@@ -3,7 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, use
 import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, roleLabel, statusLabel, useAsync } from '../../components/ui';
+import { Modal, PromptModal, roleLabel, statusLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
@@ -138,6 +138,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
+  const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
   const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask'>(null);
   const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
@@ -188,7 +189,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
             <option value="__new">+ neuer Unterordner …</option>
           </select>
           <button className="btn sm" disabled={!moveTo} onClick={() => {
-            if (moveTo === '__new') { const name = prompt('Name des neuen Ordners'); if (!name) return; folderAction(async () => { const f = await api.post<{ folder: MailFolder }>(`/mail/accounts/${m.accountId}/folders`, { name }); await api.post(`/mail/mails/${m.id}/move`, { folder: f.folder.path }); }); return; }
+            if (moveTo === '__new') { setNewFolder(true); return; }
             folderAction(() => api.post(`/mail/mails/${m.id}/move`, { folder: moveTo }));
           }}>Verschieben</button>
         </div>
@@ -217,6 +218,8 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       {error && <div className="error mb">{error}</div>}
       {m.textBody ? <pre>{m.textBody}</pre> : m.htmlBody ? <div className="prose" dangerouslySetInnerHTML={{ __html: m.htmlBody.replace(/<script[\s\S]*?<\/script>/gi, '') }} /> : <p className="muted">Kein Inhalt</p>}
 
+      {newFolder && <PromptModal title="Neuer Unterordner" label="Name" placeholder="z. B. Lieferanten" submitLabel="Anlegen und verschieben" onClose={() => setNewFolder(false)}
+        onSubmit={(name) => { if (name) folderAction(async () => { const f = await api.post<{ folder: MailFolder }>(`/mail/accounts/${m.accountId}/folders`, { name }); await api.post(`/mail/mails/${m.id}/move`, { folder: f.folder.path }); }); }} />}
       {dialog === 'link' && (
         <Modal title="Mit Arbeitspaket verknüpfen oder kopieren" onClose={() => setDialog(null)}>
           <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die das Arbeitspaket lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
@@ -367,6 +370,8 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   const { busy, error, run } = useAsync();
+  // Ansichten laden asynchron: erste schreibbare Ansicht nachziehen, sobald sie da ist
+  useEffect(() => { if (!f.viewId && writable[0]) setF((x) => ({ ...x, viewId: writable[0].id })); }, [writable.length]);
   useEffect(() => {
     if (replyTo) {
       api.get<{ mail: MailDetail }>(`/mail/mails/${replyTo}`).then(({ mail }) => {

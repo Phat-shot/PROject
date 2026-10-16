@@ -34,6 +34,24 @@ export function Modal({ title, onClose, children }: { title: ReactNode; onClose:
   );
 }
 
+/** Eingabe im eigenen Dialog statt window.prompt: Enter bestätigt, Escape bricht ab. */
+export function PromptModal({ title, label, value = '', placeholder, type = 'text', hint, submitLabel = 'Übernehmen', onSubmit, onClose }: {
+  title: ReactNode; label?: string; value?: string; placeholder?: string; type?: string; hint?: string; submitLabel?: string; onSubmit: (v: string) => unknown; onClose: () => void;
+}) {
+  const [v, setV] = useState(value);
+  const ok = () => { onSubmit(v.trim()); onClose(); };
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="form">
+        <label className="field">{label && <span>{label}</span>}
+          <input type={type} value={v} placeholder={placeholder} autoFocus onChange={(e) => setV(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); ok(); } }} /></label>
+        {hint && <p className="muted small">{hint}</p>}
+        <div className="row"><button className="btn primary" onClick={ok}>{submitLabel}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+      </div>
+    </Modal>
+  );
+}
+
 export function Markdown({ md }: { md: string }) {
   const html = DOMPurify.sanitize(marked.parse(md, { async: false, breaks: true, gfm: true }) as string);
   return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;

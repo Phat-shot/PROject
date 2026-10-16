@@ -2,7 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Task, TaskComment } from '@projekttool/shared';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
-import { Drawer, Markdown, Modal, prioLabel, useAsync } from '../../components/ui';
+import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync } from '../../components/ui';
+import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
@@ -26,6 +27,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [item, setItem] = useState('');
   const [saved, setSaved] = useState(false);
   const [more, setMore] = useState(false);
+  const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
+  const [mail, setMail] = useState<null | { to: string; subject: string; body: string }>(null);
   const { busy, error, run, setError } = useAsync();
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
@@ -58,7 +61,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           {t.escalationLevel > 0 && <div className="small">Eskalation {ESC_LABEL[t.escalationLevel]} seit {fmtDateTime(t.escalatedAt)}.</div>}
           <div className="row mt small">
             {canEdit && t.blocked && <button className="btn sm" onClick={() => void patch({ blocked: false })}>Blockade aufheben</button>}
-            {(me.role === 'pl' || t.responsible.userId === me.userId) && t.escalationLevel < 3 && <button className="btn sm" onClick={() => { const note = prompt('Grund der Eskalation (optional)') ?? ''; void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); }); }}>Eine Stufe höher eskalieren</button>}
+            {(me.role === 'pl' || t.responsible.userId === me.userId) && t.escalationLevel < 3 && <button className="btn sm" onClick={() => setAsk({ kind: 'escalate' })}>Eine Stufe höher eskalieren</button>}
             {me.role === 'pl' && t.escalationLevel > 0 && <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/escalation/reset`); await load(); await reloadTasks(); })}>Eskalation zurücksetzen</button>}
           </div>
         </div>
@@ -93,7 +96,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>
         </> : null}
         <div className="field"><span>Blockiert</span>
-          {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => { const reason = prompt('Warum hängt das Arbeitspaket?'); if (reason !== null) void patch({ blocked: true, blockedReason: reason }); }}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
+          {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
         <div className="field"><span>Antwortadresse</span><span className="small muted">{detail.project.mailAddress ? detail.project.mailAddress.replace('@', `+t${t.mailCode}@`) : `Kein Projektkonto · Code ${t.mailCode}`}</span></div>
         {!canDates && canEdit && <p className="muted small full" style={{ margin: 0 }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
       </div>
@@ -117,7 +120,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <li key={i.id} className={i.done ? 'done' : ''}>
             <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await load(); await reloadTasks(); })} />
             <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
-            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? 'extern' : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { const mail = prompt('Externe Mail-Adresse für diesen Task', i.responsibleEmail ?? ''); if (mail === null) return; void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: mail }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
+            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? 'extern' : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
               <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               <option value="extern">{i.responsibleEmail ? `${i.responsibleEmail} (extern)` : 'extern (Mail-Adresse) …'}</option>
@@ -154,6 +157,11 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <div><button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Kommentieren</button></div>
       </div>}
 
+      {ask?.kind === 'taskEmail' && <PromptModal title="Externe Zuständigkeit für diesen Task" label="Mail-Adresse" type="email" value={ask.value} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAsk(null)}
+        onSubmit={(v) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${ask.itemId}`, { responsibleUserId: null, responsibleEmail: v || null }); await load(); })} />}
+      {ask?.kind === 'blocked' && <PromptModal title="Als blockiert melden" label="Warum hängt das Arbeitspaket?" placeholder="z. B. warten auf Freigabe des Kunden" submitLabel="Melden" onClose={() => setAsk(null)} onSubmit={(v) => void patch({ blocked: true, blockedReason: v })} />}
+      {ask?.kind === 'escalate' && <PromptModal title="Eine Stufe höher eskalieren" label="Grund (optional)" submitLabel="Eskalieren" onClose={() => setAsk(null)} onSubmit={(note) => void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); })} />}
+      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void load()} />}
       {shift && (
         <Modal title="Nachfolger verschieben – Vorschau" onClose={() => setShift(null)}>
           {shift.changes.length === 0 ? <p>Kein Nachfolger muss verschoben werden.</p> : (
