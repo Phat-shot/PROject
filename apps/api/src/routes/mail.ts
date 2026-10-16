@@ -6,6 +6,8 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { ALL_RIGHTS, getMembership, getViewRights, requireProject } from '../rights.js';
 import { loadTask, newMailCode } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
+import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
+import { mapPage } from '../docs/service.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -324,6 +326,102 @@ export async function mailRoutes(app: FastifyInstance) {
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4)`, [mail.id, t.id, copy, user.id]);
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy } });
     return { task: await loadTask(db, t.id) };
+  });
+
+  // Mail → Aufgaben-Log (1:1-Zitat als Log-Eintrag, ohne KI)
+  app.post<{ Params: { mid: string }; Body: { taskId: string; note?: string } }>('/mail/mails/:mid/to-task-log', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok) throw forbidden('Kein Leserecht an dieser Mail');
+    const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
+    if (!task) throw notFound('Aufgabe nicht gefunden');
+    await requireProject(db, user, task.project_id, 'member');
+    const body = (req.body?.note?.trim() ? req.body.note.trim() + '\n\n' : '') + mailToLogEntry(mail);
+    const c = await db.one(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4) returning *`, [task.id, user.id, body, mail.id]);
+    await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, task.id, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'mail.to_task_log', objectType: 'task', objectId: task.id, details: { mailId: mail.id, subject: mail.subject } });
+    return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at } };
+  });
+
+  // Mail → Doku: als eigene Seite ablegen (1:1). Inhalt wird für alle Projektmitglieder sichtbar → Bestätigung.
+  app.post<{ Params: { mid: string }; Body: { projectId: string; folderId?: string | null; parentPageId?: string | null; title?: string; confirmed?: boolean } }>('/mail/mails/:mid/to-page', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok) throw forbidden('Kein Leserecht an dieser Mail');
+    if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Aus persönlichen Konten legt nur der Eigentümer ab');
+    const b = req.body ?? ({} as any);
+    await requireProject(db, user, b.projectId, 'member');
+    if (!b.confirmed) {
+      const members = await db.query(`select u.name, m.role from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by u.name`, [b.projectId]);
+      return { needsConfirmation: true, willSee: members.rows.map((x: any) => ({ name: x.name, role: x.role })) };
+    }
+    if (b.folderId) {
+      const f = await db.maybeOne(`select id from doc_folders where id = $1 and project_id = $2`, [b.folderId, b.projectId]);
+      if (!f) throw badRequest('Ordner gehört nicht zum Projekt');
+    }
+    const title = (b.title?.trim() || `Mail: ${mail.subject || '(kein Betreff)'}`).slice(0, 200);
+    const md = mailToMarkdown(mail, { heading: 1 });
+    const page = await db.one(
+      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, status, created_by, updated_by) values ($1,$2,$3,$4,$5,'draft',$6,$6) returning *`,
+      [b.projectId, b.folderId ?? null, b.parentPageId ?? null, title, md, user.id]
+    );
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,1,$2,$3,'draft',$4)`, [page.id, page.title, page.content_md, user.id]);
+    await db.query(`insert into mail_page_links (mail_id, page_id, kind, linked_by) values ($1,$2,'page',$3)`, [mail.id, page.id, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'mail.copy_to_page', objectType: 'doc_page', objectId: page.id, details: { mailId: mail.id, subject: mail.subject, viewIds: access.viewIds } });
+    return { page: mapPage(page) };
+  });
+
+  // Mail → Doku: an bestehende Seite anhängen (1:1-Abschnitt, z. B. unter ein Protokoll oder einen Report)
+  app.post<{ Params: { mid: string }; Body: { pageId: string; confirmed?: boolean; withBody?: boolean } }>('/mail/mails/:mid/append-to-page', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok) throw forbidden('Kein Leserecht an dieser Mail');
+    if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Aus persönlichen Konten legt nur der Eigentümer ab');
+    const page = await db.maybeOne(`select * from doc_pages where id = $1`, [req.body?.pageId]);
+    if (!page) throw notFound('Seite nicht gefunden');
+    await requireProject(db, user, page.project_id, 'member');
+    if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
+    if (!req.body?.confirmed) {
+      const members = await db.query(`select u.name, m.role from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by u.name`, [page.project_id]);
+      return { needsConfirmation: true, willSee: members.rows.map((x: any) => ({ name: x.name, role: x.role })) };
+    }
+    const section = mailToMarkdown(mail, { heading: 2, withBody: req.body?.withBody !== false });
+    const content = `${page.content_md.replace(/\s+$/, '')}\n\n${section}\n`;
+    const u = await db.one(`update doc_pages set content_md = $2, version = version + 1, updated_by = $3, updated_at = now() where id = $1 returning *`, [page.id, content, user.id]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,$2,$3,$4,$5,$6)`, [u.id, u.version, u.title, u.content_md, u.status, user.id]);
+    await db.query(`insert into mail_page_links (mail_id, page_id, kind, linked_by) values ($1,$2,'section',$3) on conflict do nothing`, [mail.id, page.id, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'mail.append_to_page', objectType: 'doc_page', objectId: page.id, details: { mailId: mail.id, subject: mail.subject, version: u.version } });
+    return { page: mapPage(u) };
+  });
+
+  // Aktionskatalog je Mail: regelbasierte Aktionen sofort, KI-Aktionen als Platzhalter
+  app.get<{ Params: { mid: string } }>('/mail/mails/:mid/actions', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok) throw forbidden();
+    const canCopy = !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
+    const pages = await db.query(`select l.page_id, l.kind, p.title, p.project_id from mail_page_links l join doc_pages p on p.id = l.page_id where l.mail_id = $1`, [mail.id]);
+    return {
+      rule: [
+        { key: 'link_task', target: 'task', label: 'Mit Aufgabe verknüpfen', enabled: access.rights.canCreateTask },
+        { key: 'copy_task', target: 'task', label: 'In Aufgabe kopieren', enabled: access.rights.canCreateTask && canCopy },
+        { key: 'task_log', target: 'task', label: 'Ins Aufgaben-Log übernehmen', enabled: true },
+        { key: 'task_adjust', target: 'task', label: 'Aufgabe anpassen (Mail als Beleg)', enabled: true },
+        { key: 'create_task', target: 'task', label: 'Aufgabe erstellen', enabled: access.rights.canCreateTask },
+        { key: 'to_page', target: 'doc', label: 'In Doku ablegen (eigene Seite)', enabled: canCopy },
+        { key: 'append_page', target: 'doc', label: 'An Seite anhängen (Protokoll, Report)', enabled: canCopy }
+      ],
+      ai: AI_ACTIONS.map((a) => ({ ...a, enabled: false, reason: 'KI ist das letzte Modul; läuft später als Vorschlag in der Freigabe-Liste.' })),
+      pages: pages.rows.map((p: any) => ({ pageId: p.page_id, kind: p.kind, title: p.title, projectId: p.project_id }))
+    };
   });
 
   // W4: Entwürfe und Versand

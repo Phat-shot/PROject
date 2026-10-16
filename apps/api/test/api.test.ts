@@ -212,3 +212,47 @@ test('Suche respektiert Rechte', async () => {
   assert.ok(res.json().tasks.length >= 1);
   assert.ok(!res.json().mails.some((m: any) => m.subject.includes('Vertragsverlängerung')));
 });
+
+test('Mail-Aktionen: Aufgaben-Log, in Doku ablegen, an Seite anhängen, Aufgabe anpassen mit Beleg', async () => {
+  const pl = await t.login('pl@demo.local');
+  const { mails } = (await t.api(pl).get(`/mail/views/${t.ids.views.project}/mails`)).json();
+  const offer = mails.find((m: any) => m.subject.startsWith('Angebot Website-Relaunch'));
+  const actions = await t.api(pl).get(`/mail/mails/${offer.id}/actions`);
+  assert.equal(actions.statusCode, 200);
+  assert.ok(actions.json().rule.some((a: any) => a.key === 'to_page' && a.enabled));
+  assert.ok(actions.json().ai.every((a: any) => a.enabled === false));
+
+  const log = await t.api(pl).post(`/mail/mails/${offer.id}/to-task-log`, { taskId: t.ids.tasks.t4, note: 'Angebot liegt vor.' });
+  assert.equal(log.statusCode, 200, log.body);
+  assert.equal(log.json().comment.source, 'mail');
+  assert.match(log.json().comment.body, /86\.400/);
+
+  const docs = (await t.api(pl).get(`/projects/${t.ids.projects.web}/docs`)).json();
+  const folder = docs.folders.find((f: any) => f.name === 'Allgemein');
+  const first = await t.api(pl).post(`/mail/mails/${offer.id}/to-page`, { projectId: t.ids.projects.web, folderId: folder.id });
+  assert.equal(first.json().needsConfirmation, true);
+  const page = await t.api(pl).post(`/mail/mails/${offer.id}/to-page`, { projectId: t.ids.projects.web, folderId: folder.id, confirmed: true });
+  assert.equal(page.statusCode, 200, page.body);
+  assert.match(page.json().page.contentMd, /\*\*Von:\*\* Katrin Müller/);
+  const leser = await t.login('leser@demo.local');
+  assert.equal((await t.api(leser).get(`/docs/pages/${page.json().page.id}`)).statusCode, 200);
+
+  const draft = docs.pages.find((p: any) => p.title === 'Statusbericht KW 41');
+  const app1 = await t.api(pl).post(`/mail/mails/${offer.id}/append-to-page`, { pageId: draft.id, confirmed: true });
+  assert.equal(app1.statusCode, 200, app1.body);
+  assert.equal(app1.json().page.version, draft.version + 1);
+  assert.match(app1.json().page.contentMd, /## Angebot Website-Relaunch/);
+  const finalPage = docs.pages.find((p: any) => p.title.startsWith('Projektauftrag'));
+  assert.equal((await t.api(pl).post(`/mail/mails/${offer.id}/append-to-page`, { pageId: finalPage.id, confirmed: true })).statusCode, 400);
+
+  const adj = await t.api(pl).patch(`/tasks/${t.ids.tasks.t4}`, { dueDate: '2026-10-25', sourceMailId: offer.id, note: 'Frist wegen Rückfragen verlängert.' });
+  assert.equal(adj.statusCode, 200, adj.body);
+  const detail = (await t.api(pl).get(`/tasks/${t.ids.tasks.t4}`)).json();
+  assert.ok(detail.comments.some((c: any) => c.source === 'mail' && /Angepasst auf Grundlage/.test(c.body)));
+  assert.ok(detail.mails.some((m: any) => m.id === offer.id));
+
+  const max = await t.login('max@demo.local');
+  const { mails: hosting } = (await t.api(pl).get(`/mail/views/${t.ids.views.hosting}/mails`)).json();
+  const denied = await t.api(max).post(`/mail/mails/${hosting[0].id}/to-page`, { projectId: t.ids.projects.web, confirmed: true });
+  assert.equal(denied.statusCode, 403, 'aus persönlichen Konten legt nur der Eigentümer ab');
+});

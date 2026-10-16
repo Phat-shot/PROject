@@ -104,7 +104,18 @@ export interface TaskComment {
   userId: string;
   userName: string;
   body: string;
+  source?: 'user' | 'mail' | 'system';
+  mailId?: string | null;
   createdAt: string;
+}
+
+export interface MailAction {
+  key: string;
+  target: 'task' | 'doc' | 'mail';
+  label: string;
+  enabled: boolean;
+  mode?: 'proposal' | 'direct';
+  reason?: string;
 }
 
 export interface MailAccount {

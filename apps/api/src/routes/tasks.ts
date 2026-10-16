@@ -20,6 +20,8 @@ interface TaskBody {
   responsibleEmail?: string | null;
   position?: number;
   predecessorIds?: string[];
+  sourceMailId?: string | null;
+  note?: string | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -93,7 +95,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
     return {
       task,
-      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, createdAt: c.created_at })),
+      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at })),
       mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, date: m.date, copied: m.copied, accountId: m.account_id })),
       attachments: attachments.rows.map(mapAttachment)
     };
@@ -140,7 +142,18 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(req.params.id, existing.project_id, b.predecessorIds);
     const changed: Record<string, unknown> = {};
-    for (const k of Object.keys(b)) changed[k] = (b as any)[k];
+    for (const k of Object.keys(b)) if (k !== 'sourceMailId' && k !== 'note') changed[k] = (b as any)[k];
+    if (b.sourceMailId) {
+      // Aufgabe anpassen mit Mail als Beleg: verknüpfen und Änderung im Log festhalten.
+      const mail = await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [b.sourceMailId]);
+      if (mail) {
+        await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, req.params.id, user.id]);
+        const parts = Object.entries(changed).map(([k, v]) => `${k}: ${v ?? '–'}`).join(', ');
+        await db.query(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4)`,
+          [req.params.id, user.id, `${b.note?.trim() ? b.note.trim() + '\n\n' : ''}Angepasst auf Grundlage der Mail „${mail.subject}“ von ${mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')}): ${parts}`, mail.id]);
+        changed.sourceMailId = mail.id;
+      }
+    }
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.update', objectType: 'task', objectId: req.params.id, details: changed });
     return { task: await loadTask(db, req.params.id) };
   });

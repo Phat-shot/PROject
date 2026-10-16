@@ -87,8 +87,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
       {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); }); }} />}
 
-      <h3 className="mt">Kommentare</h3>
-      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}</div><div>{c.body}</div></div>)}
+      <h3 className="mt">Log und Kommentare</h3>
+      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}</div><div style={{ whiteSpace: 'pre-wrap' }}>{c.body}</div></div>)}
       {canEdit && <form className="stack mt" onSubmit={(e) => { e.preventDefault(); if (!comment.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }}>
         <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Kommentar …" /><div><button className="btn sm" disabled={busy}>Kommentieren</button></div></form>}
 

@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { MailDetail, MailDraft, MailSummary, MailView as MailViewT, MailAccount, MailViewFilter } from '@projekttool/shared';
+import type { MailDetail, MailDraft, MailSummary, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, roleLabel, useAsync } from '../../components/ui';
+import { Modal, roleLabel, statusLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
 type ViewRow = MailViewT & { canManage?: boolean };
@@ -111,22 +111,34 @@ function MailOnly({ base }: { base: string }) {
 function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; view?: ViewRow; base: string; onChanged: () => void }) {
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`);
-  const [link, setLink] = useState(false);
-  const [confirmCopy, setConfirmCopy] = useState<{ taskId: string; willSee: { name: string; role: string }[] } | null>(null);
-  const [createTask, setCreateTask] = useState(false);
+  const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
+  const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask'>(null);
+  const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
   const nav = useNavigate();
   const { error, run } = useAsync();
   if (d.error) return <div className="mail-detail"><div className="error">{d.error}</div><p className="muted mt">Verknüpfte Mail, keine Berechtigung: Du darfst die Ansicht nicht lesen, aus der diese Mail stammt.</p></div>;
   if (!d.data) return <div className="mail-detail muted">Lade …</div>;
   const m = d.data.mail;
   const r = d.data.rights;
-  const doLink = async (taskId: string, copy: boolean, confirmed = false) => {
+  const refresh = async () => { await d.reload(); await actions.reload(); await reloadTasks(); onChanged(); };
+  const enabled = (key: string) => actions.data?.rule.find((a) => a.key === key)?.enabled ?? false;
+
+  /** Führt eine Aktion aus, die eine Bestätigung verlangen kann (Kopie wird für Mitglieder sichtbar). */
+  const withConfirm = async (call: (confirmed: boolean) => Promise<any>, after: (res: any) => Promise<void>) => {
     await run(async () => {
-      const res = await api.post<{ needsConfirmation?: boolean; willSee?: { name: string; role: string }[] }>(`/mail/mails/${m.id}/link`, { taskId, copy, confirmed });
-      if (res.needsConfirmation) { setConfirmCopy({ taskId, willSee: res.willSee ?? [] }); return; }
-      setConfirmCopy(null); setLink(false); await d.reload(); await reloadTasks(); onChanged();
+      const res = await call(false);
+      if (res?.needsConfirmation) {
+        setConfirmCopy({ willSee: res.willSee ?? [], run: async () => { const r2 = await call(true); setConfirmCopy(null); await after(r2); } });
+        return;
+      }
+      await after(res);
     });
   };
+  const doLink = (taskId: string, copy: boolean) => withConfirm(
+    (confirmed) => api.post(`/mail/mails/${m.id}/link`, { taskId, copy, confirmed }),
+    async () => { setDialog(null); await refresh(); }
+  );
+
   return (
     <div className="mail-detail">
       <h2>{m.subject}</h2>
@@ -138,28 +150,142 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
       </div>
       <div className="row mb">
         {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
-        {r.canCreateTask && <><button className="btn sm" onClick={() => setCreateTask(true)}>Aufgabe erstellen</button><button className="btn sm" onClick={() => setLink(true)}>Mit Aufgabe verknüpfen</button></>}
+        <span className="muted small">Aufgabe:</span>
+        {enabled('create_task') && <button className="btn sm" onClick={() => setDialog('createTask')}>Erstellen</button>}
+        {enabled('link_task') && <button className="btn sm" onClick={() => setDialog('link')}>Verknüpfen / Kopieren</button>}
+        <button className="btn sm" onClick={() => setDialog('log')}>Ins Log übernehmen</button>
+        <button className="btn sm" onClick={() => setDialog('adjust')}>Anpassen (Mail als Beleg)</button>
+        <span className="muted small" style={{ marginLeft: 8 }}>Doku:</span>
+        <button className="btn sm" disabled={!enabled('to_page')} title={enabled('to_page') ? '' : 'Aus persönlichen Konten legt nur der Eigentümer ab'} onClick={() => setDialog('toPage')}>Ablegen</button>
+        <button className="btn sm" disabled={!enabled('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
       </div>
-      {d.data.links.length > 0 && <p className="small">Verknüpft mit: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</p>}
+      <div className="row mb small">
+        <span className="muted">KI (letztes Modul):</span>
+        {actions.data?.ai.map((a) => <button key={a.key} className="btn sm" disabled title={a.reason}>{a.label}</button>)}
+      </div>
+      {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
+        <p className="small">
+          {d.data.links.length > 0 && <>Aufgaben: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</>}
+          {(actions.data?.pages.length ?? 0) > 0 && <> · Doku: {actions.data!.pages.map((p) => <Link key={p.pageId} className="btn sm link" to={`/projekte/${detail.project.id}/doku/${p.pageId}`}>{p.title}{p.kind === 'section' ? ' (Abschnitt)' : ''}</Link>)}</>}
+        </p>
+      )}
       {error && <div className="error mb">{error}</div>}
       {m.textBody ? <pre>{m.textBody}</pre> : m.htmlBody ? <div className="prose" dangerouslySetInnerHTML={{ __html: m.htmlBody.replace(/<script[\s\S]*?<\/script>/gi, '') }} /> : <p className="muted">Kein Inhalt</p>}
-      {link && (
-        <Modal title="Mit Aufgabe verknüpfen" onClose={() => setLink(false)}>
-          <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die die Aufgabe lesen dürfen – mit Bestätigung und Audit-Eintrag.</p>
+
+      {dialog === 'link' && (
+        <Modal title="Mit Aufgabe verknüpfen oder kopieren" onClose={() => setDialog(null)}>
+          <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die die Aufgabe lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
           <table className="table"><tbody>
-            {tasks.filter((t) => !t.done).map((t) => <tr key={t.id}><td>{t.title}</td><td className="nowrap"><button className="btn sm" onClick={() => void doLink(t.id, false)}>Verknüpfen</button> <button className="btn sm" onClick={() => void doLink(t.id, true)}>Kopieren</button></td></tr>)}
+            {tasks.filter((t) => !t.done).map((t) => <tr key={t.id}><td>{t.title}</td><td className="nowrap"><button className="btn sm" onClick={() => void doLink(t.id, false)}>Verknüpfen</button> <button className="btn sm" disabled={!enabled('copy_task')} onClick={() => void doLink(t.id, true)}>Kopieren</button></td></tr>)}
           </tbody></table>
         </Modal>
       )}
+      {dialog === 'log' && <PickTaskDialog title="Ins Aufgaben-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an die Aufgabe gehängt und verknüpft. Essenz per KI folgt." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
+        onPick={async (taskId, note) => { await run(async () => { await api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note }); setDialog(null); await refresh(); openTask(taskId); }); }} />}
+      {dialog === 'adjust' && <AdjustTaskDialog mailId={m.id} onClose={() => setDialog(null)} onDone={async (taskId) => { setDialog(null); await refresh(); openTask(taskId); }} />}
+      {dialog === 'toPage' && <ToPageDialog onClose={() => setDialog(null)} onSubmit={(folderId, title) => withConfirm(
+        (confirmed) => api.post(`/mail/mails/${m.id}/to-page`, { projectId: detail.project.id, folderId, title, confirmed }),
+        async (res) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}/doku/${res.page.id}`); }
+      )} />}
+      {dialog === 'appendPage' && <AppendPageDialog onClose={() => setDialog(null)} onSubmit={(pageId, withBody) => withConfirm(
+        (confirmed) => api.post(`/mail/mails/${m.id}/append-to-page`, { pageId, withBody, confirmed }),
+        async (res) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}/doku/${res.page.id}`); }
+      )} />}
       {confirmCopy && (
-        <Modal title="Kopie bestätigen" onClose={() => setConfirmCopy(null)}>
-          <p>Diese Mail wird durch die Kopie für folgende Personen sichtbar:</p>
+        <Modal title="Sichtbarkeit bestätigen" onClose={() => setConfirmCopy(null)}>
+          <p>Der Mailinhalt wird dadurch für folgende Personen sichtbar:</p>
           <ul>{confirmCopy.willSee.map((w) => <li key={w.name}>{w.name} <span className="badge">{roleLabel[w.role]}</span></li>)}</ul>
-          <div className="row"><button className="btn primary" onClick={() => void doLink(confirmCopy.taskId, true, true)}>Kopieren und protokollieren</button><button className="btn" onClick={() => setConfirmCopy(null)}>Abbrechen</button></div>
+          <div className="row"><button className="btn primary" onClick={() => void run(confirmCopy.run)}>Bestätigen und protokollieren</button><button className="btn" onClick={() => setConfirmCopy(null)}>Abbrechen</button></div>
         </Modal>
       )}
-      {createTask && <CreateTaskFromMail mail={m} onClose={() => setCreateTask(false)} onCreated={async (id) => { setCreateTask(false); await d.reload(); await reloadTasks(); onChanged(); nav(`/projekte/${detail.project.id}?task=${id}`); }} />}
+      {dialog === 'createTask' && <CreateTaskFromMail mail={m} onClose={() => setDialog(null)} onCreated={async (id) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}?task=${id}`); }} />}
     </div>
+  );
+}
+
+function PickTaskDialog({ title, hint, noteLabel, onClose, onPick }: { title: string; hint: string; noteLabel?: string; onClose: () => void; onPick: (taskId: string, note: string) => Promise<void> }) {
+  const { tasks } = useProject();
+  const [taskId, setTaskId] = useState(tasks.find((t) => !t.done)?.id ?? '');
+  const [note, setNote] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={title} onClose={onClose}>
+      <div className="form">
+        <p className="muted small">{hint}</p>
+        <label className="field"><span>Aufgabe</span><select value={taskId} onChange={(e) => setTaskId(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.done ? '✓ ' : ''}{t.title}</option>)}</select></label>
+        {noteLabel && <label className="field"><span>{noteLabel}</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>}
+        <div><button className="btn primary" disabled={busy || !taskId} onClick={() => { setBusy(true); void onPick(taskId, note).finally(() => setBusy(false)); }}>Übernehmen</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function AdjustTaskDialog({ mailId, onClose, onDone }: { mailId: string; onClose: () => void; onDone: (taskId: string) => Promise<void> }) {
+  const { detail, tasks } = useProject();
+  const [taskId, setTaskId] = useState(tasks.find((t) => !t.done)?.id ?? '');
+  const task = tasks.find((t) => t.id === taskId);
+  const [columnId, setColumnId] = useState(task?.columnId ?? '');
+  const [dueDate, setDueDate] = useState(task?.dueDate ?? '');
+  const [note, setNote] = useState('');
+  const { busy, error, run } = useAsync();
+  const pick = (id: string) => { setTaskId(id); const t = tasks.find((x) => x.id === id); setColumnId(t?.columnId ?? ''); setDueDate(t?.dueDate ?? ''); };
+  return (
+    <Modal title="Aufgabe anpassen – Mail als Beleg" onClose={onClose}>
+      <div className="form">
+        <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Aufgaben-Log festgehalten. Per KI als Vorschlag folgt.</p>
+        <label className="field"><span>Aufgabe</span><select value={taskId} onChange={(e) => pick(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
+        <label className="field"><span>Status</span><select value={columnId} onChange={(e) => setColumnId(e.target.value)}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+        <label className="field"><span>Deadline</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
+        <label className="field"><span>Begründung (optional)</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>
+        {error && <div className="error">{error}</div>}
+        <div><button className="btn primary" disabled={busy || !taskId} onClick={() => void run(async () => {
+          const body: Record<string, unknown> = { sourceMailId: mailId, note };
+          if (task && columnId !== task.columnId) body.columnId = columnId;
+          if (task && (dueDate || null) !== task.dueDate) body.dueDate = dueDate || null;
+          await api.patch(`/tasks/${taskId}`, body);
+          await onDone(taskId);
+        })}>Speichern</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function ToPageDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (folderId: string | null, title: string) => Promise<void> }) {
+  const { detail } = useProject();
+  const docs = useData<{ folders: DocFolder[] }>(`/projects/${detail.project.id}/docs`);
+  const [folderId, setFolderId] = useState('');
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { if (docs.data && !folderId) setFolderId(docs.data.folders.find((f) => f.name === 'Allgemein')?.id ?? docs.data.folders[0]?.id ?? ''); }, [docs.data]);
+  return (
+    <Modal title="In Doku ablegen" onClose={onClose}>
+      <div className="form">
+        <p className="muted small">Die Mail wird 1:1 als neue Seite (Entwurf) im gewählten Ordner abgelegt. Der Inhalt wird für alle Projektmitglieder sichtbar.</p>
+        <label className="field"><span>Ordner</span><select value={folderId} onChange={(e) => setFolderId(e.target.value)}><option value="">– ohne –</option>{docs.data?.folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
+        <label className="field"><span>Titel (leer = „Mail: Betreff“)</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
+        <div><button className="btn primary" disabled={busy} onClick={() => { setBusy(true); void onSubmit(folderId || null, title).finally(() => setBusy(false)); }}>Ablegen</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+function AppendPageDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (pageId: string, withBody: boolean) => Promise<void> }) {
+  const { detail } = useProject();
+  const docs = useData<{ pages: DocPage[]; folders: DocFolder[] }>(`/projects/${detail.project.id}/docs`);
+  const [pageId, setPageId] = useState('');
+  const [withBody, setWithBody] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const open = (docs.data?.pages ?? []).filter((p) => p.status !== 'final');
+  useEffect(() => { if (open.length && !pageId) setPageId(open[0].id); }, [docs.data]);
+  return (
+    <Modal title="An Seite anhängen" onClose={onClose}>
+      <div className="form">
+        <p className="muted small">Die Mail wird als Abschnitt an das Ende einer Seite gehängt, z. B. unter ein Jour-fixe-Protokoll oder einen Report. Finale Seiten sind gesperrt. Einpflegen der Essenz per KI folgt.</p>
+        <label className="field"><span>Seite</span><select value={pageId} onChange={(e) => setPageId(e.target.value)}>{open.map((p) => <option key={p.id} value={p.id}>{docs.data?.folders.find((f) => f.id === p.folderId)?.name ?? '–'} / {p.title} ({statusLabel[p.status]})</option>)}</select></label>
+        <label className="check"><input type="checkbox" checked={withBody} onChange={(e) => setWithBody(e.target.checked)} /> Mailtext als Zitat übernehmen (sonst nur Kopfdaten)</label>
+        <div><button className="btn primary" disabled={busy || !pageId} onClick={() => { setBusy(true); void onSubmit(pageId, withBody).finally(() => setBusy(false)); }}>Anhängen</button></div>
+      </div>
+    </Modal>
   );
 }
 
