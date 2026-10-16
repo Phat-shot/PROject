@@ -42,7 +42,8 @@ function statusLabel(s: string) {
 }
 
 function clean(s: string): string {
-  return s.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').replace(/\s+/g, ' ').trim();
+  // Zeilenumbrüche (harte Umbrüche aus Markdown) bleiben erhalten, nur Mehrfach-Leerzeichen werden gekürzt
+  return s.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').replace(/[ \t]+/g, ' ').replace(/ *\n */g, '\n').trim();
 }
 
 function inline(tokens?: Token[]): string {
