@@ -1,0 +1,89 @@
+# Produktion (Phase 1, Eigenbetrieb): fertiges Image aus der GitHub Container Registry.
+#
+#   cp deploy/.env.example deploy/.env   # Werte eintragen
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+#
+# Mit HTTPS über Caddy (automatische Zertifikate, Domain in DOMAIN setzen):
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile proxy up -d
+#
+# Update auf eine neue Version: IMAGE_TAG in deploy/.env ändern, dann `pull` und `up -d`.
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: projekttool
+      POSTGRES_USER: projekttool
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt in deploy/.env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projekttool -d projekttool"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+
+  app:
+    image: ${IMAGE:-ghcr.io/phat-shot/project}:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://projekttool:${POSTGRES_PASSWORD}@db:5432/projekttool
+      PORT: "3000"
+      DATA_DIR: /data
+      SEED: ${SEED:-false}
+      SYNC_INTERVAL_MS: ${SYNC_INTERVAL_MS:-60000}
+      COOKIE_SECURE: ${COOKIE_SECURE:-true}
+      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL fehlt in deploy/.env}
+      LOG: "true"
+    volumes:
+      - appdata:/data
+    # Ohne Proxy direkt veröffentlichen (z. B. hinter eigenem Reverse-Proxy): APP_PORT setzen
+    ports:
+      - "${APP_PORT:-127.0.0.1:3000}:3000"
+
+  # Optional: HTTPS-Proxy mit automatischen Zertifikaten (Let's Encrypt)
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["proxy"]
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN:?DOMAIN fehlt für das Profil proxy}
+    command: caddy reverse-proxy --from ${DOMAIN} --to app:3000
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - caddydata:/data
+      - caddyconfig:/config
+
+  # Tägliches Backup der Datenbank nach ./backups (pg_dump, 14 Tage Aufbewahrung)
+  backup:
+    image: postgres:16-alpine
+    profiles: ["backup"]
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        while true; do
+          pg_dump -h db -U projekttool -d projekttool -Fc -f /backups/projekttool-$(date +%F).dump && \
+          find /backups -name 'projekttool-*.dump' -mtime +14 -delete
+          sleep 86400
+        done
+
+volumes:
+  pgdata:
+  appdata:
+  caddydata:
+  caddyconfig:

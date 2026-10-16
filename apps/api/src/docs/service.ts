@@ -307,8 +307,9 @@ Ziel, Umfang, aktueller Stand.
 
 /** Eingebaute Vorlagen nachziehen (für bestehende Datenbanken). */
 export async function ensureBuiltinTemplates(db: Db) {
+  const { mdToHtml } = await import('./html.js');
   for (const t of BUILTIN_TEMPLATES) {
-    await db.query(`insert into doc_templates (org_id, key, name, content_md) values (null, $1, $2, $3) on conflict do nothing`, [t.key, t.name, t.contentMd]);
+    await db.query(`insert into doc_templates (org_id, key, name, content_md, content_html) values (null, $1, $2, $3, $4) on conflict do nothing`, [t.key, t.name, t.contentMd, mdToHtml(t.contentMd)]);
   }
 }
 

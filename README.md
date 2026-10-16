@@ -21,13 +21,30 @@ Dann http://localhost:5173 öffnen. Demodaten werden beim ersten Start angelegt 
 | leser@demo.local | Lea Reuter, Leser |
 | admin@demo.local | Alex Admin, Org-Admin ohne Projektmitgliedschaft |
 
-Produktionsnaher Lauf mit PostgreSQL:
+Produktionsnaher Lauf mit PostgreSQL aus dem Quellcode:
 
 ```bash
 docker compose up --build     # App auf :3000, Postgres 16
 ```
 
 Oder manuell: `DATABASE_URL=postgres://… npm run build && npm start`.
+
+## Deployment mit fertigem Image
+
+Der Workflow `.github/workflows/docker.yml` baut bei jedem Push das Image (amd64 und arm64) und veröffentlicht es
+unter `ghcr.io/phat-shot/project` mit den Tags Branch-Name, Commit-SHA, `latest` (Standard-Branch) und Versionen aus Git-Tags `v1.2.3`.
+`.github/workflows/ci.yml` führt Typecheck, API-Tests und Build aus.
+
+```bash
+cp deploy/.env.example deploy/.env           # Passwort, PUBLIC_URL, DOMAIN eintragen
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d                  # App + Postgres
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile proxy up -d  # zusätzlich HTTPS über Caddy
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile backup up -d # zusätzlich tägliches pg_dump nach ./backups
+```
+
+Update: `IMAGE_TAG` in `deploy/.env` setzen, dann `docker compose … pull && docker compose … up -d`. Migrationen laufen beim Start automatisch.
+Das Image läuft ohne Root, mit Healthcheck auf `/api/health`; Uploads und PGlite-Daten liegen im Volume `/data`.
+Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token mit `read:packages`.
 
 ## Was die Alpha kann
 

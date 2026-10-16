@@ -1,4 +1,5 @@
-# Phase 1: Eigenbetrieb per Docker Compose. API + Worker in einem Prozess, PostgreSQL daneben.
+# Entwicklung / Eigenbetrieb aus dem Quellcode: baut das Image lokal.
+# Produktion mit fertigem Image aus ghcr.io: siehe deploy/docker-compose.yml
 services:
   db:
     image: postgres:16-alpine
@@ -9,7 +10,7 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U projekttool"]
+      test: ["CMD-SHELL", "pg_isready -U projekttool -d projekttool"]
       interval: 5s
       timeout: 3s
       retries: 10
