@@ -4,7 +4,7 @@ import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailVie
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync } from '../../components/ui';
-import { useProject } from '../ProjectPage';
+import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
 
@@ -34,11 +34,13 @@ function useFolders(accountIds: string[]) {
   return folders;
 }
 
-export function MailView() {
-  const { detail } = useProject();
-  const base = `/projekte/${detail.project.id}/mail`;
-  const views = useData<{ views: ViewRow[] }>(`/projects/${detail.project.id}/mail/views`);
-  const drafts = useData<{ drafts: MailDraft[] }>(`/projects/${detail.project.id}/mail/drafts`);
+/** Postfach: im Projekt mit Projektfilter, global (/postfach) über alle Projekte. Gleiche Ansicht, gleiche Aktionen. */
+export function MailView({ global = false }: { global?: boolean }) {
+  const scope = useProjectOptional();
+  const projectId = global ? null : scope!.detail.project.id;
+  const base = global ? '/postfach' : `/projekte/${projectId}/mail`;
+  const views = useData<{ views: ViewRow[] }>(global ? '/mail/views' : `/projects/${projectId}/mail/views`);
+  const drafts = useData<{ drafts: MailDraft[] }>(global ? null : `/projects/${projectId}/mail/drafts`);
   const nav = useNavigate();
   const loc = useLocation();
   const [params, setParams] = useSearchParams();
@@ -48,14 +50,20 @@ export function MailView() {
   const accountIds = Array.from(new Set(readable.map((v) => v.accountId)));
   const folders = useFolders(accountIds);
   const pending = (drafts.data?.drafts ?? []).filter((d) => d.status === 'pending_approval');
-  const me = detail.project.myMembership;
+  const canWrite = global ? readable.some((v) => v.myRights.canDraft || v.myRights.canSend) : scope!.detail.project.myMembership.role !== 'reader';
+  const isPl = !global && scope!.detail.project.myMembership.role === 'pl';
+  const writeTarget = () => {
+    if (!global) return `${base}/neu`;
+    const v = readable.find((x) => x.id === viewId && (x.myRights.canDraft || x.myRights.canSend)) ?? readable.find((x) => x.myRights.canDraft || x.myRights.canSend);
+    return v ? `/projekte/${v.projectId}/mail/neu?view=${v.id}` : base;
+  };
   const inList = loc.pathname === base || loc.pathname.startsWith(`${base}/m/`);
   const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); nav(`${base}?${n.toString()}`); };
   const label = (f: MailFolder) => (f.specialUse ? FOLDER_LABEL[f.specialUse] : f.name);
   return (
     <div className="mail-layout">
       <div className="mail-views">
-        {me.role !== 'reader' && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => nav(`${base}/neu`)}>Neue Mail</button>}
+        {canWrite && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => nav(writeTarget())}>Neue Mail</button>}
         <div className="section">Ordner</div>
         {folders.map((f) => (
           <div key={f.path} className={`view ${inList && folder.toLowerCase() === f.path.toLowerCase() ? 'active' : ''}`} onClick={() => go('ordner', f.path)}>
@@ -67,21 +75,23 @@ export function MailView() {
         <div className={`view ${inList && !viewId ? 'active' : ''}`} onClick={() => go('ansicht', '')}><span>Alle Ansichten</span><span className="acc">{readable.length} mit Leserecht</span></div>
         {readable.map((v) => (
           <div key={v.id} className={`view ${inList && viewId === v.id ? 'active' : ''}`} onClick={() => go('ansicht', v.id)}>
-            <span>{v.name}</span>
+            <span>{global && v.projectKey && <span className="badge" style={{ marginRight: 6 }}>{v.projectKey}</span>}{v.name}</span>
             <span className="acc">{v.accountAddress} · {v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</span>
           </div>
         ))}
-        {me.role === 'pl' && <Link className="btn sm link" to={`/projekte/${detail.project.id}/einstellungen#mail`}>Ansichten und Filter verwalten</Link>}
-        <div className="section">Freigabe-Liste</div>
-        <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => nav(`${base}/freigaben`)}>
-          <span>Entwürfe und Freigaben {pending.length > 0 && <span className="badge warn">{pending.length}</span>}</span>
-        </div>
+        {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen#mail`}>Ansichten und Filter verwalten</Link>}
+        {!global && <>
+          <div className="section">Freigabe-Liste</div>
+          <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => nav(`${base}/freigaben`)}>
+            <span>Entwürfe und Freigaben {pending.length > 0 && <span className="badge warn">{pending.length}</span>}</span>
+          </div>
+        </>}
       </div>
       <Routes>
-        <Route index element={<InboxList base={base} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
-        <Route path="m/:mailId" element={<InboxList base={base} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
-        <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />
-        <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />
+        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
+        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
+        {!global && <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />}
+        {!global && <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />}
         <Route path="mail/:mailId" element={<LegacyMail base={base} />} />
         <Route path=":viewId/:mailId" element={<LegacyMail base={base} />} />
         <Route path=":viewId" element={<LegacyMail base={base} />} />
@@ -98,13 +108,12 @@ function LegacyMail({ base }: { base: string }) {
   return <Navigate to={mailId ? `${base}/m/${mailId}${q}` : `${base}${q}`} replace />;
 }
 
-function InboxList({ base, folder, viewId, views, folders }: { base: string; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[] }) {
-  const { detail } = useProject();
+function InboxList({ base, projectId, folder, viewId, views, folders }: { base: string; projectId: string | null; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[] }) {
   const { mailId } = useParams();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const [q, setQ] = useState('');
-  const url = `/mail/inbox?projectId=${detail.project.id}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}`;
+  const url = `/mail/inbox?${projectId ? `projectId=${projectId}&` : ''}${folder ? `folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}`;
   const list = useData<{ mails: InboxMail[] }>(url, [folder, viewId]);
   const needle = q.trim().toLowerCase();
   const mails = (list.data?.mails ?? []).filter((m) => !needle || m.subject.toLowerCase().includes(needle) || m.fromAddr.toLowerCase().includes(needle) || (m.fromName ?? '').toLowerCase().includes(needle));
@@ -122,14 +131,16 @@ function InboxList({ base, folder, viewId, views, folders }: { base: string; fol
           <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
             <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
-            <div className="snippet">{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>
+            <div className="snippet">{!projectId && <span className="badge" style={{ marginRight: 6 }}>{m.projectKey}</span>}{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>
           </div>
         ))}
         {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Der PL legt Ansichten in den Projekteinstellungen an.' : 'Keine Mails in diesem Ordner.'}</div>}
       </div>
-      {mailId
-        ? <MailDetailPanel mailId={mailId} views={views} folders={folders} base={base} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current?.viewId} />
-        : <div className="mail-detail muted">Mail wählen.</div>}
+      {mailId && current && !projectId
+        ? <ProjectScope projectId={current.projectId}><MailDetailPanel mailId={mailId} views={views} folders={folders} base={`/projekte/${current.projectId}/mail`} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current.viewId} /></ProjectScope>
+        : mailId && (projectId || current)
+          ? <MailDetailPanel mailId={mailId} views={views} folders={folders} base={base} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current?.viewId} />
+          : <div className="mail-detail muted">{mailId ? 'Lade …' : 'Mail wählen.'}</div>}
     </>
   );
 }

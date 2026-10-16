@@ -573,3 +573,13 @@ test('Tasks mit externer Zuständigkeit', async () => {
   const upd = await t.api(pl).patch(`/tasks/${task.id}/checklist/${item.id}`, { responsibleEmail: null });
   assert.equal(upd.json().task.checklist[0].responsibleEmail, null);
 });
+
+test('Globales Postfach: Ansichten über alle Projekte, Zeiterfassung mandantenweit abschaltbar', async () => {
+  const pl = await t.login('pl@demo.local');
+  const v = (await t.api(pl).get('/mail/views')).json().views;
+  assert.ok(v.length >= 2 && v.every((x: any) => x.projectKey && x.projectId && x.myRights));
+  const admin = await t.login('admin@demo.local');
+  assert.equal((await t.api(admin).put('/org/settings', { timeTracking: false })).statusCode, 200);
+  assert.equal((await t.api(pl).get('/auth/me')).json().orgSettings.timeTracking, false);
+  await t.api(admin).put('/org/settings', { timeTracking: true });
+});

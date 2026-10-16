@@ -37,7 +37,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
-        <Route path="/postfach" element={<InboxPage />} />
+        <Route path="/postfach/*" element={<InboxPage />} />
         <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
         <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />

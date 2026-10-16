@@ -86,6 +86,8 @@ export interface OrgSettings {
   company?: string;
   accentColor?: string;
   footerText?: string;
+  /** Zeiterfassung mandantenweit aus: blendet Zeiten, Aufwand und Buchungen überall aus */
+  timeTracking?: boolean;
 }
 
 export interface TimeEntry {
@@ -312,6 +314,8 @@ export interface MailViewRights {
 
 export interface MailView {
   id: string;
+  projectKey?: string;
+  canManage?: boolean;
   accountId: string;
   accountName: string;
   accountAddress: string;

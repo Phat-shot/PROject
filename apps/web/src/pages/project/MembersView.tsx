@@ -4,11 +4,13 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync } from '../../components/ui';
 import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
+import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
   const { detail, users, reload, tasks, reloadTasks } = useProject();
+  const { timeTracking } = useAuth();
   const me = detail.project.myMembership;
   const [edit, setEdit] = useState<MemberRow | null>(null);
   const [invite, setInvite] = useState(false);
@@ -45,8 +47,9 @@ export function MembersView() {
               <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/mail-konten">Meine Mail-Konten</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
               <dt>Externe Kontakte</dt><dd><Contacts /></dd>
-              <dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
-              {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}
+              {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
+              {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
+              {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
             </dl>
             {isPl && <div className="row mt">
               <button className="btn sm" onClick={() => setColumns(true)}>Board-Spalten</button>

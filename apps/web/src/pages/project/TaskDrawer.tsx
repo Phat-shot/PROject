@@ -5,6 +5,7 @@ import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync } from '../../components/ui';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
+import { useAuth } from '../../lib/auth';
 import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
@@ -21,6 +22,7 @@ interface TaskDetail {
 /** Arbeitspaket: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const { detail, users, tasks, reloadTasks } = useProject();
+  const { timeTracking } = useAuth();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [shift, setShift] = useState<{ changes: any[] } | null>(null);
   const [comment, setComment] = useState('');
@@ -91,7 +93,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
         <label className="field"><span>Start</span><input type="date" value={t.startDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ startDate: e.target.value || null })} /></label>
         <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ dueDate: e.target.value || null })} /></label>
-        {(detail.project.timeTrackingEnabled || t.estimateMinutes) ? <>
+        {timeTracking && (detail.project.timeTrackingEnabled || t.estimateMinutes) ? <>
           <TextField label="Geschätzter Aufwand (Stunden)" type="number" value={t.estimateMinutes ? String(Math.round((t.estimateMinutes / 60) * 100) / 100) : ''} canEdit={canEdit} onSave={(v) => patch({ estimateMinutes: v ? Math.round(Number(v) * 60) : null })} />
           <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>
         </> : null}
@@ -148,7 +150,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
       {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); }); }} />}
 
-      {detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
+      {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
       <h3 className="mt">Log und Kommentare</h3>
       {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}

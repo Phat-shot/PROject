@@ -12,10 +12,10 @@ import { buildWorkTree, useShowDone, WorkTree, type WorkProject } from './WorkTr
  * danach die geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Task.
  */
 export function DashboardPage() {
-  const { user } = useAuth();
+  const { user, timeTracking } = useAuth();
   const work = useData<{ projects: WorkProject[] }>('/my/work');
   const notes = useData<{ notifications: Notification[]; unread: number }>('/notifications');
-  const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>('/my/time');
+  const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>(timeTracking ? '/my/time' : null);
   const { showDone, setShowDone } = useShowDone();
   const t = today();
   const week = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10);

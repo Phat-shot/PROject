@@ -320,6 +320,24 @@ export async function mailRoutes(app: FastifyInstance) {
     return { view: mapView(v, rights), mails: rows.rows.map(mapSummary) };
   });
 
+  // Alle Ansichten mit Leserecht über alle aktiven Projekte (globales Postfach)
+  app.get('/mail/views', async (req) => {
+    const user = requireUser(req);
+    const rows = await db.query(
+      `select v.*, a.name as account_name, a.address as account_address, a.type as account_type, a.owner_user_id, p.key as project_key
+       from mail_views v join mail_accounts a on a.id = v.account_id join projects p on p.id = v.project_id where p.org_id = $1 and p.status = 'active' order by p.key, a.type desc, v.name`,
+      [user.orgId]
+    );
+    const views: MailView[] = [];
+    for (const v of rows.rows) {
+      const m = await getMembership(db, v.project_id, user.id);
+      const rights = await getViewRights(db, v.id, user, m);
+      const manage = v.account_type === 'personal' ? v.owner_user_id === user.id : m?.role === 'pl' || user.globalRole === 'org_admin';
+      if (rights.canRead || manage) views.push({ ...mapView(v, rights), projectKey: v.project_key, canManage: manage });
+    }
+    return { views };
+  });
+
   // Gemeinsames Postfach: alle Mails aus Ansichten mit Leserecht, über alle aktiven Projekte
   app.get<{ Querystring: { folder?: string; projectId?: string; viewId?: string } }>('/mail/inbox', async (req) => {
     const user = requireUser(req);
