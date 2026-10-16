@@ -8,6 +8,8 @@ import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
+import { createReport, reportingOf } from '../docs/report.js';
+import type { ReportingPolicy } from '@projekttool/shared';
 
 const DEFAULT_COLUMNS = ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'];
 
@@ -22,6 +24,7 @@ export function mapProject(r: any): Project {
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     escalation: policyOf(r.escalation),
+    reporting: reportingOf(r.reporting),
     visibility: r.visibility ?? 'members',
     myRole: r.my_role ?? undefined
   };
@@ -92,11 +95,30 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy> } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy> } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
+    if (b.reporting) {
+      const cur = reportingOf((await db.one(`select reporting from projects where id = $1`, [req.params.id])).reporting);
+      const { lastRunOn, lastPageId, ...incoming } = b.reporting as any;
+      void lastRunOn; void lastPageId;
+      const next = reportingOf({ ...cur, ...incoming });
+      if (!Number.isInteger(next.weekday) || next.weekday < 1 || next.weekday > 7) throw badRequest('Wochentag 1 (Mo) bis 7 (So)');
+      if (!Number.isInteger(next.dayOfMonth) || next.dayOfMonth < 1 || next.dayOfMonth > 28) throw badRequest('Monatstag 1 bis 28');
+      next.recipients = next.recipients.map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+      const bad = next.recipients.find((x) => !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(x));
+      if (bad) throw badRequest(`Ungültige Empfängeradresse: ${bad}`);
+      const tpl = await db.maybeOne(`select 1 from doc_templates where key = $1 and (org_id = $2 or org_id is null)`, [next.templateKey, user.orgId]);
+      if (!tpl) throw badRequest('Vorlage nicht gefunden');
+      if (next.parentPageId) {
+        const pg = await db.maybeOne(`select 1 from doc_pages where id = $1 and project_id = $2`, [next.parentPageId, req.params.id]);
+        if (!pg) throw badRequest('Oberseite gehört nicht zum Projekt');
+      }
+      await db.query(`update projects set reporting = $2 where id = $1`, [req.params.id, JSON.stringify(next)]);
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'reporting.policy', objectType: 'project', objectId: req.params.id, details: next as any });
+    }
     if (b.escalation) {
       const cur = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);
       const next = policyOf({ ...cur, ...b.escalation });
@@ -115,6 +137,14 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };
+  });
+
+  // Reporting manuell auslösen (PL): erzeugt den Bericht sofort nach den eingestellten Regeln
+  app.post<{ Params: { id: string } }>('/projects/:id/reporting/run', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const result = await createReport(db, app.mail, req.params.id, { userId: user.id, manual: true });
+    return { result };
   });
 
   // W11: Projekt archivieren

@@ -5,6 +5,7 @@ import { createRecurrenceInstance, dateStr, loadTasks } from './tasks/service.js
 import { nextDueDate, shouldCreateOnDue, type Recurrence } from './tasks/recurrence.js';
 import { audit } from './audit.js';
 import { runEscalations } from './tasks/escalation.js';
+import { runReports } from './docs/report.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -59,6 +60,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       if (lastDaily !== today) {
         await runDailyRules(db, today);
         await runEscalations(db, today);
+        await runReports(db, mail, today);
         lastDaily = today;
       }
     } catch (e) {

@@ -314,3 +314,62 @@ test('Gesamtsicht: Aufgaben über alle Projekte, gemeinsames Postfach, Projekt-S
   assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { visibility: 'members' })).statusCode, 200);
   assert.equal((await t.api(admin).get(`/projects/${t.ids.projects.web}`)).statusCode, 403);
 });
+
+test('Reporting: Policy, Fälligkeit, Bericht aus Vorlage mit Kennzahlen, Versand als PDF oder Entwurf zur Prüfung', async () => {
+  const { isReportDue, runReports } = await import('../src/docs/report.js');
+  const base = { enabled: true, templateKey: 'statusbericht', interval: 'weekly' as const, weekday: 5, dayOfMonth: 1, recipients: [], mode: 'direct' as const, parentPageId: null, lastRunOn: null, lastPageId: null };
+  assert.equal(isReportDue(base, '2026-10-16'), true, 'Freitag');
+  assert.equal(isReportDue(base, '2026-10-15'), false, 'Donnerstag');
+  assert.equal(isReportDue({ ...base, lastRunOn: '2026-10-16' }, '2026-10-16'), false, 'nur einmal am Tag');
+  assert.equal(isReportDue({ ...base, interval: 'biweekly', lastRunOn: '2026-10-09' }, '2026-10-16'), false);
+  assert.equal(isReportDue({ ...base, interval: 'biweekly', lastRunOn: '2026-10-02' }, '2026-10-16'), true);
+  assert.equal(isReportDue({ ...base, interval: 'monthly', dayOfMonth: 28 }, '2026-02-28'), true);
+  assert.equal(isReportDue({ ...base, enabled: false }, '2026-10-16'), false);
+
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).patch(`/projects/${t.ids.projects.web}`, { reporting: { enabled: true } })).statusCode, 403);
+  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { reporting: { recipients: ['kaputt'] } })).statusCode, 400);
+  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { reporting: { templateKey: 'gibtsnicht' } })).statusCode, 400);
+  const set = await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { reporting: { enabled: true, interval: 'weekly', weekday: 5, recipients: ['GF@kunde.de', 'lenkung@kunde.de'], mode: 'direct' } });
+  assert.equal(set.statusCode, 200, set.body);
+  const pol = (await t.api(pl).get(`/projects/${t.ids.projects.web}`)).json().project.reporting;
+  assert.deepEqual(pol.recipients, ['gf@kunde.de', 'lenkung@kunde.de']);
+
+  // Direktmodus: Seite final, PDF an Empfängerkreis, Anhang an der Seite
+  const before = t.mail.dev.sent.length;
+  const run = await t.api(pl).post(`/projects/${t.ids.projects.web}/reporting/run`);
+  assert.equal(run.statusCode, 200, run.body);
+  const r1 = run.json().result;
+  assert.equal(r1.sent, true, JSON.stringify(r1));
+  assert.match(r1.title, /^Statusbericht WEB KW \d{2}\/\d{4}$/);
+  const out = t.mail.dev.sent.at(-1)!;
+  assert.equal(t.mail.dev.sent.length, before + 1);
+  assert.deepEqual(out.msg.to, ['gf@kunde.de', 'lenkung@kunde.de']);
+  assert.equal(out.msg.attachments?.length, 1);
+  assert.ok(out.msg.attachments![0].content.subarray(0, 4).toString() === '%PDF');
+  const page = (await t.api(pl).get(`/docs/pages/${r1.pageId}`)).json();
+  assert.equal(page.page.status, 'final');
+  assert.ok(page.page.contentHtml.includes('Kennzahlen'));
+  assert.ok(page.page.contentHtml.includes('Nächste Meilensteine'));
+  assert.equal(page.attachments.length, 1);
+  assert.deepEqual(page.page.settings.recipients, ['gf@kunde.de', 'lenkung@kunde.de']);
+  const after = (await t.api(pl).get(`/projects/${t.ids.projects.web}`)).json().project.reporting;
+  assert.equal(after.lastPageId, r1.pageId);
+  assert.ok(after.lastRunOn);
+  // Worker-Lauf am selben Tag erzeugt nichts Doppeltes
+  assert.equal((await runReports(t.db, t.mail, after.lastRunOn)).length, 0);
+
+  // Prüfmodus: Entwurf + Benachrichtigung an PL, Versand danach über die Seite (Empfänger aus Seiteneinstellung)
+  await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { reporting: { mode: 'proposal' } });
+  const r2 = (await t.api(pl).post(`/projects/${t.ids.projects.web}/reporting/run`)).json().result;
+  assert.equal(r2.sent, false);
+  assert.equal(r2.status, 'draft');
+  const notes = (await t.api(pl).get('/notifications')).json().notifications;
+  assert.ok(notes.some((n: any) => n.type === 'report.review' && n.link.endsWith(r2.pageId)));
+  assert.equal((await t.api(pl).post(`/docs/pages/${r2.pageId}/distribute`, {})).statusCode, 400, 'Entwurf wird nicht versendet');
+  assert.equal((await t.api(pl).post(`/docs/pages/${r2.pageId}/status`, { status: 'final' })).statusCode, 200);
+  const dist = await t.api(pl).post(`/docs/pages/${r2.pageId}/distribute`, {});
+  assert.equal(dist.statusCode, 200, dist.body);
+  assert.deepEqual(dist.json().to, ['gf@kunde.de', 'lenkung@kunde.de']);
+});

@@ -12,48 +12,20 @@ import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion } from '
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
-import { type PdfStyle } from '../docs/pdf.js';
 import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
-import { htmlToMd, mdToHtml, renderTemplateHtml, sanitizeHtml } from '../docs/html.js';
+import { htmlToMd, mdToHtml, sanitizeHtml } from '../docs/html.js';
+import * as L from '../docs/layout.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
 export async function docRoutes(app: FastifyInstance) {
   const db = app.db;
-  const styleFor = async (projectId: string): Promise<PdfStyle> => {
-    const o = await db.one(`select o.name, o.settings from projects p join orgs o on o.id = p.org_id where p.id = $1`, [projectId]);
-    const st = o.settings ?? {};
-    return { company: st.company ?? o.name, accentColor: st.accentColor, footerText: st.footerText };
-  };
-  /** Layout einer Seite: Mandanten-Stil, überschrieben von Oberseiten (von oben nach unten) und der Seite selbst. */
-  const layoutFor = async (pageId: string): Promise<PageLayout> => {
-    const page = await db.one(`select project_id from doc_pages where id = $1`, [pageId]);
-    const base: PageLayout = await styleFor(page.project_id);
-    const chain = await db.query(
-      `with recursive anc as (select id, parent_page_id, settings, 0 as depth from doc_pages where id = $1
-         union all select p.id, p.parent_page_id, p.settings, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id)
-       select settings from anc order by depth desc`,
-      [pageId]
-    );
-    for (const r of chain.rows) Object.assign(base, Object.fromEntries(Object.entries(r.settings?.pdf ?? {}).filter(([, v]) => v !== null && v !== undefined && v !== '')));
-    return base;
-  };
-  /** Vorlage für Unterseiten: nächste Oberseite mit childTemplateKey. */
-  const inheritedTemplate = async (parentPageId: string | null): Promise<string | null> => {
-    if (!parentPageId) return null;
-    const chain = await db.query(
-      `with recursive anc as (select id, parent_page_id, settings, 0 as depth from doc_pages where id = $1
-         union all select p.id, p.parent_page_id, p.settings, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id)
-       select settings from anc order by depth`,
-      [parentPageId]
-    );
-    for (const r of chain.rows) if (r.settings?.childTemplateKey) return r.settings.childTemplateKey;
-    return null;
-  };
-  const loadTemplate = async (key: string, orgId: string) => db.maybeOne(`select * from doc_templates where key = $1 and (org_id = $2 or org_id is null) order by org_id nulls last limit 1`, [key, orgId]);
-  const templateHtml = (t: any) => renderTemplateHtml(t.content_html ?? mdToHtml(t.content_md ?? ''));
-  const folderName = async (folderId: string | null) => (folderId ? (await db.maybeOne(`select name from doc_folders where id = $1`, [folderId]))?.name ?? null : null);
-  const uploadDir = path.resolve(process.env.DATA_DIR ?? '.data', 'uploads');
+  const layoutFor = (pageId: string) => L.layoutFor(db, pageId);
+  const inheritedTemplate = (parentPageId: string | null) => L.inheritedTemplate(db, parentPageId);
+  const loadTemplate = (key: string, orgId: string) => L.loadTemplate(db, key, orgId);
+  const templateHtml = L.templateHtml;
+  const folderName = (folderId: string | null) => L.folderName(db, folderId);
+  const uploadDir = L.uploadDir;
 
   app.get<{ Params: { id: string } }>('/projects/:id/docs', async (req) => {
     const user = requireUser(req);
@@ -249,15 +221,16 @@ export async function docRoutes(app: FastifyInstance) {
   });
 
   // W5: Finale Seite an den Verteiler des Ordners senden (über Projektkonto, als Mailtext; PDF später)
-  app.post<{ Params: { pid: string }; Body: { accountId?: string } }>('/docs/pages/:pid/distribute', async (req) => {
+  app.post<{ Params: { pid: string }; Body: { accountId?: string; to?: string[] } }>('/docs/pages/:pid/distribute', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select p.*, f.distribution_list from doc_pages p left join doc_folders f on f.id = p.folder_id where p.id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     const m = await requireProject(db, user, r.project_id, 'member');
     if (m.role !== 'pl' && !m.canFinalize) throw forbidden('Versand erfordert das Recht „Versand auslösen“');
     if (r.status !== 'final') throw badRequest('Nur finale Seiten werden versendet');
-    const list: string[] = r.distribution_list ?? [];
-    if (!list.length) throw badRequest('Der Ordner hat keinen Verteiler');
+    const override = (req.body?.to ?? []).map((x: string) => String(x).trim().toLowerCase()).filter(Boolean);
+    const list: string[] = override.length ? override : (r.distribution_list?.length ? r.distribution_list : r.settings?.recipients ?? []);
+    if (!list.length) throw badRequest('Kein Verteiler: weder am Ordner noch an der Seite');
     const account = req.body?.accountId
       ? await db.maybeOne(`select * from mail_accounts where id = $1 and project_id = $2 and type = 'project'`, [req.body.accountId, r.project_id])
       : await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [r.project_id]);

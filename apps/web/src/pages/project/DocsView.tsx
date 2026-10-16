@@ -120,7 +120,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         {p.status !== 'final' && canFinal && <button className="btn sm" disabled={busy} onClick={() => void setStatus('final')}>Final setzen</button>}
         {p.status === 'final' && canFinal && <>
           <button className="btn sm" disabled={busy} onClick={() => { if (confirm('Finale Seite wieder öffnen? Es entsteht eine neue Version.')) void setStatus('draft'); }}>Wieder öffnen</button>
-          <button className="btn sm primary" disabled={busy || !folder?.distributionList.length} title={folder?.distributionList.length ? `An: ${folder.distributionList.join(', ')}` : 'Ordner hat keinen Verteiler'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); alert(`PDF „${r.filename}“ versendet an: ${r.to.join(', ')}`); })}>Als PDF an Verteiler senden</button>
+          <button className="btn sm primary" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); alert(`PDF „${r.filename}“ versendet an: ${r.to.join(', ')}`); })}>Als PDF an Verteiler senden</button>
         </>}
         {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Seite löschen? Unterseiten rücken eine Ebene hoch.')) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); }}>Löschen</button>}
       </div>
@@ -174,7 +174,7 @@ function Editor({ page, onCancel, onSaved }: { page: DocPage; onCancel: () => vo
 
 function SettingsDialog({ page, templates, pages, inherited, onClose, onSaved }: { page: DocPage; templates: DocTemplate[]; pages: DocPage[]; inherited: string | null; onClose: () => void; onSaved: () => Promise<void> }) {
   const s = page.settings ?? {};
-  const [f, setF] = useState({ kind: s.kind ?? '', childTemplateKey: s.childTemplateKey ?? '', showChildren: s.showChildren ?? false, parentPageId: page.parentPageId ?? '', accentColor: s.pdf?.accentColor ?? '', headerText: s.pdf?.headerText ?? '', footerText: s.pdf?.footerText ?? '', showMeta: s.pdf?.showMeta !== false });
+  const [f, setF] = useState({ kind: s.kind ?? '', childTemplateKey: s.childTemplateKey ?? '', showChildren: s.showChildren ?? false, parentPageId: page.parentPageId ?? '', accentColor: s.pdf?.accentColor ?? '', headerText: s.pdf?.headerText ?? '', footerText: s.pdf?.footerText ?? '', showMeta: s.pdf?.showMeta !== false, recipients: (s.recipients ?? []).join(', ') });
   const { busy, error, run } = useAsync();
   const candidates = pages.filter((x) => x.id !== page.id && x.parentPageId !== page.id);
   return (
@@ -186,6 +186,7 @@ function SettingsDialog({ page, templates, pages, inherited, onClose, onSaved }:
           <select value={f.childTemplateKey} onChange={(e) => setF({ ...f, childTemplateKey: e.target.value })}><option value="">– wie Oberseite / leer –</option>{templates.map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}</select></label>
         <label className="check"><input type="checkbox" checked={f.showChildren} onChange={(e) => setF({ ...f, showChildren: e.target.checked })} /> Unterseiten-Index unter dem Inhalt anzeigen</label>
         <label className="field"><span>Oberseite dieser Seite</span><select value={f.parentPageId} onChange={(e) => setF({ ...f, parentPageId: e.target.value })}><option value="">– keine (oberste Ebene) –</option>{candidates.map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}</select></label>
+        <label className="field"><span>Empfängerkreis für den PDF-Versand dieser Seite <span className="muted">(Vorrang hat ein Verteiler am Ordner)</span></span><input type="text" value={f.recipients} placeholder="gf@kunde.de, lenkungskreis@firma.de" onChange={(e) => setF({ ...f, recipients: e.target.value })} /></label>
         <strong className="small">PDF-Layout (für diese Seite und Unterseiten; leer = Mandanten-Stil)</strong>
         <div className="form cols-2">
           <label className="field"><span>Akzentfarbe</span><input type="text" value={f.accentColor} placeholder="#1f5eff" onChange={(e) => setF({ ...f, accentColor: e.target.value })} /></label>
@@ -195,7 +196,7 @@ function SettingsDialog({ page, templates, pages, inherited, onClose, onSaved }:
         </div>
         {error && <div className="error">{error}</div>}
         <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => {
-          const settings: DocPageSettings = { kind: (f.kind || null) as any, childTemplateKey: f.childTemplateKey || null, showChildren: f.showChildren, pdf: { accentColor: f.accentColor || undefined, headerText: f.headerText || undefined, footerText: f.footerText || undefined, showMeta: f.showMeta } };
+          const settings: DocPageSettings = { ...s, kind: (f.kind || null) as any, childTemplateKey: f.childTemplateKey || null, showChildren: f.showChildren, recipients: f.recipients.split(/[,;\s]+/).filter(Boolean), pdf: { accentColor: f.accentColor || undefined, headerText: f.headerText || undefined, footerText: f.footerText || undefined, showMeta: f.showMeta } };
           await api.patch(`/docs/pages/${page.id}`, { settings, parentPageId: f.parentPageId || null });
           await onSaved();
         })}>Speichern</button></div>

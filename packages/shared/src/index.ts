@@ -39,6 +39,7 @@ export interface Project {
   timeTrackingEnabled: boolean;
   budgetHours: number | null;
   escalation?: EscalationPolicy;
+  reporting?: ReportingPolicy;
   myRole?: ProjectRole;
   myMembership?: Membership;
 }
@@ -50,6 +51,24 @@ export interface EscalationPolicy {
   contactUserId: string | null;
   contactEmail: string | null;
   externalMode: 'proposal' | 'direct';
+}
+
+/** Reporting: Vorlage im Rhythmus an einen Empfängerkreis, erzeugt und versendet vom Worker. */
+export interface ReportingPolicy {
+  enabled: boolean;
+  templateKey: string;
+  interval: 'weekly' | 'biweekly' | 'monthly';
+  /** ISO-Wochentag 1 (Mo) … 7 (So) für weekly/biweekly */
+  weekday: number;
+  /** Tag im Monat 1 … 28 für monthly */
+  dayOfMonth: number;
+  recipients: string[];
+  /** proposal: Entwurf + Prüfung durch PL; direct: final setzen und sofort als PDF senden */
+  mode: 'proposal' | 'direct';
+  /** Oberseite, unter der Berichte abgelegt werden */
+  parentPageId: string | null;
+  lastRunOn: string | null;
+  lastPageId: string | null;
 }
 
 export interface EscalationRow {
@@ -353,6 +372,10 @@ export interface DocPageSettings {
   kind?: 'series' | 'subproject' | 'report' | 'custom' | null;
   /** Unterseiten-Index unter dem Inhalt anzeigen */
   showChildren?: boolean;
+  /** Empfängerkreis für den PDF-Versand dieser Seite (Vorrang hat der Ordner-Verteiler) */
+  recipients?: string[];
+  /** Vom Reporting erzeugt */
+  report?: { generatedOn: string; mode: 'proposal' | 'direct' } | null;
   /** PDF-Layout für diese Seite und Unterseiten */
   pdf?: { accentColor?: string; headerText?: string; footerText?: string; showMeta?: boolean } | null;
 }
