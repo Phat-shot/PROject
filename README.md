@@ -41,7 +41,7 @@ docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d        
 docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile backup up -d  # zusätzlich tägliches pg_dump nach ./backups
 ```
 
-TLS und Reverse-Proxy liegen außerhalb der Compose-Datei: Der vorhandene Proxy zeigt auf `APP_PORT` (Standard `127.0.0.1:3000`), `PUBLIC_URL` ist die Adresse, unter der er die App ausliefert.
+Die App hängt am bestehenden Traefik: externes Docker-Netz `proxy`, Entrypoints `http`/`https`, Certresolver `http`, Router `projekttool` mit Redirect auf HTTPS. `DOMAIN` in `deploy/.env` setzen; `PUBLIC_URL` ergibt sich daraus. Es werden keine Ports veröffentlicht.
 
 Update: `IMAGE_TAG` in `deploy/.env` setzen, dann `docker compose … pull && docker compose … up -d`. Migrationen laufen beim Start automatisch.
 Das Image läuft ohne Root, mit Healthcheck auf `/api/health`; Uploads und PGlite-Daten liegen im Volume `/data`.

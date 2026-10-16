@@ -1,15 +1,17 @@
-# Produktion (Phase 1, Eigenbetrieb): fertiges Image aus der GitHub Container Registry.
+# Produktion (Phase 1, Eigenbetrieb): fertiges Image aus der GitHub Container Registry, hinter Traefik.
 #
-#   cp deploy/.env.example deploy/.env   # Werte eintragen
+#   cp deploy/.env.example deploy/.env   # Werte eintragen (POSTGRES_PASSWORD, DOMAIN)
 #   docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d
+#   docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile backup up -d   # zusätzlich tägliches pg_dump
 #
-# TLS/Reverse-Proxy liegt außerhalb dieser Compose-Datei (vorhandener Proxy des Betriebs);
-# die App lauscht auf APP_PORT (Standard nur lokal: 127.0.0.1:3000).
+# Voraussetzung: Traefik läuft bereits mit dem externen Docker-Netz "proxy", den Entrypoints http/https
+# und dem Certresolver "http" (wie bei den übrigen Diensten). Die App veröffentlicht keine Ports selbst.
 #
-# Update auf eine neue Version: IMAGE_TAG in deploy/.env ändern, dann `pull` und `up -d`.
+# Update: IMAGE_TAG in deploy/.env ändern, dann `pull` und `up -d`. Migrationen laufen beim Start.
 services:
   db:
     image: postgres:16-alpine
+    container_name: projekttool-db
     restart: unless-stopped
     environment:
       POSTGRES_DB: projekttool
@@ -17,6 +19,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD fehlt in deploy/.env}
     volumes:
       - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U projekttool -d projekttool"]
       interval: 10s
@@ -25,6 +29,7 @@ services:
 
   app:
     image: ${IMAGE:-ghcr.io/phat-shot/project}:${IMAGE_TAG:-latest}
+    container_name: projekttool
     restart: unless-stopped
     depends_on:
       db:
@@ -35,18 +40,32 @@ services:
       DATA_DIR: /data
       SEED: ${SEED:-false}
       SYNC_INTERVAL_MS: ${SYNC_INTERVAL_MS:-60000}
-      COOKIE_SECURE: ${COOKIE_SECURE:-true}
-      PUBLIC_URL: ${PUBLIC_URL:?PUBLIC_URL fehlt in deploy/.env}
+      COOKIE_SECURE: "true"
+      PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       LOG: "true"
     volumes:
       - appdata:/data
-    # Port für den vorgelagerten Reverse-Proxy (z. B. 127.0.0.1:3000) oder direkt 0.0.0.0:3000
-    ports:
-      - "${APP_PORT:-127.0.0.1:3000}:3000"
+    networks:
+      - proxy
+      - internal
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.projekttool.entrypoints=http"
+      - "traefik.http.routers.projekttool.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.middlewares.projekttool-https-redirect.redirectscheme.scheme=https"
+      - "traefik.http.routers.projekttool.middlewares=projekttool-https-redirect"
+      - "traefik.http.routers.projekttool-secure.entrypoints=https"
+      - "traefik.http.routers.projekttool-secure.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.projekttool-secure.tls=true"
+      - "traefik.http.routers.projekttool-secure.tls.certresolver=http"
+      - "traefik.http.routers.projekttool-secure.service=projekttool"
+      - "traefik.http.services.projekttool.loadbalancer.server.port=3000"
+      - "traefik.docker.network=proxy"
 
   # Tägliches Backup der Datenbank nach ./backups (pg_dump, 14 Tage Aufbewahrung)
   backup:
     image: postgres:16-alpine
+    container_name: projekttool-backup
     profiles: ["backup"]
     restart: unless-stopped
     depends_on:
@@ -56,6 +75,8 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./backups:/backups
+    networks:
+      - internal
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
@@ -64,6 +85,11 @@ services:
           find /backups -name 'projekttool-*.dump' -mtime +14 -delete
           sleep 86400
         done
+
+networks:
+  proxy:
+    external: true
+  internal:
 
 volumes:
   pgdata:
