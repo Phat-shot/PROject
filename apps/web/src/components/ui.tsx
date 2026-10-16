@@ -35,7 +35,7 @@ export function Modal({ title, onClose, children }: { title: ReactNode; onClose:
 }
 
 export function Markdown({ md }: { md: string }) {
-  const html = DOMPurify.sanitize(marked.parse(md, { async: false }) as string);
+  const html = DOMPurify.sanitize(marked.parse(md, { async: false, breaks: true, gfm: true }) as string);
   return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
 }
 

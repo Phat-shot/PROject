@@ -7,7 +7,7 @@ import { marked, type Token, type Tokens } from 'marked';
  * Fett/kursiv werden als Text übernommen; Emojis entfernt (Standardschriften sind Latin-1).
  */
 export async function markdownToPdf(md: string, meta: { title: string; project: string; version: number; status: string; author?: string | null; date?: Date }): Promise<Buffer> {
-  const doc = new PDFDocument({ size: 'A4', margins: { top: 64, bottom: 64, left: 56, right: 56 }, info: { Title: meta.title, Author: meta.author ?? meta.project } });
+  const doc = new PDFDocument({ bufferPages: true, size: 'A4', margins: { top: 64, bottom: 64, left: 56, right: 56 }, info: { Title: meta.title, Author: meta.author ?? meta.project } });
   const chunks: Buffer[] = [];
   doc.on('data', (c: Buffer) => chunks.push(c));
   const done = new Promise<Buffer>((resolve) => doc.on('end', () => resolve(Buffer.concat(chunks))));
@@ -21,14 +21,17 @@ export async function markdownToPdf(md: string, meta: { title: string; project: 
   doc.moveDown(0.8);
   doc.fillColor('#111');
 
-  const tokens = marked.lexer(md);
+  const tokens = marked.lexer(md, { breaks: true, gfm: true });
   for (const t of tokens) renderToken(doc, t, width);
 
   // Fußzeilen mit Seitenzahl
   const range = doc.bufferedPageRange();
   for (let i = range.start; i < range.start + range.count; i++) {
     doc.switchToPage(i);
-    doc.fontSize(8).fillColor('#888').text(`Seite ${i - range.start + 1} von ${range.count}`, doc.page.margins.left, doc.page.height - 40, { width, align: 'right' });
+    const bottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0; // sonst löst die Fußzeile einen Seitenumbruch aus
+    doc.fontSize(8).fillColor('#888').text(`Seite ${i - range.start + 1} von ${range.count}`, doc.page.margins.left, doc.page.height - 40, { width, align: 'right', lineBreak: false });
+    doc.page.margins.bottom = bottom;
   }
   doc.end();
   return done;
