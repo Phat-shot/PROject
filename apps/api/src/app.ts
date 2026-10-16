@@ -75,7 +75,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(searchRoutes);
       await api.register(timeRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
-      api.get('/health', async () => ({ ok: true, db: opts.db.kind }));
+      api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },
     { prefix: '/api' }
   );

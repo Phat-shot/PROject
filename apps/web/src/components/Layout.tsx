@@ -16,6 +16,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const [projects, setProjects] = useState<Project[]>([]);
   const [open, setOpen] = useState(true);
   const [tour, setTour] = useState(false);
+  const [version, setVersion] = useState('');
+  useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
   const load = () => api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined);
@@ -68,7 +70,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>
-          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button></div>
+          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button>{version && <span className="small" title="Build-Version" style={{ marginLeft: 'auto', opacity: 0.6 }}>{version}</span>}</div>
         </div>
       </nav>
       <div className="main">{children}</div>

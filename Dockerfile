@@ -22,7 +22,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 # Laufzeit: schlank, ohne Root
 FROM node:22-alpine
 WORKDIR /app
-ENV NODE_ENV=production PORT=3000 DATA_DIR=/data STATIC_DIR=/app/apps/web/dist
+ARG GIT_SHA=dev
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/data STATIC_DIR=/app/apps/web/dist APP_VERSION=$GIT_SHA
 RUN apk add --no-cache curl tini && mkdir -p /data && chown node:node /data
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json
