@@ -622,7 +622,7 @@ export async function mailRoutes(app: FastifyInstance) {
     return { drafts: out };
   });
 
-  app.post<{ Body: { viewId?: string; accountId?: string; projectId: string; taskId?: string | null; to: string[]; cc?: string[]; subject: string; body: string; inReplyTo?: string | null; references?: string | null; send?: boolean } }>('/mail/drafts', async (req) => {
+  app.post<{ Body: { viewId?: string; accountId?: string; projectId: string; taskId?: string | null; checklistItemId?: string | null; to: string[]; cc?: string[]; subject: string; body: string; inReplyTo?: string | null; references?: string | null; send?: boolean } }>('/mail/drafts', async (req) => {
     const user = requireUser(req);
     const b = req.body ?? ({} as any);
     if (!b.projectId || !Array.isArray(b.to) || b.to.length === 0 || !b.subject) throw badRequest('Projekt, Empfänger und Betreff erforderlich');
@@ -646,8 +646,8 @@ export async function mailRoutes(app: FastifyInstance) {
       if (!t || t.project_id !== b.projectId) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
     }
     const d = await db.one(
-      `insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft') returning *`,
-      [account!.id, b.viewId ?? null, b.taskId ?? null, b.projectId, user.id, JSON.stringify(b.to), JSON.stringify(b.cc ?? []), b.subject, b.body ?? '', b.inReplyTo ?? null]
+      `insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status, checklist_item_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft',$11) returning *`,
+      [account!.id, b.viewId ?? null, b.taskId ?? null, b.projectId, user.id, JSON.stringify(b.to), JSON.stringify(b.cc ?? []), b.subject, b.body ?? '', b.inReplyTo ?? null, b.checklistItemId ?? null]
     );
     if (b.send) {
       if (rights.canSend) {
@@ -731,7 +731,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const d = await db.one(`select * from mail_drafts where id = $1`, [draftId]);
     try {
       const res = await app.mail.sendFromAccount(account, {
-        to: d.to_addrs, cc: d.cc_addrs, subject: d.subject, text: d.body, taskId: d.task_id, inReplyTo: d.in_reply_to, references, userId: user.id, projectId: d.project_id
+        to: d.to_addrs, cc: d.cc_addrs, subject: d.subject, text: d.body, taskId: d.task_id, checklistItemId: d.checklist_item_id ?? null, inReplyTo: d.in_reply_to, references, userId: user.id, projectId: d.project_id
       });
       await db.query(`update mail_drafts set status = 'sent', sent_at = now(), sent_by = $2, error = null, updated_at = now() where id = $1`, [draftId, user.id]);
       return res;

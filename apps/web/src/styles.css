@@ -427,3 +427,11 @@ table.table { width: 100%; border-collapse: collapse; }
 .mail-views .section { font-size: 11px; text-transform: uppercase; color: var(--muted); padding: 10px 10px 4px; letter-spacing: 0.4px; }
 .mail-views .view .cnt { font-size: 11px; color: var(--muted); }
 .mail-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+
+/* Mailverlauf unter Task / Arbeitspaket */
+.checklist li { flex-wrap: wrap; }
+.mail-thread { list-style: none; margin: 4px 0 2px 28px; padding: 0; flex-basis: 100%; }
+.mail-thread li { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 8px; border-left: 2px solid var(--border); margin-bottom: 2px; font-size: 13px; }
+.mail-thread li.in { border-left-color: var(--ok); }
+.mail-thread li.out { border-left-color: #c7d2fe; }
+.mail-thread .ell { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 2px; }

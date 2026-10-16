@@ -203,14 +203,14 @@ export async function taskRoutes(app: FastifyInstance) {
       [task.id]
     );
     const mails = await db.query(
-      `select m.id, m.subject, m.from_addr, m.date, l.copied, m.account_id from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
+      `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, m.outgoing, m.to_json, l.copied, l.checklist_item_id, m.account_id from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
       [task.id]
     );
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
     return {
       task,
       comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
-      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, date: m.date, copied: m.copied, accountId: m.account_id })),
+      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id })),
       attachments: attachments.rows.map(mapAttachment)
     };
   });

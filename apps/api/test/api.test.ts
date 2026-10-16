@@ -583,3 +583,21 @@ test('Globales Postfach: Ansichten über alle Projekte, Zeiterfassung mandantenw
   assert.equal((await t.api(pl).get('/auth/me')).json().orgSettings.timeTracking, false);
   await t.api(admin).put('/org/settings', { timeTracking: true });
 });
+
+test('Mails zu Tasks: Nachfrage wird dem Task zugeordnet, Antwort erbt die Zuordnung', async () => {
+  const pl = await t.login('pl@demo.local');
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit Nachfrage' })).json().task;
+  const item = (await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot', responsibleEmail: 'lieferant@extern.de' })).json().task.checklist[0];
+  const r = await t.api(pl).post('/mail/drafts', { viewId: t.ids.views.project, projectId: t.ids.projects.web, taskId: task.id, checklistItemId: item.id, to: ['lieferant@extern.de'], subject: 'Stand zu Angebot', body: 'Wie ist der Stand?', send: true });
+  assert.equal(r.statusCode, 200, r.body);
+  const sent = t.mail.dev.sent.at(-1)!;
+  // Antwort des Externen mit In-Reply-To
+  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'lieferant@extern.de', name: 'Lieferant' }, subject: 'Re: Stand zu Angebot', text: 'Kommt morgen.', inReplyTo: sent.messageId, to: [sent.msg.replyTo ?? 'projekt-web@demo.local'] });
+  await t.mail.syncAccount(t.ids.accounts.project);
+  const d = (await t.api(pl).get(`/tasks/${task.id}`)).json();
+  const out = d.mails.find((m: any) => m.outgoing && m.subject === 'Stand zu Angebot');
+  const back = d.mails.find((m: any) => !m.outgoing && m.subject === 'Re: Stand zu Angebot');
+  assert.ok(out && out.checklistItemId === item.id, JSON.stringify(d.mails));
+  assert.ok(back && back.checklistItemId === item.id, 'Antwort erbt den Task-Bezug');
+  assert.equal(back.snippet, 'Kommt morgen.');
+});

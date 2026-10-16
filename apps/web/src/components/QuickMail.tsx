@@ -7,8 +7,8 @@ import { Modal, useAsync } from './ui';
  * Mail im Popup schreiben und direkt senden, ohne ins Postfach zu wechseln.
  * Konto: bevorzugt eine Ansicht mit Senderecht (Projektkonto zuerst); ohne Senderecht geht die Mail als Entwurf zur Freigabe.
  */
-export function QuickMail({ projectId, taskId, to, subject, body, title, onClose, onSent }: {
-  projectId: string; taskId?: string | null; to: string; subject: string; body: string; title?: string; onClose: () => void; onSent?: () => void;
+export function QuickMail({ projectId, taskId, checklistItemId, to, subject, body, title, onClose, onSent }: {
+  projectId: string; taskId?: string | null; checklistItemId?: string | null; to: string; subject: string; body: string; title?: string; onClose: () => void; onSent?: () => void;
 }) {
   const [views, setViews] = useState<MailView[] | null>(null);
   const [f, setF] = useState({ viewId: '', to, cc: '', subject, body });
@@ -24,7 +24,7 @@ export function QuickMail({ projectId, taskId, to, subject, body, title, onClose
   const view = views?.find((v) => v.id === f.viewId);
   const split = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
   const send = () => run(async () => {
-    await api.post('/mail/drafts', { viewId: f.viewId, projectId, taskId: taskId ?? null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, send: true });
+    await api.post('/mail/drafts', { viewId: f.viewId, projectId, taskId: taskId ?? null, checklistItemId: checklistItemId ?? null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, send: true });
     onSent?.();
     onClose();
   });

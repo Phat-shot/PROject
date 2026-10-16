@@ -12,10 +12,12 @@ import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { today } from '../../lib/api';
 
+interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string }
+
 interface TaskDetail {
   task: Task;
   comments: TaskComment[];
-  mails: { id: string; subject: string; fromAddr: string; date: string; copied: boolean; accountId: string }[];
+  mails: TaskMail[];
   attachments: { id: string; filename: string; size: number }[];
 }
 
@@ -30,7 +32,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [saved, setSaved] = useState(false);
   const [more, setMore] = useState(false);
   const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
-  const [mail, setMail] = useState<null | { to: string; subject: string; body: string }>(null);
+  const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId?: string }>(null);
   const { busy, error, run, setError } = useAsync();
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
@@ -127,19 +129,18 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               <option value="extern">{i.responsibleEmail ? `${i.responsibleEmail} (extern)` : 'extern (Mail-Adresse) …'}</option>
             </select>
-            {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
+            {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
             {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}
+            <MailThread mails={d.mails.filter((m) => m.checklistItemId === i.id)} projectId={detail.project.id} />
           </li>
         ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
         <input type="text" placeholder="Neuer Task … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
-      <h3 className="mt">Verknüpfte Mails</h3>
-      {d.mails.length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet.</p> : (
-        <table className="table"><tbody>
-          {d.mails.map((m) => <tr key={m.id}><td><Link to={`/projekte/${detail.project.id}/mail/mail/${m.id}`}>{m.subject}</Link></td><td className="muted small">{m.fromAddr}</td><td className="muted small nowrap">{fmtDateTime(m.date)}</td><td>{m.copied && <span className="badge">Kopie</span>}</td></tr>)}
-        </tbody></table>
+      <h3 className="mt">Mails zum Arbeitspaket</h3>
+      {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
+        <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />
       )}
       {canEdit && <div className="row mt">
         <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>
@@ -163,7 +164,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         onSubmit={(v) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${ask.itemId}`, { responsibleUserId: null, responsibleEmail: v || null }); await load(); })} />}
       {ask?.kind === 'blocked' && <PromptModal title="Als blockiert melden" label="Warum hängt das Arbeitspaket?" placeholder="z. B. warten auf Freigabe des Kunden" submitLabel="Melden" onClose={() => setAsk(null)} onSubmit={(v) => void patch({ blocked: true, blockedReason: v })} />}
       {ask?.kind === 'escalate' && <PromptModal title="Eine Stufe höher eskalieren" label="Grund (optional)" submitLabel="Eskalieren" onClose={() => setAsk(null)} onSubmit={(note) => void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); })} />}
-      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void load()} />}
+      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} checklistItemId={mail.itemId ?? null} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void load()} />}
       {shift && (
         <Modal title="Nachfolger verschieben – Vorschau" onClose={() => setShift(null)}>
           {shift.changes.length === 0 ? <p>Kein Nachfolger muss verschoben werden.</p> : (
@@ -178,6 +179,26 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </Modal>
       )}
     </Drawer>
+  );
+}
+
+/** Mailverlauf zu einem Task oder Arbeitspaket: Nachfrage / Antwort, Zeit, Absender, gekürzter Inhalt. */
+function MailThread({ mails, projectId }: { mails: TaskMail[]; projectId: string }) {
+  if (mails.length === 0) return null;
+  const sorted = [...mails].sort((a, b) => a.date.localeCompare(b.date));
+  return (
+    <ul className="mail-thread">
+      {sorted.map((m) => (
+        <li key={m.id} className={m.outgoing ? 'out' : 'in'}>
+          <span className={`badge ${m.outgoing ? '' : 'ok'}`}>{m.outgoing ? 'Nachfrage' : 'Antwort'}</span>
+          <span className="muted small nowrap">{fmtDateTime(m.date)}</span>
+          <span className="small">{m.outgoing ? `an ${m.to.join(', ')}` : `von ${m.fromName ?? m.fromAddr}`}</span>
+          <Link className="small" to={`/projekte/${projectId}/mail/m/${m.id}`}>{m.subject}</Link>
+          {m.snippet && <span className="muted small ell" title={m.snippet}>{m.snippet.length > 160 ? `${m.snippet.slice(0, 160)} …` : m.snippet}</span>}
+          {m.copied && <span className="badge">Kopie</span>}
+        </li>
+      ))}
+    </ul>
   );
 }
 

@@ -84,26 +84,29 @@ export class MailService {
   private async linkByPlusAddress(account: AccountRow, mailId: string, m: IncomingMessage) {
     const code = taskCodeFromAddresses([...m.to, ...m.cc]);
     let taskId: string | null = null;
+    let itemId: string | null = null;
     if (code) {
       const t = await this.db.maybeOne(`select id from tasks where mail_code = $1`, [code]);
       taskId = t?.id ?? null;
     }
-    if (!taskId && m.inReplyTo) {
+    // Antwort auf eine Nachfrage: Task-Zuordnung (und ggf. das Arbeitspaket) von der Ausgangsmail erben
+    const refs = [m.inReplyTo, ...String(m.references ?? '').split(/\s+/)].filter(Boolean);
+    if (refs.length) {
       const t = await this.db.maybeOne(
-        `select l.task_id from mails x join mail_task_links l on l.mail_id = x.id where x.account_id = $1 and x.message_id = $2 limit 1`,
-        [account.id, m.inReplyTo]
+        `select l.task_id, l.checklist_item_id from mails x join mail_task_links l on l.mail_id = x.id where x.account_id = $1 and x.message_id = any($2::text[]) order by x.date desc limit 1`,
+        [account.id, refs]
       );
-      taskId = t?.task_id ?? null;
+      if (t) { taskId = taskId ?? t.task_id; if (t.task_id === taskId) itemId = t.checklist_item_id ?? null; }
     }
     if (taskId) {
-      await this.db.query(`insert into mail_task_links (mail_id, task_id, copied) values ($1,$2,false) on conflict do nothing`, [mailId, taskId]);
+      await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, checklist_item_id) values ($1,$2,false,$3) on conflict do nothing`, [mailId, taskId, itemId]);
       await audit(this.db, { orgId: account.org_id, projectId: account.project_id, action: 'mail.auto_linked', objectType: 'mail', objectId: mailId, details: { taskId, via: code ? 'plus-address' : 'in-reply-to' } });
     }
   }
 
   async sendFromAccount(
     account: AccountRow,
-    input: { to: string[]; cc?: string[]; subject: string; text: string; taskId?: string | null; inReplyTo?: string | null; references?: string | null; userId: string; projectId?: string | null; attachments?: { filename: string; content: Buffer; contentType: string }[] }
+    input: { to: string[]; cc?: string[]; subject: string; text: string; taskId?: string | null; checklistItemId?: string | null; inReplyTo?: string | null; references?: string | null; userId: string; projectId?: string | null; attachments?: { filename: string; content: Buffer; contentType: string }[] }
   ): Promise<{ messageId: string; mailId: string | null }> {
     let replyTo: string | undefined;
     if (input.taskId) {
@@ -138,7 +141,7 @@ export class MailService {
       }
     }
     if (input.taskId) {
-      await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [r.id, input.taskId, input.userId]);
+      await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by, checklist_item_id) values ($1,$2,false,$3,$4) on conflict do nothing`, [r.id, input.taskId, input.userId, input.checklistItemId ?? null]);
     }
     await audit(this.db, { orgId: account.org_id, projectId: input.projectId ?? account.project_id, userId: input.userId, action: 'mail.send', objectType: 'mail', objectId: r.id, details: { to: input.to, subject: input.subject, account: account.address } });
     return { messageId, mailId: r.id };
