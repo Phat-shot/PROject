@@ -37,10 +37,11 @@ unter `ghcr.io/phat-shot/project` mit den Tags Branch-Name, Commit-SHA, `latest`
 
 ```bash
 cp deploy/.env.example deploy/.env           # Passwort, PUBLIC_URL, DOMAIN eintragen
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d                  # App + Postgres
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile proxy up -d  # zusätzlich HTTPS über Caddy
-docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile backup up -d # zusätzlich tägliches pg_dump nach ./backups
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env up -d                   # App + Postgres
+docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile backup up -d  # zusätzlich tägliches pg_dump nach ./backups
 ```
+
+TLS und Reverse-Proxy liegen außerhalb der Compose-Datei: Der vorhandene Proxy zeigt auf `APP_PORT` (Standard `127.0.0.1:3000`), `PUBLIC_URL` ist die Adresse, unter der er die App ausliefert.
 
 Update: `IMAGE_TAG` in `deploy/.env` setzen, dann `docker compose … pull && docker compose … up -d`. Migrationen laufen beim Start automatisch.
 Das Image läuft ohne Root, mit Healthcheck auf `/api/health`; Uploads und PGlite-Daten liegen im Volume `/data`.
