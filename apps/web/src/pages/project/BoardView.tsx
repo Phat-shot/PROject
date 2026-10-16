@@ -37,7 +37,7 @@ export function BoardView() {
       if (e.key === 'f') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'q') setF((x) => ({ ...x, mine: !x.mine }));
       if (e.key === 'x') setF(EMPTY);
-      if (e.key === 'n' && canEdit) setCreate({ columnId: detail.columns[0].id, subprojectId: null });
+      if (e.key === 'n' && canEdit) setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null });
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -107,7 +107,7 @@ export function BoardView() {
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
-        {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: detail.columns[0].id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
+        {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen über die Arbeitspaket.</div>}
       {groups.map((g) => (
@@ -121,12 +121,12 @@ export function BoardView() {
               const isCollapsed = collapsed.has(c.id);
               const laneKey = g.key;
               return (
-                <div key={c.id} className={`column ${over ? 'wip-over' : ''} ${isCollapsed ? 'collapsed' : ''} ${drop?.col === c.id && drop.lane === laneKey ? 'over' : ''}`}
+                <div key={c.id} className={`column kind-${c.kind} ${over ? 'wip-over' : ''} ${isCollapsed ? 'collapsed' : ''} ${drop?.col === c.id && drop.lane === laneKey ? 'over' : ''}`}
                   onDragOver={(e) => { if (canEdit && drag) { e.preventDefault(); if (!drop || drop.col !== c.id || drop.lane !== laneKey) setDrop({ col: c.id, lane: laneKey, index: inCol.length }); } }}
                   onDragLeave={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDrop(null); }}
                   onDrop={(e) => { e.preventDefault(); void onDrop(laneKey, c.id); }}>
                   <h3>
-                    <span>{c.name}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
+                    <span>{c.name}{!isCollapsed && c.kind === 'backlog' && <span className="kind" title="Geplant: zählt nicht als Stillstand">geplant</span>}{!isCollapsed && c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
                     {!isCollapsed && <span className="tools">
                       <span>{inCol.length}</span>
                       {canEdit && c.isDone && inCol.length > 0 && <button title="Alle erledigten archivieren" onClick={() => { if (confirm(`${total} erledigte Arbeitspakete archivieren?`)) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); }}>⌫</button>}

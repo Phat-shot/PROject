@@ -45,8 +45,8 @@ export async function seed(db: Db) {
   await member(web.id, leser, 'reader');
 
   const cols: Record<string, string> = {};
-  for (const [i, name] of ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'].entries()) {
-    const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit) values ($1,$2,$3,$4,$5) returning id`, [web.id, name, i, i === 3, name === 'In Arbeit' ? 3 : null]);
+  for (const [i, [name, kind]] of ([['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']] as const).entries()) {
+    const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [web.id, name, i, kind === 'done', name === 'In Arbeit' ? 3 : null, kind]);
     cols[name] = c.id;
   }
   const labels: Record<string, string> = {};
@@ -279,7 +279,7 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
   await db.query(`insert into group_members (group_id, user_id) values ($1,$2), ($1,$3)`, [lenk.id, pl, anna]);
   const vertrag = await db.one(`insert into subprojects (project_id, name, responsible_user_id, position, restricted) values ($1,'Vertrag und Budget',$2,99,true) returning id`, [web.id, anna]);
   await db.query(`insert into subproject_access (subproject_id, group_id) values ($1,$2)`, [vertrag.id, lenk.id]);
-  await db.query(`insert into tasks (project_id, subproject_id, column_id, title, description, priority, due_date, created_by, mail_code, position) select $1, $2, id, 'Agenturvertrag verhandeln', 'Vertraulich: Konditionen, Haftung, Laufzeit', 'high', $3, $4, $5, 50 from board_columns where project_id = $1 order by position limit 1`, [web.id, vertrag.id, '2026-11-15', pl, 'c0ffee11']);
+  await db.query(`insert into tasks (project_id, subproject_id, column_id, title, description, priority, due_date, created_by, mail_code, position) select $1, $2, id, 'Agenturvertrag verhandeln', 'Vertraulich: Konditionen, Haftung, Laufzeit', 'high', $3, $4, $5, 50 from board_columns where project_id = $1 and kind = 'active' order by position limit 1`, [web.id, vertrag.id, '2026-11-15', pl, 'c0ffee11']);
   const persAcc = await db.one(
     `insert into mail_accounts (org_id, type, owner_user_id, name, address, provider) values ($1,'personal',$2,'Petra Lenz (persönlich)','pl@demo.local','dev') returning id`,
     [org.id, pl]
@@ -299,8 +299,8 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
   await member(erp.id, pl, 'member');
   await member(erp.id, max, 'member');
   const erpCols: string[] = [];
-  for (const [i, name] of ['Backlog', 'Sprint', 'Test', 'Fertig'].entries()) {
-    erpCols.push((await db.one(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4) returning id`, [erp.id, name, i, i === 3])).id);
+  for (const [i, [name, kind]] of ([['Backlog', 'backlog'], ['Sprint', 'active'], ['Test', 'active'], ['Fertig', 'done']] as const).entries()) {
+    erpCols.push((await db.one(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5) returning id`, [erp.id, name, i, kind === 'done', kind])).id);
   }
   await createDefaultFolders(db, erp.id);
   await db.query(

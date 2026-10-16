@@ -90,7 +90,7 @@ export async function loadTask(db: Db, id: string): Promise<Task | null> {
   if (!r) return null;
   const task = mapTask(r, await resolveProjectLead(db, r.project_id));
   const cl = await db.query(`select * from checklist_items where task_id = $1 order by position, title`, [id]);
-  task.checklist = cl.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, title: c.title, done: c.done, responsibleUserId: c.responsible_user_id, position: c.position }));
+  task.checklist = cl.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, title: c.title, done: c.done, responsibleUserId: c.responsible_user_id, responsibleEmail: c.responsible_email ?? null, position: c.position }));
   return task;
 }
 

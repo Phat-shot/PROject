@@ -71,8 +71,8 @@ export async function evaluateProject(db: Db, projectId: string, today: string):
   const tasks = await loadTasks(db, 't.project_id = $1 and t.archived_at is null', [projectId], lead);
   const raw = await db.query(`select id, blocked, blocked_reason, escalation_level, last_activity_at, column_id, subproject_id from tasks where project_id = $1 and archived_at is null`, [projectId]);
   const rawById = new Map(raw.rows.map((r: any) => [r.id, r]));
-  const cols = await db.query(`select id, position, is_done from board_columns where project_id = $1 order by position`, [projectId]);
-  const firstCol = cols.rows[0]?.id;
+  const cols = await db.query(`select id, position, is_done, kind from board_columns where project_id = $1 order by position`, [projectId]);
+  const activeCols = new Set(cols.rows.filter((c: any) => (c.kind ?? 'active') === 'active').map((c: any) => c.id));
   const succCount = await db.query(`select predecessor_id, count(*)::int as c from task_dependencies group by predecessor_id`);
   const succ = new Map(succCount.rows.map((r: any) => [r.predecessor_id, r.c]));
   const milestones = await db.query(`select subproject_id, date from milestones where project_id = $1 and date >= $2 order by date`, [projectId, today]);
@@ -85,7 +85,7 @@ export async function evaluateProject(db: Db, projectId: string, today: string):
     const r = rawById.get(t.id);
     if (!r) continue;
     const overdueDays = t.dueDate && t.dueDate < today ? Math.round((Date.parse(today) - Date.parse(t.dueDate)) / 86400_000) : 0;
-    const active = r.column_id !== firstCol;
+    const active = activeCols.has(r.column_id);
     const staleDays = active ? Math.floor((Date.parse(today + 'T00:00:00Z') - new Date(r.last_activity_at).getTime()) / 86400_000) : 0;
     const ms = milestones.rows.find((m: any) => !m.subproject_id || m.subproject_id === t.subprojectId);
     const milestoneWithinDays = ms ? Math.round((Date.parse(dateStr(ms.date)!) - Date.parse(today)) / 86400_000) : null;

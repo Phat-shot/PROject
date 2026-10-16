@@ -2,62 +2,50 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ChecklistItem, Subproject, Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../lib/api';
-import { useData } from '../lib/useData';
-import { useAuth } from '../lib/auth';
 import { prioLabel } from '../components/ui';
 
-interface WorkProject {
+export interface WorkProject {
   id: string; key: string; name: string; myRole: string;
   lead: { userId: string | null; name: string | null };
   subprojects: Subproject[];
   tasks: Task[];
   checklist: ChecklistItem[];
 }
+export interface WorkLane { sub: Subproject | null; mine: boolean; items: WorkItem[] }
+export interface WorkItem { ap: Task; mine: boolean; tasks: { item: ChecklistItem; inherited: boolean }[] }
+export interface WorkNode { p: WorkProject; leadIsMe: boolean; lanes: WorkLane[] }
 
 /**
- * Meine Arbeit: Projekt › Teilprojekt › Arbeitspaket › Task, geklammert nach Hierarchie.
- * Gezeigt wird nur, was mir zugewiesen ist, ausdrücklich oder geerbt (Projektleitung → Teilprojekt → Arbeitspaket → Task).
+ * Baum Projekt › Teilprojekt › Arbeitspaket › Task: nur was mir zugewiesen ist, ausdrücklich oder geerbt
+ * (Projektleitung → Teilprojekt → Arbeitspaket → Task). Explizit anderen zugewiesene Elemente fallen heraus.
  */
-export function WorkTree() {
-  const { user } = useAuth();
-  const { data, error, reload } = useData<{ projects: WorkProject[] }>('/my/work');
-  const [showDone, setShowDone] = useState(false);
-  const me = user?.id;
-  const t = today();
-  if (error) return <div className="error">{error}</div>;
-  if (!data) return <div className="muted">Lade …</div>;
-
-  const tree = data.projects.map((p) => {
+export function buildWorkTree(projects: WorkProject[], me: string | undefined, showDone: boolean): WorkNode[] {
+  return projects.map((p) => {
     const leadIsMe = p.lead.userId === me;
-    const lanes: { sub: Subproject | null; mine: boolean; items: { ap: Task; mine: boolean; tasks: { item: ChecklistItem; inherited: boolean }[] }[] }[] = [];
-    const laneOf = (sub: Subproject | null) => {
+    const laneOf = (sub: Subproject | null): WorkLane => {
       const subMine = sub ? sub.responsible.userId === me : leadIsMe;
       const aps = p.tasks.filter((x) => (sub ? x.subprojectId === sub.id : !x.subprojectId) && (showDone || !x.done));
       const items = aps.map((ap) => {
         const apMine = ap.responsible.userId === me;
         const tasks = p.checklist.filter((c) => c.taskId === ap.id && (showDone || !c.done))
-          .map((c) => ({ item: c, inherited: !c.responsibleUserId }))
-          .filter((x) => (x.item.responsibleUserId ? x.item.responsibleUserId === me : apMine));
+          .map((c) => ({ item: c, inherited: !c.responsibleUserId && !c.responsibleEmail }))
+          .filter((x) => (x.item.responsibleUserId ? x.item.responsibleUserId === me : !x.item.responsibleEmail && apMine));
         return { ap, mine: apMine, tasks };
       }).filter((x) => x.mine || x.tasks.length > 0);
       return { sub, mine: subMine, items };
     };
-    for (const s of p.subprojects) lanes.push(laneOf(s));
-    lanes.push(laneOf(null));
-    const shown = lanes.filter((l) => l.items.length > 0 || (l.sub && l.mine && !l.sub.responsible.inherited));
-    return { p, leadIsMe, lanes: shown };
+    const lanes = [...p.subprojects.map(laneOf), laneOf(null)].filter((l) => l.items.length > 0 || (l.sub && l.mine && !l.sub.responsible.inherited));
+    return { p, leadIsMe, lanes };
   }).filter((x) => x.leadIsMe || x.lanes.length > 0);
+}
 
-  const total = tree.reduce((n, x) => n + x.lanes.reduce((m, l) => m + l.items.length, 0), 0);
+export function WorkTree({ nodes, reload }: { nodes: WorkNode[]; reload: () => Promise<void> }) {
+  const t = today();
   const toggleTask = async (ap: Task, c: ChecklistItem) => { await api.patch(`/tasks/${ap.id}/checklist/${c.id}`, { done: !c.done }); await reload(); };
+  if (nodes.length === 0) return <div className="empty">Nichts zugewiesen.</div>;
   return (
     <div className="worktree">
-      <div className="row mb">
-        <span className="muted small">{total} Arbeitspakete in {tree.length} Projekten</span>
-        <label className="check small right"><input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> erledigte zeigen</label>
-      </div>
-      {tree.length === 0 && <div className="empty">Nichts zugewiesen.</div>}
-      {tree.map(({ p, leadIsMe, lanes }) => (
+      {nodes.map(({ p, leadIsMe, lanes }) => (
         <div key={p.id} className="card wt-project">
           <div className="wt-head">
             <Link to={`/projekte/${p.id}`} className="row" style={{ gap: 8 }}><span className="badge">{p.key}</span><strong>{p.name}</strong></Link>
@@ -82,7 +70,7 @@ export function WorkTree() {
                     {ap.priority !== 'normal' && <span className={`badge prio-${ap.priority}`}>{prioLabel[ap.priority]}</span>}
                     {ap.blocked && <span className="badge blocked">blockiert</span>}
                     {ap.escalationLevel > 0 && <span className="badge danger">Esk. {ap.escalationLevel}</span>}
-                    {ap.dueDate && <span className={`due ${!ap.done && ap.dueDate < t ? 'overdue' : ''}`} style={!ap.done && ap.dueDate < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</span>}
+                    {ap.dueDate && <span style={!ap.done && ap.dueDate < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</span>}
                     <span className="muted small">{mine ? (ap.responsible.inherited ? `ich (geerbt vom ${ap.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : 'ich') : `${ap.responsible.name ?? ap.responsible.email ?? '–'}${ap.responsible.inherited ? ' (geerbt)' : ''}`}</span>
                     {ap.checklistTotal > 0 && <span className="muted small">☑ {ap.checklistDone}/{ap.checklistTotal}</span>}
                   </div>
@@ -102,4 +90,10 @@ export function WorkTree() {
       ))}
     </div>
   );
+}
+
+/** Umschalter „erledigte zeigen“ als kleines Hilfs-Hook für Seiten mit dem Baum. */
+export function useShowDone() {
+  const [showDone, setShowDone] = useState(false);
+  return { showDone, setShowDone };
 }

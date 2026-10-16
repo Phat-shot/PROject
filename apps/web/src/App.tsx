@@ -4,6 +4,8 @@ import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { AllTasksPage } from './pages/AllTasksPage';
+import { DashboardPage } from './pages/DashboardPage';
+import { UserSettingsPage } from './pages/UserSettingsPage';
 import { InboxPage } from './pages/InboxPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
@@ -33,16 +35,20 @@ export default function App() {
   return (
     <Layout>
       <Routes>
-        <Route path="/" element={<Navigate to="/projekte" replace />} />
+        <Route path="/" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/postfach" element={<InboxPage />} />
+        <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
+        <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />
         <Route path="/projekte/aufgaben" element={<AllTasksPage />} />
-        <Route path="/projekte/postfach" element={<InboxPage />} />
-        <Route path="/meine-aufgaben" element={<Navigate to="/projekte/aufgaben" replace />} />
-        <Route path="/einstellungen/mail-konten" element={<MailAccountsPage />} />
-        <Route path="/mail-konten" element={<Navigate to="/einstellungen/mail-konten" replace />} />
+        <Route path="/projekte/postfach" element={<Navigate to="/postfach" replace />} />
+        <Route path="/meine-aufgaben" element={<Navigate to="/dashboard" replace />} />
+        <Route path="/einstellungen/mail-konten" element={<Navigate to="/einstellungen/konfiguration" replace />} />
+        <Route path="/mail-konten" element={<Navigate to="/einstellungen/konfiguration" replace />} />
         <Route path="/verwaltung" element={<AdminPage />} />
         <Route path="/projekte/:id/*" element={<ProjectPage />} />
-        <Route path="*" element={<Navigate to="/projekte" replace />} />
+        <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Layout>
   );

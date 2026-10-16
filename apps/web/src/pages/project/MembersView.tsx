@@ -4,6 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync } from '../../components/ui';
 import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
+import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
@@ -60,6 +61,15 @@ export function MembersView() {
             <h2>Reporting</h2>
             <ReportingForm />
           </div>
+          <div className="card" id="mail">
+            <h2>Mail-Ansichten und Filter</h2>
+            <MailViewsCard />
+          </div>
+          <div className="card">
+            <h2>Teilprojekte</h2>
+            <p className="muted small">Name, Verantwortung und Zeitraum werden im <Link to={`/projekte/${detail.project.id}/plan`}>Plan</Link> direkt in der Tabelle bearbeitet, dort auch Sichtbarkeit und Zugriff.</p>
+            <ul>{detail.subprojects.map((s) => <li key={s.id}>{s.name}{s.restricted && ' 🔒'} <span className="muted small">· {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}</span></li>)}</ul>
+          </div>
           <div className="card">
             <h2>Meilensteine</h2>
             <ul>{detail.milestones.map((m) => <li key={m.id}>{fmtDate(m.date)} – {m.name}</li>)}</ul>
@@ -106,14 +116,15 @@ export function MembersView() {
 
   function ColumnsForm({ onClose }: { onClose: () => void }) {
     const { reloadTasks } = useProject();
-    const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone, wipLimit: c.wipLimit })));
+    const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone, kind: c.kind, wipLimit: c.wipLimit })));
+    const KIND: Record<string, string> = { backlog: 'Geplant (noch nicht aktiv)', active: 'In Bearbeitung', parked: 'Zurückgestellt (ruht)', done: 'Erledigt' };
     const { busy, error, run } = useAsync();
     return (
       <Modal title="Board-Spalten" onClose={onClose}>
         <div className="stack">
-          {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><label className="check small"><input type="checkbox" checked={c.isDone} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, isDone: e.target.checked } : x)))} /> erledigt</label><label className="small nowrap">WIP <input type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} style={{ width: 56 }} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
-          <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false, wipLimit: null }])}>+ Spalte</button>
-          <p className="muted small">WIP-Limit: Spalte färbt sich rot, wenn mehr Arbeitspakete darin liegen (Kanban-Prinzip: erst fertig machen, dann neu anfangen).</p>
+          {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><select value={c.kind} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, kind: e.target.value as any, isDone: e.target.value === 'done' } : x)))} style={{ width: 'auto' }}>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><label className="small nowrap">WIP <input type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} style={{ width: 56 }} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
+          <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false, kind: 'active' as const, wipLimit: null }])}>+ Spalte</button>
+          <p className="muted small">Spaltenart: „Geplant“ und „Zurückgestellt“ zählen nicht als Stillstand für die Eskalation. WIP-Limit färbt die Spalte rot, wenn mehr Arbeitspakete darin liegen.</p>
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/columns`, { columns: cols }); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>
@@ -176,6 +187,29 @@ function EscalationForm() {
       {f.contactEmail && <label className="field"><span>Externe Eskalationsmail</span><select value={f.externalMode} onChange={(e) => setF({ ...f, externalMode: e.target.value as any })}><option value="proposal">als Entwurf zur Freigabe durch PL</option><option value="direct">direkt senden</option></select></label>}
       {error && <div className="error">{error}</div>}
       <div><button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { escalation: { enabled: f.enabled, stageDays: [f.d1, f.d2, f.d3], staleDays: f.staleDays, contactUserId: f.contactUserId || null, contactEmail: f.contactEmail || null, externalMode: f.externalMode } }); await reload(); })}>Speichern</button></div>
+    </div>
+  );
+}
+
+function MailViewsCard() {
+  const { detail } = useProject();
+  const views = useData<{ views: ViewRow[] }>(`/projects/${detail.project.id}/mail/views`);
+  const [newView, setNewView] = useState(false);
+  const [rightsFor, setRightsFor] = useState<ViewRow | null>(null);
+  const [filterFor, setFilterFor] = useState<ViewRow | null>(null);
+  const f = (v: ViewRow) => { const x = v.filter; return [x.folders?.length && `Ordner ${x.folders.join(', ')}`, x.from?.length && `Von ${x.from.join(', ')}`, x.to?.length && `An ${x.to.join(', ')}`, x.subject?.length && `Betreff ${x.subject.join(', ')}`, x.keyword?.length && `Stichwort ${x.keyword.join(', ')}`, x.since && `ab ${x.since}`].filter(Boolean).join(' · ') || 'alle Mails des Kontos'; };
+  return (
+    <div>
+      <p className="muted small">Eine Ansicht ist ein Filter auf ein Konto. Nur Treffer werden gespeichert. Rechte (Lesen, Entwurf, Senden, Arbeitspaket erzeugen) hängen an der Ansicht: je Person, Rolle oder Gruppe.</p>
+      {views.data && views.data.views.length === 0 && <div className="empty">Noch keine Ansicht. Ohne Ansicht werden keine Mails geladen.</div>}
+      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th /></tr></thead><tbody>
+        {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
+          <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
+      </tbody></table>}
+      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
+      {rightsFor && <RightsEditor view={rightsFor} onClose={() => setRightsFor(null)} onChanged={() => void views.reload()} />}
+      {filterFor && <FilterEditor view={filterFor} onClose={() => setFilterFor(null)} onSaved={() => { setFilterFor(null); void views.reload(); }} />}
     </div>
   );
 }

@@ -64,4 +64,15 @@ export interface MailProvider {
   /** Liefert neue Nachrichten ab Cursor; lädt Bodies nur für Treffer. */
   fetchNew(account: AccountRow, ctx: SyncContext): Promise<{ messages: IncomingMessage[]; cursor: Record<string, unknown> }>;
   send(account: AccountRow, msg: OutgoingMessage): Promise<{ messageId: string }>;
+  /** Ordner des Kontos (inkl. Spezialordner) */
+  listFolders(account: AccountRow): Promise<MailFolder[]>;
+  createFolder(account: AccountRow, path: string): Promise<MailFolder>;
+  /** Nachricht in anderen Ordner verschieben; liefert die neue UID, falls bekannt */
+  move(account: AccountRow, mail: { folder: string; uid: string | null }, target: string): Promise<{ uid: string | null }>;
+}
+
+export interface MailFolder {
+  path: string;
+  name: string;
+  specialUse: 'inbox' | 'sent' | 'trash' | 'archive' | 'drafts' | 'junk' | null;
 }

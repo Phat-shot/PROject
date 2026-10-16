@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { hashPassword, mapUser, requireUser } from '../auth.js';
+import { hashPassword, mapUser, requireUser, verifyPassword } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
@@ -27,6 +27,25 @@ export async function userRoutes(app: FastifyInstance) {
     );
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.create', objectType: 'user', objectId: row.id, details: { email, globalRole } });
     return { user: mapUser(row) };
+  });
+
+  // Eigene Einstellungen: Name, Sprache, Theme, Passwort
+  app.patch<{ Body: { name?: string; settings?: Record<string, unknown>; password?: string; currentPassword?: string } }>('/me', async (req) => {
+    const user = requireUser(req);
+    const b = req.body ?? {};
+    const row = await app.db.one(`select * from users where id = $1`, [user.id]);
+    if (b.password !== undefined) {
+      if (!b.currentPassword || !verifyPassword(b.currentPassword, row.password_hash)) throw badRequest('Aktuelles Passwort stimmt nicht');
+      if (b.password.length < 10) throw badRequest('Passwort mit mindestens 10 Zeichen');
+      await app.db.query(`update users set password_hash = $2 where id = $1`, [user.id, hashPassword(b.password)]);
+      await app.db.query(`delete from sessions where user_id = $1 and token <> $2`, [user.id, req.cookies.pt_session ?? '']);
+    }
+    const settings = { ...(row.settings ?? {}), ...(b.settings ?? {}) };
+    if (settings.theme && !['light', 'dark', 'system'].includes(String(settings.theme))) throw badRequest('Theme: light, dark oder system');
+    if (settings.language && !['de', 'en'].includes(String(settings.language))) throw badRequest('Sprache: de oder en');
+    const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
+    return { user: mapUser(r) };
   });
 
   // ---- Einladungen per Mail über das Org-Postfach; manuelles Anlegen (POST /users) bleibt als Fallback

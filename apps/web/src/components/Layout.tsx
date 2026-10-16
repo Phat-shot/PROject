@@ -30,14 +30,14 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="app">
       <nav className="sidebar">
         <div className="brand">PROject<small>{orgName}</small></div>
+        <NavLink to="/dashboard" data-tour="dashboard">Dashboard</NavLink>
+        <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
           <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
           <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
         </div>
         {open && (
           <div className="sub">
-            <NavLink to="/projekte/aufgaben" data-tour="aufgaben">Meine Arbeit</NavLink>
-            <NavLink to="/projekte/postfach" data-tour="postfach">Postfach</NavLink>
             {projects.map((p) => {
               const base = `/projekte/${p.id}`;
               const sel = currentId === p.id;
@@ -62,7 +62,8 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         )}
         <div className="section">Einstellungen</div>
-        <NavLink to="/einstellungen/mail-konten" data-tour="mailkonten">Meine Mail-Konten</NavLink>
+        <NavLink to="/einstellungen/benutzer" data-tour="benutzer">Benutzereinstellungen</NavLink>
+        <NavLink to="/einstellungen/konfiguration" data-tour="mailkonten">Konfiguration</NavLink>
         {user?.globalRole === 'org_admin' && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>

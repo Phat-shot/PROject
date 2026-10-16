@@ -117,10 +117,12 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <li key={i.id} className={i.done ? 'done' : ''}>
             <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await load(); await reloadTasks(); })} />
             <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
-            <select className="inline-select" value={i.responsibleUserId ?? ''} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: e.target.value || null }); await load(); })}>
+            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? 'extern' : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { const mail = prompt('Externe Mail-Adresse für diesen Task', i.responsibleEmail ?? ''); if (mail === null) return; void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: mail }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
               <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              <option value="extern">{i.responsibleEmail ? `${i.responsibleEmail} (extern)` : 'extern (Mail-Adresse) …'}</option>
             </select>
+            {i.responsibleEmail && canEdit && <Link className="btn sm link" title="Stand per Mail nachfragen" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}&to=${encodeURIComponent(i.responsibleEmail)}&subject=${encodeURIComponent(`${detail.project.key}: Stand zu „${i.title}“`)}&body=${encodeURIComponent(`Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n`)}`}>Nachfragen</Link>}
             {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}
           </li>
         ))}
@@ -134,7 +136,10 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           {d.mails.map((m) => <tr key={m.id}><td><Link to={`/projekte/${detail.project.id}/mail/mail/${m.id}`}>{m.subject}</Link></td><td className="muted small">{m.fromAddr}</td><td className="muted small nowrap">{fmtDateTime(m.date)}</td><td>{m.copied && <span className="badge">Kopie</span>}</td></tr>)}
         </tbody></table>
       )}
-      {canEdit && <Link className="btn sm mt" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>}
+      {canEdit && <div className="row mt">
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>
+        {(t.responsible.email || t.responsibleEmail) && <Link className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}&to=${encodeURIComponent(t.responsibleEmail ?? t.responsible.email ?? '')}&subject=${encodeURIComponent(`${detail.project.key}: Stand zu „${t.title}“`)}&body=${encodeURIComponent(`Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n`)}`}>Stand nachfragen</Link>}
+      </div>}
 
       <h3 className="mt">Anhänge</h3>
       <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>

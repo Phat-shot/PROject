@@ -492,3 +492,84 @@ test('Meine Arbeit: Projekte mit Teilprojekten, Arbeitspaketen und Tasks, einges
   const plWeb = (await t.api(pl).get('/my/work')).json().projects.find((p: any) => p.key === 'WEB');
   assert.ok(plWeb.subprojects.some((s: any) => s.name === 'Vertrag und Budget'));
 });
+
+test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalten, neue Projekte mit sechs Spalten', async () => {
+  const pl = await t.login('pl@demo.local');
+  const d = (await t.api(pl).get(`/projects/${t.ids.projects.web}`)).json();
+  const kinds = d.columns.map((c: any) => c.kind);
+  assert.ok(kinds.includes('backlog') && kinds.includes('parked') && kinds.includes('done'), JSON.stringify(kinds));
+  assert.equal(d.columns[0].kind, 'backlog');
+  assert.equal(d.columns.at(-1).kind, 'done');
+  const p = (await t.api(pl).post('/projects', { key: 'SPA', name: 'Spalten' })).json().project;
+  const cols = (await t.api(pl).get(`/projects/${p.id}`)).json().columns;
+  assert.deepEqual(cols.map((c: any) => c.name), ['Geplant', 'Offen', 'In Arbeit', 'In Prüfung', 'Zurückgestellt', 'Erledigt']);
+  // ohne Erledigt-Spalte abgelehnt
+  assert.equal((await t.api(pl).put(`/projects/${p.id}/columns`, { columns: [{ name: 'A', kind: 'active' }, { name: 'B', kind: 'parked' }] })).statusCode, 400);
+  // Zurückgestellt zählt nicht als Stillstand
+  const { evaluateProject } = await import('../src/tasks/escalation.js');
+  const parked = cols.find((c: any) => c.kind === 'parked');
+  const task = (await t.api(pl).post(`/projects/${p.id}/tasks`, { title: 'Ruht', columnId: parked.id })).json().task;
+  await t.db.query(`update tasks set last_activity_at = now() - interval '30 days' where id = $1`, [task.id]);
+  const rows = await evaluateProject(t.db, p.id, new Date().toISOString().slice(0, 10));
+  assert.ok(!rows.some((r) => r.taskId === task.id && r.staleDays > 0), 'zurückgestellt ist kein Stillstand');
+});
+
+test('Mail: Ordner, Archivieren, Papierkorb, Verschieben in Unterordner mit Rechten und Audit', async () => {
+  const pl = await t.login('pl@demo.local');
+  const leser = await t.login('leser@demo.local');
+  const acc = t.ids.accounts.project;
+  const folders = (await t.api(pl).get(`/mail/accounts/${acc}/folders`)).json().folders;
+  assert.ok(folders.some((f: any) => f.specialUse === 'inbox') && folders.some((f: any) => f.specialUse === 'trash'));
+  const inbox = (await t.api(pl).get(`/mail/inbox?projectId=${t.ids.projects.web}&folder=INBOX`)).json().mails;
+  assert.ok(inbox.length >= 2);
+  const m1 = inbox[0]; const m2 = inbox[1];
+  assert.equal((await t.api(leser).post(`/mail/mails/${m1.id}/archive`)).statusCode, 403, 'Leser ohne Entwurfs-/Senderecht');
+  const a = await t.api(pl).post(`/mail/mails/${m1.id}/archive`);
+  assert.equal(a.statusCode, 200, a.body);
+  assert.equal((await t.api(pl).get(`/mail/mails/${m1.id}`)).json().mail.folder, 'Archive');
+  assert.ok((await t.api(pl).get(`/mail/inbox?projectId=${t.ids.projects.web}&folder=Archive`)).json().mails.some((m: any) => m.id === m1.id));
+  assert.ok(!(await t.api(pl).get(`/mail/inbox?projectId=${t.ids.projects.web}&folder=INBOX`)).json().mails.some((m: any) => m.id === m1.id));
+  const tr = await t.api(pl).post(`/mail/mails/${m2.id}/trash`);
+  assert.equal(tr.json().folder, 'Trash');
+  const nf = await t.api(pl).post(`/mail/accounts/${acc}/folders`, { name: 'Lieferanten' });
+  assert.equal(nf.statusCode, 200, nf.body);
+  assert.equal((await t.api(pl).post(`/mail/mails/${m2.id}/move`, { folder: nf.json().folder.path })).json().folder, 'Lieferanten');
+  assert.ok((await t.api(pl).get(`/mail/accounts/${acc}/folders`)).json().folders.some((f: any) => f.path === 'Lieferanten'));
+  const audit = (await t.api(pl).get(`/audit?projectId=${t.ids.projects.web}`)).json().entries;
+  assert.ok(audit.some((e: any) => e.action === 'mail.archive') && audit.some((e: any) => e.action === 'mail.trash') && audit.some((e: any) => e.action === 'mail.move'));
+  // Ansicht-Filter im Posteingang
+  const only = (await t.api(pl).get(`/mail/inbox?projectId=${t.ids.projects.web}&viewId=${t.ids.views.hosting}`)).json();
+  assert.ok(only.mails.every((m: any) => m.viewId === t.ids.views.hosting));
+  // Detail liefert Ansichten und Änderungsrecht
+  const det = (await t.api(pl).get(`/mail/mails/${m2.id}`)).json();
+  assert.ok(Array.isArray(det.viewIds) && det.canModify === true);
+});
+
+test('Benutzereinstellungen: Theme, Sprache, Name, Passwort; Org-Admin verwaltet Projekt- und Org-Konten', async () => {
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).patch('/me', { settings: { theme: 'neon' } })).statusCode, 400);
+  const r = await t.api(max).patch('/me', { name: 'Max K.', settings: { theme: 'dark', language: 'de' } });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(r.json().user.settings.theme, 'dark');
+  assert.equal((await t.api(max).get('/auth/me')).json().user.name, 'Max K.');
+  assert.equal((await t.api(max).patch('/me', { password: 'neues-passwort-99', currentPassword: 'falsch' })).statusCode, 400);
+  assert.equal((await t.api(max).patch('/me', { password: 'neues-passwort-99', currentPassword: 'demo1234' })).statusCode, 200);
+  assert.equal((await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'max@demo.local', password: 'neues-passwort-99' } })).statusCode, 200);
+  await t.api(max).patch('/me', { password: 'demo1234', currentPassword: 'neues-passwort-99' });
+  const admin = await t.login('admin@demo.local');
+  const accounts = (await t.api(admin).get('/mail/accounts')).json().accounts;
+  assert.ok(accounts.some((a: any) => a.type === 'project') && accounts.some((a: any) => a.type === 'org'));
+  assert.equal((await t.api(admin).patch(`/mail/accounts/${t.ids.accounts.project}`, { name: 'Projektpostfach (Admin)' })).statusCode, 200);
+  assert.equal((await t.api(admin).patch(`/mail/accounts/${t.ids.accounts.personal}`, { name: 'x' })).statusCode, 403, 'persönliche Konten bleiben beim Eigentümer');
+});
+
+test('Tasks mit externer Zuständigkeit', async () => {
+  const pl = await t.login('pl@demo.local');
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit externem Task' })).json().task;
+  const r = await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot liefern', responsibleEmail: 'Lieferant@Extern.de' });
+  assert.equal(r.statusCode, 200, r.body);
+  const item = r.json().task.checklist[0];
+  assert.equal(item.responsibleEmail, 'lieferant@extern.de');
+  const upd = await t.api(pl).patch(`/tasks/${task.id}/checklist/${item.id}`, { responsibleEmail: null });
+  assert.equal(upd.json().task.checklist[0].responsibleEmail, null);
+});

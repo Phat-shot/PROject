@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
+import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext, MailFolder } from './types.js';
 
 /**
  * Entwicklungs-Adapter: Postfach im Speicher je Konto. Mails werden über
@@ -7,6 +7,23 @@ import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncCo
  */
 export class DevMailProvider implements MailProvider {
   private boxes = new Map<string, IncomingMessage[]>();
+  private folders = new Map<string, MailFolder[]>();
+  private defaultFolders(): MailFolder[] {
+    return [{ path: 'INBOX', name: 'INBOX', specialUse: 'inbox' }, { path: 'Sent', name: 'Sent', specialUse: 'sent' }, { path: 'Archive', name: 'Archive', specialUse: 'archive' }, { path: 'Trash', name: 'Trash', specialUse: 'trash' }];
+  }
+  async listFolders(account: AccountRow): Promise<MailFolder[]> {
+    if (!this.folders.has(account.id)) this.folders.set(account.id, this.defaultFolders());
+    return this.folders.get(account.id)!;
+  }
+  async createFolder(account: AccountRow, path: string): Promise<MailFolder> {
+    const list = await this.listFolders(account);
+    const f: MailFolder = { path, name: path.split(/[./]/).pop() ?? path, specialUse: null };
+    if (!list.some((x) => x.path === path)) list.push(f);
+    return f;
+  }
+  async move(_account: AccountRow, mail: { folder: string; uid: string | null }, _target: string): Promise<{ uid: string | null }> {
+    return { uid: mail.uid };
+  }
   public sent: { accountId: string; msg: OutgoingMessage; messageId: string }[] = [];
 
   inject(accountId: string, m: Partial<IncomingMessage> & { from: IncomingMessage['from']; subject: string }): IncomingMessage {

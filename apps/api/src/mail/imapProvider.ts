@@ -1,13 +1,64 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
-import type { AccountRow, IncomingMessage, MailProvider, MessageEnvelope, OutgoingMessage, SyncContext } from './types.js';
+import type { MailFolder, AccountRow, IncomingMessage, MailProvider, MessageEnvelope, OutgoingMessage, SyncContext } from './types.js';
 
 /**
  * IMAP/SMTP-Adapter. Kopfdaten werden zuerst geholt (ENVELOPE), nur Treffer
  * werden vollständig geladen. OAuth2 (XOAUTH2) folgt; alpha: Passwort.
  */
+function specialOf(box: { path: string; specialUse?: string | null; name: string }): MailFolder['specialUse'] {
+  const su = (box.specialUse ?? '').toLowerCase();
+  const n = box.name.toLowerCase();
+  if (box.path.toUpperCase() === 'INBOX') return 'inbox';
+  if (su === '\\sent' || n === 'sent' || n === 'gesendet' || n === 'sent items') return 'sent';
+  if (su === '\\trash' || n === 'trash' || n === 'papierkorb' || n === 'deleted' || n === 'deleted items' || n === 'gelöscht') return 'trash';
+  if (su === '\\archive' || n === 'archive' || n === 'archiv') return 'archive';
+  if (su === '\\drafts' || n === 'drafts' || n === 'entwürfe') return 'drafts';
+  if (su === '\\junk' || n === 'junk' || n === 'spam') return 'junk';
+  return null;
+}
+
 export class ImapMailProvider implements MailProvider {
+  private client(account: AccountRow) {
+    return new ImapFlow({
+      host: account.imap_host!, port: account.imap_port ?? 993, secure: account.imap_secure ?? true,
+      auth: { user: account.imap_user ?? account.address, pass: account.imap_password ?? '' }, logger: false
+    });
+  }
+
+  async listFolders(account: AccountRow): Promise<MailFolder[]> {
+    const client = this.client(account);
+    await client.connect();
+    try {
+      const boxes = await client.list();
+      return boxes.map((b) => ({ path: b.path, name: b.name, specialUse: specialOf(b as any) }));
+    } finally { await client.logout().catch(() => undefined); }
+  }
+
+  async createFolder(account: AccountRow, path: string): Promise<MailFolder> {
+    const client = this.client(account);
+    await client.connect();
+    try {
+      const r = await client.mailboxCreate(path);
+      return { path: r.path, name: path.split(/[./]/).pop() ?? path, specialUse: null };
+    } finally { await client.logout().catch(() => undefined); }
+  }
+
+  async move(account: AccountRow, mail: { folder: string; uid: string | null }, target: string): Promise<{ uid: string | null }> {
+    if (!mail.uid) throw new Error('Nachricht ohne UID kann beim Anbieter nicht verschoben werden');
+    const client = this.client(account);
+    await client.connect();
+    try {
+      const lock = await client.getMailboxLock(mail.folder);
+      try {
+        const r = await client.messageMove(mail.uid, target, { uid: true });
+        const newUid = r && typeof r === 'object' && 'uidMap' in r && r.uidMap ? r.uidMap.get(Number(mail.uid)) : undefined;
+        return { uid: newUid ? String(newUid) : null };
+      } finally { lock.release(); }
+    } finally { await client.logout().catch(() => undefined); }
+  }
+
   async fetchNew(account: AccountRow, ctx: SyncContext) {
     const client = new ImapFlow({
       host: account.imap_host!,
@@ -84,10 +135,7 @@ export class ImapMailProvider implements MailProvider {
       result.imap = { ok: false, error: friendlyError(e) };
     }
     try {
-      const transport = nodemailer.createTransport({
-        host: account.smtp_host!, port: account.smtp_port ?? 587, secure: account.smtp_secure ?? false,
-        auth: account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined, connectionTimeout: 15000, greetingTimeout: 15000
-      });
+      const transport = nodemailer.createTransport(smtpOptions(account));
       await transport.verify();
       result.smtp = { ok: true };
     } catch (e: any) {
@@ -97,13 +145,10 @@ export class ImapMailProvider implements MailProvider {
   }
 
   async send(account: AccountRow, msg: OutgoingMessage) {
-    const transport = nodemailer.createTransport({
-      host: account.smtp_host!,
-      port: account.smtp_port ?? 587,
-      secure: account.smtp_secure ?? false,
-      auth: account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined
-    });
-    const info = await transport.sendMail({
+    const transport = nodemailer.createTransport(smtpOptions(account));
+    let info;
+    try {
+      info = await transport.sendMail({
       from: msg.from.name ? { name: msg.from.name, address: msg.from.address } : msg.from.address,
       to: msg.to,
       cc: msg.cc,
@@ -114,13 +159,31 @@ export class ImapMailProvider implements MailProvider {
       references: msg.references ?? undefined,
       attachments: msg.attachments?.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType }))
     });
+    } catch (e: any) {
+      throw new Error(friendlyError(e));
+    }
     return { messageId: info.messageId };
   }
 }
 
 
-function friendlyError(e: any): string {
+/**
+ * SMTP-Optionen: Port 465 ist implizites TLS, 587/25 ist STARTTLS. Ein falsch gesetzter SSL-Haken führt sonst zu
+ * „Greeting never received“ oder „wrong version number“, deshalb wird die Verschlüsselung am Port festgemacht.
+ */
+function smtpOptions(account: AccountRow) {
+  const port = account.smtp_port ?? 587;
+  const secure = port === 465 ? true : port === 587 || port === 25 ? false : (account.smtp_secure ?? false);
+  return {
+    host: account.smtp_host!, port, secure, requireTLS: !secure && port === 587,
+    auth: account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined,
+    connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000
+  };
+}
+
+export function friendlyError(e: any): string {
   const msg = String(e?.responseText ?? e?.response ?? e?.message ?? e);
+  if (/Greeting never received/i.test(msg)) return 'SMTP-Server antwortet nicht (Greeting never received): Port und Verschlüsselung prüfen, 465 = SSL, 587 = STARTTLS. Manche Anbieter blockieren SMTP aus Rechenzentren.';
   if (/AUTHENTICATIONFAILED|Invalid credentials|535|authentication failed/i.test(msg)) return 'Anmeldung abgelehnt: Benutzername oder Passwort falsch (bei App-Passwörtern das App-Passwort verwenden).';
   if (/ENOTFOUND|getaddrinfo/i.test(msg)) return 'Host nicht gefunden: Servername prüfen.';
   if (/ECONNREFUSED/i.test(msg)) return 'Verbindung abgelehnt: Port oder Verschlüsselung prüfen (IMAP 993/SSL, SMTP 587/STARTTLS oder 465/SSL).';

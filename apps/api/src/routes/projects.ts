@@ -11,7 +11,7 @@ import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escal
 import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
 
-const DEFAULT_COLUMNS = ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'];
+const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
 export function mapProject(r: any): Project {
   return {
@@ -61,8 +61,8 @@ export async function projectRoutes(app: FastifyInstance) {
       `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
       [p.id, user.id]
     );
-    for (const [i, c] of DEFAULT_COLUMNS.entries()) {
-      await db.query(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4)`, [p.id, c, i, i === DEFAULT_COLUMNS.length - 1]);
+    for (const [i, [name, kind]] of DEFAULT_COLUMNS.entries()) {
+      await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
     }
     await createDefaultFolders(db, p.id);
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name } });
@@ -218,19 +218,22 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Board-Spalten
-  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; wipLimit?: number | null }[] } }>('/projects/:id/columns', async (req) => {
+  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; kind?: string; wipLimit?: number | null }[] } }>('/projects/:id/columns', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const cols = req.body?.columns ?? [];
     if (cols.length < 2) throw badRequest('Mindestens zwei Spalten');
     const existing = await db.query(`select id from board_columns where project_id = $1`, [req.params.id]);
     const keep = new Set<string>();
+    const kinds = ['backlog', 'active', 'parked', 'done'];
+    if (!cols.some((c) => c.kind === 'done' || (!c.kind && c.isDone))) throw badRequest('Eine Spalte muss „Erledigt“ sein');
     for (const [i, c] of cols.entries()) {
+      const kind = c.kind && kinds.includes(c.kind) ? c.kind : c.isDone ? 'done' : 'active';
       if (c.id) {
-        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6 where id = $1 and project_id = $5`, [c.id, c.name, i, Boolean(c.isDone), req.params.id, c.wipLimit || null]);
+        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6, kind = $7 where id = $1 and project_id = $5`, [c.id, c.name, i, kind === 'done', req.params.id, c.wipLimit || null, kind]);
         keep.add(c.id);
       } else {
-        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit) values ($1,$2,$3,$4,$5) returning id`, [req.params.id, c.name, i, Boolean(c.isDone), c.wipLimit || null]);
+        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [req.params.id, c.name, i, kind === 'done', c.wipLimit || null, kind]);
         keep.add(r.id);
       }
     }
@@ -427,5 +430,5 @@ export async function projectRoutes(app: FastifyInstance) {
 }
 
 export function mapColumn(r: any) {
-  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, wipLimit: r.wip_limit ?? null };
+  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, kind: r.kind ?? (r.is_done ? 'done' : 'active'), wipLimit: r.wip_limit ?? null };
 }

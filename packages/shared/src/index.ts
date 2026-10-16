@@ -15,6 +15,12 @@ export interface User {
   name: string;
   globalRole: GlobalRole;
   active: boolean;
+  settings?: UserSettings;
+}
+
+export interface UserSettings {
+  language?: 'de' | 'en';
+  theme?: 'light' | 'dark' | 'system';
 }
 
 export interface Membership {
@@ -102,6 +108,8 @@ export interface BoardColumn {
   name: string;
   position: number;
   isDone: boolean;
+  /** backlog = Geplant, active = in Bearbeitung, parked = Zurückgestellt, done = Erledigt */
+  kind: 'backlog' | 'active' | 'parked' | 'done';
   wipLimit: number | null;
 }
 
@@ -237,6 +245,7 @@ export interface ChecklistItem {
   title: string;
   done: boolean;
   responsibleUserId: string | null;
+  responsibleEmail?: string | null;
   position: number;
 }
 
@@ -326,6 +335,12 @@ export interface MailSummary {
   snippet: string;
   hasAttachments: boolean;
   linkedTaskIds: string[];
+}
+
+export interface MailFolder {
+  path: string;
+  name: string;
+  specialUse: 'inbox' | 'sent' | 'trash' | 'archive' | 'drafts' | 'junk' | null;
 }
 
 export interface InboxMail extends MailSummary {

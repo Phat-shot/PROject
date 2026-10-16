@@ -43,6 +43,7 @@ export async function mailRoutes(app: FastifyInstance) {
   async function canManageAccount(user: User, account: AccountRow): Promise<boolean> {
     if (account.type === 'personal') return account.owner_user_id === user.id;
     if (account.type === 'org') return user.globalRole === 'org_admin';
+    if (user.globalRole === 'org_admin') return true;
     const m = await getMembership(db, account.project_id!, user.id);
     return m?.role === 'pl';
   }
@@ -87,7 +88,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const rows = await db.query(
       `select a.*, (select count(*)::int from mail_views v where v.account_id = a.id) as view_count from mail_accounts a
-       where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl') or (a.type = 'org' and $3)) order by a.type, a.name`,
+       where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl') or (a.type <> 'personal' and $3)) order by a.type, a.name`,
       [user.orgId, user.id, user.globalRole === 'org_admin']
     );
     return { accounts: rows.rows.map(mapAccount) };
@@ -320,7 +321,7 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   // Gemeinsames Postfach: alle Mails aus Ansichten mit Leserecht, über alle aktiven Projekte
-  app.get<{ Querystring: { folder?: string; projectId?: string } }>('/mail/inbox', async (req) => {
+  app.get<{ Querystring: { folder?: string; projectId?: string; viewId?: string } }>('/mail/inbox', async (req) => {
     const user = requireUser(req);
     const views = await db.query(
       `select v.id, v.name, v.project_id, p.key as project_key from mail_views v join projects p on p.id = v.project_id
@@ -334,7 +335,7 @@ export async function mailRoutes(app: FastifyInstance) {
       if (r.canRead) readable.push({ id: v.id, name: v.name, projectId: v.project_id, projectKey: v.project_key });
     }
     if (readable.length === 0) return { mails: [], views: [] };
-    const ids = readable.map((v) => v.id);
+    const ids = readable.filter((v) => !req.query.viewId || v.id === req.query.viewId).map((v) => v.id);
     const rows = await db.query(
       `select distinct on (m.id) m.*, x.view_id, ${LINKED} from mails m join mail_view_matches x on x.mail_id = m.id
        where x.view_id = any($1::uuid[]) ${req.query.folder ? 'and lower(m.folder) = lower($2)' : ''} order by m.id, x.view_id`,
@@ -358,8 +359,84 @@ export async function mailRoutes(app: FastifyInstance) {
     return {
       mail: { ...mapSummary(r), ccJson: r.cc_json ?? [], textBody: r.text_body, htmlBody: r.html_body, inReplyTo: r.in_reply_to },
       rights: access.rights,
+      viewIds: access.viewIds,
+      canModify: await canModifyMail(user, r),
       links: links.rows.map((l: any) => ({ taskId: l.task_id, title: l.title, projectId: l.project_id, copied: l.copied }))
     };
+  });
+
+  // ---- Ordner und Verschieben: Löschen = Papierkorb, Archivieren = Archiv, Unterordner anlegen
+  /** Verschieben/Löschen darf, wer das Konto verwaltet oder an einer lesbaren Ansicht Entwurfs- oder Senderecht hat. */
+  async function canModifyMail(user: User, mail: any): Promise<boolean> {
+    const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [mail.account_id]);
+    if (await canManageAccount(user, a)) return true;
+    const access = await mailReadable(user, mail.id);
+    return access.ok && (access.rights.canDraft || access.rights.canSend);
+  }
+  async function foldersOf(account: AccountRow) {
+    const list = await app.mail.providerFor(account).listFolders(account);
+    const known = await db.query(`select distinct folder from mails where account_id = $1`, [account.id]);
+    for (const k of known.rows) if (!list.some((f) => f.path.toLowerCase() === String(k.folder).toLowerCase())) list.push({ path: k.folder, name: k.folder, specialUse: k.folder.toUpperCase() === 'INBOX' ? 'inbox' : k.folder.toLowerCase() === 'sent' ? 'sent' : null });
+    return list;
+  }
+  async function specialFolder(account: AccountRow, kind: 'trash' | 'archive'): Promise<string> {
+    const list = await foldersOf(account);
+    const hit = list.find((f) => f.specialUse === kind);
+    if (hit) return hit.path;
+    const created = await app.mail.providerFor(account).createFolder(account, kind === 'trash' ? 'Trash' : 'Archive');
+    return created.path;
+  }
+  async function moveMail(user: User, mailId: string, target: string, action: string) {
+    const r = await db.maybeOne(`select * from mails where id = $1`, [mailId]);
+    if (!r) throw notFound('Mail nicht gefunden');
+    if (!(await canModifyMail(user, r))) throw forbidden('Verschieben erfordert Entwurfs- oder Senderecht an der Ansicht');
+    const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [r.account_id]);
+    if (r.folder.toLowerCase() === target.toLowerCase()) return { folder: r.folder };
+    const moved = await app.mail.providerFor(account).move(account, { folder: r.folder, uid: r.uid }, target);
+    await db.query(`update mails set folder = $2, uid = coalesce($3, uid) where id = $1`, [r.id, target, moved.uid]);
+    const views = await db.query(`select project_id from mail_views v join mail_view_matches x on x.view_id = v.id where x.mail_id = $1 limit 1`, [r.id]);
+    await audit(db, { orgId: user.orgId, projectId: views.rows[0]?.project_id ?? account.project_id, userId: user.id, action, objectType: 'mail', objectId: r.id, details: { from: r.folder, to: target } });
+    return { folder: target };
+  }
+
+  app.get<{ Params: { id: string } }>('/mail/accounts/:id/folders', async (req) => {
+    const user = requireUser(req);
+    const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!a) throw notFound('Konto nicht gefunden');
+    const readable = (await canManageAccount(user, a)) || (await db.maybeOne(`select 1 from mail_views v where v.account_id = $1 and exists (select 1 from project_members pm where pm.project_id = v.project_id and pm.user_id = $2)`, [a.id, user.id]));
+    if (!readable) throw forbidden();
+    return { folders: await foldersOf(a) };
+  });
+  app.post<{ Params: { id: string }; Body: { name: string; parent?: string | null } }>('/mail/accounts/:id/folders', async (req) => {
+    const user = requireUser(req);
+    const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!a) throw notFound('Konto nicht gefunden');
+    if (!(await canManageAccount(user, a))) throw forbidden('Ordner legt an, wer das Konto verwaltet');
+    const name = String(req.body?.name ?? '').trim().replace(/[\\/.]/g, '-');
+    if (!name) throw badRequest('Ordnername erforderlich');
+    const path = req.body?.parent ? `${req.body.parent}/${name}` : name;
+    const folder = await app.mail.providerFor(a).createFolder(a, path);
+    await audit(db, { orgId: user.orgId, projectId: a.project_id, userId: user.id, action: 'mail.folder_create', objectType: 'mail_account', objectId: a.id, details: { path: folder.path } });
+    return { folder };
+  });
+  app.post<{ Params: { mid: string }; Body: { folder: string } }>('/mail/mails/:mid/move', async (req) => {
+    const user = requireUser(req);
+    if (!req.body?.folder) throw badRequest('Zielordner erforderlich');
+    return moveMail(user, req.params.mid, req.body.folder, 'mail.move');
+  });
+  app.post<{ Params: { mid: string } }>('/mail/mails/:mid/archive', async (req) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select account_id from mails where id = $1`, [req.params.mid]);
+    if (!r) throw notFound('Mail nicht gefunden');
+    const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [r.account_id]);
+    return moveMail(user, req.params.mid, await specialFolder(a, 'archive'), 'mail.archive');
+  });
+  app.post<{ Params: { mid: string } }>('/mail/mails/:mid/trash', async (req) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select account_id from mails where id = $1`, [req.params.mid]);
+    if (!r) throw notFound('Mail nicht gefunden');
+    const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [r.account_id]);
+    return moveMail(user, req.params.mid, await specialFolder(a, 'trash'), 'mail.trash');
   });
 
   // Mail ↔ Arbeitspaket: verknüpfen oder kopieren

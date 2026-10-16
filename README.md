@@ -67,6 +67,11 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Benutzer einladen per Mail über das Org-Postfach (Kontotyp „org“), Annahme mit Passwort unter /einladung/:token, manuelles Anlegen als Fallback
 - Berechtigungsgruppen des Mandanten; eingeschränkte Teilprojekte (nur PL, Verantwortliche, benannte Benutzer und Gruppen); Gruppen auch in Mail-Ansicht-Rechten
 - Interaktives, überspringbares Tutorial beim ersten Login, jederzeit neu startbar
+- Dashboard: Soll/Ist der eigenen Arbeit über alle Projekte (offen, überfällig, fällig, blockiert, im Plan), Termine, Meldungen, geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Task
+- Kanban-Spaltenarten Geplant / in Bearbeitung / Zurückgestellt / Erledigt; nur aktive Spalten zählen als Stillstand für die Eskalation
+- Projekt-Postfach als Posteingang aller Ansichten mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), Filter je Ansicht; Mails archivieren, löschen, verschieben, Unterordner anlegen (IMAP und Datenbank synchron); Ansichten und Filter in den Projekteinstellungen
+- Einstellungen: Benutzereinstellungen (Name, Theme hell/dunkel/System, Sprache, Passwort), Konfiguration (Mail-Konten persönlich, Projekt, Organisation; Org-Admin verwaltet Projekt- und Org-Konten, PL die Konten seiner Projekte), Verwaltung
+- Tasks mit externer Mail-Zuständigkeit; „Stand nachfragen“ aus Arbeitspaket und Task mit vorbelegter Mail, Antwort landet über die Antwortadresse im Arbeitspaket
 - Zeiterfassung als optionales Modul je Projekt: Buchung je Aufgabe oder frei, Schätzung je Aufgabe, Budget je Projekt, Auswertung je Person und Teilprojekt, CSV-Export, „Meine Zeiten“; Mitglieder sehen eigene Buchungen, PL alle
 - Plan: Balken Start–Deadline, Punkt bei reiner Deadline, Teilprojekt-Sammelbalken, Meilensteine, Abhängigkeiten Ende → Anfang
 - Konflikte werden markiert, nichts verschiebt sich automatisch; „Nachfolger verschieben“ mit Vorschau (W7)

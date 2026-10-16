@@ -151,7 +151,7 @@ export async function taskRoutes(app: FastifyInstance) {
         id: p.id, key: p.key, name: p.name, myRole: p.my_role, lead,
         subprojects: subs.rows.map((r: any) => mapSubproject(r, lead)),
         tasks,
-        checklist: items.map((c: any) => ({ id: c.id, taskId: c.task_id, title: c.title, done: c.done, responsibleUserId: c.responsible_user_id, position: c.position }))
+        checklist: items.map((c: any) => ({ id: c.id, taskId: c.task_id, title: c.title, done: c.done, responsibleUserId: c.responsible_user_id, responsibleEmail: c.responsible_email ?? null, position: c.position }))
       });
     }
     return { projects: out };
@@ -386,18 +386,18 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // Checkliste (Tasks)
-  app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null } }>('/tasks/:id/checklist', async (req) => {
+  app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     if (!req.body?.title?.trim()) throw badRequest('Titel erforderlich');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [req.params.id]);
-    await db.query(`insert into checklist_items (task_id, title, responsible_user_id, position) values ($1,$2,$3,$4)`, [req.params.id, req.body.title.trim(), req.body.responsibleUserId ?? null, pos.p]);
+    await db.query(`insert into checklist_items (task_id, title, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5)`, [req.params.id, req.body.title.trim(), req.body.responsibleUserId ?? null, req.body.responsibleEmail?.trim().toLowerCase() || null, pos.p]);
     return { task: await loadTask(db, req.params.id) };
   });
 
-  app.patch<{ Params: { id: string; itemId: string }; Body: { title?: string; done?: boolean; responsibleUserId?: string | null } }>('/tasks/:id/checklist/:itemId', async (req) => {
+  app.patch<{ Params: { id: string; itemId: string }; Body: { title?: string; done?: boolean; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist/:itemId', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
@@ -405,9 +405,10 @@ export async function taskRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     await db.query(
       `update checklist_items set title = coalesce($3, title), done = coalesce($4, done),
-         responsible_user_id = case when $5 then $6::uuid else responsible_user_id end
+         responsible_user_id = case when $5 then $6::uuid else responsible_user_id end,
+         responsible_email = case when $7 then $8 else responsible_email end
        where id = $1 and task_id = $2`,
-      [req.params.itemId, req.params.id, b.title ?? null, b.done ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null]
+      [req.params.itemId, req.params.id, b.title ?? null, b.done ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'responsibleEmail' in b, b.responsibleEmail?.trim().toLowerCase() || null]
     );
     await touchTask(db, req.params.id);
     return { task: await loadTask(db, req.params.id) };

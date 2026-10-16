@@ -27,6 +27,8 @@ export class MailService {
     return account.provider === 'dev' ? this.dev : this.imap;
   }
 
+  providerFor(account: AccountRow): MailProvider { return this.provider(account); }
+
   async syncAccount(accountId: string): Promise<SyncResult> {
     const account = await this.db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1`, [accountId]);
     if (!account) return { accountId, fetched: 0, stored: 0, error: 'Konto nicht gefunden' };

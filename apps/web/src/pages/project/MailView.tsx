@@ -1,12 +1,38 @@
 import { useEffect, useState } from 'react';
-import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { MailDetail, MailDraft, MailSummary, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group } from '@projekttool/shared';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, roleLabel, statusLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
-type ViewRow = MailViewT & { canManage?: boolean };
+export type ViewRow = MailViewT & { canManage?: boolean };
+
+export const FOLDER_LABEL: Record<string, string> = { inbox: 'Posteingang', sent: 'Gesendet', archive: 'Archiv', trash: 'Papierkorb', drafts: 'Entwürfe', junk: 'Spam' };
+
+/** Ordner aller Konten, auf die lesbare Ansichten zeigen; gleiche Spezialordner werden zusammengelegt. */
+function useFolders(accountIds: string[]) {
+  const [folders, setFolders] = useState<(MailFolder & { accountIds: string[] })[]>([]);
+  const key = accountIds.join(',');
+  useEffect(() => {
+    if (!key) { setFolders([]); return; }
+    let alive = true;
+    Promise.all(accountIds.map((id) => api.get<{ folders: MailFolder[] }>(`/mail/accounts/${id}/folders`).then((r) => r.folders.map((f) => ({ ...f, accountId: id }))).catch(() => [] as (MailFolder & { accountId: string })[])))
+      .then((lists) => {
+        if (!alive) return;
+        const merged = new Map<string, MailFolder & { accountIds: string[] }>();
+        for (const f of lists.flat()) {
+          const k = f.specialUse ?? f.path.toLowerCase();
+          const cur = merged.get(k);
+          if (cur) cur.accountIds.push(f.accountId); else merged.set(k, { path: f.path, name: f.name, specialUse: f.specialUse, accountIds: [f.accountId] });
+        }
+        const order = ['inbox', 'sent', 'drafts', 'archive', 'junk', 'trash'];
+        setFolders([...merged.values()].sort((a, b) => (a.specialUse ? order.indexOf(a.specialUse) : 99) - (b.specialUse ? order.indexOf(b.specialUse) : 99) || a.name.localeCompare(b.name)));
+      });
+    return () => { alive = false; };
+  }, [key]);
+  return folders;
+}
 
 export function MailView() {
   const { detail } = useProject();
@@ -14,102 +40,104 @@ export function MailView() {
   const views = useData<{ views: ViewRow[] }>(`/projects/${detail.project.id}/mail/views`);
   const drafts = useData<{ drafts: MailDraft[] }>(`/projects/${detail.project.id}/mail/drafts`);
   const nav = useNavigate();
-  const [newView, setNewView] = useState(false);
-  const [rightsFor, setRightsFor] = useState<ViewRow | null>(null);
+  const loc = useLocation();
+  const [params, setParams] = useSearchParams();
+  const folder = params.get('ordner') ?? 'INBOX';
+  const viewId = params.get('ansicht') ?? '';
+  const readable = (views.data?.views ?? []).filter((v) => v.myRights.canRead);
+  const accountIds = Array.from(new Set(readable.map((v) => v.accountId)));
+  const folders = useFolders(accountIds);
   const pending = (drafts.data?.drafts ?? []).filter((d) => d.status === 'pending_approval');
   const me = detail.project.myMembership;
+  const inList = loc.pathname === base || loc.pathname.startsWith(`${base}/m/`);
+  const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); nav(`${base}?${n.toString()}`); };
+  const label = (f: MailFolder) => (f.specialUse ? FOLDER_LABEL[f.specialUse] : f.name);
   return (
     <div className="mail-layout">
       <div className="mail-views">
-        <div className="row between mb"><strong>Ansichten</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button>}</div>
-        <Routes>
-          <Route path=":viewId?/*" element={<ViewList views={views.data?.views ?? []} base={base} onRights={setRightsFor} />} />
-        </Routes>
-        <div className="section mt" style={{ fontSize: 11, textTransform: 'uppercase', color: 'var(--muted)', padding: '10px 10px 4px' }}>Freigabe-Liste</div>
-        <div className={`view ${location.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => nav(`${base}/freigaben`)}>
+        {me.role !== 'reader' && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => nav(`${base}/neu`)}>Neue Mail</button>}
+        <div className="section">Ordner</div>
+        {folders.map((f) => (
+          <div key={f.path} className={`view ${inList && folder.toLowerCase() === f.path.toLowerCase() ? 'active' : ''}`} onClick={() => go('ordner', f.path)}>
+            <span>{label(f)}</span>
+          </div>
+        ))}
+        {folders.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>{readable.length === 0 ? 'Keine Ansicht mit Leserecht.' : 'Lade Ordner …'}</div>}
+        <div className="section">Ansichten</div>
+        <div className={`view ${inList && !viewId ? 'active' : ''}`} onClick={() => go('ansicht', '')}><span>Alle Ansichten</span><span className="acc">{readable.length} mit Leserecht</span></div>
+        {readable.map((v) => (
+          <div key={v.id} className={`view ${inList && viewId === v.id ? 'active' : ''}`} onClick={() => go('ansicht', v.id)}>
+            <span>{v.name}</span>
+            <span className="acc">{v.accountAddress} · {v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</span>
+          </div>
+        ))}
+        {me.role === 'pl' && <Link className="btn sm link" to={`/projekte/${detail.project.id}/einstellungen#mail`}>Ansichten und Filter verwalten</Link>}
+        <div className="section">Freigabe-Liste</div>
+        <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => nav(`${base}/freigaben`)}>
           <span>Entwürfe und Freigaben {pending.length > 0 && <span className="badge warn">{pending.length}</span>}</span>
         </div>
-        {me.role !== 'reader' && <button className="btn primary mt" style={{ width: '100%' }} onClick={() => nav(`${base}/neu`)}>Neue Mail</button>}
       </div>
       <Routes>
-        <Route index element={<><div className="mail-list"><div className="empty" style={{ margin: 12 }}>Ansicht wählen</div></div><div className="mail-detail muted">Ansicht wählen.</div></>} />
+        <Route index element={<InboxList base={base} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
+        <Route path="m/:mailId" element={<InboxList base={base} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
         <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />
         <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />
-        <Route path="mail/:mailId" element={<MailOnly base={base} />} />
-        <Route path=":viewId/:mailId?" element={<ViewMails base={base} views={views.data?.views ?? []} />} />
+        <Route path="mail/:mailId" element={<LegacyMail base={base} />} />
+        <Route path=":viewId/:mailId" element={<LegacyMail base={base} />} />
+        <Route path=":viewId" element={<LegacyMail base={base} />} />
       </Routes>
-      {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
-      {rightsFor && <RightsEditor view={rightsFor} onClose={() => setRightsFor(null)} onChanged={() => void views.reload()} />}
     </div>
   );
 }
 
-function ViewList({ views, base, onRights }: { views: ViewRow[]; base: string; onRights: (v: ViewRow) => void }) {
-  const { viewId } = useParams();
-  const nav = useNavigate();
-  return (
-    <>
-      {views.map((v) => (
-        <div key={v.id} className={`view ${viewId === v.id ? 'active' : ''}`} onClick={() => nav(`${base}/${v.id}`)}>
-          <span className="row between">{v.name}{v.canManage && <button className="btn sm link" onClick={(e) => { e.stopPropagation(); onRights(v); }}>Rechte</button>}</span>
-          <span className="acc">{v.accountAddress} · {v.accountType === 'personal' ? 'persönlich' : 'Projektkonto'}{!v.myRights.canRead && ' · kein Leserecht'}</span>
-        </div>
-      ))}
-      {views.length === 0 && <div className="muted small" style={{ padding: 10 }}>Noch keine Ansichten.</div>}
-    </>
-  );
+/** Alte Pfade (/mail/<ansicht>/<mail>, /mail/mail/<mail>) auf die neue Struktur umleiten. */
+function LegacyMail({ base }: { base: string }) {
+  const { viewId, mailId } = useParams();
+  const isView = viewId && viewId !== 'mail';
+  const q = isView ? `?ansicht=${viewId}&ordner=` : '';
+  return <Navigate to={mailId ? `${base}/m/${mailId}${q}` : `${base}${q}`} replace />;
 }
 
-function ViewMails({ base, views }: { base: string; views: ViewRow[] }) {
-  const { viewId, mailId } = useParams();
+function InboxList({ base, folder, viewId, views, folders }: { base: string; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[] }) {
+  const { detail } = useProject();
+  const { mailId } = useParams();
   const nav = useNavigate();
-  const [folder, setFolder] = useState('');
-  const list = useData<{ view: MailViewT; mails: MailSummary[] }>(viewId ? `/mail/views/${viewId}/mails${folder ? `?folder=${folder}` : ''}` : null, [folder]);
-  const view = views.find((v) => v.id === viewId);
+  const [params] = useSearchParams();
+  const [q, setQ] = useState('');
+  const url = `/mail/inbox?projectId=${detail.project.id}${folder ? `&folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}`;
+  const list = useData<{ mails: InboxMail[] }>(url, [folder, viewId]);
+  const needle = q.trim().toLowerCase();
+  const mails = (list.data?.mails ?? []).filter((m) => !needle || m.subject.toLowerCase().includes(needle) || m.fromAddr.toLowerCase().includes(needle) || (m.fromName ?? '').toLowerCase().includes(needle));
+  const open = (id: string) => nav(`${base}/m/${id}?${params.toString()}`);
+  const current = mails.find((m) => m.id === mailId);
   return (
     <>
       <div className="mail-list">
         <div className="row" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-          <select value={folder} onChange={(e) => setFolder(e.target.value)} style={{ width: 'auto' }}><option value="">Alle Ordner</option><option value="INBOX">Posteingang</option><option value="Sent">Gesendet</option></select>
-          <span className="muted small right">{list.data?.mails.length ?? 0} Mails</span>
+          <input type="text" placeholder="Betreff oder Absender …" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
+          <span className="muted small nowrap">{mails.length}</span>
         </div>
         {list.error && <div className="error" style={{ margin: 12 }}>{list.error}</div>}
-        {list.data?.mails.map((m) => (
-          <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''}`} onClick={() => nav(`${base}/${viewId}/${m.id}`)}>
+        {mails.map((m) => (
+          <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
             <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
-            <div className="snippet">{m.snippet}</div>
+            <div className="snippet">{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>
           </div>
         ))}
-        {list.data && list.data.mails.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Mails in dieser Ansicht.</div>}
+        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Der PL legt Ansichten in den Projekteinstellungen an.' : 'Keine Mails in diesem Ordner.'}</div>}
       </div>
-      {mailId ? <MailDetailPanel mailId={mailId} view={view} base={base} onChanged={() => void list.reload()} /> : <div className="mail-detail muted">{view ? <ViewInfo view={view} /> : 'Mail wählen'}</div>}
+      {mailId
+        ? <MailDetailPanel mailId={mailId} views={views} folders={folders} base={base} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current?.viewId} />
+        : <div className="mail-detail muted">Mail wählen.</div>}
     </>
   );
 }
 
-function ViewInfo({ view }: { view: ViewRow }) {
-  const f = view.filter;
-  const parts = [f.folders?.length && `Ordner: ${f.folders.join(', ')}`, f.from?.length && `Von: ${f.from.join(', ')}`, f.to?.length && `An: ${f.to.join(', ')}`, f.subject?.length && `Betreff: ${f.subject.join(', ')}`, f.keyword?.length && `Stichwort: ${f.keyword.join(', ')}`, f.since && `ab ${f.since}`].filter(Boolean);
-  const r = view.myRights;
-  return (
-    <div>
-      <h2>{view.name}</h2>
-      <p>Konto {view.accountAddress} ({view.accountType === 'personal' ? 'persönlich' : 'Projektkonto'})</p>
-      <p>Filter: {parts.length ? parts.join(' · ') : 'alle Mails des Kontos'}</p>
-      <p>Meine Rechte: {[r.canRead && 'Lesen', r.canDraft && 'Entwurf', r.canSend && 'Senden', r.canCreateTask && 'Arbeitspaket erzeugen', r.canAi && 'KI'].filter(Boolean).join(', ') || 'keine'}</p>
-    </div>
-  );
-}
-
-function MailOnly({ base }: { base: string }) {
-  const { mailId } = useParams();
-  return <><div className="mail-list" /><MailDetailPanel mailId={mailId!} base={base} onChanged={() => undefined} /></>;
-}
-
-function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; view?: ViewRow; base: string; onChanged: () => void }) {
+function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; base: string; onChanged: () => void; onGone: () => void; viewHint?: string }) {
   const { detail, tasks, reloadTasks, openTask } = useProject();
-  const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`);
+  const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
+  const [moveTo, setMoveTo] = useState('');
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
   const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask'>(null);
   const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
@@ -119,7 +147,10 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
   if (!d.data) return <div className="mail-detail muted">Lade …</div>;
   const m = d.data.mail;
   const r = d.data.rights;
+  const view = views.find((v) => v.id === viewHint && d.data!.viewIds.includes(v.id)) ?? views.find((v) => d.data!.viewIds.includes(v.id));
+  const mailFolders = folders.filter((f) => (f as any).accountIds ? (f as any).accountIds.includes(m.accountId) : true);
   const refresh = async () => { await d.reload(); await actions.reload(); await reloadTasks(); onChanged(); };
+  const folderAction = (call: () => Promise<unknown>) => run(async () => { await call(); onGone(); });
   const enabled = (key: string) => actions.data?.rule.find((a) => a.key === key)?.enabled ?? false;
 
   /** Führt eine Aktion aus, die eine Bestätigung verlangen kann (Kopie wird für Mitglieder sichtbar). */
@@ -147,6 +178,21 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
         {m.ccJson.length > 0 && <div><strong>Cc:</strong> {m.ccJson.join(', ')}</div>}
         <div><strong>Datum:</strong> {fmtDateTime(m.date)} · Ordner {m.folder}</div>
       </div>
+      {d.data.canModify && (
+        <div className="mail-actions">
+          <button className="btn sm" onClick={() => folderAction(() => api.post(`/mail/mails/${m.id}/archive`))}>Archivieren</button>
+          <button className="btn sm danger" onClick={() => { if (confirm('Mail in den Papierkorb verschieben?')) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); }}>Löschen</button>
+          <select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} style={{ width: 'auto' }}>
+            <option value="">Verschieben nach …</option>
+            {mailFolders.filter((f) => f.path.toLowerCase() !== m.folder.toLowerCase()).map((f) => <option key={f.path} value={f.path}>{f.specialUse ? FOLDER_LABEL[f.specialUse] : f.path}</option>)}
+            <option value="__new">+ neuer Unterordner …</option>
+          </select>
+          <button className="btn sm" disabled={!moveTo} onClick={() => {
+            if (moveTo === '__new') { const name = prompt('Name des neuen Ordners'); if (!name) return; folderAction(async () => { const f = await api.post<{ folder: MailFolder }>(`/mail/accounts/${m.accountId}/folders`, { name }); await api.post(`/mail/mails/${m.id}/move`, { folder: f.folder.path }); }); return; }
+            folderAction(() => api.post(`/mail/mails/${m.id}/move`, { folder: moveTo }));
+          }}>Verschieben</button>
+        </div>
+      )}
       <div className="row mb">
         {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
         <span className="muted small">Arbeitspaket:</span>
@@ -319,7 +365,7 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const replyTo = params.get('reply');
   const taskParam = params.get('task');
   const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
-  const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: '', cc: '', subject: '', body: '', inReplyTo: '' as string | null });
+  const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   const { busy, error, run } = useAsync();
   useEffect(() => {
     if (replyTo) {
@@ -327,7 +373,7 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
         setF((x) => ({ ...x, to: mail.fromAddr, subject: mail.subject.startsWith('Re:') ? mail.subject : `Re: ${mail.subject}`, inReplyTo: mail.messageId, taskId: x.taskId || (mail.linkedTaskIds[0] ?? ''),
           body: `\n\n---\nAm ${fmtDateTime(mail.date)} schrieb ${mail.fromName ?? mail.fromAddr}:\n${(mail.textBody ?? '').split('\n').map((l) => `> ${l}`).join('\n')}` }));
       }).catch(() => undefined);
-    } else if (taskParam) {
+    } else if (taskParam && !params.get('subject')) {
       const t = tasks.find((x) => x.id === taskParam);
       if (t) setF((x) => ({ ...x, to: t.responsible.email && !t.responsible.userId ? t.responsible.email : '', subject: `${detail.project.key}: ${t.title}`, body: `Guten Tag,\n\nzum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}:\n\n\n\nMit freundlichen Grüßen\n` }));
     }
@@ -415,7 +461,7 @@ function EditDraft({ draft, onSaved }: { draft: MailDraft; onSaved: () => Promis
   );
 }
 
-function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+export function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { detail } = useProject();
   const accounts = useData<{ accounts: MailAccount[] }>('/mail/accounts');
   const [f, setF] = useState({ accountId: '', name: '', folders: '', from: '', to: '', subject: '', keyword: '', since: '', memberRead: true, memberDraft: true, memberTask: true, readerRead: false });
@@ -455,7 +501,7 @@ function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () =>
 
 interface RightRow { id?: string; userId: string | null; userName?: string | null; role: string | null; groupId?: string | null; groupName?: string | null; canRead: boolean; canDraft: boolean; canSend: boolean; canAi: boolean; canCreateTask: boolean }
 
-function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: () => void; onChanged: () => void }) {
+export function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: () => void; onChanged: () => void }) {
   const { detail } = useProject();
   const [rows, setRows] = useState<RightRow[] | null>(null);
   const [addUser, setAddUser] = useState('');
@@ -492,7 +538,7 @@ function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: ()
   );
 }
 
-function FilterEditor({ view, onClose, onSaved }: { view: ViewRow; onClose: () => void; onSaved: () => void }) {
+export function FilterEditor({ view, onClose, onSaved }: { view: ViewRow; onClose: () => void; onSaved: () => void }) {
   const f0 = view.filter;
   const [f, setF] = useState({ name: view.name, folders: f0.folders?.join(', ') ?? '', from: f0.from?.join(', ') ?? '', to: f0.to?.join(', ') ?? '', subject: f0.subject?.join(', ') ?? '', keyword: f0.keyword?.join(', ') ?? '', since: f0.since ?? '' });
   const { busy, error, run } = useAsync();
