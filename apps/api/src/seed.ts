@@ -45,8 +45,12 @@ export async function seed(db: Db) {
 
   const cols: Record<string, string> = {};
   for (const [i, name] of ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'].entries()) {
-    const c = await db.one(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4) returning id`, [web.id, name, i, i === 3]);
+    const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit) values ($1,$2,$3,$4,$5) returning id`, [web.id, name, i, i === 3, name === 'In Arbeit' ? 3 : null]);
     cols[name] = c.id;
+  }
+  const labels: Record<string, string> = {};
+  for (const [i, [name, color]] of [['Design', 'purple'], ['Technik', 'blue'], ['Vertrag', 'orange'], ['Blocker', 'red'], ['Content', 'green']].entries()) {
+    labels[name] = (await db.one(`insert into labels (project_id, name, color, position) values ($1,$2,$3,$4) returning id`, [web.id, name, color, i])).id;
   }
   const sp = async (name: string, resp: string | null, start: string, end: string, pos: number) =>
     (await db.one(`insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning id`, [web.id, name, resp, start, end, pos])).id as string;
@@ -73,6 +77,14 @@ export async function seed(db: Db) {
   const t9 = await task({ title: 'DNS-Umstellung und Go-Live-Kommunikation', sp: golive, col: 'Offen', prio: 'high', start: '2027-02-20', due: '2027-02-25', pos: 1 });
   await task({ title: 'Projektauftrag unterschreiben lassen', col: 'Erledigt', due: '2026-09-30', desc: 'Ohne Teilprojekt: Zuständigkeit geerbt vom PL.' });
   await db.query(`insert into task_dependencies (predecessor_id, successor_id) values ($1,$2), ($3,$4), ($5,$6)`, [t2.id, t3.id, t5.id, t6.id, t8.id, t9.id]);
+  const tag = (t: { id: string }, ...names: string[]) => Promise.all(names.map((n) => db.query(`insert into task_labels (task_id, label_id) values ($1,$2)`, [t.id, labels[n]])));
+  await tag(t1, 'Design'); await tag(t2, 'Design'); await tag(t3, 'Design', 'Technik'); await tag(t4, 'Vertrag', 'Design'); await tag(t5, 'Technik', 'Blocker'); await tag(t6, 'Technik'); await tag(t7, 'Content'); await tag(t8, 'Technik'); await tag(t9, 'Technik', 'Content');
+  // W6: wiederkehrende Aufgabe (Statusbericht jeden Freitag, nächste nach Erledigung)
+  const friday = (() => { const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); })();
+  await db.query(
+    `insert into tasks (project_id, column_id, title, description, priority, due_date, responsible_user_id, position, mail_code, created_by, recurrence) values ($1,$2,'Wochen-Statusbericht an Geschäftsführung','Statusbericht aus Vorlage erstellen, final setzen, an Verteiler senden.','normal',$3,$4,5,$5,$4,$6)`,
+    [web.id, cols['Offen'], friday, pl, newMailCode(), JSON.stringify({ freq: 'weekly', interval: 1, mode: 'after_done' })]
+  );
   // Zusätzlich ein Konflikt: t6 startet vor Ende von t5.
   await db.query(`insert into task_dependencies (predecessor_id, successor_id) values ($1,$2)`, [t5.id, t7.id]);
   for (const [i, c] of ['Startseite', 'Produktübersicht', 'Produktdetail', 'Kontakt'].entries()) {

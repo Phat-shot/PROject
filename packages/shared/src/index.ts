@@ -45,6 +45,26 @@ export interface BoardColumn {
   name: string;
   position: number;
   isDone: boolean;
+  wipLimit: number | null;
+}
+
+export interface Label {
+  id: string;
+  projectId: string;
+  name: string;
+  color: string;
+  position: number;
+}
+
+export const LABEL_COLORS = ['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'teal'] as const;
+
+export interface Recurrence {
+  freq: 'daily' | 'weekly' | 'monthly' | 'monthly_weekday';
+  interval?: number;
+  nth?: number;
+  weekday?: number;
+  mode: 'on_due' | 'after_done';
+  leadDays?: number;
 }
 
 export interface Subproject {
@@ -83,10 +103,45 @@ export interface Task {
   mailCode: string;
   done: boolean;
   conflicts: string[];
+  labelIds: string[];
+  archivedAt: string | null;
+  recurrence: Recurrence | null;
+  hasDescription: boolean;
+  commentCount: number;
+  attachmentCount: number;
+  mailCount: number;
+  checklistDone: number;
+  checklistTotal: number;
   checklist?: ChecklistItem[];
   predecessorIds?: string[];
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Notification {
+  id: string;
+  projectId: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  link: string | null;
+  readAt: string | null;
+  createdAt: string;
+}
+
+export interface DocShare {
+  id: string;
+  pageId: string;
+  pageTitle?: string;
+  email: string;
+  mode: 'read' | 'write';
+  includeChildren: boolean;
+  expiresAt: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+  lastAccessAt: string | null;
+  accessCount: number;
+  url: string;
 }
 
 export interface ChecklistItem {

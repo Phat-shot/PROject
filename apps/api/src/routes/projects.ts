@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { getMembership, mapMembership, requireProject } from '../rights.js';
 import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { createDefaultFolders } from '../docs/service.js';
+import { mapLabel } from './tasks.js';
 
 const DEFAULT_COLUMNS = ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'];
 
@@ -74,8 +75,10 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     const milestones = await db.query(`select * from milestones where project_id = $1 order by date`, [p.id]);
     const lead = await resolveProjectLead(db, p.id);
+    const labels = await db.query(`select * from labels where project_id = $1 order by position, name`, [p.id]);
     return {
       project: { ...mapProject(p), myRole: m.role, myMembership: m },
+      labels: labels.rows.map(mapLabel),
       members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email })),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
@@ -153,7 +156,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Board-Spalten
-  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean }[] } }>('/projects/:id/columns', async (req) => {
+  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; wipLimit?: number | null }[] } }>('/projects/:id/columns', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const cols = req.body?.columns ?? [];
@@ -162,10 +165,10 @@ export async function projectRoutes(app: FastifyInstance) {
     const keep = new Set<string>();
     for (const [i, c] of cols.entries()) {
       if (c.id) {
-        await db.query(`update board_columns set name = $2, position = $3, is_done = $4 where id = $1 and project_id = $5`, [c.id, c.name, i, Boolean(c.isDone), req.params.id]);
+        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6 where id = $1 and project_id = $5`, [c.id, c.name, i, Boolean(c.isDone), req.params.id, c.wipLimit || null]);
         keep.add(c.id);
       } else {
-        const r = await db.one(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4) returning id`, [req.params.id, c.name, i, Boolean(c.isDone)]);
+        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit) values ($1,$2,$3,$4,$5) returning id`, [req.params.id, c.name, i, Boolean(c.isDone), c.wipLimit || null]);
         keep.add(r.id);
       }
     }
@@ -242,6 +245,57 @@ export async function projectRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Übersicht: Kennzahlen, Meilensteine, Konflikte, Freigaben, Aktivität
+  app.get<{ Params: { id: string } }>('/projects/:id/overview', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id);
+    const pid = req.params.id;
+    const today = new Date().toISOString().slice(0, 10);
+    const week = new Date(Date.now() + 7 * 86400_000).toISOString().slice(0, 10);
+    const counts = await db.one(
+      `select count(*) filter (where not c.is_done)::int as open,
+              count(*) filter (where c.is_done)::int as done,
+              count(*) filter (where not c.is_done and t.due_date < $2)::int as overdue,
+              count(*) filter (where not c.is_done and t.due_date >= $2 and t.due_date <= $3)::int as due_week,
+              count(*) filter (where not c.is_done and t.due_date is null)::int as no_due
+       from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.archived_at is null`,
+      [pid, today, week]
+    );
+    const perSub = await db.query(
+      `select s.id, s.name, count(t.id)::int as total, count(t.id) filter (where c.is_done)::int as done, count(t.id) filter (where not c.is_done and t.due_date < $2)::int as overdue
+       from subprojects s left join tasks t on t.subproject_id = s.id and t.archived_at is null left join board_columns c on c.id = t.column_id
+       where s.project_id = $1 group by s.id, s.name, s.position order by s.position`,
+      [pid, today]
+    );
+    const milestones = await db.query(`select * from milestones where project_id = $1 and date >= $2 order by date limit 5`, [pid, today]);
+    const pending = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [pid]);
+    const review = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' order by updated_at desc limit 5`, [pid]);
+    const activity = await db.query(
+      `select a.action, a.object_type, a.object_id, a.details, a.created_at, u.name as user_name from audit_log a left join users u on u.id = a.user_id where a.project_id = $1 order by a.created_at desc limit 12`,
+      [pid]
+    );
+    const lead = await resolveProjectLead(db, pid);
+    const { loadTasks } = await import('../tasks/service.js');
+    const tasks = await loadTasks(db, 't.project_id = $1 and t.archived_at is null', [pid], lead);
+    const conflicts = tasks.filter((t) => t.conflicts.length > 0 && !t.done).map((t) => ({ id: t.id, title: t.title, conflicts: t.conflicts }));
+    const overdue = tasks.filter((t) => !t.done && t.dueDate && t.dueDate < today).sort((a, b) => a.dueDate!.localeCompare(b.dueDate!)).slice(0, 8)
+      .map((t) => ({ id: t.id, title: t.title, dueDate: t.dueDate, responsible: t.responsible.name ?? t.responsible.email }));
+    const load = new Map<string, { name: string; open: number; overdue: number }>();
+    for (const t of tasks) {
+      if (t.done || !t.responsible.userId) continue;
+      const e = load.get(t.responsible.userId) ?? { name: t.responsible.name ?? '?', open: 0, overdue: 0 };
+      e.open++; if (t.dueDate && t.dueDate < today) e.overdue++;
+      load.set(t.responsible.userId, e);
+    }
+    return {
+      counts, perSubproject: perSub.rows,
+      milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subproject_id })),
+      pendingDrafts: pending.c, pagesInReview: review.rows, conflicts, overdue,
+      workload: [...load.entries()].map(([userId, v]) => ({ userId, ...v })).sort((a, b) => b.open - a.open),
+      activity: activity.rows.map((a: any) => ({ action: a.action, objectType: a.object_type, objectId: a.object_id, details: a.details, createdAt: a.created_at, userName: a.user_name }))
+    };
+  });
+
   // Projektkontakte (Externe)
   app.get<{ Params: { id: string } }>('/projects/:id/contacts', async (req) => {
     const user = requireUser(req);
@@ -256,5 +310,5 @@ export async function projectRoutes(app: FastifyInstance) {
 }
 
 export function mapColumn(r: any) {
-  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done };
+  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, wipLimit: r.wip_limit ?? null };
 }

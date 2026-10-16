@@ -4,7 +4,9 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
-import { dateStr, loadTask, loadTasks, newMailCode, resolveProjectLead } from '../tasks/service.js';
+import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead } from '../tasks/service.js';
+import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
+import { notify, notifyMany } from '../notify.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -22,17 +24,86 @@ interface TaskBody {
   predecessorIds?: string[];
   sourceMailId?: string | null;
   note?: string | null;
+  labelIds?: string[];
+  recurrence?: Recurrence | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
   const db = app.db;
 
-  app.get<{ Params: { id: string } }>('/projects/:id/tasks', async (req) => {
+  app.get<{ Params: { id: string }; Querystring: { archived?: string } }>('/projects/:id/tasks', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
     const lead = await resolveProjectLead(db, req.params.id);
-    const tasks = await loadTasks(db, 't.project_id = $1', [req.params.id], lead);
+    const archived = req.query.archived === '1';
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is ${archived ? 'not' : ''} null`, [req.params.id], lead);
     return { tasks };
+  });
+
+  // Labels je Projekt
+  app.post<{ Params: { id: string }; Body: { name: string; color?: string } }>('/projects/:id/labels', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'member');
+    if (!req.body?.name?.trim()) throw badRequest('Name erforderlich');
+    const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from labels where project_id = $1`, [req.params.id]);
+    const r = await db.one(`insert into labels (project_id, name, color, position) values ($1,$2,$3,$4) returning *`, [req.params.id, req.body.name.trim(), req.body.color ?? 'gray', pos.p]);
+    return { label: mapLabel(r) };
+  });
+  app.patch<{ Params: { id: string; lid: string }; Body: { name?: string; color?: string } }>('/projects/:id/labels/:lid', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'member');
+    const r = await db.maybeOne(`update labels set name = coalesce($3, name), color = coalesce($4, color) where id = $1 and project_id = $2 returning *`, [req.params.lid, req.params.id, req.body?.name ?? null, req.body?.color ?? null]);
+    if (!r) throw notFound('Label nicht gefunden');
+    return { label: mapLabel(r) };
+  });
+  app.delete<{ Params: { id: string; lid: string } }>('/projects/:id/labels/:lid', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    await db.query(`delete from labels where id = $1 and project_id = $2`, [req.params.lid, req.params.id]);
+    return { ok: true };
+  });
+
+  // Sortieren / Verschieben per Drag & Drop
+  app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null } }>('/tasks/:id/move', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    await requireProject(db, user, existing.project_id, 'member');
+    const col = await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2`, [req.body?.columnId, existing.project_id]);
+    if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
+    const prevCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
+    await moveTask(db, existing.id, col.id, req.body?.index ?? null);
+    if (col.id !== existing.column_id) {
+      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: existing.id, details: { from: prevCol.name, to: col.name } });
+      if (col.is_done && !prevCol.is_done) await onTaskDone(existing, user);
+    }
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/archive', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    await requireProject(db, user, existing.project_id, 'member');
+    await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1`, [existing.id]);
+    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.archive', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
+    return { ok: true };
+  });
+  app.post<{ Params: { id: string } }>('/tasks/:id/unarchive', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    await requireProject(db, user, existing.project_id, 'member');
+    await db.query(`update tasks set archived_at = null, updated_at = now() where id = $1`, [existing.id]);
+    return { task: await loadTask(db, existing.id) };
+  });
+  // Alle erledigten Aufgaben einer Spalte archivieren
+  app.post<{ Params: { id: string; cid: string } }>('/projects/:id/columns/:cid/archive-done', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'member');
+    const r = await db.query(`update tasks set archived_at = now() where project_id = $1 and column_id = $2 and archived_at is null returning id`, [req.params.id, req.params.cid]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.archive_column', objectType: 'board_column', objectId: req.params.cid, details: { count: r.rows.length } });
+    return { archived: r.rows.length };
   });
 
   // Querschnitt: Meine Aufgaben über alle Projekte (ausdrücklich oder geerbt zuständig)
@@ -40,7 +111,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const tasks = await loadTasks(
       db,
-      `t.project_id in (select project_id from project_members where user_id = $1)
+      `t.project_id in (select project_id from project_members where user_id = $1) and t.archived_at is null
        and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active')`,
       [user.id]
     );
@@ -75,7 +146,10 @@ export async function taskRoutes(app: FastifyInstance) {
     );
     if (b.responsibleEmail) await rememberContact(req.params.id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(r.id, req.params.id, b.predecessorIds);
+    if (b.labelIds) await setLabels(r.id, req.params.id, b.labelIds);
+    if (b.recurrence) await db.query(`update tasks set recurrence = $2 where id = $1`, [r.id, JSON.stringify(b.recurrence)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.create', objectType: 'task', objectId: r.id, details: { title: b.title } });
+    if (b.responsibleUserId) await notify(db, { userId: b.responsibleUserId, projectId: req.params.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}?task=${r.id}`, dedupeKey: null });
     return { task: await loadTask(db, r.id) };
   });
 
@@ -141,6 +215,16 @@ export async function taskRoutes(app: FastifyInstance) {
     );
     if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(req.params.id, existing.project_id, b.predecessorIds);
+    if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
+    if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
+    if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id && b.responsibleUserId !== user.id) {
+      await notify(db, { userId: b.responsibleUserId, projectId: existing.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}?task=${existing.id}` });
+    }
+    if (b.columnId && b.columnId !== existing.column_id) {
+      const newCol = await db.one(`select is_done from board_columns where id = $1`, [b.columnId]);
+      const oldCol = await db.one(`select is_done from board_columns where id = $1`, [existing.column_id]);
+      if (newCol.is_done && !oldCol.is_done) await onTaskDone(existing, user);
+    }
     const changed: Record<string, unknown> = {};
     for (const k of Object.keys(b)) if (k !== 'sourceMailId' && k !== 'note') changed[k] = (b as any)[k];
     if (b.sourceMailId) {
@@ -200,6 +284,11 @@ export async function taskRoutes(app: FastifyInstance) {
         await db.query(`update tasks set start_date = $2, due_date = $3, updated_at = now() where id = $1`, [c.id, c.from ? c.to : null, c.dueTo]);
       }
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'plan.shift', objectType: 'task', objectId: existing.id, details: { changes } });
+      // Betroffene informieren (Zuständige der verschobenen Aufgaben)
+      for (const c of changes) {
+        const t = (await loadTask(db, c.id))!;
+        if (t.responsible.userId) await notify(db, { userId: t.responsible.userId, projectId: existing.project_id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}?task=${t.id}` }, );
+      }
     }
     return { changes, applied: Boolean(req.body?.apply) };
   });
@@ -248,11 +337,33 @@ export async function taskRoutes(app: FastifyInstance) {
     await requireProject(db, user, t.project_id, 'member');
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
     const c = await db.one(`insert into task_comments (task_id, user_id, body) values ($1,$2,$3) returning *`, [req.params.id, user.id, req.body.body.trim()]);
+    const task = (await loadTask(db, req.params.id))!;
+    const others = await db.query(`select distinct user_id from task_comments where task_id = $1`, [req.params.id]);
+    const targets = new Set<string>(others.rows.map((r: any) => r.user_id));
+    if (task.responsible.userId) targets.add(task.responsible.userId);
+    await notifyMany(db, targets, { projectId: t.project_id, type: 'task.comment', title: `Kommentar zu „${task.title}“`, body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link: `/projekte/${t.project_id}?task=${task.id}` }, user.id);
     return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, createdAt: c.created_at } };
   });
 
   async function rememberContact(projectId: string, email: string) {
     await db.query(`insert into project_contacts (project_id, email) values ($1, lower($2)) on conflict do nothing`, [projectId, email.trim()]);
+  }
+
+  async function setLabels(taskId: string, projectId: string, ids: string[]) {
+    await db.query(`delete from task_labels where task_id = $1`, [taskId]);
+    for (const l of ids) {
+      await db.query(`insert into task_labels (task_id, label_id) select $1, id from labels where id = $2 and project_id = $3 on conflict do nothing`, [taskId, l, projectId]);
+    }
+  }
+
+  /** W6: Wiederholung „nach Erledigung“ erzeugt die nächste Instanz. */
+  async function onTaskDone(existing: any, user: { id: string; orgId: string }) {
+    const r: Recurrence | null = existing.recurrence ?? null;
+    if (!r || r.mode !== 'after_done' || !existing.due_date) return;
+    const next = nextDueDate(dateStr(existing.due_date)!, r);
+    const id = await createRecurrenceInstance(db, existing, next, true);
+    await db.query(`update tasks set recurrence = null where id = $1`, [existing.id]);
+    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: null, action: 'task.recurrence_created', objectType: 'task', objectId: id, details: { from: existing.id, due: next, trigger: 'after_done' } });
   }
 
   async function setPredecessors(taskId: string, projectId: string, ids: string[]) {
@@ -263,6 +374,10 @@ export async function taskRoutes(app: FastifyInstance) {
       if (ok) await db.query(`insert into task_dependencies (predecessor_id, successor_id) values ($1,$2) on conflict do nothing`, [p, taskId]);
     }
   }
+}
+
+export function mapLabel(r: any) {
+  return { id: r.id, projectId: r.project_id, name: r.name, color: r.color, position: r.position };
 }
 
 export function mapAttachment(a: any) {

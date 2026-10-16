@@ -50,6 +50,12 @@ const TASK_SELECT = `
     s.responsible_user_id as sp_responsible_user_id, su.name as sp_responsible_name, su.email as sp_responsible_email,
     s.end_date as sp_end_date,
     coalesce((select json_agg(d.predecessor_id) from task_dependencies d where d.successor_id = t.id), '[]'::json) as predecessor_ids,
+    coalesce((select json_agg(tl.label_id) from task_labels tl where tl.task_id = t.id), '[]'::json) as label_ids,
+    (select count(*)::int from task_comments x where x.task_id = t.id) as comment_count,
+    (select count(*)::int from attachments x where x.task_id = t.id) as attachment_count,
+    (select count(*)::int from mail_task_links x where x.task_id = t.id) as mail_count,
+    (select count(*)::int from checklist_items x where x.task_id = t.id and x.done) as checklist_done,
+    (select count(*)::int from checklist_items x where x.task_id = t.id) as checklist_total,
     coalesce((select json_agg(json_build_object('id', p.id, 'title', p.title, 'due', p.due_date)) from task_dependencies d join tasks p on p.id = d.predecessor_id where d.successor_id = t.id), '[]'::json) as predecessors
   from tasks t
   join board_columns c on c.id = t.column_id
@@ -108,7 +114,17 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     if (pDue && ref && ref < pDue) conflicts.push(`Vorgänger „${p.title}“ endet ${pDue}, Aufgabe beginnt ${ref}`);
   }
   const predIds = typeof r.predecessor_ids === 'string' ? JSON.parse(r.predecessor_ids) : r.predecessor_ids ?? [];
+  const labelIds = typeof r.label_ids === 'string' ? JSON.parse(r.label_ids) : r.label_ids ?? [];
   return {
+    labelIds,
+    archivedAt: r.archived_at,
+    recurrence: r.recurrence ?? null,
+    hasDescription: Boolean(r.description && String(r.description).trim()),
+    commentCount: r.comment_count ?? 0,
+    attachmentCount: r.attachment_count ?? 0,
+    mailCount: r.mail_count ?? 0,
+    checklistDone: r.checklist_done ?? 0,
+    checklistTotal: r.checklist_total ?? 0,
     id: r.id,
     projectId: r.project_id,
     subprojectId: r.subproject_id,
@@ -129,4 +145,36 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };
+}
+
+
+/** Reiht eine Aufgabe in einer Spalte an Position index ein und nummeriert die Spalte neu. */
+export async function moveTask(db: Db, taskId: string, columnId: string, index: number | null) {
+  const others = await db.query(`select id from tasks where column_id = $1 and id <> $2 and archived_at is null order by position, created_at`, [columnId, taskId]);
+  const ids = others.rows.map((r: any) => r.id as string);
+  const at = index === null || index < 0 || index > ids.length ? ids.length : index;
+  ids.splice(at, 0, taskId);
+  for (const [i, id] of ids.entries()) {
+    await db.query(`update tasks set position = $2, column_id = $3, updated_at = case when id = $4 then now() else updated_at end where id = $1`, [id, i, columnId, taskId]);
+  }
+}
+
+/** Kopiert eine Aufgabe als nächste Instanz einer Wiederholung (Checkliste offen, Labels gleich). */
+export async function createRecurrenceInstance(db: Db, source: any, nextDue: string, keepRecurrence: boolean): Promise<string> {
+  const firstCol = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [source.project_id]);
+  const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [firstCol.id]);
+  let start: string | null = null;
+  if (source.start_date && source.due_date) {
+    const span = Math.round((new Date(dateStr(source.due_date)! + 'T00:00:00Z').getTime() - new Date(dateStr(source.start_date)! + 'T00:00:00Z').getTime()) / 86400_000);
+    const d = new Date(nextDue + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - span); start = d.toISOString().slice(0, 10);
+  }
+  const r = await db.one(
+    `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, recurrence, recurrence_parent_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning id`,
+    [source.project_id, source.subproject_id, firstCol.id, source.title, source.description, source.priority, start, nextDue, source.responsible_user_id, source.responsible_email, pos.p, newMailCode(), source.created_by,
+      keepRecurrence ? JSON.stringify(source.recurrence) : null, source.recurrence_parent_id ?? source.id]
+  );
+  await db.query(`insert into task_labels (task_id, label_id) select $1, label_id from task_labels where task_id = $2`, [r.id, source.id]);
+  await db.query(`insert into checklist_items (task_id, title, responsible_user_id, position) select $1, title, responsible_user_id, position from checklist_items where task_id = $2`, [r.id, source.id]);
+  return r.id;
 }

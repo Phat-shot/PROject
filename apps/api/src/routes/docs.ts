@@ -10,6 +10,8 @@ import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
 import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion, renderTemplate } from '../docs/service.js';
 import { mapAttachment } from './tasks.js';
+import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
+import { notify, notifyMany, usersWithRight } from '../notify.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
@@ -94,11 +96,24 @@ export async function docRoutes(app: FastifyInstance) {
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
     const versions = await db.query(
-      `select v.id, v.page_id, v.version, v.title, v.status, v.saved_by, v.saved_at, '' as content_md, u.name as saved_by_name from doc_page_versions v left join users u on u.id = v.saved_by where v.page_id = $1 order by v.version desc`,
+      `select v.id, v.page_id, v.version, v.title, v.status, v.saved_by, v.saved_at, '' as content_md, coalesce(u.name, v.external_editor || ' (extern)') as saved_by_name from doc_page_versions v left join users u on u.id = v.saved_by where v.page_id = $1 order by v.version desc`,
       [r.id]
     );
     const attachments = await db.query(`select * from attachments where page_id = $1 order by created_at`, [r.id]);
-    return { page: mapPage(r), versions: versions.rows.map(mapVersion), attachments: attachments.rows.map(mapAttachment) };
+    // Freigaben, die diese Seite erreichen: direkt oder über einen Vorfahren mit „inkl. Unterseiten“
+    const shares = await db.one(
+      `with recursive anc as (
+         select id, parent_page_id, 0 as depth from doc_pages where id = $1
+         union all
+         select p.id, p.parent_page_id, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id
+       )
+       select count(*)::int as c from doc_shares s join anc a on a.id = s.page_id
+       where s.revoked_at is null and (s.expires_at is null or s.expires_at > now()) and (a.depth = 0 or s.include_children)`,
+      [r.id]
+    );
+    const page = mapPage(r);
+    if (!r.updated_by && r.updated_by_external) page.updatedByName = `${r.updated_by_external} (extern)`;
+    return { page, versions: versions.rows.map(mapVersion), attachments: attachments.rows.map(mapAttachment), activeShares: shares.c };
   });
 
   app.get<{ Params: { pid: string; v: string } }>('/docs/pages/:pid/versions/:v', async (req) => {
@@ -154,6 +169,9 @@ export async function docRoutes(app: FastifyInstance) {
     );
     await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: `page.${to}`, objectType: 'doc_page', objectId: r.id, details: { from: r.status, version: u.version } });
+    if (to === 'review') {
+      await notifyMany(db, await usersWithRight(db, r.project_id, 'can_finalize'), { projectId: r.project_id, type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}` }, user.id);
+    }
     return { page: mapPage(u) };
   });
 
@@ -191,6 +209,113 @@ export async function docRoutes(app: FastifyInstance) {
     });
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.distribute', objectType: 'doc_page', objectId: r.id, details: { to: list, version: r.version, messageId: result.messageId } });
     return { ok: true, to: list };
+  });
+
+  // Freigabe per Link: Seite (+ Unterseiten) an eine Mail-Adresse, lesend oder schreibend
+  app.get<{ Params: { pid: string } }>('/docs/pages/:pid/shares', async (req) => {
+    const user = requireUser(req);
+    const p = await db.maybeOne(`select project_id from doc_pages where id = $1`, [req.params.pid]);
+    if (!p) throw notFound('Seite nicht gefunden');
+    const m = await requireProject(db, user, p.project_id, 'member');
+    if (m.role !== 'pl' && !m.canFinalize) throw forbidden('Freigaben verwaltet der PL oder wer „Versand auslösen“ darf');
+    const rows = await db.query(`select s.*, p.title as page_title from doc_shares s join doc_pages p on p.id = s.page_id where s.page_id = $1 order by s.created_at desc`, [req.params.pid]);
+    return { shares: rows.rows.map(mapShare) };
+  });
+
+  app.post<{ Params: { pid: string }; Body: { email: string; mode: 'read' | 'write'; includeChildren?: boolean; expiresDays?: number | null; send?: boolean; message?: string } }>('/docs/pages/:pid/shares', async (req) => {
+    const user = requireUser(req);
+    const page = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
+    if (!page) throw notFound('Seite nicht gefunden');
+    const m = await requireProject(db, user, page.project_id, 'member');
+    if (m.role !== 'pl' && !m.canFinalize) throw forbidden('Freigaben erstellt der PL oder wer „Versand auslösen“ darf');
+    const b = req.body ?? ({} as any);
+    if (!b.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(b.email)) throw badRequest('Gültige Mail-Adresse erforderlich');
+    if (!['read', 'write'].includes(b.mode)) throw badRequest('Modus read oder write');
+    const expires = b.expiresDays ? new Date(Date.now() + b.expiresDays * 86400_000) : null;
+    const r = await db.one(
+      `insert into doc_shares (page_id, project_id, token, email, mode, include_children, expires_at, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8) returning *`,
+      [page.id, page.project_id, newShareToken(), b.email.toLowerCase(), b.mode, b.includeChildren !== false, expires, user.id]
+    );
+    await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'page.share', objectType: 'doc_page', objectId: page.id, details: { email: b.email, mode: b.mode, includeChildren: b.includeChildren !== false, expiresAt: expires } });
+    const share = mapShare({ ...r, page_title: page.title });
+    let sent = false;
+    if (b.send) {
+      const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [page.project_id]);
+      if (!account) throw badRequest('Kein Projektkonto für den Versand. Link wurde erstellt, bitte manuell weitergeben.');
+      const project = await db.one(`select name from projects where id = $1`, [page.project_id]);
+      const text = `${b.message?.trim() ? b.message.trim() + '\n\n' : ''}${user.name} hat die Seite „${page.title}“ aus dem Projekt „${project.name}“ für Sie freigegeben (${b.mode === 'write' ? 'lesen und bearbeiten' : 'nur lesen'}${share.includeChildren ? ', inkl. Unterseiten' : ''}).\n\nLink: ${share.url}${expires ? `\nGültig bis ${expires.toLocaleDateString('de-DE')}` : ''}\n\nDer Link ist persönlich; bitte nicht weitergeben.`;
+      await app.mail.sendFromAccount(account, { to: [b.email], subject: `Freigabe: ${page.title}`, text, userId: user.id, projectId: page.project_id });
+      sent = true;
+    }
+    return { share, sent };
+  });
+
+  app.delete<{ Params: { sid: string } }>('/docs/shares/:sid', async (req) => {
+    const user = requireUser(req);
+    const sh = await db.maybeOne(`select * from doc_shares where id = $1`, [req.params.sid]);
+    if (!sh) throw notFound('Freigabe nicht gefunden');
+    const m = await requireProject(db, user, sh.project_id, 'member');
+    if (m.role !== 'pl' && !m.canFinalize && sh.created_by !== user.id) throw forbidden();
+    await db.query(`update doc_shares set revoked_at = now() where id = $1`, [sh.id]);
+    await audit(db, { orgId: user.orgId, projectId: sh.project_id, userId: user.id, action: 'page.share_revoke', objectType: 'doc_page', objectId: sh.page_id, details: { email: sh.email } });
+    return { ok: true };
+  });
+
+  // Öffentlich (ohne Login): Lesen und ggf. Bearbeiten über den Freigabe-Link
+  app.get<{ Params: { token: string } }>('/share/:token', async (req) => {
+    const sh = await resolveShare(db, req.params.token, true);
+    if (!sh) throw notFound('Freigabe ungültig, abgelaufen oder widerrufen');
+    const ids = await sharedPageIds(db, sh);
+    const pages = await db.query(`select id, parent_page_id, title, status, version, updated_at from doc_pages where id = any($1::uuid[]) order by title`, [ids]);
+    const root = await db.one(`select p.*, u.name as updated_by_name from doc_pages p left join users u on u.id = p.updated_by where p.id = $1`, [sh.page_id]);
+    return {
+      share: { mode: sh.mode, email: sh.email, includeChildren: sh.include_children, expiresAt: sh.expires_at, sharedBy: sh.created_by_name, projectName: sh.project_name },
+      root: mapPage(root),
+      pages: pages.rows.map((p: any) => ({ id: p.id, parentPageId: p.id === sh.page_id ? null : p.parent_page_id, title: p.title, status: p.status, version: p.version, updatedAt: p.updated_at }))
+    };
+  });
+
+  app.get<{ Params: { token: string; pid: string } }>('/share/:token/pages/:pid', async (req) => {
+    const sh = await resolveShare(db, req.params.token);
+    if (!sh) throw notFound('Freigabe ungültig, abgelaufen oder widerrufen');
+    const ids = await sharedPageIds(db, sh);
+    if (!ids.includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
+    const page = await db.one(`select p.*, u.name as updated_by_name from doc_pages p left join users u on u.id = p.updated_by where p.id = $1`, [req.params.pid]);
+    const attachments = await db.query(`select * from attachments where page_id = $1 order by created_at`, [page.id]);
+    return { page: mapPage(page), attachments: attachments.rows.map(mapAttachment) };
+  });
+
+  app.get<{ Params: { token: string; aid: string } }>('/share/:token/attachments/:aid', async (req, reply) => {
+    const sh = await resolveShare(db, req.params.token);
+    if (!sh) throw notFound('Freigabe ungültig');
+    const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.aid]);
+    if (!a || !a.page_id || !(await sharedPageIds(db, sh)).includes(a.page_id)) throw notFound('Anhang nicht gefunden');
+    reply.header('content-type', a.mime);
+    reply.header('content-disposition', `inline; filename="${encodeURIComponent(a.filename)}"`);
+    return reply.send(createReadStream(a.storage_path));
+  });
+
+  app.patch<{ Params: { token: string; pid: string }; Body: { contentMd: string; title?: string; baseVersion?: number } }>('/share/:token/pages/:pid', async (req) => {
+    const sh = await resolveShare(db, req.params.token);
+    if (!sh) throw notFound('Freigabe ungültig, abgelaufen oder widerrufen');
+    if (sh.mode !== 'write') throw forbidden('Diese Freigabe erlaubt nur Lesen');
+    const ids = await sharedPageIds(db, sh);
+    if (!ids.includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
+    const page = await db.one(`select * from doc_pages where id = $1`, [req.params.pid]);
+    if (page.status === 'final') throw conflict('Finale Seite ist gesperrt');
+    const b = req.body ?? ({} as any);
+    if (typeof b.contentMd !== 'string') throw badRequest('contentMd erforderlich');
+    if (b.baseVersion !== undefined && b.baseVersion !== page.version) throw conflict(`Seite wurde zwischenzeitlich geändert (Version ${page.version}). Bitte neu laden.`);
+    if (b.contentMd === page.content_md && (!b.title || b.title.trim() === page.title)) return { page: mapPage(page) };
+    const u = await db.one(
+      `update doc_pages set content_md = $2, title = coalesce($3, title), version = version + 1, updated_by = null, updated_by_external = $4, updated_at = now() where id = $1 returning *`,
+      [page.id, b.contentMd, b.title?.trim() || null, sh.email]
+    );
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by, external_editor) values ($1,$2,$3,$4,$5,null,$6)`, [u.id, u.version, u.title, u.content_md, u.status, sh.email]);
+    await audit(db, { orgId: (await db.one(`select org_id from projects where id = $1`, [page.project_id])).org_id, projectId: page.project_id, userId: null, action: 'page.external_edit', objectType: 'doc_page', objectId: page.id, details: { email: sh.email, version: u.version, shareId: sh.id } });
+    const targets = new Set<string>([sh.created_by, page.created_by].filter(Boolean));
+    await notifyMany(db, targets, { projectId: page.project_id, type: 'page.external_edit', title: `Extern bearbeitet: ${u.title}`, body: `${sh.email} hat Version ${u.version} gespeichert`, link: `/projekte/${page.project_id}/doku/${u.id}` });
+    return { page: { ...mapPage(u), updatedByName: sh.email } };
   });
 
   app.get('/docs/templates', async (req) => {

@@ -8,6 +8,7 @@ import { loadTask, newMailCode } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mapPage } from '../docs/service.js';
+import { notifyMany } from '../notify.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -476,6 +477,7 @@ export async function mailRoutes(app: FastifyInstance) {
       } else {
         await db.query(`update mail_drafts set status = 'pending_approval', updated_at = now() where id = $1`, [d.id]);
         await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'mail.draft_submitted', objectType: 'mail_draft', objectId: d.id, details: { to: b.to, subject: b.subject } });
+        await notifyApprovers(b.viewId ?? null, b.projectId, user, b.subject);
       }
     }
     const row = await db.one(`select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [d.id]);
@@ -533,6 +535,19 @@ export async function mailRoutes(app: FastifyInstance) {
     await audit(db, { orgId: user.orgId, projectId: d.project_id, userId: user.id, action: 'mail.draft_rejected', objectType: 'mail_draft', objectId: d.id, details: { subject: d.subject, by: user.id === d.user_id ? 'author' : 'approver' } });
     return { ok: true };
   });
+
+  /** Wer an der Ansicht senden darf, erfährt von wartenden Entwürfen. */
+  async function notifyApprovers(viewId: string | null, projectId: string, author: User, subject: string) {
+    const members = await db.query(`select user_id, role from project_members where project_id = $1`, [projectId]);
+    const targets: string[] = [];
+    for (const m of members.rows) {
+      if (!viewId) { if (m.role === 'pl') targets.push(m.user_id); continue; }
+      const u = await db.maybeOne(`select id from users where id = $1`, [m.user_id]);
+      const r = await getViewRights(db, viewId, { ...author, id: m.user_id, orgId: author.orgId } as User, { ...(await getMembership(db, projectId, m.user_id))! });
+      if (u && r.canSend) targets.push(m.user_id);
+    }
+    await notifyMany(db, targets, { projectId, type: 'mail.approval', title: `Freigabe wartet: ${subject}`, body: `Entwurf von ${author.name}`, link: `/projekte/${projectId}/mail/freigaben` }, author.id);
+  }
 
   async function doSend(draftId: string, user: User, account: AccountRow, references: string | null) {
     const d = await db.one(`select * from mail_drafts where id = $1`, [draftId]);

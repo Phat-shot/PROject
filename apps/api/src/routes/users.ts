@@ -52,6 +52,20 @@ export async function userRoutes(app: FastifyInstance) {
     return { ok: true, releasedTasks: tasks.rows };
   });
 
+  // Benachrichtigungen
+  app.get('/notifications', async (req) => {
+    const user = requireUser(req);
+    const rows = await app.db.query(`select * from notifications where user_id = $1 order by read_at nulls first, created_at desc limit 60`, [user.id]);
+    const unread = await app.db.one(`select count(*)::int as c from notifications where user_id = $1 and read_at is null`, [user.id]);
+    return { notifications: rows.rows.map((n: any) => ({ id: n.id, projectId: n.project_id, type: n.type, title: n.title, body: n.body, link: n.link, readAt: n.read_at, createdAt: n.created_at })), unread: unread.c };
+  });
+  app.post<{ Body: { ids?: string[]; all?: boolean } }>('/notifications/read', async (req) => {
+    const user = requireUser(req);
+    if (req.body?.all) await app.db.query(`update notifications set read_at = now() where user_id = $1 and read_at is null`, [user.id]);
+    else if (req.body?.ids?.length) await app.db.query(`update notifications set read_at = now() where user_id = $1 and id = any($2::uuid[])`, [user.id, req.body.ids]);
+    return { ok: true };
+  });
+
   app.get<{ Querystring: { projectId?: string } }>('/audit', async (req) => {
     const user = requireUser(req);
     const { projectId } = req.query;

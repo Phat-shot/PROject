@@ -118,6 +118,146 @@ Ampel: 🟢
   }
 ];
 
+BUILTIN_TEMPLATES.push(
+  {
+    key: 'raid',
+    name: 'RAID-Log (Risiken, Annahmen, Issues, Entscheidungen)',
+    contentMd: `# RAID-Log
+
+Lebendes Dokument: bei jedem Jour fixe durchgehen und aktualisieren.
+
+## Risiken
+
+| Nr | Risiko | Eintritt (1–5) | Auswirkung (1–5) | Maßnahme | Verantwortlich | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| R1 |  |  |  |  |  | offen |
+
+## Annahmen
+
+| Nr | Annahme | Gilt bis / Prüfung | Verantwortlich |
+| --- | --- | --- | --- |
+| A1 |  |  |  |
+
+## Issues (eingetretene Probleme)
+
+| Nr | Issue | Seit | Auswirkung | Nächster Schritt | Verantwortlich | Status |
+| --- | --- | --- | --- | --- | --- | --- |
+| I1 |  |  |  |  |  | offen |
+
+## Entscheidungen
+
+| Nr | Entscheidung | Datum | Entschieden von | Begründung | Betroffene Aufgaben |
+| --- | --- | --- | --- | --- | --- |
+| E1 |  | {{datum}} |  |  |  |
+`
+  },
+  {
+    key: 'aenderungsantrag',
+    name: 'Änderungsantrag (Change Request)',
+    contentMd: `# Änderungsantrag: Titel
+
+**Antragsteller:**   **Datum:** {{datum}}   **Status:** eingereicht
+
+## Beschreibung der Änderung
+
+## Begründung / Nutzen
+
+## Auswirkungen
+
+| Bereich | Auswirkung |
+| --- | --- |
+| Umfang |  |
+| Termine |  |
+| Kosten |  |
+| Risiken |  |
+
+## Entscheidung
+
+| Entschieden von | Datum | Ergebnis | Auflagen |
+| --- | --- | --- | --- |
+|  |  | offen |  |
+`
+  },
+  {
+    key: 'kickoff',
+    name: 'Kickoff-Protokoll',
+    contentMd: `# Kickoff {{datum}}
+
+**Teilnehmer:** 
+
+## Projektziel und Erfolgskriterien
+
+## Umfang (in / out)
+
+## Rollen und Verantwortung
+
+| Rolle | Person | Vertretung |
+| --- | --- | --- |
+| PL |  |  |
+
+## Meilensteine
+
+| Meilenstein | Termin |
+| --- | --- |
+|  |  |
+
+## Zusammenarbeit
+
+- Jour fixe: Rhythmus, Teilnehmer
+- Kommunikationswege, Verteiler
+- Ablageorte
+
+## Bekannte Risiken und offene Punkte
+
+## Nächste Schritte
+
+| Aufgabe | Zuständig | Fällig |
+| --- | --- | --- |
+|  |  |  |
+`
+  },
+  {
+    key: 'lessons',
+    name: 'Lessons Learned',
+    contentMd: `# Lessons Learned {{datum}}
+
+**Teilnehmer:** 
+
+## Was lief gut (beibehalten)
+
+- 
+
+## Was lief schlecht (abstellen)
+
+- 
+
+## Was probieren wir beim nächsten Mal
+
+- 
+
+## Kennzahlen
+
+| Kennzahl | Plan | Ist |
+| --- | --- | --- |
+| Go-Live |  |  |
+| Budget |  |  |
+
+## Maßnahmen
+
+| Maßnahme | Verantwortlich | Fällig |
+| --- | --- | --- |
+|  |  |  |
+`
+  }
+);
+
+/** Eingebaute Vorlagen nachziehen (für bestehende Datenbanken). */
+export async function ensureBuiltinTemplates(db: Db) {
+  for (const t of BUILTIN_TEMPLATES) {
+    await db.query(`insert into doc_templates (org_id, key, name, content_md) values (null, $1, $2, $3) on conflict do nothing`, [t.key, t.name, t.contentMd]);
+  }
+}
+
 export function renderTemplate(md: string): string {
   const d = new Date().toISOString().slice(0, 10);
   return md.replaceAll('{{datum}}', d);
