@@ -297,3 +297,14 @@ table.table { width: 100%; border-collapse: collapse; }
 .time-bar { height: 8px; background: #e5e9f0; border-radius: 4px; overflow: hidden; }
 .time-bar > div { height: 100%; background: var(--primary); }
 .time-bar.over > div { background: var(--danger); }
+
+/* Eskalation */
+.badge.blocked { background: #fdecea; color: var(--danger); border-color: #f5c2c0; }
+.badge.esc1 { background: var(--warn-soft); color: var(--warn); border-color: #f2d9a6; }
+.badge.esc2 { background: #fde2cf; color: #9a3412; border-color: #f7c4a2; }
+.badge.esc3 { background: #fdecea; color: var(--danger); border-color: #f5c2c0; font-weight: 700; }
+.task-card.blocked { border-left: 3px solid var(--danger); }
+.chain { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 12px; }
+.chain .step { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.chain .step.on { background: var(--warn-soft); border-color: #f2d9a6; font-weight: 600; }
+.chain .arrow { color: var(--muted); }

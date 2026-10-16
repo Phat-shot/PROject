@@ -4,7 +4,8 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
-import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead } from '../tasks/service.js';
+import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
@@ -28,6 +29,8 @@ interface TaskBody {
   labelIds?: string[];
   recurrence?: Recurrence | null;
   estimateMinutes?: number | null;
+  blocked?: boolean;
+  blockedReason?: string | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -75,6 +78,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
     const prevCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
     await moveTask(db, existing.id, col.id, req.body?.index ?? null);
+    await touchTask(db, existing.id);
     if (col.id !== existing.column_id) {
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: existing.id, details: { from: prevCol.name, to: col.name } });
       if (col.is_done && !prevCol.is_done) await onTaskDone(existing, user);
@@ -221,6 +225,19 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
     if ('estimateMinutes' in b) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [req.params.id, b.estimateMinutes && b.estimateMinutes > 0 ? Math.round(b.estimateMinutes) : null]);
+    if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
+      await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [req.params.id, user.id, b.blocked ? `Blockiert gemeldet${b.blockedReason ? `: ${b.blockedReason}` : ''}. Teilprojekt-Verantwortung wird informiert.` : 'Blockade aufgehoben.']);
+      if (b.blocked) {
+        const sub = await db.maybeOne(`select s.responsible_user_id from tasks t join subprojects s on s.id = t.subproject_id where t.id = $1`, [req.params.id]);
+        const lead = await resolveProjectLead(db, existing.project_id);
+        const tgt = sub?.responsible_user_id ?? lead.userId;
+        if (tgt) await notify(db, { userId: tgt, projectId: existing.project_id, type: 'escalation', title: `Blockiert: ${existing.title}`, body: `${user.name}: ${b.blockedReason ?? 'kein Grund angegeben'}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}` });
+      }
+    } else if ('blockedReason' in b && existing.blocked) {
+      await db.query(`update tasks set blocked_reason = $2 where id = $1`, [req.params.id, b.blockedReason?.trim() || null]);
+    }
+    await touchTask(db, req.params.id);
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id && b.responsibleUserId !== user.id) {
       await notify(db, { userId: b.responsibleUserId, projectId: existing.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}` });
     }
@@ -297,6 +314,42 @@ export async function taskRoutes(app: FastifyInstance) {
     return { changes, applied: Boolean(req.body?.apply) };
   });
 
+  // Eskalation von Hand (Zuständiger, Teilprojekt-Verantwortlicher, PL) oder zurücksetzen (PL)
+  app.post<{ Params: { id: string }; Body: { level: number; note?: string } }>('/tasks/:id/escalate', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select t.*, s.responsible_user_id as sub_resp from tasks t left join subprojects s on s.id = t.subproject_id where t.id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    const m = await requireProject(db, user, existing.project_id, 'member');
+    const level = Number(req.body?.level);
+    if (![1, 2, 3].includes(level)) throw badRequest('Stufe 1 bis 3');
+    const allowed = m.role === 'pl' || existing.responsible_user_id === user.id || existing.sub_resp === user.id;
+    if (!allowed) throw forbidden('Eskalieren dürfen Zuständige, Teilprojekt-Verantwortliche und PL');
+    const policy = (await db.one(`select escalation from projects where id = $1`, [existing.project_id])).escalation ?? {};
+    const lead = await resolveProjectLead(db, existing.project_id);
+    const targets = new Set<string>();
+    if (level >= 1) targets.add(existing.sub_resp ?? lead.userId ?? '');
+    if (level >= 2) (await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [existing.project_id])).rows.forEach((r: any) => targets.add(r.user_id));
+    if (level >= 3 && policy.contactUserId) targets.add(policy.contactUserId);
+    targets.delete('');
+    const body = `${user.name} eskaliert von Hand${req.body?.note ? `: ${req.body.note}` : ''}`;
+    await notifyMany(db, targets, { projectId: existing.project_id, type: 'escalation', title: `Eskalation ${LEVEL_LABEL[level]}: ${existing.title}`, body, link: `/projekte/${existing.project_id}/board?task=${existing.id}` }, user.id);
+    await db.query(`update tasks set escalation_level = greatest(escalation_level, $2), escalated_at = now() where id = $1`, [existing.id, level]);
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [existing.id, user.id, `Eskalation ${LEVEL_LABEL[level]} (manuell). ${body}`]);
+    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'escalation.manual', objectType: 'task', objectId: existing.id, details: { level, note: req.body?.note ?? null } });
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/escalation/reset', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    await requireProject(db, user, existing.project_id, 'pl');
+    await db.query(`update tasks set escalation_level = 0, escalated_at = null, last_activity_at = now() where id = $1`, [existing.id]);
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,'Eskalation durch PL zurückgesetzt.','system')`, [existing.id, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'escalation.reset', objectType: 'task', objectId: existing.id });
+    return { task: await loadTask(db, existing.id) };
+  });
+
   // Checkliste (Tasks)
   app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null } }>('/tasks/:id/checklist', async (req) => {
     const user = requireUser(req);
@@ -321,6 +374,7 @@ export async function taskRoutes(app: FastifyInstance) {
        where id = $1 and task_id = $2`,
       [req.params.itemId, req.params.id, b.title ?? null, b.done ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null]
     );
+    await touchTask(db, req.params.id);
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -343,6 +397,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);
     const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
     const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions) values ($1,$2,$3,$4) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions)]);
+    await touchTask(db, req.params.id);
     const task = (await loadTask(db, req.params.id))!;
     const link = `/projekte/${t.project_id}/board?task=${task.id}`;
     // Erwähnte zuerst (eigener Typ), danach Zuständige und bisherige Kommentatoren

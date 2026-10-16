@@ -3,6 +3,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
+import { touchTask } from '../tasks/service.js';
 
 function mapEntry(r: any) {
   return { id: r.id, projectId: r.project_id, taskId: r.task_id, taskTitle: r.task_title ?? null, userId: r.user_id, userName: r.user_name ?? null, date: typeof r.date === 'string' ? r.date.slice(0, 10) : new Date(r.date).toISOString().slice(0, 10), minutes: r.minutes, note: r.note, createdAt: r.created_at };
@@ -67,6 +68,7 @@ export async function timeRoutes(app: FastifyInstance) {
       `insert into time_entries (project_id, task_id, user_id, date, minutes, note) values ($1,$2,$3,$4,$5,$6) returning *`,
       [req.params.id, b.taskId ?? null, user.id, b.date ?? new Date().toISOString().slice(0, 10), minutes, b.note?.trim() || null]
     );
+    if (b.taskId) await touchTask(db, b.taskId);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'time.book', objectType: 'time_entry', objectId: r.id, details: { taskId: b.taskId ?? null, minutes } });
     const full = await db.one(`select e.*, t.title as task_title, u.name as user_name from time_entries e left join tasks t on t.id = e.task_id join users u on u.id = e.user_id where e.id = $1`, [r.id]);
     return { entry: mapEntry(full) };

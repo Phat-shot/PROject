@@ -7,6 +7,7 @@ import { getMembership, mapMembership, requireProject } from '../rights.js';
 import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
+import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
 
 const DEFAULT_COLUMNS = ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'];
 
@@ -20,6 +21,7 @@ export function mapProject(r: any): Project {
     mailAddress: r.mail_address,
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
+    escalation: policyOf(r.escalation),
     myRole: r.my_role ?? undefined
   };
 }
@@ -88,10 +90,21 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; escalation?: Partial<EscalationPolicy> } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if (b.escalation) {
+      const cur = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);
+      const next = policyOf({ ...cur, ...b.escalation });
+      if (next.stageDays.some((d) => !Number.isFinite(d) || d < 0) || !(next.stageDays[0] <= next.stageDays[1] && next.stageDays[1] <= next.stageDays[2])) throw badRequest('Stufenfristen müssen aufsteigend sein');
+      if (next.contactUserId) {
+        const ok = await db.maybeOne(`select 1 from users where id = $1 and org_id = $2 and active`, [next.contactUserId, user.orgId]);
+        if (!ok) throw badRequest('Eskalationskontakt muss ein Benutzer des Mandanten sein');
+      }
+      await db.query(`update projects set escalation = $2 where id = $1`, [req.params.id, JSON.stringify(next)]);
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'escalation.policy', objectType: 'project', objectId: req.params.id, details: next as any });
+    }
     const p = await db.one(
       `update projects set name = coalesce($2, name), description = coalesce($3, description), mail_address = case when $4::text is null then mail_address else nullif($4,'') end,
          time_tracking_enabled = coalesce($5, time_tracking_enabled), budget_hours = case when $6 then $7::numeric else budget_hours end where id = $1 returning *`,
@@ -293,7 +306,9 @@ export async function projectRoutes(app: FastifyInstance) {
     const time = await db.one(`select coalesce(sum(minutes), 0)::int as logged from time_entries where project_id = $1`, [pid]);
     const est = await db.one(`select coalesce(sum(estimate_minutes), 0)::int as est from tasks where project_id = $1 and archived_at is null`, [pid]);
     const proj = await db.one(`select time_tracking_enabled, budget_hours from projects where id = $1`, [pid]);
+    const esc = await evaluateProject(db, pid, today);
     return {
+      escalations: esc.filter((e) => e.targetLevel > 0 || e.level > 0).slice(0, 10),
       time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
       counts, perSubproject: perSub.rows,
       milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subproject_id })),
@@ -301,6 +316,15 @@ export async function projectRoutes(app: FastifyInstance) {
       workload: [...load.entries()].map(([userId, v]) => ({ userId, ...v })).sort((a, b) => b.open - a.open),
       activity: activity.rows.map((a: any) => ({ action: a.action, objectType: a.object_type, objectId: a.object_id, details: a.details, createdAt: a.created_at, userName: a.user_name }))
     };
+  });
+
+  // Warnungen: aktuelle Eskalationslage (Soll-Stufen aus dem Regelwerk, ohne Nebenwirkung)
+  app.get<{ Params: { id: string } }>('/projects/:id/escalations', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id);
+    const rows = await evaluateProject(db, req.params.id, new Date().toISOString().slice(0, 10));
+    const policy = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);
+    return { policy, escalations: rows };
   });
 
   // Projektkontakte (Externe)

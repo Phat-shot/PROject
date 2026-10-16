@@ -5,8 +5,8 @@ import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
-interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean }
-const EMPTY: Filter = { q: '', member: '', label: '', mine: false, overdue: false, conflicts: false, prio: '', archived: false };
+interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean; escalated: boolean }
+const EMPTY: Filter = { q: '', member: '', label: '', mine: false, overdue: false, conflicts: false, prio: '', archived: false, escalated: false };
 
 export function BoardView() {
   const { detail, tasks, reloadTasks, openTask } = useProject();
@@ -22,7 +22,7 @@ export function BoardView() {
   const canEdit = detail.project.myMembership.role !== 'reader';
   const t = today();
   const soon = new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10);
-  const active = f.q || f.member || f.label || f.mine || f.overdue || f.conflicts || f.prio;
+  const active = f.q || f.member || f.label || f.mine || f.overdue || f.conflicts || f.prio || f.escalated;
 
   useEffect(() => {
     if (f.archived && !archived) api.get<{ tasks: Task[] }>(`/projects/${detail.project.id}/tasks?archived=1`).then((r) => setArchived(r.tasks));
@@ -51,6 +51,7 @@ export function BoardView() {
     if (f.mine && x.responsible.userId !== user?.id) return false;
     if (f.overdue && !(x.dueDate && x.dueDate < t && !x.done)) return false;
     if (f.conflicts && x.conflicts.length === 0) return false;
+    if (f.escalated && !x.blocked && x.escalationLevel === 0) return false;
     if (f.prio && x.priority !== f.prio) return false;
     return true;
   }), [source, f, t, user?.id]);
@@ -101,6 +102,7 @@ export function BoardView() {
         <button className={`chip ${f.mine ? 'on' : ''}`} onClick={() => setF({ ...f, mine: !f.mine })}>Nur meine<kbd>q</kbd></button>
         <button className={`chip ${f.overdue ? 'on' : ''}`} onClick={() => setF({ ...f, overdue: !f.overdue })}>Überfällig</button>
         <button className={`chip ${f.conflicts ? 'on' : ''}`} onClick={() => setF({ ...f, conflicts: !f.conflicts })}>Konflikte</button>
+        <button className={`chip ${f.escalated ? 'on' : ''}`} onClick={() => setF({ ...f, escalated: !f.escalated })}>Blockiert / eskaliert</button>
         <button className={`chip ${f.archived ? 'on' : ''}`} onClick={() => setF({ ...f, archived: !f.archived })}>Archiv</button>
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
@@ -161,11 +163,13 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   const dueClass = x.done ? 'done' : x.dueDate && x.dueDate < t ? 'overdue' : x.dueDate && x.dueDate <= soon ? 'soon' : '';
   const labels = x.labelIds.map((id) => detail.labels.find((l) => l.id === id)).filter(Boolean);
   return (
-    <div className={`task-card ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''}`} draggable={canEdit}
+    <div className={`task-card ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''}`} draggable={canEdit}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
       <div className="badges">
+        {x.blocked && <span className="badge blocked" title={x.blockedReason ?? 'blockiert'}>Blockiert</span>}
+        {x.escalationLevel > 0 && <span className={`badge esc${x.escalationLevel}`} title="Eskalationsstufe">Esk. {x.escalationLevel}</span>}
         {x.priority !== 'normal' && <span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span>}
         {x.dueDate && <span className={`due ${dueClass}`} title={x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline'}>{x.done ? '✓ ' : '⏰ '}{fmtDate(x.dueDate)}</span>}
         {x.conflicts.length > 0 && <span className="conflict" title={x.conflicts.join('\n')}>⚠</span>}

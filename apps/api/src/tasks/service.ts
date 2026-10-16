@@ -122,6 +122,10 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     recurrence: r.recurrence ?? null,
     estimateMinutes: r.estimate_minutes ?? null,
     loggedMinutes: r.logged_minutes ?? 0,
+    blocked: Boolean(r.blocked),
+    blockedReason: r.blocked_reason ?? null,
+    escalationLevel: r.escalation_level ?? 0,
+    escalatedAt: r.escalated_at ?? null,
     hasDescription: Boolean(r.description && String(r.description).trim()),
     commentCount: r.comment_count ?? 0,
     attachmentCount: r.attachment_count ?? 0,
@@ -180,4 +184,10 @@ export async function createRecurrenceInstance(db: Db, source: any, nextDue: str
   await db.query(`insert into task_labels (task_id, label_id) select $1, label_id from task_labels where task_id = $2`, [r.id, source.id]);
   await db.query(`insert into checklist_items (task_id, title, responsible_user_id, position) select $1, title, responsible_user_id, position from checklist_items where task_id = $2`, [r.id, source.id]);
   return r.id;
+}
+
+
+/** Aktivität an einer Aufgabe vermerken (für die Regel „hängt seit n Tagen“). */
+export async function touchTask(db: Db, taskId: string) {
+  await db.query(`update tasks set last_activity_at = now() where id = $1`, [taskId]);
 }

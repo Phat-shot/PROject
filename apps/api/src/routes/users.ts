@@ -52,6 +52,22 @@ export async function userRoutes(app: FastifyInstance) {
     return { ok: true, releasedTasks: tasks.rows };
   });
 
+  // Mandanten-Einstellungen (PDF-Stil, Firmenname)
+  app.get('/org/settings', async (req) => {
+    const user = requireUser(req);
+    const o = await app.db.one(`select name, settings from orgs where id = $1`, [user.orgId]);
+    return { name: o.name, settings: o.settings ?? {} };
+  });
+  app.put<{ Body: { company?: string; accentColor?: string; footerText?: string } }>('/org/settings', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const b = req.body ?? {};
+    if (b.accentColor && !/^#[0-9a-fA-F]{6}$/.test(b.accentColor)) throw badRequest('Akzentfarbe als #rrggbb');
+    const o = await app.db.one(`update orgs set settings = settings || $2::jsonb where id = $1 returning settings`, [user.orgId, JSON.stringify({ company: b.company ?? undefined, accentColor: b.accentColor ?? undefined, footerText: b.footerText ?? undefined })]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'org.settings', objectType: 'org', objectId: user.orgId, details: b });
+    return { settings: o.settings };
+  });
+
   // Benachrichtigungen
   app.get('/notifications', async (req) => {
     const user = requireUser(req);

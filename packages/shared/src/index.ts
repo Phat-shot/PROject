@@ -37,8 +37,29 @@ export interface Project {
   mailAddress: string | null;
   timeTrackingEnabled: boolean;
   budgetHours: number | null;
+  escalation?: EscalationPolicy;
   myRole?: ProjectRole;
   myMembership?: Membership;
+}
+
+export interface EscalationPolicy {
+  enabled: boolean;
+  stageDays: [number, number, number];
+  staleDays: number;
+  contactUserId: string | null;
+  contactEmail: string | null;
+  externalMode: 'proposal' | 'direct';
+}
+
+export interface EscalationRow {
+  taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
+  score: number; dueDate: string | null; responsible: string | null; chain: string[]; reason: string;
+}
+
+export interface OrgSettings {
+  company?: string;
+  accentColor?: string;
+  footerText?: string;
 }
 
 export interface TimeEntry {
@@ -124,6 +145,10 @@ export interface Task {
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;
+  blocked: boolean;
+  blockedReason: string | null;
+  escalationLevel: number;
+  escalatedAt: string | null;
   hasDescription: boolean;
   commentCount: number;
   attachmentCount: number;

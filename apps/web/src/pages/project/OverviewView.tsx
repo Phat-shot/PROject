@@ -4,6 +4,7 @@ import { useData } from '../../lib/useData';
 import { useProject } from '../ProjectPage';
 
 interface Overview {
+  escalations: { taskId: string; title: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; score: number; reason: string; chain: string[]; responsible: string | null }[];
   time: { enabled: boolean; loggedMinutes: number; estimateMinutes: number; budgetHours: number | null };
   counts: { open: number; done: number; overdue: number; due_week: number; no_due: number };
   perSubproject: { id: string; name: string; total: number; done: number; overdue: number }[];
@@ -39,9 +40,25 @@ export function OverviewView() {
         <div className={`kpi ${o.counts.due_week ? 'warn' : ''}`}><div className="v">{o.counts.due_week}</div><div className="l">fällig in 7 Tagen</div></div>
         <div className={`kpi ${o.conflicts.length ? 'warn' : ''}`}><div className="v">{o.conflicts.length}</div><div className="l">Terminkonflikte</div></div>
         <div className={`kpi ${o.pendingDrafts ? 'warn' : ''}`}><div className="v">{o.pendingDrafts}</div><div className="l">Freigaben offen</div></div>
+        <div className={`kpi ${o.escalations.some((e) => e.level >= 2 || e.blocked) ? 'bad' : o.escalations.length ? 'warn' : 'ok'}`}><div className="v">{o.escalations.length}</div><div className="l">Warnungen / eskaliert</div></div>
         <div className="kpi ok"><div className="v">{pct}%</div><div className="l">erledigt ({o.counts.done}/{total})</div></div>
         {o.time.enabled && <div className={`kpi ${o.time.budgetHours && o.time.loggedMinutes > o.time.budgetHours * 60 ? 'bad' : ''}`}><div className="v">{Math.round(o.time.loggedMinutes / 60)} h</div><div className="l">gebucht{o.time.budgetHours ? ` von ${o.time.budgetHours} h Budget` : ''}</div></div>}
       </div>
+      {o.escalations.length > 0 && (
+        <div className="card mb" style={{ borderColor: '#f2d9a6' }}>
+          <h2>Warnungen und Eskalationen <span className="muted small" style={{ fontWeight: 400 }}>Regelwerk: Verzug, Stillstand, Blockaden entlang der Kette Zuständig → Teilprojekt → PL → Eskalationskontakt</span></h2>
+          <table className="table"><thead><tr><th>Aufgabe</th><th>Grund</th><th>Stufe</th><th>Kette</th></tr></thead><tbody>
+            {o.escalations.map((e) => (
+              <tr key={e.taskId} className="clickable" onClick={() => openTask(e.taskId)}>
+                <td>{e.title}<div className="muted small">{e.responsible}</div></td>
+                <td className="small">{e.reason}</td>
+                <td className="nowrap">{e.blocked && <span className="badge blocked">Blockiert</span>} {e.level > 0 ? <span className={`badge esc${e.level}`}>Stufe {e.level}</span> : <span className="badge warn">Warnung</span>}{e.targetLevel > e.level && <span className="muted small"> → {e.targetLevel} beim nächsten Lauf</span>}</td>
+                <td><div className="chain">{e.chain.map((c, i) => <span key={i} style={{ display: 'contents' }}>{i > 0 && <span className="arrow">→</span>}<span className={`step ${i <= e.level && i > 0 ? 'on' : ''}`}>{c}</span></span>)}</div></td>
+              </tr>
+            ))}
+          </tbody></table>
+        </div>
+      )}
       <div className="grid cols-2">
         <div className="stack">
           <div className="card">

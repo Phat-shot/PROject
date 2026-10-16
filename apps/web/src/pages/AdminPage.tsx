@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { AuditEntry, User } from '@projekttool/shared';
+import type { AuditEntry, DocTemplate, OrgSettings, User } from '@projekttool/shared';
+import { Markdown } from '../components/ui';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
@@ -24,6 +25,8 @@ export function AdminPage() {
               <td><button className="btn sm danger" disabled={busy} onClick={() => { if (confirm(`${u.name} deaktivieren? Login endet, persönliche Konten werden getrennt, Zuständigkeiten fallen zurück (W10).`)) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); }}>Deaktivieren</button></td></tr>)}
           </tbody></table>
         </div>
+        <PdfStyleCard />
+        <TemplatesCard />
         <div className="card">
           <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Export laden (nur Metadaten, wird protokolliert)</button></div>
           {audit && <table className="table mt"><thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Objekt</th></tr></thead><tbody>
@@ -33,6 +36,55 @@ export function AdminPage() {
       </div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await users.reload(); }} />}
     </>
+  );
+}
+
+function PdfStyleCard() {
+  const { data, reload } = useData<{ name: string; settings: OrgSettings }>('/org/settings');
+  const [f, setF] = useState<OrgSettings | null>(null);
+  const { busy, error, run } = useAsync();
+  const v = f ?? data?.settings ?? {};
+  if (!data) return null;
+  return (
+    <div className="card">
+      <h2>PDF-Stil (Protokolle, Berichte, Freigaben)</h2>
+      <p className="muted small">Gilt für alle PDFs des Mandanten: Kopfzeile, Akzentfarbe für Überschriften und Tabellenköpfe, Fußzeile. Inhalt und Gliederung kommen aus der Seite bzw. Vorlage.</p>
+      <div className="form cols-2">
+        <label className="field"><span>Firmenname in der Kopfzeile</span><input type="text" value={v.company ?? ''} placeholder={data.name} onChange={(e) => setF({ ...v, company: e.target.value })} /></label>
+        <label className="field"><span>Akzentfarbe</span><span className="row"><input type="color" value={v.accentColor ?? '#1f5eff'} onChange={(e) => setF({ ...v, accentColor: e.target.value })} style={{ width: 48, padding: 0, height: 32 }} /><input type="text" value={v.accentColor ?? '#1f5eff'} onChange={(e) => setF({ ...v, accentColor: e.target.value })} style={{ width: 110 }} /></span></label>
+        <label className="field full"><span>Fußzeile</span><input type="text" value={v.footerText ?? ''} placeholder="z. B. Vertraulich · nur für Projektbeteiligte" onChange={(e) => setF({ ...v, footerText: e.target.value })} /></label>
+        {error && <div className="error full">{error}</div>}
+        <div className="full"><button className="btn primary sm" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/org/settings', f); setF(null); await reload(); })}>Speichern</button></div>
+      </div>
+    </div>
+  );
+}
+
+function TemplatesCard() {
+  const { data, reload } = useData<{ templates: DocTemplate[] }>('/docs/templates');
+  const [edit, setEdit] = useState<DocTemplate | null>(null);
+  const [name, setName] = useState('');
+  const [md, setMd] = useState('');
+  const [newKey, setNewKey] = useState('');
+  const { busy, error, run } = useAsync();
+  const open = (t: DocTemplate) => { setEdit(t); setName(t.name); setMd(t.contentMd); };
+  return (
+    <div className="card">
+      <h2>Vorlagen (Protokoll, Statusbericht, RAID-Log …)</h2>
+      <p className="muted small">Vorlagen sind Markdown mit Platzhalter <code>{'{{datum}}'}</code>. Eingebaute Vorlagen lassen sich für den Mandanten überschreiben; neue Seiten übernehmen die Struktur, das PDF folgt dem PDF-Stil.</p>
+      <div className="row mb">
+        {data?.templates.map((t) => <button key={t.id} className={`chip ${edit?.key === t.key ? 'on' : ''}`} onClick={() => open(t)}>{t.name}</button>)}
+        <span className="row small"><input type="text" placeholder="neuer Schlüssel, z. B. abnahme" value={newKey} onChange={(e) => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))} style={{ width: 200 }} /><button className="btn sm" disabled={!newKey} onClick={() => { setEdit({ id: '', key: newKey, name: '', contentMd: '# Titel\n\n' }); setName(''); setMd('# Titel\n\n'); }}>+ Vorlage</button></span>
+      </div>
+      {edit && (
+        <div className="form">
+          <label className="field"><span>Name (Schlüssel: {edit.key})</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
+          <div className="doc-editor"><textarea value={md} onChange={(e) => setMd(e.target.value)} style={{ minHeight: 360 }} /><div className="card" style={{ overflow: 'auto', maxHeight: 420 }}><Markdown md={md.replaceAll('{{datum}}', new Date().toLocaleDateString('de-DE'))} /></div></div>
+          {error && <div className="error">{error}</div>}
+          <div className="row"><button className="btn primary sm" disabled={busy || !name} onClick={() => void run(async () => { await api.put(`/docs/templates/${edit.key}`, { name, contentMd: md }); await reload(); })}>Speichern</button><button className="btn sm" onClick={() => setEdit(null)}>Schließen</button></div>
+        </div>
+      )}
+    </div>
   );
 }
 

@@ -46,6 +46,17 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>
       </>}>
       {error && <div className="error mb">{error}</div>}
+      {(t.blocked || t.escalationLevel > 0) && (
+        <div className="notice mb" style={t.escalationLevel >= 2 || t.blocked ? { background: '#fdecea', borderColor: '#f5c2c0', color: '#7f1d1d' } : undefined}>
+          <strong>{t.blocked ? `Blockiert${t.blockedReason ? `: ${t.blockedReason}` : ''}` : 'Eskaliert'}</strong>
+          {t.escalationLevel > 0 && <div className="small">Eskalation {ESC_LABEL[t.escalationLevel]} seit {fmtDateTime(t.escalatedAt)}. Nächste Stufe nach den Fristen des Projekts, zurück sobald der Grund entfällt.</div>}
+          <div className="row mt small">
+            {canEdit && t.blocked && <button className="btn sm" onClick={() => void patch({ blocked: false })}>Blockade aufheben</button>}
+            {(me.role === 'pl' || t.responsible.userId === me.userId) && t.escalationLevel < 3 && <button className="btn sm" onClick={() => { const note = prompt('Grund der Eskalation (optional)') ?? ''; void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); }); }}>Eine Stufe höher eskalieren</button>}
+            {me.role === 'pl' && t.escalationLevel > 0 && <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/escalation/reset`); await load(); await reloadTasks(); })}>Eskalation zurücksetzen</button>}
+          </div>
+        </div>
+      )}
       {t.conflicts.length > 0 && (
         <div className="notice mb">
           <strong>Terminkonflikt</strong>
@@ -67,6 +78,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <dt>Labels</dt><dd>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</dd>
         {(detail.project.timeTrackingEnabled || t.estimateMinutes) && <><dt>Aufwand</dt><dd>{fmtH(t.loggedMinutes)} gebucht{t.estimateMinutes ? <> / {fmtH(t.estimateMinutes)} geschätzt{t.loggedMinutes > t.estimateMinutes && <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span>}</> : ''}</dd></>}
         <dt>Wiederholung</dt><dd>{t.recurrence ? describeRec(t.recurrence) : <span className="muted">keine</span>}{t.archivedAt && <span className="badge" style={{ marginLeft: 6 }}>archiviert</span>}</dd>
+        <dt>Blockiert</dt><dd>{canEdit && !t.blocked && !t.done ? <button className="btn sm" onClick={() => { const reason = prompt('Warum hängt die Aufgabe? (wird der Teilprojekt-Verantwortung gemeldet)'); if (reason !== null) void patch({ blocked: true, blockedReason: reason }); }}>Als blockiert melden</button> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</dd>
         <dt>Zeitraum</dt><dd>{t.startDate ? `${fmtDate(t.startDate)} – ` : ''}{t.dueDate ? fmtDate(t.dueDate) : <span className="muted">keine Deadline</span>}</dd>
         {t.predecessorIds && t.predecessorIds.length > 0 && <><dt>Vorgänger</dt><dd>{t.predecessorIds.map((p) => tasks.find((x) => x.id === p)?.title).filter(Boolean).join(', ')}</dd></>}
         <dt>Antwortadresse</dt><dd className="small muted">{detail.project.mailAddress ? detail.project.mailAddress.replace('@', `+t${t.mailCode}@`) : `Kein Projektkonto · Code ${t.mailCode}`}</dd>
@@ -189,6 +201,8 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
   );
 }
 
+
+const ESC_LABEL = ['keine', 'Stufe 1: Teilprojekt-Verantwortung', 'Stufe 2: Projektleitung', 'Stufe 3: Eskalationskontakt'];
 
 function describeRec(r: Recurrence): string {
   const n = r.interval ?? 1;

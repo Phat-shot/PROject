@@ -12,12 +12,18 @@ import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion, renderT
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
-import { markdownToPdf } from '../docs/pdf.js';
+import { markdownToPdf, type PdfStyle } from '../docs/pdf.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
 export async function docRoutes(app: FastifyInstance) {
   const db = app.db;
+  const styleFor = async (projectId: string): Promise<PdfStyle> => {
+    const o = await db.one(`select o.name, o.settings from projects p join orgs o on o.id = p.org_id where p.id = $1`, [projectId]);
+    const st = o.settings ?? {};
+    return { company: st.company ?? o.name, accentColor: st.accentColor, footerText: st.footerText };
+  };
+  const folderName = async (folderId: string | null) => (folderId ? (await db.maybeOne(`select name from doc_folders where id = $1`, [folderId]))?.name ?? null : null);
   const uploadDir = path.resolve(process.env.DATA_DIR ?? '.data', 'uploads');
 
   app.get<{ Params: { id: string } }>('/projects/:id/docs', async (req) => {
@@ -202,7 +208,7 @@ export async function docRoutes(app: FastifyInstance) {
       : await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [r.project_id]);
     if (!account) throw badRequest('Kein Projektkonto vorhanden');
     const project = await db.one(`select name from projects where id = $1`, [r.project_id]);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date() });
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
     const filename = `${r.title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${r.version}.pdf`;
     const result = await app.mail.sendFromAccount(account, {
       to: list,
@@ -334,7 +340,7 @@ export async function docRoutes(app: FastifyInstance) {
     const r = await db.maybeOne(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name });
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name, folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
@@ -345,7 +351,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!sh) throw notFound('Freigabe ungültig');
     if (!(await sharedPageIds(db, sh)).includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
     const r = await db.one(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status });
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
