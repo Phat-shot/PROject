@@ -1,0 +1,30 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { buildApp } from '../src/app.js';
+import { createDb, runMigrations } from '../src/db.js';
+import { MailService } from '../src/mail/service.js';
+
+test('Ersteinrichtung legt Mandant und Org-Admin an und sperrt sich danach', async () => {
+  process.env.DATABASE_URL = 'memory';
+  const db = await createDb();
+  await runMigrations(db);
+  const app = await buildApp({ db, mail: new MailService(db) });
+  await app.ready();
+  assert.equal((await app.inject({ method: 'GET', url: '/api/setup/status' })).json().needsSetup, true);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'a@b.de', password: 'x' } })).statusCode, 401);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/setup', payload: { orgName: 'Firma', name: 'Admin', email: 'admin@firma.de', password: 'kurz' } })).statusCode, 400);
+  const ok = await app.inject({ method: 'POST', url: '/api/setup', payload: { orgName: 'Firma GmbH', name: 'Alex Admin', email: 'Admin@Firma.de', password: 'sehr-sicher-123' } });
+  assert.equal(ok.statusCode, 200, ok.body);
+  assert.equal(ok.json().user.globalRole, 'org_admin');
+  assert.equal(ok.json().user.email, 'admin@firma.de');
+  assert.ok(ok.cookies.some((c) => c.name === 'pt_session'), 'direkt angemeldet');
+  assert.equal((await app.inject({ method: 'GET', url: '/api/setup/status' })).json().needsSetup, false);
+  assert.equal((await app.inject({ method: 'POST', url: '/api/setup', payload: { orgName: 'X', name: 'Y', email: 'y@x.de', password: 'sehr-sicher-123' } })).statusCode, 403);
+  const login = await app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'admin@firma.de', password: 'sehr-sicher-123' } });
+  assert.equal(login.statusCode, 200);
+  const cookie = login.cookies.find((c) => c.name === 'pt_session')!.value;
+  const create = await app.inject({ method: 'POST', url: '/api/projects', cookies: { pt_session: cookie }, payload: { key: 'P1', name: 'Erstes Projekt' } });
+  assert.equal(create.statusCode, 200, create.body);
+  await app.close();
+  await db.close();
+});

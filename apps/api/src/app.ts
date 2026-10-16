@@ -16,6 +16,7 @@ import { docRoutes } from './routes/docs.js';
 import { devRoutes } from './routes/dev.js';
 import { searchRoutes } from './routes/search.js';
 import { timeRoutes } from './routes/time.js';
+import { setupRoutes } from './routes/setup.js';
 import { MailService } from './mail/service.js';
 
 export interface AppOptions {
@@ -60,6 +61,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
 
   await app.register(
     async (api) => {
+      await api.register(setupRoutes);
       await api.register(authRoutes);
       await api.register(userRoutes);
       await api.register(projectRoutes);
