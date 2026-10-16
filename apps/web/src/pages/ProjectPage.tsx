@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import { Navigate, Route, Routes, useParams, useSearchParams } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import type { BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
@@ -40,6 +40,7 @@ export const useProject = () => useContext(Ctx);
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
+  const loc = useLocation();
   const detail = useData<ProjectDetail>(`/projects/${id}`);
   const tasks = useData<{ tasks: Task[] }>(`/projects/${id}/tasks`);
   const users = useData<{ users: User[] }>('/users');
@@ -53,21 +54,24 @@ export function ProjectPage() {
   };
   const base = `/projekte/${id}`;
   const ctx: ProjectCtx = { detail: detail.data, tasks: tasks.data.tasks, users: users.data.users, reload: detail.reload, reloadTasks: tasks.reload, openTask };
-  const tabs = [
-    { to: base, label: 'Übersicht', end: true },
-    { to: `${base}/board`, label: 'Board' },
-    { to: `${base}/plan`, label: 'Plan' },
-    { to: `${base}/kalender`, label: 'Kalender' },
-    ...(p.timeTrackingEnabled || p.myMembership.role === 'pl' ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
-    { to: `${base}/mail`, label: 'Mail' },
-    { to: `${base}/doku`, label: 'Doku' },
-    { to: `${base}/mitglieder`, label: 'Mitglieder' },
-    { to: `${base}/audit`, label: 'Audit' }
-  ];
+  // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt nur die Unterreiter des aktuellen Bereichs
+  const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
+  const isPl = p.myMembership.role === 'pl';
+  const tabs = ['board', 'plan', 'kalender', 'zeiten'].includes(sub)
+    ? [
+        { to: `${base}/board`, label: 'Board' },
+        { to: `${base}/plan`, label: 'Plan' },
+        { to: `${base}/kalender`, label: 'Kalender' },
+        ...(p.timeTrackingEnabled || isPl ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : [])
+      ]
+    : ['einstellungen', 'audit'].includes(sub)
+      ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
+      : undefined;
+  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten'].includes(sub) ? 'Aufgaben' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <Ctx.Provider value={ctx}>
-      <TopBar title={<><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}</>} tabs={tabs} />
+      <TopBar title={<><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
       <Routes>
         <Route index element={<OverviewView />} />
         <Route path="board" element={<BoardView />} />
@@ -76,7 +80,8 @@ export function ProjectPage() {
         <Route path="zeiten" element={<TimeView />} />
         <Route path="mail/*" element={<MailView />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
-        <Route path="mitglieder" element={<MembersView />} />
+        <Route path="einstellungen" element={<MembersView />} />
+        <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen`} replace />} />
         <Route path="audit" element={<AuditView />} />
         <Route path="*" element={<Navigate to={base} replace />} />
       </Routes>

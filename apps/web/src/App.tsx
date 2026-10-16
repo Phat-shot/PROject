@@ -3,7 +3,8 @@ import { useAuth } from './lib/auth';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
-import { MyTasksPage } from './pages/MyTasksPage';
+import { AllTasksPage } from './pages/AllTasksPage';
+import { InboxPage } from './pages/InboxPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
@@ -30,8 +31,11 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Navigate to="/projekte" replace />} />
         <Route path="/projekte" element={<ProjectsPage />} />
-        <Route path="/meine-aufgaben" element={<MyTasksPage />} />
-        <Route path="/mail-konten" element={<MailAccountsPage />} />
+        <Route path="/projekte/aufgaben" element={<AllTasksPage />} />
+        <Route path="/projekte/postfach" element={<InboxPage />} />
+        <Route path="/meine-aufgaben" element={<Navigate to="/projekte/aufgaben?scope=mine" replace />} />
+        <Route path="/einstellungen/mail-konten" element={<MailAccountsPage />} />
+        <Route path="/mail-konten" element={<Navigate to="/einstellungen/mail-konten" replace />} />
         <Route path="/verwaltung" element={<AdminPage />} />
         <Route path="/projekte/:id/*" element={<ProjectPage />} />
         <Route path="*" element={<Navigate to="/projekte" replace />} />

@@ -314,6 +314,35 @@ export async function mailRoutes(app: FastifyInstance) {
     return { view: mapView(v, rights), mails: rows.rows.map(mapSummary) };
   });
 
+  // Gemeinsames Postfach: alle Mails aus Ansichten mit Leserecht, über alle aktiven Projekte
+  app.get<{ Querystring: { folder?: string; projectId?: string } }>('/mail/inbox', async (req) => {
+    const user = requireUser(req);
+    const views = await db.query(
+      `select v.id, v.name, v.project_id, p.key as project_key from mail_views v join projects p on p.id = v.project_id
+       where p.org_id = $1 and p.status = 'active' ${req.query.projectId ? 'and p.id = $2' : ''}`,
+      req.query.projectId ? [user.orgId, req.query.projectId] : [user.orgId]
+    );
+    const readable: { id: string; name: string; projectId: string; projectKey: string }[] = [];
+    for (const v of views.rows) {
+      const m = await getMembership(db, v.project_id, user.id);
+      const r = await getViewRights(db, v.id, user, m);
+      if (r.canRead) readable.push({ id: v.id, name: v.name, projectId: v.project_id, projectKey: v.project_key });
+    }
+    if (readable.length === 0) return { mails: [], views: [] };
+    const ids = readable.map((v) => v.id);
+    const rows = await db.query(
+      `select distinct on (m.id) m.*, x.view_id, ${LINKED} from mails m join mail_view_matches x on x.mail_id = m.id
+       where x.view_id = any($1::uuid[]) ${req.query.folder ? 'and lower(m.folder) = lower($2)' : ''} order by m.id, x.view_id`,
+      req.query.folder ? [ids, req.query.folder] : [ids]
+    );
+    const byView = new Map(readable.map((v) => [v.id, v]));
+    const mails = rows.rows
+      .map((r: any) => { const v = byView.get(r.view_id)!; return { ...mapSummary(r), projectId: v.projectId, projectKey: v.projectKey, viewId: v.id, viewName: v.name }; })
+      .sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)))
+      .slice(0, 500);
+    return { mails, views: readable };
+  });
+
   app.get<{ Params: { mid: string } }>('/mail/mails/:mid', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select m.*, ${LINKED} from mails m where m.id = $1`, [req.params.mid]);

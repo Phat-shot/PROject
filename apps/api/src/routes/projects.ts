@@ -22,6 +22,7 @@ export function mapProject(r: any): Project {
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     escalation: policyOf(r.escalation),
+    visibility: r.visibility ?? 'members',
     myRole: r.my_role ?? undefined
   };
 }
@@ -32,8 +33,8 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get('/projects', async (req) => {
     const user = requireUser(req);
     const rows = await db.query(
-      `select p.*, m.role as my_role from projects p join project_members m on m.project_id = p.id and m.user_id = $1
-       where p.org_id = $2 order by p.status, p.name`,
+      `select p.*, coalesce(m.role, 'reader') as my_role from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
+       where p.org_id = $2 and (m.user_id is not null or p.visibility = 'org') order by p.status, p.name`,
       [user.id, user.orgId]
     );
     return { projects: rows.rows.map(mapProject) };
@@ -91,10 +92,11 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; escalation?: Partial<EscalationPolicy> } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy> } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
     if (b.escalation) {
       const cur = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);
       const next = policyOf({ ...cur, ...b.escalation });
@@ -108,8 +110,8 @@ export async function projectRoutes(app: FastifyInstance) {
     }
     const p = await db.one(
       `update projects set name = coalesce($2, name), description = coalesce($3, description),
-         time_tracking_enabled = coalesce($4, time_tracking_enabled), budget_hours = case when $5 then $6::numeric else budget_hours end where id = $1 returning *`,
-      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null]
+         time_tracking_enabled = coalesce($4, time_tracking_enabled), budget_hours = case when $5 then $6::numeric else budget_hours end, visibility = coalesce($7, visibility) where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null, b.visibility ?? null]
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };

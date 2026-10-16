@@ -35,6 +35,7 @@ export interface Project {
   description: string | null;
   status: 'active' | 'archived';
   mailAddress: string | null;
+  visibility: 'members' | 'org';
   timeTrackingEnabled: boolean;
   budgetHours: number | null;
   escalation?: EscalationPolicy;
@@ -282,6 +283,13 @@ export interface MailSummary {
   snippet: string;
   hasAttachments: boolean;
   linkedTaskIds: string[];
+}
+
+export interface InboxMail extends MailSummary {
+  projectId: string;
+  projectKey: string;
+  viewId: string;
+  viewName: string;
 }
 
 export interface MailDetail extends MailSummary {

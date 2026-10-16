@@ -281,3 +281,36 @@ test('Leerer POST-Body liefert 400 statt 500; Konto bearbeiten und testen; Proje
   await t.api(pl).del(`/mail/accounts/${acc.json().account.id}`);
   assert.equal((await t.api(pl).get(`/projects/${p.json().project.id}`)).json().project.mailAddress, null);
 });
+
+test('Gesamtsicht: Aufgaben über alle Projekte, gemeinsames Postfach, Projekt-Sichtbarkeit org', async () => {
+  const pl = await t.login('pl@demo.local');
+  const mine = (await t.api(pl).get('/my/tasks')).json().tasks;
+  const all = (await t.api(pl).get('/my/tasks?scope=all')).json().tasks;
+  assert.ok(all.length >= mine.length && all.length > 0);
+  assert.ok(all.every((x: any) => typeof x.projectKey === 'string' && x.projectKey.length > 0));
+  assert.ok(mine.every((x: any) => !x.done));
+  const inbox = (await t.api(pl).get('/mail/inbox')).json();
+  assert.ok(inbox.views.length >= 1 && inbox.mails.length > 0);
+  assert.ok(inbox.mails.every((m: any) => m.projectKey && m.viewId && m.viewName));
+  const ids = new Set(inbox.mails.map((m: any) => m.id));
+  assert.equal(ids.size, inbox.mails.length, 'keine Doppelungen über mehrere Ansichten');
+  // Leser ohne Mail-Rechte sieht leeres Postfach, aber keinen Fehler
+  const leser = await t.login('leser@demo.local');
+  const li = await t.api(leser).get('/mail/inbox');
+  assert.equal(li.statusCode, 200);
+  // Sichtbarkeit: Admin ist kein Mitglied von WEB → 403; nach visibility=org lesend → 200, schreiben weiter 403
+  const admin = await t.login('admin@demo.local');
+  assert.equal((await t.api(admin).get(`/projects/${t.ids.projects.web}`)).statusCode, 403);
+  assert.equal((await t.api(admin).patch(`/projects/${t.ids.projects.web}`, { visibility: 'org' })).statusCode, 403, 'nur PL ändert Sichtbarkeit');
+  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { visibility: 'offen' })).statusCode, 400);
+  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { visibility: 'org' })).statusCode, 200);
+  const vis = await t.api(admin).get(`/projects/${t.ids.projects.web}`);
+  assert.equal(vis.statusCode, 200, vis.body);
+  assert.equal(vis.json().project.myRole, 'reader');
+  assert.ok((await t.api(admin).get('/projects')).json().projects.some((p: any) => p.id === t.ids.projects.web && p.myRole === 'reader'));
+  assert.equal((await t.api(admin).get(`/projects/${t.ids.projects.web}/tasks`)).statusCode, 200);
+  assert.equal((await t.api(admin).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'nicht erlaubt' })).statusCode, 403);
+  assert.ok((await t.api(admin).get('/my/tasks?scope=all')).json().tasks.some((x: any) => x.projectKey === 'WEB'));
+  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}`, { visibility: 'members' })).statusCode, 200);
+  assert.equal((await t.api(admin).get(`/projects/${t.ids.projects.web}`)).statusCode, 403);
+});

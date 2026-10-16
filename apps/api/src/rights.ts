@@ -26,12 +26,21 @@ export async function getMembership(db: Db, projectId: string, userId: string): 
  * Org-Admins haben keinen impliziten Zugriff auf Projektinhalte.
  */
 export async function requireProject(db: Db, user: User, projectId: string, min: ProjectRole = 'reader'): Promise<Membership> {
-  const project = await db.maybeOne(`select id, org_id, status from projects where id = $1`, [projectId]);
+  const project = await db.maybeOne(`select id, org_id, status, visibility from projects where id = $1`, [projectId]);
   if (!project || project.org_id !== user.orgId) throw notFound('Projekt nicht gefunden');
-  const m = await getMembership(db, projectId, user.id);
+  const m = await effectiveMembership(db, user, projectId, project.visibility);
   if (!m) throw forbidden('Kein Mitglied dieses Projekts');
   if (ROLE_RANK[m.role] < ROLE_RANK[min]) throw forbidden(`Rolle ${min} erforderlich`);
   return m;
+}
+
+/** Mitgliedschaft oder, bei Sichtbarkeit „org“, implizite Leserolle für alle aktiven Benutzer des Mandanten. */
+export async function effectiveMembership(db: Db, user: User, projectId: string, visibility?: string): Promise<Membership | null> {
+  const m = await getMembership(db, projectId, user.id);
+  if (m) return m;
+  const vis = visibility ?? (await db.maybeOne(`select visibility from projects where id = $1 and org_id = $2`, [projectId, user.orgId]))?.visibility;
+  if (vis === 'org' && user.active) return { projectId, userId: user.id, role: 'reader', isDeputy: false, canEditPlan: false, canApprove: false, canFinalize: false, canUseAi: false };
+  return null;
 }
 
 export function requireFlag(m: Membership, flag: keyof Membership, message: string) {

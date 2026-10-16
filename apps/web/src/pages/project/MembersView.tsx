@@ -15,6 +15,10 @@ export function MembersView() {
   const isPl = me.role === 'pl';
   return (
     <div className="content">
+      <div className="card mb">
+        <h2>Allgemein</h2>
+        <GeneralForm />
+      </div>
       <div className="grid cols-2">
         <div className="card">
           <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <button className="btn primary sm" onClick={() => setInvite(true)}>Einladen</button>}</div>
@@ -36,7 +40,7 @@ export function MembersView() {
             <h2>Projekt</h2>
             <dl className="kv">
               <dt>Kürzel</dt><dd>{detail.project.key}</dd>
-              <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/mail-konten">Mail-Konten</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
+              <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/mail-konten">Meine Mail-Konten</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
               <dt>Externe Kontakte</dt><dd><Contacts /></dd>
               <dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
@@ -104,6 +108,35 @@ export function MembersView() {
       </Modal>
     );
   }
+}
+
+function GeneralForm() {
+  const { detail, reload } = useProject();
+  const p = detail.project;
+  const isPl = p.myMembership.role === 'pl';
+  const [f, setF] = useState({ name: p.name, description: p.description ?? '', visibility: p.visibility });
+  const { busy, error, run } = useAsync();
+  const dirty = f.name !== p.name || f.description !== (p.description ?? '') || f.visibility !== p.visibility;
+  if (!isPl) {
+    return <dl className="kv"><dt>Name</dt><dd>{p.name}</dd><dt>Beschreibung</dt><dd>{p.description || '–'}</dd><dt>Sichtbarkeit</dt><dd>{p.visibility === 'org' ? 'alle Benutzer des Mandanten (lesend)' : 'nur Mitglieder'}</dd></dl>;
+  }
+  return (
+    <div className="form">
+      <div className="grid cols-2">
+        <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+        <label className="field"><span>Sichtbarkeit</span>
+          <select value={f.visibility} onChange={(e) => setF({ ...f, visibility: e.target.value as 'members' | 'org' })}>
+            <option value="members">nur Mitglieder</option>
+            <option value="org">alle Benutzer des Mandanten (lesend)</option>
+          </select>
+        </label>
+      </div>
+      <label className="field"><span>Beschreibung</span><textarea value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
+      <p className="muted small">Sichtbarkeit „alle Benutzer“: Nicht-Mitglieder sehen Übersicht, Board, Plan und Doku lesend. Mail-Ansichten bleiben rechtegebunden, schreiben darf weiterhin nur, wer Mitglied ist.</p>
+      {error && <div className="error">{error}</div>}
+      <div><button className="btn primary sm" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility }); await reload(); })}>Speichern</button></div>
+    </div>
+  );
 }
 
 function EscalationForm() {

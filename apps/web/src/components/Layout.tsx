@@ -1,31 +1,65 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { Notification, Project } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 
+/**
+ * Seitenleiste: „Projekte“ (standardmäßig ausgeklappt) mit Gesamtsicht Aufgaben, gemeinsamem Postfach
+ * und allen aktiven Projekten. Das gewählte Projekt zeigt darunter seine Bereiche (Übersicht, Aufgaben,
+ * Postfach, Doku, Einstellungen nur für PL). Darunter die Benutzer-Einstellungen und die Verwaltung.
+ */
 export function Layout({ children }: { children: ReactNode }) {
   const { user, logout } = useAuth();
+  const loc = useLocation();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [open, setOpen] = useState(true);
+  const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
+  const load = () => api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined);
+  useEffect(() => { void load(); }, []);
+  // Liste auffrischen, wenn ein unbekanntes Projekt geöffnet wird (z. B. direkt nach dem Anlegen) oder die Projektübersicht aufgerufen wird
   useEffect(() => {
-    api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined);
-  }, []);
+    if (loc.pathname === '/projekte' || (currentId && !projects.some((p) => p.id === currentId))) void load();
+  }, [loc.pathname]);
+  useEffect(() => { if (currentId) setOpen(true); }, [currentId]);
+  const isActive = (p: string, end = false) => (end ? loc.pathname === p : loc.pathname === p || loc.pathname.startsWith(p + '/'));
   return (
     <div className="app">
       <nav className="sidebar">
         <div className="brand">Projekttool<small>Alpha · Konzept B</small></div>
-        <NavLink to="/meine-aufgaben">Meine Aufgaben</NavLink>
-        <NavLink to="/projekte" end>Projekte</NavLink>
-        <div className="section">Aktive Projekte</div>
-        <div className="sub">
-          {projects.map((p) => (
-            <NavLink key={p.id} to={`/projekte/${p.id}`}>
-              <span className="badge">{p.key}</span> {p.name}
-            </NavLink>
-          ))}
+        <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
+          <NavLink to="/projekte" end>Projekte</NavLink>
+          <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
         </div>
+        {open && (
+          <div className="sub">
+            <NavLink to="/projekte/aufgaben">Alle Aufgaben</NavLink>
+            <NavLink to="/projekte/postfach">Postfach</NavLink>
+            {projects.map((p) => {
+              const base = `/projekte/${p.id}`;
+              const sel = currentId === p.id;
+              return (
+                <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
+                  <NavLink to={base} className={() => (sel ? 'proj-link sel' : 'proj-link')}>
+                    <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
+                  </NavLink>
+                  {sel && (
+                    <div className="sub2">
+                      <NavLink to={base} end>Übersicht</NavLink>
+                      <NavLink to={`${base}/board`} className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Aufgaben</NavLink>
+                      <NavLink to={`${base}/mail`}>Postfach</NavLink>
+                      <NavLink to={`${base}/doku`}>Doku</NavLink>
+                      {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            {projects.length === 0 && <div className="muted small" style={{ padding: '4px 22px' }}>Keine aktiven Projekte.</div>}
+          </div>
+        )}
         <div className="section">Einstellungen</div>
-        <NavLink to="/mail-konten">Mail-Konten</NavLink>
+        <NavLink to="/einstellungen/mail-konten">Meine Mail-Konten</NavLink>
         {user?.globalRole === 'org_admin' && <NavLink to="/verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>

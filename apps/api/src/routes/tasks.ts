@@ -113,16 +113,20 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // Querschnitt: Meine Aufgaben über alle Projekte (ausdrücklich oder geerbt zuständig)
-  app.get('/my/tasks', async (req) => {
+  // Aufgaben über alle aktiven Projekte: scope=mine (Standard, nur eigene offene) oder scope=all (alle offenen, auch org-sichtbare Projekte)
+  app.get<{ Querystring: { scope?: string; done?: string } }>('/my/tasks', async (req) => {
     const user = requireUser(req);
+    const all = req.query.scope === 'all';
     const tasks = await loadTasks(
       db,
-      `t.project_id in (select project_id from project_members where user_id = $1) and t.archived_at is null
-       and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active')`,
-      [user.id]
+      `t.archived_at is null and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active' and p.org_id = $2
+         and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) ${all ? "or p.visibility = 'org'" : ''}))`,
+      [user.id, user.orgId]
     );
-    const mine = tasks.filter((t) => t.responsible.userId === user.id && !t.done);
-    return { tasks: mine };
+    const keys = await db.query(`select id, key from projects where org_id = $1`, [user.orgId]);
+    const keyOf = new Map(keys.rows.map((r: any) => [r.id, r.key]));
+    const list = tasks.filter((t) => (all || t.responsible.userId === user.id) && (req.query.done === '1' || !t.done)).map((t) => ({ ...t, projectKey: keyOf.get(t.projectId) ?? '' }));
+    return { tasks: list };
   });
 
   app.post<{ Params: { id: string }; Body: TaskBody }>('/projects/:id/tasks', async (req) => {
