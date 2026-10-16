@@ -18,6 +18,8 @@ export function mapProject(r: any): Project {
     description: r.description,
     status: r.status,
     mailAddress: r.mail_address,
+    timeTrackingEnabled: Boolean(r.time_tracking_enabled),
+    budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     myRole: r.my_role ?? undefined
   };
 }
@@ -86,13 +88,14 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
     const p = await db.one(
-      `update projects set name = coalesce($2, name), description = coalesce($3, description), mail_address = case when $4::text is null then mail_address else nullif($4,'') end where id = $1 returning *`,
-      [req.params.id, b.name ?? null, b.description ?? null, b.mailAddress === undefined ? null : b.mailAddress ?? '']
+      `update projects set name = coalesce($2, name), description = coalesce($3, description), mail_address = case when $4::text is null then mail_address else nullif($4,'') end,
+         time_tracking_enabled = coalesce($5, time_tracking_enabled), budget_hours = case when $6 then $7::numeric else budget_hours end where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.mailAddress === undefined ? null : b.mailAddress ?? '', b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null]
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };
@@ -287,7 +290,11 @@ export async function projectRoutes(app: FastifyInstance) {
       e.open++; if (t.dueDate && t.dueDate < today) e.overdue++;
       load.set(t.responsible.userId, e);
     }
+    const time = await db.one(`select coalesce(sum(minutes), 0)::int as logged from time_entries where project_id = $1`, [pid]);
+    const est = await db.one(`select coalesce(sum(estimate_minutes), 0)::int as est from tasks where project_id = $1 and archived_at is null`, [pid]);
+    const proj = await db.one(`select time_tracking_enabled, budget_hours from projects where id = $1`, [pid]);
     return {
+      time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
       counts, perSubproject: perSub.rows,
       milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subproject_id })),
       pendingDrafts: pending.c, pagesInReview: review.rows, conflicts, overdue,

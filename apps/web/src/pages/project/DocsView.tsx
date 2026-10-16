@@ -87,6 +87,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
         <span className="right" />
         {canEdit && !edit && <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>}
+        <a className="btn sm" href={`/api/docs/pages/${p.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
         {me.role !== 'reader' && <button className="btn sm" onClick={() => onNewChild(p)}>+ Unterseite</button>}
         {canFinal && <button className="btn sm" onClick={() => setShare(true)}>Teilen{d.data.activeShares > 0 && <span className="badge" style={{ marginLeft: 4 }}>{d.data.activeShares}</span>}</button>}
         {p.status === 'draft' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('review')}>In Prüfung geben</button>}
@@ -94,7 +95,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         {p.status !== 'final' && canFinal && <button className="btn sm primary" disabled={busy} onClick={() => void setStatus('final')}>Final setzen</button>}
         {p.status === 'final' && canFinal && <>
           <button className="btn sm" disabled={busy} onClick={() => { if (confirm('Finale Seite wieder öffnen? Es entsteht eine neue Version.')) void setStatus('draft'); }}>Wieder öffnen</button>
-          <button className="btn sm primary" disabled={busy || !folder?.distributionList.length} title={folder?.distributionList.length ? `An: ${folder.distributionList.join(', ')}` : 'Ordner hat keinen Verteiler'} onClick={() => void run(async () => { const r = await api.post<{ to: string[] }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); alert(`Versendet an: ${r.to.join(', ')}`); })}>An Verteiler senden</button>
+          <button className="btn sm primary" disabled={busy || !folder?.distributionList.length} title={folder?.distributionList.length ? `An: ${folder.distributionList.join(', ')}` : 'Ordner hat keinen Verteiler'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); alert(`PDF „${r.filename}“ versendet an: ${r.to.join(', ')}`); })}>Als PDF an Verteiler senden</button>
         </>}
         {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Seite löschen?')) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(`/projekte/${detail.project.id}/doku`); }); }}>Löschen</button>}
       </div>

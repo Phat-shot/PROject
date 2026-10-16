@@ -11,6 +11,7 @@ import { MembersView } from './project/MembersView';
 import { AuditView } from './project/AuditView';
 import { OverviewView } from './project/OverviewView';
 import { CalendarView } from './project/CalendarView';
+import { TimeView } from './project/TimeView';
 import { TaskDrawer } from './project/TaskDrawer';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
@@ -57,6 +58,7 @@ export function ProjectPage() {
     { to: `${base}/board`, label: 'Board' },
     { to: `${base}/plan`, label: 'Plan' },
     { to: `${base}/kalender`, label: 'Kalender' },
+    ...(p.timeTrackingEnabled || p.myMembership.role === 'pl' ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
     { to: `${base}/mail`, label: 'Mail' },
     { to: `${base}/doku`, label: 'Doku' },
     { to: `${base}/mitglieder`, label: 'Mitglieder' },
@@ -71,6 +73,7 @@ export function ProjectPage() {
         <Route path="board" element={<BoardView />} />
         <Route path="plan" element={<PlanView />} />
         <Route path="kalender" element={<CalendarView />} />
+        <Route path="zeiten" element={<TimeView />} />
         <Route path="mail/*" element={<MailView />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
         <Route path="mitglieder" element={<MembersView />} />

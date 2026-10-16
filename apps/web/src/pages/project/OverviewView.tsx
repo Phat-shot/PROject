@@ -4,6 +4,7 @@ import { useData } from '../../lib/useData';
 import { useProject } from '../ProjectPage';
 
 interface Overview {
+  time: { enabled: boolean; loggedMinutes: number; estimateMinutes: number; budgetHours: number | null };
   counts: { open: number; done: number; overdue: number; due_week: number; no_due: number };
   perSubproject: { id: string; name: string; total: number; done: number; overdue: number }[];
   milestones: { id: string; name: string; date: string; subprojectId: string | null }[];
@@ -39,6 +40,7 @@ export function OverviewView() {
         <div className={`kpi ${o.conflicts.length ? 'warn' : ''}`}><div className="v">{o.conflicts.length}</div><div className="l">Terminkonflikte</div></div>
         <div className={`kpi ${o.pendingDrafts ? 'warn' : ''}`}><div className="v">{o.pendingDrafts}</div><div className="l">Freigaben offen</div></div>
         <div className="kpi ok"><div className="v">{pct}%</div><div className="l">erledigt ({o.counts.done}/{total})</div></div>
+        {o.time.enabled && <div className={`kpi ${o.time.budgetHours && o.time.loggedMinutes > o.time.budgetHours * 60 ? 'bad' : ''}`}><div className="v">{Math.round(o.time.loggedMinutes / 60)} h</div><div className="l">gebucht{o.time.budgetHours ? ` von ${o.time.budgetHours} h Budget` : ''}</div></div>}
       </div>
       <div className="grid cols-2">
         <div className="stack">

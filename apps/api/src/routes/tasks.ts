@@ -7,6 +7,7 @@ import { requireProject } from '../rights.js';
 import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead } from '../tasks/service.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { notify, notifyMany } from '../notify.js';
+import { extractMentions } from '../tasks/mentions.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -26,6 +27,7 @@ interface TaskBody {
   note?: string | null;
   labelIds?: string[];
   recurrence?: Recurrence | null;
+  estimateMinutes?: number | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -148,8 +150,9 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.predecessorIds) await setPredecessors(r.id, req.params.id, b.predecessorIds);
     if (b.labelIds) await setLabels(r.id, req.params.id, b.labelIds);
     if (b.recurrence) await db.query(`update tasks set recurrence = $2 where id = $1`, [r.id, JSON.stringify(b.recurrence)]);
+    if (b.estimateMinutes) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [r.id, Math.round(b.estimateMinutes)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.create', objectType: 'task', objectId: r.id, details: { title: b.title } });
-    if (b.responsibleUserId) await notify(db, { userId: b.responsibleUserId, projectId: req.params.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}?task=${r.id}`, dedupeKey: null });
+    if (b.responsibleUserId) await notify(db, { userId: b.responsibleUserId, projectId: req.params.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}/board?task=${r.id}`, dedupeKey: null });
     return { task: await loadTask(db, r.id) };
   });
 
@@ -169,7 +172,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
     return {
       task,
-      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at })),
+      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
       mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, date: m.date, copied: m.copied, accountId: m.account_id })),
       attachments: attachments.rows.map(mapAttachment)
     };
@@ -217,8 +220,9 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.predecessorIds) await setPredecessors(req.params.id, existing.project_id, b.predecessorIds);
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
+    if ('estimateMinutes' in b) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [req.params.id, b.estimateMinutes && b.estimateMinutes > 0 ? Math.round(b.estimateMinutes) : null]);
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id && b.responsibleUserId !== user.id) {
-      await notify(db, { userId: b.responsibleUserId, projectId: existing.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}?task=${existing.id}` });
+      await notify(db, { userId: b.responsibleUserId, projectId: existing.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}` });
     }
     if (b.columnId && b.columnId !== existing.column_id) {
       const newCol = await db.one(`select is_done from board_columns where id = $1`, [b.columnId]);
@@ -287,7 +291,7 @@ export async function taskRoutes(app: FastifyInstance) {
       // Betroffene informieren (Zuständige der verschobenen Aufgaben)
       for (const c of changes) {
         const t = (await loadTask(db, c.id))!;
-        if (t.responsible.userId) await notify(db, { userId: t.responsible.userId, projectId: existing.project_id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}?task=${t.id}` }, );
+        if (t.responsible.userId) await notify(db, { userId: t.responsible.userId, projectId: existing.project_id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${t.id}` });
       }
     }
     return { changes, applied: Boolean(req.body?.apply) };
@@ -336,13 +340,19 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!t) throw notFound('Aufgabe nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
-    const c = await db.one(`insert into task_comments (task_id, user_id, body) values ($1,$2,$3) returning *`, [req.params.id, user.id, req.body.body.trim()]);
+    const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);
+    const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
+    const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions) values ($1,$2,$3,$4) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions)]);
     const task = (await loadTask(db, req.params.id))!;
+    const link = `/projekte/${t.project_id}/board?task=${task.id}`;
+    // Erwähnte zuerst (eigener Typ), danach Zuständige und bisherige Kommentatoren
+    await notifyMany(db, mentions, { projectId: t.project_id, type: 'mention', title: `${user.name} hat dich erwähnt: „${task.title}“`, body: req.body.body.trim().slice(0, 160), link }, user.id);
     const others = await db.query(`select distinct user_id from task_comments where task_id = $1`, [req.params.id]);
     const targets = new Set<string>(others.rows.map((r: any) => r.user_id));
     if (task.responsible.userId) targets.add(task.responsible.userId);
-    await notifyMany(db, targets, { projectId: t.project_id, type: 'task.comment', title: `Kommentar zu „${task.title}“`, body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link: `/projekte/${t.project_id}?task=${task.id}` }, user.id);
-    return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, createdAt: c.created_at } };
+    for (const m of mentions) targets.delete(m);
+    await notifyMany(db, targets, { projectId: t.project_id, type: 'task.comment', title: `Kommentar zu „${task.title}“`, body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link }, user.id);
+    return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, mentions, createdAt: c.created_at } };
   });
 
   async function rememberContact(projectId: string, email: string) {

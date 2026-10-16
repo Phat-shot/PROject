@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import type { Task } from '@projekttool/shared';
+import type { Task, TimeEntry } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { fmtDate, today } from '../lib/api';
 import { TopBar } from '../components/Layout';
@@ -32,8 +32,21 @@ export function MyTasksPage() {
             </table>
           )}
         </div>
+        <MyWeek />
       </div>
     </>
+  );
+}
+
+function MyWeek() {
+  const { data } = useData<{ from: string; to: string; entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>('/my/time');
+  if (!data || data.entries.length === 0) return null;
+  const h = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h`;
+  return (
+    <div className="card mt">
+      <h2>Meine Zeiten (letzte 7 Tage) <span className="badge">{h(data.totalMinutes)}</span></h2>
+      <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap">{fmtDate(e.date)}</td><td><span className="badge">{e.projectKey}</span></td><td>{e.taskTitle ?? <span className="muted">ohne Aufgabe</span>}</td><td className="nowrap">{h(e.minutes)}</td><td className="muted small">{e.note}</td></tr>)}</tbody></table>
+    </div>
   );
 }
 

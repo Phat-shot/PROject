@@ -14,9 +14,9 @@ export async function runDailyRules(db: Db, today = new Date().toISOString().sli
     if (t.done) continue;
     if (t.dueDate && t.responsible.userId) {
       if (t.dueDate < today) {
-        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.overdue', title: `Überfällig: ${t.title}`, body: `Fällig war ${t.dueDate}`, link: `/projekte/${t.projectId}?task=${t.id}`, dedupeKey: `overdue:${t.id}:${today}` });
+        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.overdue', title: `Überfällig: ${t.title}`, body: `Fällig war ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, dedupeKey: `overdue:${t.id}:${today}` });
       } else if (t.dueDate <= soon) {
-        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.due_soon', title: `Bald fällig: ${t.title}`, body: `Fällig am ${t.dueDate}`, link: `/projekte/${t.projectId}?task=${t.id}`, dedupeKey: `due_soon:${t.id}` });
+        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.due_soon', title: `Bald fällig: ${t.title}`, body: `Fällig am ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, dedupeKey: `due_soon:${t.id}` });
       }
     }
   }

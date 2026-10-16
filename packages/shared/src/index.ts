@@ -35,8 +35,24 @@ export interface Project {
   description: string | null;
   status: 'active' | 'archived';
   mailAddress: string | null;
+  timeTrackingEnabled: boolean;
+  budgetHours: number | null;
   myRole?: ProjectRole;
   myMembership?: Membership;
+}
+
+export interface TimeEntry {
+  id: string;
+  projectId: string;
+  projectKey?: string;
+  taskId: string | null;
+  taskTitle: string | null;
+  userId: string;
+  userName: string | null;
+  date: string;
+  minutes: number;
+  note: string | null;
+  createdAt: string;
 }
 
 export interface BoardColumn {
@@ -106,6 +122,8 @@ export interface Task {
   labelIds: string[];
   archivedAt: string | null;
   recurrence: Recurrence | null;
+  estimateMinutes: number | null;
+  loggedMinutes: number;
   hasDescription: boolean;
   commentCount: number;
   attachmentCount: number;
@@ -161,6 +179,7 @@ export interface TaskComment {
   body: string;
   source?: 'user' | 'mail' | 'system';
   mailId?: string | null;
+  mentions?: string[];
   createdAt: string;
 }
 

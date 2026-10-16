@@ -83,7 +83,8 @@ export class ImapMailProvider implements MailProvider {
       subject: msg.subject,
       text: msg.text,
       inReplyTo: msg.inReplyTo ?? undefined,
-      references: msg.references ?? undefined
+      references: msg.references ?? undefined,
+      attachments: msg.attachments?.map((a) => ({ filename: a.filename, content: a.content, contentType: a.contentType }))
     });
     return { messageId: info.messageId };
   }

@@ -38,7 +38,9 @@ Oder manuell: `DATABASE_URL=postgres://… npm run build && npm start`.
 - Kanban: Spalten pro Projekt mit WIP-Limit, Swimlanes je Teilprojekt, Drag & Drop inkl. Sortierung, Labels, Filterleiste (Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, Archiv), Tastaturkürzel f/q/n/x, Karten-Badges (Fälligkeit farbig, Beschreibung, Kommentare, Anhänge, Mails, Checklisten-Fortschritt), Schnellanlage, Spalten einklappen, Archivieren
 - Wiederkehrende Aufgaben (W6): täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit
 - Übersicht je Projekt (Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, offene Freigaben, Aktivität), Kalender (Deadlines, Meilensteine)
-- In-App-Benachrichtigungen: Zuweisung, Kommentar, bald fällig, überfällig, Termin verschoben, Freigabe wartet, Seite in Prüfung, externe Bearbeitung
+- In-App-Benachrichtigungen: Zuweisung, Kommentar, @-Erwähnung, bald fällig, überfällig, Termin verschoben, Freigabe wartet, Seite in Prüfung, externe Bearbeitung
+- @-Erwähnungen in Kommentaren mit Vervollständigung über Projektmitglieder
+- Zeiterfassung als optionales Modul je Projekt: Buchung je Aufgabe oder frei, Schätzung je Aufgabe, Budget je Projekt, Auswertung je Person und Teilprojekt, CSV-Export, „Meine Zeiten“; Mitglieder sehen eigene Buchungen, PL alle
 - Plan: Balken Start–Deadline, Punkt bei reiner Deadline, Teilprojekt-Sammelbalken, Meilensteine, Abhängigkeiten Ende → Anfang
 - Konflikte werden markiert, nichts verschiebt sich automatisch; „Nachfolger verschieben“ mit Vorschau (W7)
 - „Meine Aufgaben“ über alle Projekte, Suche, Audit-Log je Projekt (Mitglieder sehen eigene Aktionen)
@@ -56,7 +58,7 @@ Oder manuell: `DATABASE_URL=postgres://… npm run build && npm start`.
 **Doku (à la Confluence)**
 - Ordner mit Verteiler, Seitenbaum mit Unterseiten, Markdown-Editor mit Vorschau
 - Versionen bei jeder Änderung, Konfliktschutz bei veralteter Version
-- Status Entwurf → In Prüfung → Final; Final sperrt; Versand finaler Seiten an den Verteiler über das Projektkonto (W5, als Mailtext; PDF folgt)
+- Status Entwurf → In Prüfung → Final; Final sperrt; Versand finaler Seiten als **PDF-Anhang** an den Verteiler über das Projektkonto (W5); die versendete PDF wird an der Seite abgelegt; PDF-Ansicht jeder Seite, auch über Freigabe-Links
 - Vorlagen: Besprechungsprotokoll, Statusbericht, Konzept, RAID-Log, Änderungsantrag, Kickoff, Lessons Learned
 - Freigabe per Link: Seite (wahlweise mit Unterseiten) an eine Mail-Adresse, lesend oder schreibend, mit Ablauf, widerrufbar, Versand über das Projektkonto; externe Änderungen werden mit der Adresse versioniert und gemeldet (`/s/<token>`)
 - Anhänge an Seiten und Aufgaben
@@ -69,7 +71,7 @@ Oder manuell: `DATABASE_URL=postgres://… npm run build && npm start`.
 
 ## Noch nicht enthalten (laut Modulreihenfolge)
 
-Kalender-Anbindung (M365/Google/CalDAV), Erinnerungen an Externe, Reports (W9), PDF-Erzeugung, OAuth2 für M365/Google,
+Kalender-Anbindung (M365/Google/CalDAV), Erinnerungen an Externe, Reports (W9), OAuth2 für M365/Google,
 Microsoft-Graph-Adapter, Keycloak/SSO, Row-Level Security, Office-Bearbeitung, KI (Chat, Vorschläge, RAG).
 
 ## Struktur

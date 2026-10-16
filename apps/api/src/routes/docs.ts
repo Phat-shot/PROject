@@ -12,6 +12,7 @@ import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion, renderT
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
+import { markdownToPdf } from '../docs/pdf.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
@@ -200,15 +201,24 @@ export async function docRoutes(app: FastifyInstance) {
       ? await db.maybeOne(`select * from mail_accounts where id = $1 and project_id = $2 and type = 'project'`, [req.body.accountId, r.project_id])
       : await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [r.project_id]);
     if (!account) throw badRequest('Kein Projektkonto vorhanden');
+    const project = await db.one(`select name from projects where id = $1`, [r.project_id]);
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date() });
+    const filename = `${r.title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${r.version}.pdf`;
     const result = await app.mail.sendFromAccount(account, {
       to: list,
       subject: `${r.title} (Version ${r.version})`,
-      text: r.content_md,
+      text: `Anbei „${r.title}“ in der finalen Version ${r.version} aus dem Projekt „${project.name}“ als PDF.\n\nMit freundlichen Grüßen\n${user.name}`,
       userId: user.id,
-      projectId: r.project_id
+      projectId: r.project_id,
+      attachments: [{ filename, content: pdf, contentType: 'application/pdf' }]
     });
-    await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.distribute', objectType: 'doc_page', objectId: r.id, details: { to: list, version: r.version, messageId: result.messageId } });
-    return { ok: true, to: list };
+    // Versandte PDF an der Seite ablegen (nachvollziehbar, was rausging)
+    await mkdir(uploadDir, { recursive: true });
+    const storage = path.join(uploadDir, `${randomUUID()}.pdf`);
+    await writeFile(storage, pdf);
+    await db.query(`insert into attachments (project_id, page_id, filename, mime, size, storage_path, uploaded_by) values ($1,$2,$3,'application/pdf',$4,$5,$6)`, [r.project_id, r.id, filename, pdf.length, storage, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.distribute', objectType: 'doc_page', objectId: r.id, details: { to: list, version: r.version, messageId: result.messageId, pdf: filename, bytes: pdf.length } });
+    return { ok: true, to: list, filename };
   });
 
   // Freigabe per Link: Seite (+ Unterseiten) an eine Mail-Adresse, lesend oder schreibend
@@ -316,6 +326,29 @@ export async function docRoutes(app: FastifyInstance) {
     const targets = new Set<string>([sh.created_by, page.created_by].filter(Boolean));
     await notifyMany(db, targets, { projectId: page.project_id, type: 'page.external_edit', title: `Extern bearbeitet: ${u.title}`, body: `${sh.email} hat Version ${u.version} gespeichert`, link: `/projekte/${page.project_id}/doku/${u.id}` });
     return { page: { ...mapPage(u), updatedByName: sh.email } };
+  });
+
+  // PDF-Ansicht / Download einer Seite
+  app.get<{ Params: { pid: string } }>('/docs/pages/:pid/pdf', async (req, reply) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
+    if (!r) throw notFound('Seite nicht gefunden');
+    await requireProject(db, user, r.project_id);
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name });
+    reply.header('content-type', 'application/pdf');
+    reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
+    return reply.send(pdf);
+  });
+
+  app.get<{ Params: { token: string; pid: string } }>('/share/:token/pages/:pid/pdf', async (req, reply) => {
+    const sh = await resolveShare(db, req.params.token);
+    if (!sh) throw notFound('Freigabe ungültig');
+    if (!(await sharedPageIds(db, sh)).includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
+    const r = await db.one(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
+    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status });
+    reply.header('content-type', 'application/pdf');
+    reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
+    return reply.send(pdf);
   });
 
   app.get('/docs/templates', async (req) => {

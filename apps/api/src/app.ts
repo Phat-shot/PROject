@@ -15,6 +15,7 @@ import { mailRoutes } from './routes/mail.js';
 import { docRoutes } from './routes/docs.js';
 import { devRoutes } from './routes/dev.js';
 import { searchRoutes } from './routes/search.js';
+import { timeRoutes } from './routes/time.js';
 import { MailService } from './mail/service.js';
 
 export interface AppOptions {
@@ -66,6 +67,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(mailRoutes);
       await api.register(docRoutes);
       await api.register(searchRoutes);
+      await api.register(timeRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind }));
     },

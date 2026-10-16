@@ -54,6 +54,7 @@ const TASK_SELECT = `
     (select count(*)::int from task_comments x where x.task_id = t.id) as comment_count,
     (select count(*)::int from attachments x where x.task_id = t.id) as attachment_count,
     (select count(*)::int from mail_task_links x where x.task_id = t.id) as mail_count,
+    (select coalesce(sum(minutes), 0)::int from time_entries x where x.task_id = t.id) as logged_minutes,
     (select count(*)::int from checklist_items x where x.task_id = t.id and x.done) as checklist_done,
     (select count(*)::int from checklist_items x where x.task_id = t.id) as checklist_total,
     coalesce((select json_agg(json_build_object('id', p.id, 'title', p.title, 'due', p.due_date)) from task_dependencies d join tasks p on p.id = d.predecessor_id where d.successor_id = t.id), '[]'::json) as predecessors
@@ -119,6 +120,8 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     labelIds,
     archivedAt: r.archived_at,
     recurrence: r.recurrence ?? null,
+    estimateMinutes: r.estimate_minutes ?? null,
+    loggedMinutes: r.logged_minutes ?? 0,
     hasDescription: Boolean(r.description && String(r.description).trim()),
     commentCount: r.comment_count ?? 0,
     attachmentCount: r.attachment_count ?? 0,

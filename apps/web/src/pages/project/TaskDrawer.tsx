@@ -5,7 +5,10 @@ import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Drawer, Markdown, Modal, prioLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { LabelPicker } from './BoardView';
-import type { Recurrence } from '@projekttool/shared';
+import type { Recurrence, TimeEntry } from '@projekttool/shared';
+import { MentionInput, MentionText } from '../../components/MentionInput';
+import { fmtH } from './TimeView';
+import { today } from '../../lib/api';
 
 interface TaskDetail {
   task: Task;
@@ -62,6 +65,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </dd>
         <dt>Priorität</dt><dd><span className={`badge prio-${t.priority}`}>{prioLabel[t.priority]}</span></dd>
         <dt>Labels</dt><dd>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</dd>
+        {(detail.project.timeTrackingEnabled || t.estimateMinutes) && <><dt>Aufwand</dt><dd>{fmtH(t.loggedMinutes)} gebucht{t.estimateMinutes ? <> / {fmtH(t.estimateMinutes)} geschätzt{t.loggedMinutes > t.estimateMinutes && <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span>}</> : ''}</dd></>}
         <dt>Wiederholung</dt><dd>{t.recurrence ? describeRec(t.recurrence) : <span className="muted">keine</span>}{t.archivedAt && <span className="badge" style={{ marginLeft: 6 }}>archiviert</span>}</dd>
         <dt>Zeitraum</dt><dd>{t.startDate ? `${fmtDate(t.startDate)} – ` : ''}{t.dueDate ? fmtDate(t.dueDate) : <span className="muted">keine Deadline</span>}</dd>
         {t.predecessorIds && t.predecessorIds.length > 0 && <><dt>Vorgänger</dt><dd>{t.predecessorIds.map((p) => tasks.find((x) => x.id === p)?.title).filter(Boolean).join(', ')}</dd></>}
@@ -95,10 +99,14 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
       {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); }); }} />}
 
+      {detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
+
       <h3 className="mt">Log und Kommentare</h3>
-      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}</div><div style={{ whiteSpace: 'pre-wrap' }}>{c.body}</div></div>)}
-      {canEdit && <form className="stack mt" onSubmit={(e) => { e.preventDefault(); if (!comment.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }}>
-        <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Kommentar …" /><div><button className="btn sm" disabled={busy}>Kommentieren</button></div></form>}
+      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
+      {canEdit && <div className="stack mt">
+        <MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar … (@Name erwähnt eine Person, Strg+Enter sendet)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} />
+        <div><button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Kommentieren</button></div>
+      </div>}
 
       {edit && <EditTask task={t} members={members} onClose={() => setEdit(false)} onSaved={async () => { setEdit(false); await load(); await reloadTasks(); }} canPlan={canPlan} />}
       {shift && (
@@ -123,7 +131,8 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
   const [f, setF] = useState({
     title: task.title, description: task.description ?? '', subprojectId: task.subprojectId ?? '', priority: task.priority, startDate: task.startDate ?? '', dueDate: task.dueDate ?? '',
     responsibleUserId: task.responsibleUserId ?? '', responsibleEmail: task.responsibleEmail ?? '', predecessorIds: task.predecessorIds ?? [],
-    rec: task.recurrence ? { ...task.recurrence } : null as Recurrence | null
+    rec: task.recurrence ? { ...task.recurrence } : null as Recurrence | null,
+    estimateHours: task.estimateMinutes ? String(Math.round((task.estimateMinutes / 60) * 100) / 100) : ''
   });
   const { busy, error, run } = useAsync();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
@@ -140,6 +149,8 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
         <label className="field"><span>Deadline</span><input type="date" value={f.dueDate} disabled={!canDates} onChange={(e) => set('dueDate', e.target.value)} /></label>
         <label className="field"><span>Zuständig (intern)</span><select value={f.responsibleUserId} onChange={(e) => { set('responsibleUserId', e.target.value); if (e.target.value) set('responsibleEmail', ''); }}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
         <label className="field"><span>Extern (Mail-Adresse)</span><input type="email" value={f.responsibleEmail} onChange={(e) => { set('responsibleEmail', e.target.value); if (e.target.value) set('responsibleUserId', ''); }} /></label>
+        <label className="field"><span>Geschätzter Aufwand (Stunden)</span><input type="number" min={0} step={0.25} value={f.estimateHours} onChange={(e) => set('estimateHours', e.target.value)} /></label>
+        <div />
         <label className="field full"><span>Vorgänger (Ende → Anfang)</span>
           <select multiple value={f.predecessorIds} disabled={!canPlan} onChange={(e) => set('predecessorIds', Array.from(e.target.selectedOptions).map((o) => o.value))} style={{ height: 90 }}>
             {tasks.filter((x) => x.id !== task.id).map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
@@ -167,6 +178,7 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
             if (canDates) { body.startDate = f.startDate || null; body.dueDate = f.dueDate || null; }
             if (canPlan) body.predecessorIds = f.predecessorIds;
             body.recurrence = f.rec;
+            body.estimateMinutes = f.estimateHours ? Math.round(Number(f.estimateHours) * 60) : null;
             await api.patch(`/tasks/${task.id}`, body);
             await onSaved();
           })}>Speichern</button>
@@ -183,4 +195,29 @@ function describeRec(r: Recurrence): string {
   const names = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
   const base = r.freq === 'daily' ? (n === 1 ? 'täglich' : `alle ${n} Tage`) : r.freq === 'weekly' ? (n === 1 ? 'wöchentlich' : `alle ${n} Wochen`) : r.freq === 'monthly' ? (n === 1 ? 'monatlich' : `alle ${n} Monate`) : `jeden ${r.nth ?? 1}. ${names[r.weekday ?? 1]} im Monat`;
   return `${base}, nächste ${r.mode === 'after_done' ? 'nach Erledigung' : `${r.leadDays ?? 0} Tage vor Fälligkeit`}`;
+}
+
+
+function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: boolean; onChanged: () => Promise<void> }) {
+  const { detail } = useProject();
+  const [data, setData] = useState<{ entries: TimeEntry[]; totalMinutes: number } | null>(null);
+  const [f, setF] = useState({ date: today(), hours: '', minutes: '', note: '' });
+  const { busy, error, run } = useAsync();
+  const load = () => api.get<{ entries: TimeEntry[]; totalMinutes: number }>(`/tasks/${taskId}/time`).then(setData);
+  useEffect(() => { void load(); }, [taskId]);
+  const minutes = Number(f.hours || 0) * 60 + Number(f.minutes || 0);
+  return (
+    <>
+      <h3 className="mt">Zeiten {data && <span className="badge">{fmtH(data.totalMinutes)}</span>}</h3>
+      {data && data.entries.length > 0 && <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap small">{fmtDate(e.date)}</td><td className="small">{e.userName}</td><td className="nowrap small">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td><td>{(e.userId === detail.project.myMembership.userId || detail.project.myMembership.role === 'pl') && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await load(); await onChanged(); })}>✕</button>}</td></tr>)}</tbody></table>}
+      {canEdit && <div className="row mt">
+        <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={{ width: 140 }} />
+        <input type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} style={{ width: 64 }} />
+        <input type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} style={{ width: 64 }} />
+        <input type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} style={{ flex: 1 }} />
+        <button className="btn sm primary" disabled={busy || minutes <= 0} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/time`, { taskId, date: f.date, minutes, note: f.note }); setF({ ...f, hours: '', minutes: '', note: '' }); await load(); await onChanged(); })}>Buchen</button>
+      </div>}
+      {error && <div className="error mt">{error}</div>}
+    </>
+  );
 }

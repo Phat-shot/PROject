@@ -39,6 +39,8 @@ export function MembersView() {
               <dt>Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">keine</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
               <dt>Externe Kontakte</dt><dd><Contacts /></dd>
+              <dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
+              {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}
             </dl>
             {isPl && <div className="row mt">
               <button className="btn sm" onClick={() => setColumns(true)}>Board-Spalten</button>
@@ -98,6 +100,12 @@ export function MembersView() {
       </Modal>
     );
   }
+}
+
+function BudgetInput() {
+  const { detail, reload } = useProject();
+  const [v, setV] = useState(detail.project.budgetHours?.toString() ?? '');
+  return <span className="row"><input type="number" min={0} value={v} onChange={(e) => setV(e.target.value)} style={{ width: 100 }} /><button className="btn sm" onClick={() => void api.patch(`/projects/${detail.project.id}`, { budgetHours: v ? Number(v) : null }).then(reload)}>Speichern</button></span>;
 }
 
 function Contacts() {

@@ -30,7 +30,7 @@ export async function seed(db: Db) {
 
   // Projekt 1: Website-Relaunch
   const web = await db.one(
-    `insert into projects (org_id, key, name, description, mail_address, created_by) values ($1,'WEB','Website-Relaunch','Neue Unternehmenswebsite mit CMS, Go-Live Q1 2027.','projekt-web@demo.local',$2) returning id`,
+    `insert into projects (org_id, key, name, description, mail_address, created_by, time_tracking_enabled, budget_hours) values ($1,'WEB','Website-Relaunch','Neue Unternehmenswebsite mit CMS, Go-Live Q1 2027.','projekt-web@demo.local',$2,true,1200) returning id`,
     [org.id, pl]
   );
   const member = (p: string, u: string, role: string, extra: Partial<Record<'is_deputy' | 'can_edit_plan' | 'can_approve' | 'can_finalize' | 'can_use_ai', boolean>> = {}) =>
@@ -77,6 +77,10 @@ export async function seed(db: Db) {
   const t9 = await task({ title: 'DNS-Umstellung und Go-Live-Kommunikation', sp: golive, col: 'Offen', prio: 'high', start: '2027-02-20', due: '2027-02-25', pos: 1 });
   await task({ title: 'Projektauftrag unterschreiben lassen', col: 'Erledigt', due: '2026-09-30', desc: 'Ohne Teilprojekt: Zuständigkeit geerbt vom PL.' });
   await db.query(`insert into task_dependencies (predecessor_id, successor_id) values ($1,$2), ($3,$4), ($5,$6)`, [t2.id, t3.id, t5.id, t6.id, t8.id, t9.id]);
+  await db.query(`update tasks set estimate_minutes = 960 where id = $1`, [t2.id]);
+  await db.query(`update tasks set estimate_minutes = 2400 where id = $1`, [t3.id]);
+  await db.query(`update tasks set estimate_minutes = 1200 where id = $1`, [t5.id]);
+  await db.query(`insert into time_entries (project_id, task_id, user_id, date, minutes, note) values ($1,$2,$3,current_date - 3, 240, 'Wireframes Startseite'), ($1,$2,$3,current_date - 1, 180, 'Produktübersicht'), ($1,$4,$5,current_date - 2, 90, 'Angebot gelesen, Rückfragen notiert')`, [web.id, t2.id, max, t4.id, pl]);
   const tag = (t: { id: string }, ...names: string[]) => Promise.all(names.map((n) => db.query(`insert into task_labels (task_id, label_id) values ($1,$2)`, [t.id, labels[n]])));
   await tag(t1, 'Design'); await tag(t2, 'Design'); await tag(t3, 'Design', 'Technik'); await tag(t4, 'Vertrag', 'Design'); await tag(t5, 'Technik', 'Blocker'); await tag(t6, 'Technik'); await tag(t7, 'Content'); await tag(t8, 'Technik'); await tag(t9, 'Technik', 'Content');
   // W6: wiederkehrende Aufgabe (Statusbericht jeden Freitag, nächste nach Erledigung)

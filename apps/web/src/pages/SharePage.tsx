@@ -56,7 +56,8 @@ export function SharePage() {
           <div className="row mb">
             <span className="muted small">Version {current.version} · {current.updatedByName ?? ''} · {fmtDateTime(current.updatedAt)}</span>
             <span className={`badge ${current.status}`}>{statusLabel[current.status]}</span>
-            {canEdit && !edit && <button className="btn sm right" onClick={() => setEdit(true)}>Bearbeiten</button>}
+            <a className="btn sm right" href={`/api/share/${token}/pages/${current.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
+            {canEdit && !edit && <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>}
             {data.share.mode === 'write' && current.status === 'final' && <span className="muted small right">Finale Seite: gesperrt</span>}
           </div>
           {saveError && <div className="error mb">{saveError}</div>}

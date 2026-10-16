@@ -58,7 +58,8 @@ export class DevMailProvider implements MailProvider {
       cc: msg.cc ?? [],
       subject: msg.subject,
       text: msg.text,
-      inReplyTo: msg.inReplyTo ?? null
+      inReplyTo: msg.inReplyTo ?? null,
+      hasAttachments: (msg.attachments?.length ?? 0) > 0
     });
     return { messageId };
   }

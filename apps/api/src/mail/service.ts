@@ -101,7 +101,7 @@ export class MailService {
 
   async sendFromAccount(
     account: AccountRow,
-    input: { to: string[]; cc?: string[]; subject: string; text: string; taskId?: string | null; inReplyTo?: string | null; references?: string | null; userId: string; projectId?: string | null }
+    input: { to: string[]; cc?: string[]; subject: string; text: string; taskId?: string | null; inReplyTo?: string | null; references?: string | null; userId: string; projectId?: string | null; attachments?: { filename: string; content: Buffer; contentType: string }[] }
   ): Promise<{ messageId: string; mailId: string | null }> {
     let replyTo: string | undefined;
     if (input.taskId) {
@@ -116,15 +116,16 @@ export class MailService {
       subject: input.subject,
       text: input.text,
       inReplyTo: input.inReplyTo,
-      references: input.references
+      references: input.references,
+      attachments: input.attachments
     };
     const { messageId } = await this.provider(account).send(account, msg);
     const user = await this.db.maybeOne(`select name from users where id = $1`, [input.userId]);
     const r = await this.db.one(
-      `insert into mails (account_id, folder, uid, message_id, in_reply_to, from_addr, from_name, to_json, cc_json, subject, date, text_body, snippet, outgoing)
-       values ($1,'Sent',$2,$3,$4,$5,$6,$7,$8,$9,now(),$10,$11,true) returning id`,
+      `insert into mails (account_id, folder, uid, message_id, in_reply_to, from_addr, from_name, to_json, cc_json, subject, date, text_body, snippet, outgoing, has_attachments)
+       values ($1,'Sent',$2,$3,$4,$5,$6,$7,$8,$9,now(),$10,$11,true,$12) returning id`,
       [account.id, messageId, messageId, input.inReplyTo ?? null, account.address, `${account.name} (gesendet von ${user?.name ?? '?'} über Tool)`,
-        JSON.stringify(input.to), JSON.stringify(input.cc ?? []), input.subject, input.text, snippetOf({ text: input.text, html: null })]
+        JSON.stringify(input.to), JSON.stringify(input.cc ?? []), input.subject, input.text, snippetOf({ text: input.text, html: null }), (input.attachments?.length ?? 0) > 0]
     );
     // Gesendete Mails erscheinen in allen Ansichten des Kontos, die 'Sent' nennen oder keinen Ordnerfilter haben.
     const views = await this.db.query(`select id, filter from mail_views where account_id = $1`, [account.id]);

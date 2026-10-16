@@ -26,6 +26,7 @@ export interface OutgoingMessage {
   text: string;
   inReplyTo?: string | null;
   references?: string | null;
+  attachments?: { filename: string; content: Buffer; contentType: string }[];
 }
 
 export interface AccountRow {
