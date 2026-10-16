@@ -127,7 +127,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               <option value="extern">{i.responsibleEmail ? `${i.responsibleEmail} (extern)` : 'extern (Mail-Adresse) …'}</option>
             </select>
-            {i.responsibleEmail && canEdit && <Link className="btn sm link" title="Stand per Mail nachfragen" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}&to=${encodeURIComponent(i.responsibleEmail)}&subject=${encodeURIComponent(`${detail.project.key}: Stand zu „${i.title}“`)}&body=${encodeURIComponent(`Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n`)}`}>Nachfragen</Link>}
+            {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
             {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}
           </li>
         ))}
@@ -143,7 +143,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       )}
       {canEdit && <div className="row mt">
         <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>
-        {(t.responsible.email || t.responsibleEmail) && <Link className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}&to=${encodeURIComponent(t.responsibleEmail ?? t.responsible.email ?? '')}&subject=${encodeURIComponent(`${detail.project.key}: Stand zu „${t.title}“`)}&body=${encodeURIComponent(`Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n`)}`}>Stand nachfragen</Link>}
+        {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
       </div>}
 
       <h3 className="mt">Anhänge</h3>
