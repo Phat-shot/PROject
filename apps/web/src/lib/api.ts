@@ -7,7 +7,7 @@ export class ApiError extends Error {
 async function request<T>(method: string, url: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api${url}`, {
     method,
-    headers: body instanceof FormData ? undefined : { 'content-type': 'application/json' },
+    headers: body instanceof FormData || body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body instanceof FormData ? body : body === undefined ? undefined : JSON.stringify(body),
     credentials: 'same-origin'
   });

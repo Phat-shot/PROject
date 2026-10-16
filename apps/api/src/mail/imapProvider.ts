@@ -68,6 +68,34 @@ export class ImapMailProvider implements MailProvider {
     return { messages, cursor };
   }
 
+  /** Prüft IMAP-Login und SMTP-Verbindung getrennt und liefert verständliche Fehler. */
+  async test(account: AccountRow): Promise<{ imap: { ok: boolean; error?: string; folders?: string[] }; smtp: { ok: boolean; error?: string } }> {
+    const result = { imap: { ok: false } as { ok: boolean; error?: string; folders?: string[] }, smtp: { ok: false } as { ok: boolean; error?: string } };
+    const client = new ImapFlow({
+      host: account.imap_host!, port: account.imap_port ?? 993, secure: account.imap_secure ?? true,
+      auth: { user: account.imap_user ?? account.address, pass: account.imap_password ?? '' }, logger: false, connectionTimeout: 15000, greetingTimeout: 15000
+    });
+    try {
+      await client.connect();
+      const list = await client.list();
+      result.imap = { ok: true, folders: list.map((f) => f.path).slice(0, 30) };
+      await client.logout().catch(() => undefined);
+    } catch (e: any) {
+      result.imap = { ok: false, error: friendlyError(e) };
+    }
+    try {
+      const transport = nodemailer.createTransport({
+        host: account.smtp_host!, port: account.smtp_port ?? 587, secure: account.smtp_secure ?? false,
+        auth: account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined, connectionTimeout: 15000, greetingTimeout: 15000
+      });
+      await transport.verify();
+      result.smtp = { ok: true };
+    } catch (e: any) {
+      result.smtp = { ok: false, error: friendlyError(e) };
+    }
+    return result;
+  }
+
   async send(account: AccountRow, msg: OutgoingMessage) {
     const transport = nodemailer.createTransport({
       host: account.smtp_host!,
@@ -88,4 +116,16 @@ export class ImapMailProvider implements MailProvider {
     });
     return { messageId: info.messageId };
   }
+}
+
+
+function friendlyError(e: any): string {
+  const msg = String(e?.responseText ?? e?.response ?? e?.message ?? e);
+  if (/AUTHENTICATIONFAILED|Invalid credentials|535|authentication failed/i.test(msg)) return 'Anmeldung abgelehnt: Benutzername oder Passwort falsch (bei App-Passwörtern das App-Passwort verwenden).';
+  if (/ENOTFOUND|getaddrinfo/i.test(msg)) return 'Host nicht gefunden: Servername prüfen.';
+  if (/ECONNREFUSED/i.test(msg)) return 'Verbindung abgelehnt: Port oder Verschlüsselung prüfen (IMAP 993/SSL, SMTP 587/STARTTLS oder 465/SSL).';
+  if (/timeout|ETIMEDOUT/i.test(msg)) return 'Zeitüberschreitung: Server nicht erreichbar oder Port blockiert.';
+  if (/certificate|self signed|CERT/i.test(msg)) return 'TLS-Zertifikat ungültig.';
+  if (/wrong version number|ssl3_get_record/i.test(msg)) return 'Verschlüsselung passt nicht zum Port: SSL/TLS-Haken prüfen.';
+  return msg.slice(0, 300);
 }

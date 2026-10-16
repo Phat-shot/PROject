@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync } from '../../components/ui';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -36,7 +36,7 @@ export function MembersView() {
             <h2>Projekt</h2>
             <dl className="kv">
               <dt>Kürzel</dt><dd>{detail.project.key}</dd>
-              <dt>Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">keine</span>}</dd>
+              <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/mail-konten">Mail-Konten</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
               <dt>Externe Kontakte</dt><dd><Contacts /></dd>
               <dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>

@@ -48,9 +48,10 @@ export async function projectRoutes(app: FastifyInstance) {
     if (!/^[A-Z0-9-]{2,12}$/.test(key)) throw badRequest('Kürzel: 2–12 Zeichen, Großbuchstaben, Ziffern, Bindestrich');
     const exists = await db.maybeOne(`select id from projects where org_id = $1 and key = $2`, [user.orgId, key]);
     if (exists) throw conflict('Kürzel bereits vergeben');
+    void mailAddress; // Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto
     const p = await db.one(
-      `insert into projects (org_id, key, name, description, mail_address, created_by) values ($1,$2,$3,$4,$5,$6) returning *`,
-      [user.orgId, key, name, description ?? null, mailAddress ?? null, user.id]
+      `insert into projects (org_id, key, name, description, created_by) values ($1,$2,$3,$4,$5) returning *`,
+      [user.orgId, key, name, description ?? null, user.id]
     );
     await db.query(
       `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
@@ -106,9 +107,9 @@ export async function projectRoutes(app: FastifyInstance) {
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'escalation.policy', objectType: 'project', objectId: req.params.id, details: next as any });
     }
     const p = await db.one(
-      `update projects set name = coalesce($2, name), description = coalesce($3, description), mail_address = case when $4::text is null then mail_address else nullif($4,'') end,
-         time_tracking_enabled = coalesce($5, time_tracking_enabled), budget_hours = case when $6 then $7::numeric else budget_hours end where id = $1 returning *`,
-      [req.params.id, b.name ?? null, b.description ?? null, b.mailAddress === undefined ? null : b.mailAddress ?? '', b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null]
+      `update projects set name = coalesce($2, name), description = coalesce($3, description),
+         time_tracking_enabled = coalesce($4, time_tracking_enabled), budget_hours = case when $5 then $6::numeric else budget_hours end where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null]
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };

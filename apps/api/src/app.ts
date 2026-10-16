@@ -55,6 +55,10 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       reply.status(400).send({ error: 'Ungültige Eingabe', details: err.validation });
       return;
     }
+    if (typeof err.statusCode === 'number' && err.statusCode >= 400 && err.statusCode < 500) {
+      reply.status(err.statusCode).send({ error: err.code === 'FST_ERR_CTP_EMPTY_JSON_BODY' ? 'Leerer Anfragetext' : err.message });
+      return;
+    }
     req.log.error(err);
     reply.status(500).send({ error: 'Interner Fehler' });
   });

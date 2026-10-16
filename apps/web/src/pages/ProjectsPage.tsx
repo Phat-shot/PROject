@@ -37,7 +37,6 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [key, setKey] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
-  const [mailAddress, setMailAddress] = useState('');
   const { busy, error, run } = useAsync();
   return (
     <Modal title="Neues Projekt" onClose={onClose}>
@@ -45,10 +44,9 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
         <label className="field"><span>Kürzel</span><input type="text" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="z. B. CRM" /></label>
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-        <label className="field"><span>Projekt-Mailadresse (optional)</span><input type="email" value={mailAddress} onChange={(e) => setMailAddress(e.target.value)} /></label>
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, mailAddress: mailAddress || undefined }); onCreated(); })}>Anlegen</button></div>
-        <p className="muted small">Du wirst PL. Standard-Spalten, Ordner und ein leeres Board werden angelegt (W1).</p>
+        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description }); onCreated(); })}>Anlegen</button></div>
+        <p className="muted small">Du wirst PL. Standard-Spalten, Ordner und ein leeres Board werden angelegt (W1). Die Projekt-Mailadresse ergibt sich später aus dem angebundenen Projektkonto.</p>
       </div>
     </Modal>
   );

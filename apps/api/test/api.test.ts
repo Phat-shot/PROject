@@ -256,3 +256,28 @@ test('Mail-Aktionen: Aufgaben-Log, in Doku ablegen, an Seite anhängen, Aufgabe 
   const denied = await t.api(max).post(`/mail/mails/${hosting[0].id}/to-page`, { projectId: t.ids.projects.web, confirmed: true });
   assert.equal(denied.statusCode, 403, 'aus persönlichen Konten legt nur der Eigentümer ab');
 });
+
+test('Leerer POST-Body liefert 400 statt 500; Konto bearbeiten und testen; Projektadresse aus Projektkonto', async () => {
+  const pl = await t.login('pl@demo.local');
+  const empty = await t.app.inject({ method: 'POST', url: `/api/mail/accounts/${t.ids.accounts.project}/sync`, cookies: pl, headers: { 'content-type': 'application/json' } });
+  assert.equal(empty.statusCode, 400);
+  const ok = await t.app.inject({ method: 'POST', url: `/api/mail/accounts/${t.ids.accounts.project}/sync`, cookies: pl });
+  assert.equal(ok.statusCode, 200, ok.body);
+  assert.equal(ok.json().hint, null);
+  const upd = await t.api(pl).patch(`/mail/accounts/${t.ids.accounts.project}`, { name: 'Projektpostfach WEB (neu)', imapPassword: '' });
+  assert.equal(upd.statusCode, 200, upd.body);
+  assert.equal(upd.json().account.name, 'Projektpostfach WEB (neu)');
+  const test = await t.api(pl).post('/mail/accounts/test', { accountId: t.ids.accounts.project });
+  assert.equal(test.statusCode, 200);
+  assert.equal(test.json().imap.ok, true);
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).patch(`/mail/accounts/${t.ids.accounts.project}`, { name: 'x' })).statusCode, 403);
+  // Projekt ohne Mailadresse, Projektkonto anbinden → Adresse gesetzt, trennen → Adresse weg
+  const p = await t.api(pl).post('/projects', { key: 'NEU', name: 'Neues Projekt' });
+  assert.equal(p.json().project.mailAddress, null);
+  const acc = await t.api(pl).post('/mail/accounts', { type: 'project', projectId: p.json().project.id, name: 'Postfach NEU', address: 'neu@demo.local', provider: 'dev' });
+  assert.equal(acc.statusCode, 200, acc.body);
+  assert.equal((await t.api(pl).get(`/projects/${p.json().project.id}`)).json().project.mailAddress, 'neu@demo.local');
+  await t.api(pl).del(`/mail/accounts/${acc.json().account.id}`);
+  assert.equal((await t.api(pl).get(`/projects/${p.json().project.id}`)).json().project.mailAddress, null);
+});

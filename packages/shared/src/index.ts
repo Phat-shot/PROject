@@ -226,7 +226,16 @@ export interface MailAccount {
   ownerUserId: string | null;
   projectId: string | null;
   imapHost: string | null;
+  imapPort?: number | null;
+  imapUser?: string | null;
+  imapSecure?: boolean | null;
   smtpHost: string | null;
+  smtpPort?: number | null;
+  smtpUser?: string | null;
+  smtpSecure?: boolean | null;
+  hasImapPassword?: boolean;
+  hasSmtpPassword?: boolean;
+  viewCount?: number;
   lastSyncAt: string | null;
   syncError: string | null;
 }

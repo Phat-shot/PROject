@@ -14,7 +14,9 @@ import { notifyMany } from '../notify.js';
 function mapAccount(r: any): MailAccount {
   return {
     id: r.id, type: r.type, name: r.name, address: r.address, provider: r.provider, ownerUserId: r.owner_user_id, projectId: r.project_id,
-    imapHost: r.imap_host, smtpHost: r.smtp_host, lastSyncAt: r.last_sync_at, syncError: r.sync_error
+    imapHost: r.imap_host, imapPort: r.imap_port, imapUser: r.imap_user, imapSecure: r.imap_secure, smtpHost: r.smtp_host, smtpPort: r.smtp_port, smtpUser: r.smtp_user, smtpSecure: r.smtp_secure,
+    hasImapPassword: Boolean(r.imap_password), hasSmtpPassword: Boolean(r.smtp_password), viewCount: r.view_count ?? 0,
+    lastSyncAt: r.last_sync_at, syncError: r.sync_error
   };
 }
 
@@ -83,7 +85,8 @@ export async function mailRoutes(app: FastifyInstance) {
   app.get('/mail/accounts', async (req) => {
     const user = requireUser(req);
     const rows = await db.query(
-      `select * from mail_accounts where org_id = $1 and (owner_user_id = $2 or project_id in (select project_id from project_members where user_id = $2 and role = 'pl')) order by type, name`,
+      `select a.*, (select count(*)::int from mail_views v where v.account_id = a.id) as view_count from mail_accounts a
+       where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl')) order by a.type, a.name`,
       [user.orgId, user.id]
     );
     return { accounts: rows.rows.map(mapAccount) };
@@ -111,10 +114,52 @@ export async function mailRoutes(app: FastifyInstance) {
           b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, b.imapPassword ?? null, b.imapSecure ?? true,
           b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, b.smtpPassword ?? null, b.smtpSecure ?? false]
       );
+      if (projectId) await db.query(`update projects set mail_address = coalesce(mail_address, $2) where id = $1`, [projectId, r.address]);
       await audit(db, { orgId: user.orgId, projectId, userId: user.id, action: 'mail_account.create', objectType: 'mail_account', objectId: r.id, details: { type: b.type, address: b.address, provider } });
       return { account: mapAccount(r) };
     }
   );
+
+  // Konto bearbeiten (leeres Passwortfeld = unverändert)
+  app.patch<{ Params: { id: string }; Body: Record<string, any> }>('/mail/accounts/:id', async (req) => {
+    const user = requireUser(req);
+    const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!a) throw notFound('Konto nicht gefunden');
+    if (!(await canManageAccount(user, a))) throw forbidden();
+    const b = req.body ?? {};
+    const r = await db.one(
+      `update mail_accounts set name = coalesce($2, name), address = coalesce($3, address),
+         imap_host = coalesce($4, imap_host), imap_port = coalesce($5, imap_port), imap_user = coalesce($6, imap_user), imap_password = coalesce(nullif($7, ''), imap_password), imap_secure = coalesce($8, imap_secure),
+         smtp_host = coalesce($9, smtp_host), smtp_port = coalesce($10, smtp_port), smtp_user = coalesce($11, smtp_user), smtp_password = coalesce(nullif($12, ''), smtp_password), smtp_secure = coalesce($13, smtp_secure),
+         sync_error = null
+       where id = $1 returning *`,
+      [a.id, b.name ?? null, b.address ? String(b.address).toLowerCase() : null, b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, b.imapPassword ?? null, b.imapSecure ?? null,
+        b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, b.smtpPassword ?? null, b.smtpSecure ?? null]
+    );
+    if (a.project_id && r.address !== a.address) await db.query(`update projects set mail_address = $2 where id = $1 and (mail_address = $3 or mail_address is null)`, [a.project_id, r.address, a.address]);
+    await audit(db, { orgId: user.orgId, projectId: a.project_id, userId: user.id, action: 'mail_account.update', objectType: 'mail_account', objectId: a.id, details: Object.fromEntries(Object.entries(b).filter(([k]) => !/password/i.test(k))) });
+    return { account: mapAccount(r) };
+  });
+
+  // Verbindung testen: gespeichertes Konto (accountId) oder noch ungespeicherte Konfiguration
+  app.post<{ Body: Record<string, any> }>('/mail/accounts/test', async (req) => {
+    const user = requireUser(req);
+    const b = req.body ?? {};
+    let cfg: AccountRow;
+    if (b.accountId) {
+      const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [b.accountId, user.orgId]);
+      if (!a) throw notFound('Konto nicht gefunden');
+      if (!(await canManageAccount(user, a))) throw forbidden();
+      cfg = { ...a, imap_password: b.imapPassword || a.imap_password, smtp_password: b.smtpPassword || a.smtp_password, imap_host: b.imapHost ?? a.imap_host, imap_port: b.imapPort ?? a.imap_port, imap_user: b.imapUser ?? a.imap_user, imap_secure: b.imapSecure ?? a.imap_secure, smtp_host: b.smtpHost ?? a.smtp_host, smtp_port: b.smtpPort ?? a.smtp_port, smtp_user: b.smtpUser ?? a.smtp_user, smtp_secure: b.smtpSecure ?? a.smtp_secure, address: b.address ?? a.address };
+    } else {
+      if (!b.imapHost || !b.smtpHost) throw badRequest('IMAP- und SMTP-Host erforderlich');
+      cfg = { id: '', org_id: user.orgId, type: 'personal', owner_user_id: user.id, project_id: null, name: b.name ?? '', address: b.address ?? '', provider: 'imap', imap_host: b.imapHost, imap_port: b.imapPort ?? 993, imap_user: b.imapUser ?? b.address, imap_password: b.imapPassword ?? '', imap_secure: b.imapSecure ?? true, smtp_host: b.smtpHost, smtp_port: b.smtpPort ?? 587, smtp_user: b.smtpUser ?? null, smtp_password: b.smtpPassword ?? '', smtp_secure: b.smtpSecure ?? false, sync_cursor: {} };
+    }
+    if (cfg.provider === 'dev') return { imap: { ok: true, folders: ['INBOX', 'Sent'] }, smtp: { ok: true } };
+    const { ImapMailProvider } = await import('../mail/imapProvider.js');
+    const result = await new ImapMailProvider().test(cfg);
+    return result;
+  });
 
   app.delete<{ Params: { id: string } }>('/mail/accounts/:id', async (req) => {
     const user = requireUser(req);
@@ -122,6 +167,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Konto nicht gefunden');
     if (!(await canManageAccount(user, a))) throw forbidden();
     await db.query(`delete from mail_accounts where id = $1`, [a.id]);
+    if (a.project_id) await db.query(`update projects set mail_address = null where id = $1 and mail_address = $2`, [a.project_id, a.address]);
     await audit(db, { orgId: user.orgId, projectId: a.project_id, userId: user.id, action: 'mail_account.delete', objectType: 'mail_account', objectId: a.id });
     return { ok: true };
   });
@@ -132,7 +178,8 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Konto nicht gefunden');
     if (!(await canManageAccount(user, a))) throw forbidden();
     const result = await app.mail.syncAccount(a.id);
-    return { result };
+    const views = await db.one(`select count(*)::int as c from mail_views where account_id = $1`, [a.id]);
+    return { result, viewCount: views.c, hint: views.c === 0 ? 'Noch keine Ansicht auf diesem Konto. Lege im Projekt unter Mail eine Ansicht an; erst dann werden Mails geladen (nur Treffer werden gespeichert).' : null };
   });
 
   // Ansichten
