@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { DocFolder, DocPage, DocPageVersion, DocTemplate } from '@projekttool/shared';
+import type { DocFolder, DocPage, DocPageVersion, DocShare, DocTemplate } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Markdown, Modal, statusLabel, useAsync } from '../../components/ui';
@@ -67,8 +67,9 @@ export function DocsView() {
 function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; docs: DocsData | null; reloadTree: () => Promise<void>; onNewChild: (p: DocPage) => void }) {
   const { detail } = useProject();
   const nav = useNavigate();
-  const d = useData<{ page: DocPage; versions: DocPageVersion[]; attachments: { id: string; filename: string; size: number }[] }>(`/docs/pages/${pageId}`);
+  const d = useData<{ page: DocPage; versions: DocPageVersion[]; attachments: { id: string; filename: string; size: number }[]; activeShares: number }>(`/docs/pages/${pageId}`);
   const [edit, setEdit] = useState(false);
+  const [share, setShare] = useState(false);
   const [showVersion, setShowVersion] = useState<DocPageVersion | null>(null);
   const { busy, error, run, setError } = useAsync();
   const me = detail.project.myMembership;
@@ -87,6 +88,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         <span className="right" />
         {canEdit && !edit && <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>}
         {me.role !== 'reader' && <button className="btn sm" onClick={() => onNewChild(p)}>+ Unterseite</button>}
+        {canFinal && <button className="btn sm" onClick={() => setShare(true)}>Teilen{d.data.activeShares > 0 && <span className="badge" style={{ marginLeft: 4 }}>{d.data.activeShares}</span>}</button>}
         {p.status === 'draft' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('review')}>In Prüfung geben</button>}
         {p.status === 'review' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('draft')}>Zurück auf Entwurf</button>}
         {p.status !== 'final' && canFinal && <button className="btn sm primary" disabled={busy} onClick={() => void setStatus('final')}>Final setzen</button>}
@@ -113,7 +115,49 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         </div>
       </div>
       {showVersion && <Modal title={`${showVersion.title} – Version ${showVersion.version}`} onClose={() => setShowVersion(null)}><Markdown md={showVersion.contentMd} /></Modal>}
+      {share && <ShareDialog page={p} onClose={() => { setShare(false); void d.reload(); }} />}
     </div>
+  );
+}
+
+function ShareDialog({ page, onClose }: { page: DocPage; onClose: () => void }) {
+  const shares = useData<{ shares: DocShare[] }>(`/docs/pages/${page.id}/shares`);
+  const [f, setF] = useState({ email: '', mode: 'read', includeChildren: true, expiresDays: '30', send: true, message: '' });
+  const [created, setCreated] = useState<{ url: string; sent: boolean } | null>(null);
+  const { busy, error, run } = useAsync();
+  return (
+    <Modal title={`Teilen: ${page.title}`} onClose={onClose}>
+      <p className="muted small">Freigabe per persönlichem Link an eine Mail-Adresse, ohne Login. Lesend oder schreibend, wahlweise inkl. Unterseiten, mit Ablaufdatum, jederzeit widerrufbar. Externe Änderungen werden mit der Mail-Adresse versioniert und gemeldet.</p>
+      <div className="form cols-2">
+        <label className="field full"><span>Mail-Adresse</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} placeholder="extern@partner.de" /></label>
+        <label className="field"><span>Rechte</span><select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value })}><option value="read">Nur lesen</option><option value="write">Lesen und bearbeiten</option></select></label>
+        <label className="field"><span>Gültig (Tage, leer = unbegrenzt)</span><input type="number" min={1} value={f.expiresDays} onChange={(e) => setF({ ...f, expiresDays: e.target.value })} /></label>
+        <label className="check"><input type="checkbox" checked={f.includeChildren} onChange={(e) => setF({ ...f, includeChildren: e.target.checked })} /> Unterseiten einschließen</label>
+        <label className="check"><input type="checkbox" checked={f.send} onChange={(e) => setF({ ...f, send: e.target.checked })} /> Link per Mail über das Projektkonto senden</label>
+        {f.send && <label className="field full"><span>Nachricht (optional)</span><textarea value={f.message} onChange={(e) => setF({ ...f, message: e.target.value })} /></label>}
+        {error && <div className="error full">{error}</div>}
+        <div className="full row"><button className="btn primary" disabled={busy || !f.email} onClick={() => void run(async () => {
+          const r = await api.post<{ share: DocShare; sent: boolean }>(`/docs/pages/${page.id}/shares`, { email: f.email, mode: f.mode, includeChildren: f.includeChildren, expiresDays: f.expiresDays ? Number(f.expiresDays) : null, send: f.send, message: f.message });
+          setCreated({ url: r.share.url, sent: r.sent }); setF({ ...f, email: '' }); await shares.reload();
+        })}>Freigeben</button></div>
+        {created && <div className="success full small">Freigabe erstellt{created.sent ? ' und per Mail gesendet' : ''}. Link: <code style={{ userSelect: 'all' }}>{created.url}</code></div>}
+      </div>
+      <h3 className="mt">Bestehende Freigaben</h3>
+      {shares.data?.shares.length === 0 && <p className="muted small">Keine.</p>}
+      {shares.data && shares.data.shares.length > 0 && (
+        <table className="table"><thead><tr><th>Empfänger</th><th>Rechte</th><th>Gültig bis</th><th>Zugriffe</th><th /></tr></thead><tbody>
+          {shares.data.shares.map((s) => (
+            <tr key={s.id} style={{ opacity: s.revokedAt ? 0.5 : 1 }}>
+              <td>{s.email}<div className="muted small">{s.includeChildren ? 'inkl. Unterseiten' : 'nur diese Seite'}</div></td>
+              <td>{s.mode === 'write' ? 'schreibend' : 'lesend'}</td>
+              <td className="small">{s.revokedAt ? 'widerrufen' : s.expiresAt ? fmtDateTime(s.expiresAt) : 'unbegrenzt'}</td>
+              <td className="small">{s.accessCount}{s.lastAccessAt && <div className="muted">zuletzt {fmtDateTime(s.lastAccessAt)}</div>}</td>
+              <td className="nowrap">{!s.revokedAt && <><button className="btn sm" onClick={() => void navigator.clipboard?.writeText(s.url)}>Link kopieren</button> <button className="btn sm danger" onClick={() => void run(async () => { await api.del(`/docs/shares/${s.id}`); await shares.reload(); })}>Widerrufen</button></>}</td>
+            </tr>
+          ))}
+        </tbody></table>
+      )}
+    </Modal>
   );
 }
 

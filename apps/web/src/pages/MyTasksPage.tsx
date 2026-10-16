@@ -21,7 +21,7 @@ export function MyTasksPage() {
               <tbody>
                 {sorted.map((x) => (
                   <tr key={x.id}>
-                    <td><Link to={`/projekte/${x.projectId}?task=${x.id}`}>{x.title}</Link>{x.conflicts.length > 0 && <span className="badge warn" style={{ marginLeft: 6 }}>Konflikt</span>}</td>
+                    <td><Link to={`/projekte/${x.projectId}/board?task=${x.id}`}>{x.title}</Link>{x.conflicts.length > 0 && <span className="badge warn" style={{ marginLeft: 6 }}>Konflikt</span>}</td>
                     <td><ProjectKey id={x.projectId} /></td>
                     <td><span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span></td>
                     <td className={x.dueDate && x.dueDate < t ? 'nowrap' : 'nowrap'} style={{ color: x.dueDate && x.dueDate < t ? 'var(--danger)' : undefined }}>{fmtDate(x.dueDate)}</td>

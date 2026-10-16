@@ -84,13 +84,14 @@ export function MembersView() {
 
   function ColumnsForm({ onClose }: { onClose: () => void }) {
     const { reloadTasks } = useProject();
-    const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone })));
+    const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone, wipLimit: c.wipLimit })));
     const { busy, error, run } = useAsync();
     return (
       <Modal title="Board-Spalten" onClose={onClose}>
         <div className="stack">
-          {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><label className="check small"><input type="checkbox" checked={c.isDone} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, isDone: e.target.checked } : x)))} /> erledigt</label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
-          <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false }])}>+ Spalte</button>
+          {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><label className="check small"><input type="checkbox" checked={c.isDone} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, isDone: e.target.checked } : x)))} /> erledigt</label><label className="small nowrap">WIP <input type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} style={{ width: 56 }} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
+          <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false, wipLimit: null }])}>+ Spalte</button>
+          <p className="muted small">WIP-Limit: Spalte färbt sich rot, wenn mehr Aufgaben darin liegen (Kanban-Prinzip: erst fertig machen, dann neu anfangen).</p>
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/columns`, { columns: cols }); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>

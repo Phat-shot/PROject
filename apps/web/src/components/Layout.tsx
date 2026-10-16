@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useNavigate } from 'react-router-dom';
-import type { Project } from '@projekttool/shared';
+import type { Notification, Project } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 
@@ -52,7 +52,34 @@ export function TopBar({ title, children, tabs }: { title: ReactNode; children?:
         </div>
       )}
       <SearchBox />
+      <Bell />
       {children}
+    </div>
+  );
+}
+
+function Bell() {
+  const [open, setOpen] = useState(false);
+  const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
+  const nav = useNavigate();
+  const load = () => api.get<{ notifications: Notification[]; unread: number }>('/notifications').then(setData).catch(() => undefined);
+  useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, []);
+  const go = async (n: Notification) => {
+    await api.post('/notifications/read', { ids: [n.id] });
+    setOpen(false);
+    await load();
+    if (n.link) nav(n.link);
+  };
+  return (
+    <div className="bell" style={{ position: 'relative' }}>
+      <button className="btn" title="Benachrichtigungen" onClick={() => setOpen(!open)}>🔔{data.unread > 0 && <span className="dot">{data.unread}</span>}</button>
+      {open && (
+        <div className="notif-panel">
+          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><strong>Benachrichtigungen</strong>{data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
+          {data.notifications.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Benachrichtigungen.</div>}
+          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{new Date(n.createdAt).toLocaleString('de-DE')}</div></div>)}
+        </div>
+      )}
     </div>
   );
 }
@@ -79,7 +106,7 @@ function SearchBox() {
       {res && (
         <div className="search-results">
           {res.tasks.length > 0 && <div className="group">Aufgaben</div>}
-          {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}?task=${t.id}`)}><span className="badge">{t.projectKey}</span> {t.title}</div>)}
+          {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}/board?task=${t.id}`)}><span className="badge">{t.projectKey}</span> {t.title}</div>)}
           {res.pages.length > 0 && <div className="group">Seiten</div>}
           {res.pages.map((p) => <div key={p.id} className="item" onClick={() => go(`/projekte/${p.projectId}/doku/${p.id}`)}><span className="badge">{p.projectKey}</span> {p.title}</div>)}
           {res.mails.length > 0 && <div className="group">Mails</div>}

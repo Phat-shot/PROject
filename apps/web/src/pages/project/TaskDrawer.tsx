@@ -4,6 +4,8 @@ import type { Task, TaskComment } from '@projekttool/shared';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Drawer, Markdown, Modal, prioLabel, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { LabelPicker } from './BoardView';
+import type { Recurrence } from '@projekttool/shared';
 
 interface TaskDetail {
   task: Task;
@@ -35,7 +37,11 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
   return (
     <Drawer title={<>{t.title}{t.done && <span className="badge ok" style={{ marginLeft: 8 }}>erledigt</span>}</>} onClose={onClose}
-      actions={canEdit && <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>}>
+      actions={canEdit && <>
+        {t.archivedAt ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
+          : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>}
+        <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>
+      </>}>
       {error && <div className="error mb">{error}</div>}
       {t.conflicts.length > 0 && (
         <div className="notice mb">
@@ -55,6 +61,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           {t.responsible.email && !t.responsible.userId && <span className="badge" style={{ marginLeft: 6 }}>extern</span>}
         </dd>
         <dt>Priorität</dt><dd><span className={`badge prio-${t.priority}`}>{prioLabel[t.priority]}</span></dd>
+        <dt>Labels</dt><dd>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</dd>
+        <dt>Wiederholung</dt><dd>{t.recurrence ? describeRec(t.recurrence) : <span className="muted">keine</span>}{t.archivedAt && <span className="badge" style={{ marginLeft: 6 }}>archiviert</span>}</dd>
         <dt>Zeitraum</dt><dd>{t.startDate ? `${fmtDate(t.startDate)} – ` : ''}{t.dueDate ? fmtDate(t.dueDate) : <span className="muted">keine Deadline</span>}</dd>
         {t.predecessorIds && t.predecessorIds.length > 0 && <><dt>Vorgänger</dt><dd>{t.predecessorIds.map((p) => tasks.find((x) => x.id === p)?.title).filter(Boolean).join(', ')}</dd></>}
         <dt>Antwortadresse</dt><dd className="small muted">{detail.project.mailAddress ? detail.project.mailAddress.replace('@', `+t${t.mailCode}@`) : `Kein Projektkonto · Code ${t.mailCode}`}</dd>
@@ -114,7 +122,8 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
   const { detail, tasks } = useProject();
   const [f, setF] = useState({
     title: task.title, description: task.description ?? '', subprojectId: task.subprojectId ?? '', priority: task.priority, startDate: task.startDate ?? '', dueDate: task.dueDate ?? '',
-    responsibleUserId: task.responsibleUserId ?? '', responsibleEmail: task.responsibleEmail ?? '', predecessorIds: task.predecessorIds ?? []
+    responsibleUserId: task.responsibleUserId ?? '', responsibleEmail: task.responsibleEmail ?? '', predecessorIds: task.predecessorIds ?? [],
+    rec: task.recurrence ? { ...task.recurrence } : null as Recurrence | null
   });
   const { busy, error, run } = useAsync();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
@@ -135,6 +144,21 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
           <select multiple value={f.predecessorIds} disabled={!canPlan} onChange={(e) => set('predecessorIds', Array.from(e.target.selectedOptions).map((o) => o.value))} style={{ height: 90 }}>
             {tasks.filter((x) => x.id !== task.id).map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
           </select></label>
+        <div className="field full"><span>Wiederholung (W6)</span>
+          <div className="row">
+            <select value={f.rec?.freq ?? ''} onChange={(e) => set('rec', e.target.value ? { freq: e.target.value, interval: 1, mode: f.rec?.mode ?? 'after_done', leadDays: f.rec?.leadDays ?? 0, nth: 1, weekday: 1 } : null)} style={{ width: 'auto' }}>
+              <option value="">keine</option><option value="daily">täglich</option><option value="weekly">wöchentlich</option><option value="monthly">monatlich</option><option value="monthly_weekday">n-ter Wochentag im Monat</option>
+            </select>
+            {f.rec && <>
+              <label className="small">alle <input type="number" min={1} value={f.rec.interval ?? 1} onChange={(e) => set('rec', { ...f.rec, interval: Number(e.target.value) })} style={{ width: 56 }} /> {f.rec.freq === 'daily' ? 'Tage' : f.rec.freq === 'weekly' ? 'Wochen' : 'Monate'}</label>
+              {f.rec.freq === 'monthly_weekday' && <><select value={f.rec.nth ?? 1} onChange={(e) => set('rec', { ...f.rec, nth: Number(e.target.value) })} style={{ width: 'auto' }}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}.</option>)}</select>
+                <select value={f.rec.weekday ?? 1} onChange={(e) => set('rec', { ...f.rec, weekday: Number(e.target.value) })} style={{ width: 'auto' }}>{['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></>}
+              <select value={f.rec.mode} onChange={(e) => set('rec', { ...f.rec, mode: e.target.value })} style={{ width: 'auto' }}><option value="after_done">nächste nach Erledigung</option><option value="on_due">nächste vor Fälligkeit</option></select>
+              {f.rec.mode === 'on_due' && <label className="small">Vorlauf <input type="number" min={0} value={f.rec.leadDays ?? 0} onChange={(e) => set('rec', { ...f.rec, leadDays: Number(e.target.value) })} style={{ width: 56 }} /> Tage</label>}
+            </>}
+          </div>
+          {f.rec && !f.dueDate && <span className="small" style={{ color: 'var(--warn)' }}>Wiederholung braucht eine Deadline.</span>}
+        </div>
         {!canDates && <p className="muted small full">Termine und Abhängigkeiten ändert der PL oder wer das Recht „Projektplan ändern“ hat.</p>}
         {error && <div className="error full">{error}</div>}
         <div className="row full">
@@ -142,6 +166,7 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
             const body: Record<string, unknown> = { title: f.title, description: f.description || null, subprojectId: f.subprojectId || null, priority: f.priority, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null };
             if (canDates) { body.startDate = f.startDate || null; body.dueDate = f.dueDate || null; }
             if (canPlan) body.predecessorIds = f.predecessorIds;
+            body.recurrence = f.rec;
             await api.patch(`/tasks/${task.id}`, body);
             await onSaved();
           })}>Speichern</button>
@@ -150,4 +175,12 @@ function EditTask({ task, members, onClose, onSaved, canPlan }: { task: Task; me
       </div>
     </Modal>
   );
+}
+
+
+function describeRec(r: Recurrence): string {
+  const n = r.interval ?? 1;
+  const names = ['Sonntag', 'Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag'];
+  const base = r.freq === 'daily' ? (n === 1 ? 'täglich' : `alle ${n} Tage`) : r.freq === 'weekly' ? (n === 1 ? 'wöchentlich' : `alle ${n} Wochen`) : r.freq === 'monthly' ? (n === 1 ? 'monatlich' : `alle ${n} Monate`) : `jeden ${r.nth ?? 1}. ${names[r.weekday ?? 1]} im Monat`;
+  return `${base}, nächste ${r.mode === 'after_done' ? 'nach Erledigung' : `${r.leadDays ?? 0} Tage vor Fälligkeit`}`;
 }

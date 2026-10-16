@@ -7,9 +7,13 @@ import { MyTasksPage } from './pages/MyTasksPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
+import { SharePage } from './pages/SharePage';
 
 export default function App() {
   const { user, loading } = useAuth();
+  if (window.location.pathname.startsWith('/s/')) {
+    return <Routes><Route path="/s/:token" element={<SharePage />} /></Routes>;
+  }
   if (loading) return <div className="content muted">Lade …</div>;
   if (!user) return <LoginPage />;
   return (

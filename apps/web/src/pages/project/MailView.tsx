@@ -198,7 +198,7 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
           <div className="row"><button className="btn primary" onClick={() => void run(confirmCopy.run)}>Bestätigen und protokollieren</button><button className="btn" onClick={() => setConfirmCopy(null)}>Abbrechen</button></div>
         </Modal>
       )}
-      {dialog === 'createTask' && <CreateTaskFromMail mail={m} onClose={() => setDialog(null)} onCreated={async (id) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}?task=${id}`); }} />}
+      {dialog === 'createTask' && <CreateTaskFromMail mail={m} onClose={() => setDialog(null)} onCreated={async (id) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}/board?task=${id}`); }} />}
     </div>
   );
 }

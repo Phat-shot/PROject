@@ -26,6 +26,7 @@ services:
       SEED: ${SEED:-true}
       SYNC_INTERVAL_MS: "60000"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
     ports:
       - "3000:3000"
     volumes:
