@@ -2,6 +2,7 @@ import { hashPassword } from './auth.js';
 import { createDb, runMigrations, type Db } from './db.js';
 import { BUILTIN_TEMPLATES, createDefaultFolders } from './docs/service.js';
 import { newMailCode } from './tasks/service.js';
+import { mdToHtml } from './docs/html.js';
 
 export const DEMO_PASSWORD = 'demo1234';
 
@@ -25,7 +26,7 @@ export async function seed(db: Db) {
   const leser = await mk('leser@demo.local', 'Lea Reuter', 'user');
 
   for (const t of BUILTIN_TEMPLATES) {
-    await db.query(`insert into doc_templates (org_id, key, name, content_md) values (null, $1, $2, $3) on conflict do nothing`, [t.key, t.name, t.contentMd]);
+    await db.query(`insert into doc_templates (org_id, key, name, content_md, content_html) values (null, $1, $2, $3, $4) on conflict do nothing`, [t.key, t.name, t.contentMd, mdToHtml(t.contentMd)]);
   }
 
   // Projekt 1: Website-Relaunch
@@ -102,19 +103,45 @@ export async function seed(db: Db) {
   const folders = await db.query(`select id, name from doc_folders where project_id = $1`, [web.id]);
   const fid = (n: string) => folders.rows.find((f: any) => f.name === n).id as string;
   await db.query(`update doc_folders set distribution_list = $2 where id = $1`, [fid('Protokolle'), JSON.stringify(['gf@demo.local', 'k.mueller@mueller-design.de'])]);
-  const page = async (p: { title: string; folder: string; parent?: string | null; status: string; md: string; by: string; template?: string | null; versions?: string[] }) => {
+  const page = async (p: { title: string; folder: string; parent?: string | null; status: string; md: string; by: string; template?: string | null; versions?: string[]; settings?: Record<string, unknown> }) => {
     const r = await db.one(
-      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, status, version, template_key, created_by, updated_by, finalized_at)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9, case when $6 = 'final' then now() else null end) returning id`,
-      [web.id, fid(p.folder), p.parent ?? null, p.title, p.md, p.status, (p.versions?.length ?? 0) + 1, p.template ?? null, p.by]
+      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, content_html, status, version, template_key, settings, created_by, updated_by, finalized_at)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$11, case when $7 = 'final' then now() else null end) returning id`,
+      [web.id, fid(p.folder), p.parent ?? null, p.title, p.md, mdToHtml(p.md), p.status, (p.versions?.length ?? 0) + 1, p.template ?? null, JSON.stringify(p.settings ?? {}), p.by]
     );
     let v = 1;
     for (const old of p.versions ?? []) {
-      await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,$2,$3,$4,'draft',$5)`, [r.id, v++, p.title, old, p.by]);
+      await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,'draft',$6)`, [r.id, v++, p.title, old, mdToHtml(old), p.by]);
     }
-    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,$2,$3,$4,$5,$6)`, [r.id, v, p.title, p.md, p.status, p.by]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [r.id, v, p.title, p.md, mdToHtml(p.md), p.status, p.by]);
     return r.id as string;
   };
+  // Oberseite der Besprechungsreihe: Zusammenfassung + Teilnehmer, Protokolle als Unterseiten mit vererbter Vorlage
+  const jfTop = await page({
+    title: 'JF Auftraggeber', folder: 'Protokolle', status: 'final', by: pl, template: 'reihe',
+    settings: { kind: 'series', childTemplateKey: 'protokoll', showChildren: true, pdf: { headerText: 'Website-Relaunch · Jour fixe Auftraggeber', footerText: 'Protokoll · vertraulich' } },
+    md: `# JF Auftraggeber
+
+## Zusammenfassung
+
+Wöchentlicher Jour fixe mit der Geschäftsführung. Entscheidungen zu Budget, Agentur und Terminen fallen hier. Stand: Agentur beauftragt, Go-Live 25.02.2027 bestätigt.
+
+## Teilnehmer
+
+| Name | Rolle | Organisation |
+| --- | --- | --- |
+| Petra Lenz | Projektleitung | Demo GmbH |
+| Anna Berger | Stellvertretung | Demo GmbH |
+| Geschäftsführung | Auftraggeber | Demo GmbH |
+| Katrin Müller | Agentur (bei Bedarf) | Müller-Design |
+
+## Rhythmus und Verteiler
+
+- Rhythmus: freitags 10:00, 30 Minuten
+- Verteiler: gf@demo.local, k.mueller@mueller-design.de
+- Ablage der Protokolle: Unterseiten dieser Seite
+`
+  });
   const auftrag = await page({
     title: 'Projektauftrag Website-Relaunch', folder: 'Konzepte', status: 'final', by: pl,
     versions: ['# Projektauftrag\n\nEntwurf.'],
@@ -159,7 +186,7 @@ Grundlage: WCAG 2.1 AA, BITV 2.0.
 Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
   });
   await page({
-    title: 'Protokoll JF Auftraggeber 02.10.2026', folder: 'Protokolle', status: 'final', by: pl, template: 'protokoll',
+    title: 'Protokoll JF Auftraggeber 02.10.2026', folder: 'Protokolle', parent: jfTop, status: 'final', by: pl, template: 'protokoll',
     md: `# Protokoll 2026-10-02
 
 **Besprechung:** JF Auftraggeber
@@ -185,7 +212,7 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
 16.10.2026, 10:00 Uhr`
   });
   await page({
-    title: 'Protokoll JF Auftraggeber 16.10.2026', folder: 'Protokolle', status: 'draft', by: anna, template: 'protokoll',
+    title: 'Protokoll JF Auftraggeber 16.10.2026', folder: 'Protokolle', parent: jfTop, status: 'draft', by: anna, template: 'protokoll',
     md: `# Protokoll 2026-10-16
 
 **Besprechung:** JF Auftraggeber

@@ -57,11 +57,12 @@ Oder manuell: `DATABASE_URL=postgres://… npm run build && npm start`.
 - Antworten Externer werden per Plus-Adresse (`projekt-x+t<code>@…`) der Aufgabe zugeordnet, Fallback In-Reply-To
 
 **Doku (à la Confluence)**
-- Ordner mit Verteiler, Seitenbaum mit Unterseiten, Markdown-Editor mit Vorschau
+- WYSIWYG-Editor (TipTap/ProseMirror): Überschriften, Schriftgrößen, Fett/Kursiv/Unterstrichen, Listen, Tabellen mit Zeilen/Spalten, Bilder (Upload, Drag & Drop, Einfügen), Links, Zitate; HTML als Speicherformat, Markdown abgeleitet für Suche und Mail-Aktionen; serverseitige Bereinigung
+- Ordner mit Verteiler, Seitenbaum mit Unterseiten; jede Seite kann Oberseite sein (Besprechungsreihe, Teilprojekt, Berichte): Zusammenfassung und Teilnehmer auf der Oberseite, Vorlage für neue Unterseiten wird vererbt, Unterseiten-Index, PDF-Layout (Akzentfarbe, Kopf-/Fußzeile, Metadaten) je Oberseite
 - Versionen bei jeder Änderung, Konfliktschutz bei veralteter Version
 - Status Entwurf → In Prüfung → Final; Final sperrt; Versand finaler Seiten als **PDF-Anhang** an den Verteiler über das Projektkonto (W5); die versendete PDF wird an der Seite abgelegt; PDF-Ansicht jeder Seite, auch über Freigabe-Links
 - Vorlagen: Besprechungsprotokoll, Statusbericht, Konzept, RAID-Log, Änderungsantrag, Kickoff, Lessons Learned; Vorlagen-Editor in der Verwaltung
-- PDF-Stil je Mandant (Firmenname, Akzentfarbe, Fußzeile); PDF mit Titelblock, Metadaten, Fett/Kursiv, Tabellen-Zebra, Kopf- und Fußzeile
+- PDF aus dem Seiten-HTML (pdfkit): Titelblock, Metadaten, Schriftgrößen, Fett/Kursiv/Unterstrichen, verschachtelte Listen, Tabellen-Zebra, Bilder, Kopf- und Fußzeile; Stil je Mandant, überschreibbar je Oberseite
 - Freigabe per Link: Seite (wahlweise mit Unterseiten) an eine Mail-Adresse, lesend oder schreibend, mit Ablauf, widerrufbar, Versand über das Projektkonto; externe Änderungen werden mit der Adresse versioniert und gemeldet (`/s/<token>`)
 - Anhänge an Seiten und Aufgaben
 

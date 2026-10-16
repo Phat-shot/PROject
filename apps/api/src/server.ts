@@ -5,6 +5,7 @@ import { createDb, runMigrations } from './db.js';
 import { MailService } from './mail/service.js';
 import { seedDevMails, seedIfEmpty } from './seed.js';
 import { ensureBuiltinTemplates } from './docs/service.js';
+import { ensureHtmlContent } from './docs/html.js';
 import { startWorker } from './worker.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -15,6 +16,8 @@ async function main() {
   if (applied.length) console.log('Migrationen angewendet:', applied.join(', '));
   if (process.env.SEED !== 'false') await seedIfEmpty(db);
   await ensureBuiltinTemplates(db);
+  const converted = await ensureHtmlContent(db);
+  if (converted) console.log(`Doku: ${converted} Inhalte nach HTML konvertiert`);
 
   const mail = new MailService(db);
   if (process.env.SEED !== 'false' && process.env.NODE_ENV !== 'production') {

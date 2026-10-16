@@ -315,6 +315,9 @@ export interface DocPage {
   parentPageId: string | null;
   title: string;
   contentMd: string;
+  contentHtml: string;
+  settings: DocPageSettings;
+  childCount?: number;
   status: DocStatus;
   version: number;
   templateKey: string | null;
@@ -326,12 +329,24 @@ export interface DocPage {
   finalizedAt: string | null;
 }
 
+export interface DocPageSettings {
+  /** Vorlage für neue Unterseiten (vererbt an tiefere Ebenen) */
+  childTemplateKey?: string | null;
+  /** Art der Oberseite: Besprechungsreihe, Teilprojekt, Bericht, frei */
+  kind?: 'series' | 'subproject' | 'report' | 'custom' | null;
+  /** Unterseiten-Index unter dem Inhalt anzeigen */
+  showChildren?: boolean;
+  /** PDF-Layout für diese Seite und Unterseiten */
+  pdf?: { accentColor?: string; headerText?: string; footerText?: string; showMeta?: boolean } | null;
+}
+
 export interface DocPageVersion {
   id: string;
   pageId: string;
   version: number;
   title: string;
   contentMd: string;
+  contentHtml?: string;
   status: DocStatus;
   savedBy: string;
   savedByName: string;
@@ -343,6 +358,7 @@ export interface DocTemplate {
   key: string;
   name: string;
   contentMd: string;
+  contentHtml: string;
 }
 
 export interface AuditEntry {

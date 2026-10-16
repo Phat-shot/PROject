@@ -22,15 +22,20 @@
     "fastify": "^5.2.1",
     "imapflow": "^1.0.188",
     "mailparser": "^3.7.2",
+    "marked": "^18.1.1",
+    "node-html-parser": "^9.0.4",
     "nodemailer": "^6.10.0",
     "pdfkit": "^0.20.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.5",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.11.10",
+    "@types/turndown": "^5.0.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"
   }

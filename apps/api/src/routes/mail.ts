@@ -8,6 +8,7 @@ import { loadTask, newMailCode } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mapPage } from '../docs/service.js';
+import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { notifyMany } from '../notify.js';
 
 function mapAccount(r: any): MailAccount {
@@ -366,11 +367,12 @@ export async function mailRoutes(app: FastifyInstance) {
     }
     const title = (b.title?.trim() || `Mail: ${mail.subject || '(kein Betreff)'}`).slice(0, 200);
     const md = mailToMarkdown(mail, { heading: 1 });
+    const html = mdToHtml(md);
     const page = await db.one(
-      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, status, created_by, updated_by) values ($1,$2,$3,$4,$5,'draft',$6,$6) returning *`,
-      [b.projectId, b.folderId ?? null, b.parentPageId ?? null, title, md, user.id]
+      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, content_html, status, created_by, updated_by) values ($1,$2,$3,$4,$5,$6,'draft',$7,$7) returning *`,
+      [b.projectId, b.folderId ?? null, b.parentPageId ?? null, title, md, html, user.id]
     );
-    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,1,$2,$3,'draft',$4)`, [page.id, page.title, page.content_md, user.id]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,1,$2,$3,$4,'draft',$5)`, [page.id, page.title, page.content_md, page.content_html, user.id]);
     await db.query(`insert into mail_page_links (mail_id, page_id, kind, linked_by) values ($1,$2,'page',$3)`, [mail.id, page.id, user.id]);
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'mail.copy_to_page', objectType: 'doc_page', objectId: page.id, details: { mailId: mail.id, subject: mail.subject, viewIds: access.viewIds } });
     return { page: mapPage(page) };
@@ -393,9 +395,9 @@ export async function mailRoutes(app: FastifyInstance) {
       return { needsConfirmation: true, willSee: members.rows.map((x: any) => ({ name: x.name, role: x.role })) };
     }
     const section = mailToMarkdown(mail, { heading: 2, withBody: req.body?.withBody !== false });
-    const content = `${page.content_md.replace(/\s+$/, '')}\n\n${section}\n`;
-    const u = await db.one(`update doc_pages set content_md = $2, version = version + 1, updated_by = $3, updated_at = now() where id = $1 returning *`, [page.id, content, user.id]);
-    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,$2,$3,$4,$5,$6)`, [u.id, u.version, u.title, u.content_md, u.status, user.id]);
+    const html = `${(page.content_html ?? mdToHtml(page.content_md)).replace(/\s+$/, '')}\n${mdToHtml(section)}`;
+    const u = await db.one(`update doc_pages set content_html = $2, content_md = $3, version = version + 1, updated_by = $4, updated_at = now() where id = $1 returning *`, [page.id, html, htmlToMd(html), user.id]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, user.id]);
     await db.query(`insert into mail_page_links (mail_id, page_id, kind, linked_by) values ($1,$2,'section',$3) on conflict do nothing`, [mail.id, page.id, user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'mail.append_to_page', objectType: 'doc_page', objectId: page.id, details: { mailId: mail.id, subject: mail.subject, version: u.version } });
     return { page: mapPage(u) };

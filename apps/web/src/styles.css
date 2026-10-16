@@ -308,3 +308,29 @@ table.table { width: 100%; border-collapse: collapse; }
 .chain .step { padding: 2px 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
 .chain .step.on { background: var(--warn-soft); border-color: #f2d9a6; font-weight: 600; }
 .chain .arrow { color: var(--muted); }
+
+/* WYSIWYG-Editor (TipTap) */
+.editor-wrap { border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+.editor-toolbar { display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--border); background: var(--surface-2); position: sticky; top: 52px; z-index: 4; border-radius: var(--radius) var(--radius) 0 0; }
+.editor-toolbar .sep { width: 1px; background: var(--border); margin: 0 4px; }
+.editor-toolbar button { border: 1px solid transparent; background: none; padding: 4px 7px; border-radius: 5px; font-size: 13px; min-width: 28px; }
+.editor-toolbar button:hover { background: var(--surface); border-color: var(--border); }
+.editor-toolbar button.on { background: var(--primary-soft); color: var(--primary); border-color: #c7d6ff; font-weight: 600; }
+.editor-toolbar select { width: auto; padding: 3px 6px; font-size: 13px; }
+.editor-content .ProseMirror { min-height: 50vh; padding: 18px 24px; outline: none; }
+.editor-content .ProseMirror p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: var(--muted); float: left; pointer-events: none; height: 0; }
+.prose table, .ProseMirror table { border-collapse: collapse; margin: 10px 0 14px; width: 100%; table-layout: fixed; }
+.prose th, .prose td, .ProseMirror th, .ProseMirror td { border: 1px solid var(--border); padding: 6px 9px; vertical-align: top; position: relative; min-width: 40px; }
+.prose th, .ProseMirror th { background: var(--surface-2); font-weight: 600; text-align: left; }
+.ProseMirror .selectedCell::after { content: ''; position: absolute; inset: 0; background: rgba(31, 94, 255, 0.08); pointer-events: none; }
+.ProseMirror .column-resize-handle { position: absolute; right: -2px; top: 0; bottom: 0; width: 4px; background: var(--primary); cursor: col-resize; }
+.prose img, .ProseMirror img { max-width: 100%; height: auto; border-radius: 4px; }
+.ProseMirror img.ProseMirror-selectednode { outline: 2px solid var(--primary); }
+.prose ul[data-type=taskList], .ProseMirror ul[data-type=taskList] { list-style: none; padding-left: 4px; }
+.prose ul[data-type=taskList] li, .ProseMirror ul[data-type=taskList] li { display: flex; gap: 8px; }
+.prose hr, .ProseMirror hr { border: 0; border-top: 1px solid var(--border); margin: 14px 0; }
+.prose a { text-decoration: underline; }
+.prose p, .ProseMirror p { margin: 0 0 0.6em; }
+.children-index { margin-top: 24px; border-top: 1px solid var(--border); padding-top: 14px; }
+.children-index h3 { display: flex; align-items: center; gap: 8px; }
+.page-settings { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }

@@ -8,11 +8,13 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
-import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion, renderTemplate } from '../docs/service.js';
+import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion } from '../docs/service.js';
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
-import { markdownToPdf, type PdfStyle } from '../docs/pdf.js';
+import { type PdfStyle } from '../docs/pdf.js';
+import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
+import { htmlToMd, mdToHtml, renderTemplateHtml, sanitizeHtml } from '../docs/html.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
@@ -23,6 +25,33 @@ export async function docRoutes(app: FastifyInstance) {
     const st = o.settings ?? {};
     return { company: st.company ?? o.name, accentColor: st.accentColor, footerText: st.footerText };
   };
+  /** Layout einer Seite: Mandanten-Stil, überschrieben von Oberseiten (von oben nach unten) und der Seite selbst. */
+  const layoutFor = async (pageId: string): Promise<PageLayout> => {
+    const page = await db.one(`select project_id from doc_pages where id = $1`, [pageId]);
+    const base: PageLayout = await styleFor(page.project_id);
+    const chain = await db.query(
+      `with recursive anc as (select id, parent_page_id, settings, 0 as depth from doc_pages where id = $1
+         union all select p.id, p.parent_page_id, p.settings, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id)
+       select settings from anc order by depth desc`,
+      [pageId]
+    );
+    for (const r of chain.rows) Object.assign(base, Object.fromEntries(Object.entries(r.settings?.pdf ?? {}).filter(([, v]) => v !== null && v !== undefined && v !== '')));
+    return base;
+  };
+  /** Vorlage für Unterseiten: nächste Oberseite mit childTemplateKey. */
+  const inheritedTemplate = async (parentPageId: string | null): Promise<string | null> => {
+    if (!parentPageId) return null;
+    const chain = await db.query(
+      `with recursive anc as (select id, parent_page_id, settings, 0 as depth from doc_pages where id = $1
+         union all select p.id, p.parent_page_id, p.settings, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id)
+       select settings from anc order by depth`,
+      [parentPageId]
+    );
+    for (const r of chain.rows) if (r.settings?.childTemplateKey) return r.settings.childTemplateKey;
+    return null;
+  };
+  const loadTemplate = async (key: string, orgId: string) => db.maybeOne(`select * from doc_templates where key = $1 and (org_id = $2 or org_id is null) order by org_id nulls last limit 1`, [key, orgId]);
+  const templateHtml = (t: any) => renderTemplateHtml(t.content_html ?? mdToHtml(t.content_md ?? ''));
   const folderName = async (folderId: string | null) => (folderId ? (await db.maybeOne(`select name from doc_folders where id = $1`, [folderId]))?.name ?? null : null);
   const uploadDir = path.resolve(process.env.DATA_DIR ?? '.data', 'uploads');
 
@@ -31,12 +60,13 @@ export async function docRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id);
     const folders = await db.query(`select * from doc_folders where project_id = $1 order by position, name`, [req.params.id]);
     const pages = await db.query(
-      `select p.id, p.project_id, p.folder_id, p.parent_page_id, p.title, p.status, p.version, p.template_key, p.created_by, p.updated_by, p.created_at, p.updated_at, p.finalized_at, '' as content_md, u.name as updated_by_name
+      `select p.id, p.project_id, p.folder_id, p.parent_page_id, p.title, p.status, p.version, p.template_key, p.settings, p.created_by, p.updated_by, p.created_at, p.updated_at, p.finalized_at, '' as content_md, '' as content_html, u.name as updated_by_name,
+              (select count(*)::int from doc_pages c where c.parent_page_id = p.id) as child_count
        from doc_pages p left join users u on u.id = p.updated_by where p.project_id = $1 order by p.title`,
       [req.params.id]
     );
-    const templates = await db.query(`select * from doc_templates where org_id = $1 or org_id is null order by name`, [user.orgId]);
-    return { folders: folders.rows.map(mapFolder), pages: pages.rows.map(mapPage), templates: templates.rows.map(mapTemplate) };
+    const templates = await db.query(`select distinct on (key) * from doc_templates where org_id = $1 or org_id is null order by key, org_id nulls last`, [user.orgId]);
+    return { folders: folders.rows.map(mapFolder), pages: pages.rows.map(mapPage), templates: templates.rows.map(mapTemplate).sort((a: any, b: any) => a.name.localeCompare(b.name)) };
   });
 
   app.post<{ Params: { id: string }; Body: { name: string; parentId?: string | null; distributionList?: string[] } }>('/projects/:id/docs/folders', async (req) => {
@@ -77,22 +107,30 @@ export async function docRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  app.post<{ Params: { id: string }; Body: { title: string; folderId?: string | null; parentPageId?: string | null; templateKey?: string | null; contentMd?: string } }>('/projects/:id/docs/pages', async (req) => {
+  app.post<{ Params: { id: string }; Body: { title: string; folderId?: string | null; parentPageId?: string | null; templateKey?: string | null; contentMd?: string; contentHtml?: string; settings?: any } }>('/projects/:id/docs/pages', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'member');
     const b = req.body ?? ({} as any);
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
-    let content = b.contentMd ?? '';
-    if (b.templateKey) {
-      const t = await db.maybeOne(`select * from doc_templates where key = $1 and (org_id = $2 or org_id is null) order by org_id nulls last limit 1`, [b.templateKey, user.orgId]);
+    let parentFolder: string | null = null;
+    if (b.parentPageId) {
+      const parent = await db.maybeOne(`select folder_id, project_id from doc_pages where id = $1`, [b.parentPageId]);
+      if (!parent || parent.project_id !== req.params.id) throw badRequest('Oberseite gehört nicht zum Projekt');
+      parentFolder = parent.folder_id;
+    }
+    // Vorlage: angegeben, sonst von der Oberseite geerbt
+    let templateKey: string | null = b.templateKey === undefined ? await inheritedTemplate(b.parentPageId ?? null) : b.templateKey;
+    let html = b.contentHtml ? sanitizeHtml(b.contentHtml) : b.contentMd ? mdToHtml(b.contentMd) : '';
+    if (templateKey && !b.contentHtml && !b.contentMd) {
+      const t = await loadTemplate(templateKey, user.orgId);
       if (!t) throw badRequest('Vorlage nicht gefunden');
-      content = renderTemplate(t.content_md);
+      html = templateHtml(t);
     }
     const r = await db.one(
-      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, template_key, created_by, updated_by) values ($1,$2,$3,$4,$5,$6,$7,$7) returning *`,
-      [req.params.id, b.folderId ?? null, b.parentPageId ?? null, b.title.trim(), content, b.templateKey ?? null, user.id]
+      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, content_html, template_key, settings, created_by, updated_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$9) returning *`,
+      [req.params.id, b.folderId ?? parentFolder ?? null, b.parentPageId ?? null, b.title.trim(), htmlToMd(html), html, templateKey, JSON.stringify(b.settings ?? {}), user.id]
     );
-    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,1,$2,$3,'draft',$4)`, [r.id, r.title, r.content_md, user.id]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,1,$2,$3,$4,'draft',$5)`, [r.id, r.title, r.content_md, r.content_html, user.id]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'page.create', objectType: 'doc_page', objectId: r.id, details: { title: b.title, templateKey: b.templateKey ?? null } });
     return { page: mapPage(r) };
   });
@@ -103,7 +141,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
     const versions = await db.query(
-      `select v.id, v.page_id, v.version, v.title, v.status, v.saved_by, v.saved_at, '' as content_md, coalesce(u.name, v.external_editor || ' (extern)') as saved_by_name from doc_page_versions v left join users u on u.id = v.saved_by where v.page_id = $1 order by v.version desc`,
+      `select v.id, v.page_id, v.version, v.title, v.status, v.saved_by, v.saved_at, '' as content_md, '' as content_html, coalesce(u.name, v.external_editor || ' (extern)') as saved_by_name from doc_page_versions v left join users u on u.id = v.saved_by where v.page_id = $1 order by v.version desc`,
       [r.id]
     );
     const attachments = await db.query(`select * from attachments where page_id = $1 order by created_at`, [r.id]);
@@ -120,7 +158,10 @@ export async function docRoutes(app: FastifyInstance) {
     );
     const page = mapPage(r);
     if (!r.updated_by && r.updated_by_external) page.updatedByName = `${r.updated_by_external} (extern)`;
-    return { page, versions: versions.rows.map(mapVersion), attachments: attachments.rows.map(mapAttachment), activeShares: shares.c };
+    const children = await db.query(`select id, title, status, version, updated_at, template_key from doc_pages where parent_page_id = $1 order by title desc`, [r.id]);
+    return { page, versions: versions.rows.map(mapVersion), attachments: attachments.rows.map(mapAttachment), activeShares: shares.c,
+      children: children.rows.map((c: any) => ({ id: c.id, title: c.title, status: c.status, version: c.version, updatedAt: c.updated_at, templateKey: c.template_key })),
+      inheritedTemplateKey: await inheritedTemplate(r.id) };
   });
 
   app.get<{ Params: { pid: string; v: string } }>('/docs/pages/:pid/versions/:v', async (req) => {
@@ -133,29 +174,43 @@ export async function docRoutes(app: FastifyInstance) {
     return { version: mapVersion(v) };
   });
 
-  app.patch<{ Params: { pid: string }; Body: { title?: string; contentMd?: string; folderId?: string | null; parentPageId?: string | null; baseVersion?: number } }>('/docs/pages/:pid', async (req) => {
+  app.patch<{ Params: { pid: string }; Body: { title?: string; contentMd?: string; contentHtml?: string; folderId?: string | null; parentPageId?: string | null; baseVersion?: number; settings?: any } }>('/docs/pages/:pid', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id, 'member');
-    if (r.status === 'final') throw conflict('Finale Seite ist gesperrt. Erst zurück auf Entwurf setzen.');
     const b = req.body ?? {};
+    if (b.parentPageId && b.parentPageId === r.id) throw badRequest('Seite kann nicht ihre eigene Oberseite sein');
+    if (b.parentPageId) {
+      const desc = await db.query(
+        `with recursive sub as (select id from doc_pages where parent_page_id = $1 union all select p.id from doc_pages p join sub s on p.parent_page_id = s.id) select 1 from sub where id = $2`,
+        [r.id, b.parentPageId]
+      );
+      if (desc.rows.length) throw badRequest('Eine Unterseite kann nicht Oberseite werden');
+    }
+    // Struktur (Einstellungen, Oberseite, Ordner) darf auch an finalen Seiten geändert werden, Inhalt nicht
+    const structuralOnly = b.contentHtml === undefined && b.contentMd === undefined && b.title === undefined;
+    if (r.status === 'final' && !structuralOnly) throw conflict('Finale Seite ist gesperrt. Erst zurück auf Entwurf setzen.');
     if (b.baseVersion !== undefined && b.baseVersion !== r.version) {
       throw conflict(`Seite wurde zwischenzeitlich geändert (Version ${r.version}). Bitte neu laden.`);
     }
-    const contentChanged = b.contentMd !== undefined && b.contentMd !== r.content_md;
+    let html: string | null = null;
+    if (b.contentHtml !== undefined) html = sanitizeHtml(b.contentHtml);
+    else if (b.contentMd !== undefined) html = mdToHtml(b.contentMd);
+    const contentChanged = html !== null && html !== r.content_html;
     const titleChanged = b.title !== undefined && b.title.trim() !== r.title;
     const newVersion = contentChanged || titleChanged ? r.version + 1 : r.version;
+    const settings = b.settings !== undefined ? { ...(r.settings ?? {}), ...b.settings } : r.settings;
     const u = await db.one(
-      `update doc_pages set title = coalesce($2, title), content_md = coalesce($3, content_md),
-         folder_id = case when $4 then $5::uuid else folder_id end,
-         parent_page_id = case when $6 then $7::uuid else parent_page_id end,
-         version = $8, updated_by = $9, updated_at = now()
+      `update doc_pages set title = coalesce($2, title), content_html = coalesce($3, content_html), content_md = coalesce($4, content_md),
+         folder_id = case when $5 then $6::uuid else folder_id end,
+         parent_page_id = case when $7 then $8::uuid else parent_page_id end,
+         version = $9, updated_by = $10, updated_at = now(), settings = $11
        where id = $1 returning *`,
-      [r.id, b.title?.trim() || null, b.contentMd ?? null, 'folderId' in b, b.folderId ?? null, 'parentPageId' in b, b.parentPageId ?? null, newVersion, user.id]
+      [r.id, b.title?.trim() || null, html, html !== null ? htmlToMd(html) : null, 'folderId' in b, b.folderId ?? null, 'parentPageId' in b, b.parentPageId ?? null, newVersion, user.id, JSON.stringify(settings ?? {})]
     );
     if (newVersion !== r.version) {
-      await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by) values ($1,$2,$3,$4,$5,$6)`, [u.id, newVersion, u.title, u.content_md, u.status, user.id]);
+      await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, newVersion, u.title, u.content_md, u.content_html, u.status, user.id]);
     }
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.update', objectType: 'doc_page', objectId: r.id, details: { version: newVersion } });
     return { page: mapPage(u) };
@@ -208,7 +263,7 @@ export async function docRoutes(app: FastifyInstance) {
       : await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [r.project_id]);
     if (!account) throw badRequest('Kein Projektkonto vorhanden');
     const project = await db.one(`select name from projects where id = $1`, [r.project_id]);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     const filename = `${r.title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${r.version}.pdf`;
     const result = await app.mail.sendFromAccount(account, {
       to: list,
@@ -311,7 +366,7 @@ export async function docRoutes(app: FastifyInstance) {
     return reply.send(createReadStream(a.storage_path));
   });
 
-  app.patch<{ Params: { token: string; pid: string }; Body: { contentMd: string; title?: string; baseVersion?: number } }>('/share/:token/pages/:pid', async (req) => {
+  app.patch<{ Params: { token: string; pid: string }; Body: { contentMd?: string; contentHtml?: string; title?: string; baseVersion?: number } }>('/share/:token/pages/:pid', async (req) => {
     const sh = await resolveShare(db, req.params.token);
     if (!sh) throw notFound('Freigabe ungültig, abgelaufen oder widerrufen');
     if (sh.mode !== 'write') throw forbidden('Diese Freigabe erlaubt nur Lesen');
@@ -320,14 +375,15 @@ export async function docRoutes(app: FastifyInstance) {
     const page = await db.one(`select * from doc_pages where id = $1`, [req.params.pid]);
     if (page.status === 'final') throw conflict('Finale Seite ist gesperrt');
     const b = req.body ?? ({} as any);
-    if (typeof b.contentMd !== 'string') throw badRequest('contentMd erforderlich');
+    const html = typeof b.contentHtml === 'string' ? sanitizeHtml(b.contentHtml) : typeof b.contentMd === 'string' ? mdToHtml(b.contentMd) : null;
+    if (html === null) throw badRequest('contentHtml erforderlich');
     if (b.baseVersion !== undefined && b.baseVersion !== page.version) throw conflict(`Seite wurde zwischenzeitlich geändert (Version ${page.version}). Bitte neu laden.`);
-    if (b.contentMd === page.content_md && (!b.title || b.title.trim() === page.title)) return { page: mapPage(page) };
+    if (html === page.content_html && (!b.title || b.title.trim() === page.title)) return { page: mapPage(page) };
     const u = await db.one(
-      `update doc_pages set content_md = $2, title = coalesce($3, title), version = version + 1, updated_by = null, updated_by_external = $4, updated_at = now() where id = $1 returning *`,
-      [page.id, b.contentMd, b.title?.trim() || null, sh.email]
+      `update doc_pages set content_html = $2, content_md = $3, title = coalesce($4, title), version = version + 1, updated_by = null, updated_by_external = $5, updated_at = now() where id = $1 returning *`,
+      [page.id, html, htmlToMd(html), b.title?.trim() || null, sh.email]
     );
-    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, status, saved_by, external_editor) values ($1,$2,$3,$4,$5,null,$6)`, [u.id, u.version, u.title, u.content_md, u.status, sh.email]);
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by, external_editor) values ($1,$2,$3,$4,$5,$6,null,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, sh.email]);
     await audit(db, { orgId: (await db.one(`select org_id from projects where id = $1`, [page.project_id])).org_id, projectId: page.project_id, userId: null, action: 'page.external_edit', objectType: 'doc_page', objectId: page.id, details: { email: sh.email, version: u.version, shareId: sh.id } });
     const targets = new Set<string>([sh.created_by, page.created_by].filter(Boolean));
     await notifyMany(db, targets, { projectId: page.project_id, type: 'page.external_edit', title: `Extern bearbeitet: ${u.title}`, body: `${sh.email} hat Version ${u.version} gespeichert`, link: `/projekte/${page.project_id}/doku/${u.id}` });
@@ -340,7 +396,7 @@ export async function docRoutes(app: FastifyInstance) {
     const r = await db.maybeOne(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name, folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
@@ -351,7 +407,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!sh) throw notFound('Freigabe ungültig');
     if (!(await sharedPageIds(db, sh)).includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
     const r = await db.one(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
-    const pdf = await markdownToPdf(r.content_md, { title: r.title, project: r.project_name, version: r.version, status: r.status, folder: await folderName(r.folder_id) }, await styleFor(r.project_id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, version: r.version, status: r.status, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
@@ -359,19 +415,20 @@ export async function docRoutes(app: FastifyInstance) {
 
   app.get('/docs/templates', async (req) => {
     const user = requireUser(req);
-    const rows = await db.query(`select * from doc_templates where org_id = $1 or org_id is null order by name`, [user.orgId]);
-    return { templates: rows.rows.map(mapTemplate) };
+    const rows = await db.query(`select distinct on (key) * from doc_templates where org_id = $1 or org_id is null order by key, org_id nulls last`, [user.orgId]);
+    return { templates: rows.rows.map(mapTemplate).sort((a: any, b: any) => a.name.localeCompare(b.name)) };
   });
 
-  app.put<{ Params: { key: string }; Body: { name: string; contentMd: string } }>('/docs/templates/:key', async (req) => {
+  app.put<{ Params: { key: string }; Body: { name: string; contentMd?: string; contentHtml?: string } }>('/docs/templates/:key', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Vorlagen pflegt der Org-Admin');
     const b = req.body ?? ({} as any);
-    if (!b.name || b.contentMd === undefined) throw badRequest('Name und Inhalt erforderlich');
+    if (!b.name || (b.contentMd === undefined && b.contentHtml === undefined)) throw badRequest('Name und Inhalt erforderlich');
+    const html = b.contentHtml !== undefined ? sanitizeHtml(b.contentHtml) : mdToHtml(b.contentMd ?? '');
     const r = await db.one(
-      `insert into doc_templates (org_id, key, name, content_md) values ($1,$2,$3,$4)
-       on conflict (org_id, key) do update set name = excluded.name, content_md = excluded.content_md returning *`,
-      [user.orgId, req.params.key, b.name, b.contentMd]
+      `insert into doc_templates (org_id, key, name, content_md, content_html) values ($1,$2,$3,$4,$5)
+       on conflict (org_id, key) do update set name = excluded.name, content_md = excluded.content_md, content_html = excluded.content_html returning *`,
+      [user.orgId, req.params.key, b.name, htmlToMd(html), html]
     );
     return { template: mapTemplate(r) };
   });

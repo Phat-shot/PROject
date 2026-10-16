@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { AuditEntry, DocTemplate, OrgSettings, User } from '@projekttool/shared';
-import { Markdown } from '../components/ui';
+import { RichEditor } from '../components/RichEditor';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
@@ -64,24 +64,24 @@ function TemplatesCard() {
   const { data, reload } = useData<{ templates: DocTemplate[] }>('/docs/templates');
   const [edit, setEdit] = useState<DocTemplate | null>(null);
   const [name, setName] = useState('');
-  const [md, setMd] = useState('');
+  const [html, setHtml] = useState('');
   const [newKey, setNewKey] = useState('');
   const { busy, error, run } = useAsync();
-  const open = (t: DocTemplate) => { setEdit(t); setName(t.name); setMd(t.contentMd); };
+  const open = (t: DocTemplate) => { setEdit(t); setName(t.name); setHtml(t.contentHtml || ''); };
   return (
     <div className="card">
       <h2>Vorlagen (Protokoll, Statusbericht, RAID-Log …)</h2>
-      <p className="muted small">Vorlagen sind Markdown mit Platzhalter <code>{'{{datum}}'}</code>. Eingebaute Vorlagen lassen sich für den Mandanten überschreiben; neue Seiten übernehmen die Struktur, das PDF folgt dem PDF-Stil.</p>
+      <p className="muted small">Vorlagen werden im selben Editor wie Seiten gepflegt; Platzhalter <code>{'{{datum}}'}</code> wird beim Anlegen ersetzt. Eingebaute Vorlagen lassen sich für den Mandanten überschreiben. Oberseiten legen fest, welche Vorlage ihre Unterseiten bekommen.</p>
       <div className="row mb">
         {data?.templates.map((t) => <button key={t.id} className={`chip ${edit?.key === t.key ? 'on' : ''}`} onClick={() => open(t)}>{t.name}</button>)}
-        <span className="row small"><input type="text" placeholder="neuer Schlüssel, z. B. abnahme" value={newKey} onChange={(e) => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))} style={{ width: 200 }} /><button className="btn sm" disabled={!newKey} onClick={() => { setEdit({ id: '', key: newKey, name: '', contentMd: '# Titel\n\n' }); setName(''); setMd('# Titel\n\n'); }}>+ Vorlage</button></span>
+        <span className="row small"><input type="text" placeholder="neuer Schlüssel, z. B. abnahme" value={newKey} onChange={(e) => setNewKey(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))} style={{ width: 200 }} /><button className="btn sm" disabled={!newKey} onClick={() => { setEdit({ id: '', key: newKey, name: '', contentMd: '', contentHtml: '<h1>Titel</h1><p></p>' }); setName(''); setHtml('<h1>Titel</h1><p></p>'); }}>+ Vorlage</button></span>
       </div>
       {edit && (
         <div className="form">
           <label className="field"><span>Name (Schlüssel: {edit.key})</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <div className="doc-editor"><textarea value={md} onChange={(e) => setMd(e.target.value)} style={{ minHeight: 360 }} /><div className="card" style={{ overflow: 'auto', maxHeight: 420 }}><Markdown md={md.replaceAll('{{datum}}', new Date().toLocaleDateString('de-DE'))} /></div></div>
+          <RichEditor key={edit.key} html={html} onChange={setHtml} />
           {error && <div className="error">{error}</div>}
-          <div className="row"><button className="btn primary sm" disabled={busy || !name} onClick={() => void run(async () => { await api.put(`/docs/templates/${edit.key}`, { name, contentMd: md }); await reload(); })}>Speichern</button><button className="btn sm" onClick={() => setEdit(null)}>Schließen</button></div>
+          <div className="row"><button className="btn primary sm" disabled={busy || !name} onClick={() => void run(async () => { await api.put(`/docs/templates/${edit.key}`, { name, contentHtml: html }); await reload(); })}>Speichern</button><button className="btn sm" onClick={() => setEdit(null)}>Schließen</button></div>
         </div>
       )}
     </div>

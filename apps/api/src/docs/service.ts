@@ -21,6 +21,9 @@ export function mapPage(r: any): DocPage {
     parentPageId: r.parent_page_id,
     title: r.title,
     contentMd: r.content_md,
+    contentHtml: r.content_html ?? '',
+    settings: r.settings ?? {},
+    childCount: r.child_count ?? undefined,
     status: r.status,
     version: r.version,
     templateKey: r.template_key,
@@ -34,11 +37,11 @@ export function mapPage(r: any): DocPage {
 }
 
 export function mapVersion(r: any): DocPageVersion {
-  return { id: r.id, pageId: r.page_id, version: r.version, title: r.title, contentMd: r.content_md, status: r.status, savedBy: r.saved_by, savedByName: r.saved_by_name ?? '', savedAt: r.saved_at };
+  return { id: r.id, pageId: r.page_id, version: r.version, title: r.title, contentMd: r.content_md, contentHtml: r.content_html ?? undefined, status: r.status, savedBy: r.saved_by, savedByName: r.saved_by_name ?? '', savedAt: r.saved_at };
 }
 
 export function mapTemplate(r: any): DocTemplate {
-  return { id: r.id, key: r.key, name: r.name, contentMd: r.content_md };
+  return { id: r.id, key: r.key, name: r.name, contentMd: r.content_md, contentHtml: r.content_html ?? '' };
 }
 
 export const BUILTIN_TEMPLATES: { key: string; name: string; contentMd: string }[] = [
@@ -247,6 +250,57 @@ Lebendes Dokument: bei jedem Jour fixe durchgehen und aktualisieren.
 | Maßnahme | Verantwortlich | Fällig |
 | --- | --- | --- |
 |  |  |  |
+`
+  }
+);
+
+BUILTIN_TEMPLATES.push(
+  {
+    key: 'reihe',
+    name: 'Besprechungsreihe (Oberseite)',
+    contentMd: `# Besprechungsreihe
+
+## Zusammenfassung
+
+Zweck der Reihe, Entscheidungsrahmen, aktueller Stand in zwei Sätzen.
+
+## Teilnehmer
+
+| Name | Rolle | Organisation |
+| --- | --- | --- |
+|  |  |  |
+
+## Rhythmus und Verteiler
+
+- Rhythmus: 
+- Verteiler: 
+- Ablage der Protokolle: Unterseiten dieser Seite
+`
+  },
+  {
+    key: 'teilprojekt',
+    name: 'Teilprojekt (Oberseite)',
+    contentMd: `# Teilprojekt
+
+## Zusammenfassung
+
+Ziel, Umfang, aktueller Stand.
+
+## Beteiligte
+
+| Name | Rolle |
+| --- | --- |
+|  |  |
+
+## Meilensteine
+
+| Meilenstein | Termin | Status |
+| --- | --- | --- |
+|  |  |  |
+
+## Offene Punkte
+
+- 
 `
   }
 );

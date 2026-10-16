@@ -2,7 +2,8 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import type { DocPage } from '@projekttool/shared';
 import { api, fmtDateTime } from '../lib/api';
-import { Markdown, statusLabel, useAsync } from '../components/ui';
+import { statusLabel, useAsync } from '../components/ui';
+import { HtmlView, RichEditor } from '../components/RichEditor';
 
 interface ShareData {
   share: { mode: 'read' | 'write'; email: string; includeChildren: boolean; expiresAt: string | null; sharedBy: string | null; projectName: string };
@@ -61,7 +62,7 @@ export function SharePage() {
             {data.share.mode === 'write' && current.status === 'final' && <span className="muted small right">Finale Seite: gesperrt</span>}
           </div>
           {saveError && <div className="error mb">{saveError}</div>}
-          {edit ? <ShareEditor page={current} busy={busy} onCancel={() => setEdit(false)} onSave={(md) => void run(async () => { const r = await api.patch<{ page: DocPage }>(`/share/${token}/pages/${current.id}`, { contentMd: md, baseVersion: current.version }); setCurrent(r.page); setEdit(false); })} /> : <Markdown md={current.contentMd} />}
+          {edit ? <ShareEditor page={current} busy={busy} onCancel={() => setEdit(false)} onSave={(html) => void run(async () => { const r = await api.patch<{ page: DocPage }>(`/share/${token}/pages/${current.id}`, { contentHtml: html, baseVersion: current.version }); setCurrent(r.page); setEdit(false); })} /> : <HtmlView html={current.contentHtml.replaceAll('/api/attachments/', `/api/share/${token}/attachments/`)} />}
           {attachments.length > 0 && <div className="card mt"><h3>Anhänge</h3><ul>{attachments.map((a) => <li key={a.id}><a href={`/api/share/${token}/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a></li>)}</ul></div>}
           <p className="muted small mt">Dieser Link ist persönlich. Änderungen werden mit Ihrer Mail-Adresse versioniert und dem Projektteam gemeldet.</p>
         </div>
@@ -70,12 +71,12 @@ export function SharePage() {
   );
 }
 
-function ShareEditor({ page, busy, onCancel, onSave }: { page: DocPage; busy: boolean; onCancel: () => void; onSave: (md: string) => void }) {
-  const [md, setMd] = useState(page.contentMd);
+function ShareEditor({ page, busy, onCancel, onSave }: { page: DocPage; busy: boolean; onCancel: () => void; onSave: (html: string) => void }) {
+  const [html, setHtml] = useState(page.contentHtml);
   return (
     <div>
-      <div className="row mb"><button className="btn primary" disabled={busy} onClick={() => onSave(md)}>Speichern</button><button className="btn" onClick={onCancel}>Abbrechen</button><span className="muted small">Markdown. Speichern erzeugt eine neue Version.</span></div>
-      <div className="doc-editor"><textarea value={md} onChange={(e) => setMd(e.target.value)} /><div className="card" style={{ overflow: 'auto' }}><Markdown md={md} /></div></div>
+      <div className="row mb"><button className="btn primary" disabled={busy} onClick={() => onSave(html)}>Speichern</button><button className="btn" onClick={onCancel}>Abbrechen</button><span className="muted small">Speichern erzeugt eine neue Version mit Ihrer Mail-Adresse.</span></div>
+      <RichEditor html={html} onChange={setHtml} minimal onSave={() => onSave(html)} />
     </div>
   );
 }
