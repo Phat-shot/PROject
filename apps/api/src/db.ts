@@ -1,4 +1,4 @@
-import { readdir, readFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -56,6 +56,7 @@ export async function createDb(): Promise<Db> {
   }
   const { PGlite } = await import('@electric-sql/pglite');
   const dataDir = url === 'memory' ? undefined : path.join(process.env.DATA_DIR ?? '.data', 'pglite');
+  if (dataDir) await mkdir(dataDir, { recursive: true });
   const lite = dataDir ? new PGlite(dataDir) : new PGlite();
   await lite.waitReady;
   return wrap('pglite', lite as any, () => lite.close());

@@ -27,7 +27,7 @@ export async function searchRoutes(app: FastifyInstance) {
     let mails: any[] = [];
     if (readable.length) {
       const res = await app.db.query(
-        `select distinct m.id, m.subject, m.from_addr, m.date, x.view_id from mails m join mail_view_matches x on x.mail_id = m.id
+        `select distinct m.id, m.subject, m.from_addr, m.date, x.view_id, v.project_id from mails m join mail_view_matches x on x.mail_id = m.id join mail_views v on v.id = x.view_id
          where x.view_id = any($1::uuid[]) and (m.subject ilike $2 or m.text_body ilike $2 or m.from_addr ilike $2) order by m.date desc limit 20`,
         [readable, like]
       );
@@ -36,7 +36,7 @@ export async function searchRoutes(app: FastifyInstance) {
     return {
       tasks: tasks.rows.map((t: any) => ({ id: t.id, title: t.title, projectId: t.project_id, projectKey: t.project_key })),
       pages: pages.rows.map((p: any) => ({ id: p.id, title: p.title, projectId: p.project_id, projectKey: p.project_key, status: p.status })),
-      mails: mails.map((m) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, date: m.date, viewId: m.view_id }))
+      mails: mails.map((m) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, date: m.date, viewId: m.view_id, projectId: m.project_id }))
     };
   });
 }

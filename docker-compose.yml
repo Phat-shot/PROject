@@ -1,0 +1,36 @@
+# Phase 1: Eigenbetrieb per Docker Compose. API + Worker in einem Prozess, PostgreSQL daneben.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: projekttool
+      POSTGRES_USER: projekttool
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-projekttool}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U projekttool"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://projekttool:${POSTGRES_PASSWORD:-projekttool}@db:5432/projekttool
+      PORT: "3000"
+      DATA_DIR: /data
+      SEED: ${SEED:-true}
+      SYNC_INTERVAL_MS: "60000"
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
+    ports:
+      - "3000:3000"
+    volumes:
+      - appdata:/data
+
+volumes:
+  pgdata:
+  appdata:
