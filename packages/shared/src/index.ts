@@ -1,0 +1,250 @@
+// Gemeinsame Typen für API und Web-Client.
+
+export type GlobalRole = 'org_admin' | 'project_creator' | 'user';
+export type ProjectRole = 'pl' | 'member' | 'reader';
+export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
+export type DocStatus = 'draft' | 'review' | 'final';
+export type MailAccountType = 'personal' | 'project';
+export type MailProviderKind = 'imap' | 'dev';
+export type DraftStatus = 'draft' | 'pending_approval' | 'sent' | 'failed';
+
+export interface User {
+  id: string;
+  orgId: string;
+  email: string;
+  name: string;
+  globalRole: GlobalRole;
+  active: boolean;
+}
+
+export interface Membership {
+  projectId: string;
+  userId: string;
+  role: ProjectRole;
+  isDeputy: boolean;
+  canEditPlan: boolean;
+  canApprove: boolean;
+  canFinalize: boolean;
+  canUseAi: boolean;
+}
+
+export interface Project {
+  id: string;
+  key: string;
+  name: string;
+  description: string | null;
+  status: 'active' | 'archived';
+  mailAddress: string | null;
+  myRole?: ProjectRole;
+  myMembership?: Membership;
+}
+
+export interface BoardColumn {
+  id: string;
+  projectId: string;
+  name: string;
+  position: number;
+  isDone: boolean;
+}
+
+export interface Subproject {
+  id: string;
+  projectId: string;
+  name: string;
+  responsibleUserId: string | null;
+  responsible: ResponsibleInfo;
+  startDate: string | null;
+  endDate: string | null;
+  position: number;
+}
+
+export interface ResponsibleInfo {
+  userId: string | null;
+  email: string | null;
+  name: string | null;
+  inherited: boolean;
+  inheritedFrom: 'task' | 'subproject' | 'project' | null;
+}
+
+export interface Task {
+  id: string;
+  projectId: string;
+  subprojectId: string | null;
+  columnId: string;
+  title: string;
+  description: string | null;
+  priority: TaskPriority;
+  startDate: string | null;
+  dueDate: string | null;
+  responsibleUserId: string | null;
+  responsibleEmail: string | null;
+  responsible: ResponsibleInfo;
+  position: number;
+  mailCode: string;
+  done: boolean;
+  conflicts: string[];
+  checklist?: ChecklistItem[];
+  predecessorIds?: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChecklistItem {
+  id: string;
+  taskId: string;
+  title: string;
+  done: boolean;
+  responsibleUserId: string | null;
+  position: number;
+}
+
+export interface TaskComment {
+  id: string;
+  taskId: string;
+  userId: string;
+  userName: string;
+  body: string;
+  createdAt: string;
+}
+
+export interface MailAccount {
+  id: string;
+  type: MailAccountType;
+  name: string;
+  address: string;
+  provider: MailProviderKind;
+  ownerUserId: string | null;
+  projectId: string | null;
+  imapHost: string | null;
+  smtpHost: string | null;
+  lastSyncAt: string | null;
+  syncError: string | null;
+}
+
+export interface MailViewFilter {
+  folders?: string[];
+  from?: string[];
+  to?: string[];
+  subject?: string[];
+  keyword?: string[];
+  since?: string | null;
+}
+
+export interface MailViewRights {
+  canRead: boolean;
+  canDraft: boolean;
+  canSend: boolean;
+  canAi: boolean;
+  canCreateTask: boolean;
+}
+
+export interface MailView {
+  id: string;
+  accountId: string;
+  accountName: string;
+  accountAddress: string;
+  accountType: MailAccountType;
+  projectId: string;
+  name: string;
+  filter: MailViewFilter;
+  myRights: MailViewRights;
+}
+
+export interface MailSummary {
+  id: string;
+  accountId: string;
+  folder: string;
+  messageId: string | null;
+  fromAddr: string;
+  fromName: string | null;
+  toJson: string[];
+  subject: string;
+  date: string;
+  snippet: string;
+  hasAttachments: boolean;
+  linkedTaskIds: string[];
+}
+
+export interface MailDetail extends MailSummary {
+  ccJson: string[];
+  textBody: string | null;
+  htmlBody: string | null;
+  inReplyTo: string | null;
+}
+
+export interface MailDraft {
+  id: string;
+  accountId: string;
+  viewId: string | null;
+  taskId: string | null;
+  userId: string;
+  userName: string;
+  toAddrs: string[];
+  ccAddrs: string[];
+  subject: string;
+  body: string;
+  status: DraftStatus;
+  error: string | null;
+  sentAt: string | null;
+  createdAt: string;
+}
+
+export interface DocFolder {
+  id: string;
+  projectId: string;
+  parentId: string | null;
+  name: string;
+  position: number;
+  distributionList: string[];
+}
+
+export interface DocPage {
+  id: string;
+  projectId: string;
+  folderId: string | null;
+  parentPageId: string | null;
+  title: string;
+  contentMd: string;
+  status: DocStatus;
+  version: number;
+  templateKey: string | null;
+  createdBy: string;
+  updatedBy: string;
+  updatedByName?: string;
+  createdAt: string;
+  updatedAt: string;
+  finalizedAt: string | null;
+}
+
+export interface DocPageVersion {
+  id: string;
+  pageId: string;
+  version: number;
+  title: string;
+  contentMd: string;
+  status: DocStatus;
+  savedBy: string;
+  savedByName: string;
+  savedAt: string;
+}
+
+export interface DocTemplate {
+  id: string;
+  key: string;
+  name: string;
+  contentMd: string;
+}
+
+export interface AuditEntry {
+  id: string;
+  projectId: string | null;
+  userId: string | null;
+  userName: string | null;
+  action: string;
+  objectType: string;
+  objectId: string | null;
+  details: Record<string, unknown>;
+  createdAt: string;
+}
+
+export const ROLE_RANK: Record<ProjectRole, number> = { reader: 1, member: 2, pl: 3 };

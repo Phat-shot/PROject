@@ -1,0 +1,260 @@
+import type { FastifyInstance } from 'fastify';
+import type { Project, ProjectRole } from '@projekttool/shared';
+import { requireUser } from '../auth.js';
+import { audit } from '../audit.js';
+import { badRequest, conflict, forbidden, notFound } from '../errors.js';
+import { getMembership, mapMembership, requireProject } from '../rights.js';
+import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
+import { createDefaultFolders } from '../docs/service.js';
+
+const DEFAULT_COLUMNS = ['Offen', 'In Arbeit', 'In Prüfung', 'Erledigt'];
+
+export function mapProject(r: any): Project {
+  return {
+    id: r.id,
+    key: r.key,
+    name: r.name,
+    description: r.description,
+    status: r.status,
+    mailAddress: r.mail_address,
+    myRole: r.my_role ?? undefined
+  };
+}
+
+export async function projectRoutes(app: FastifyInstance) {
+  const db = app.db;
+
+  app.get('/projects', async (req) => {
+    const user = requireUser(req);
+    const rows = await db.query(
+      `select p.*, m.role as my_role from projects p join project_members m on m.project_id = p.id and m.user_id = $1
+       where p.org_id = $2 order by p.status, p.name`,
+      [user.id, user.orgId]
+    );
+    return { projects: rows.rows.map(mapProject) };
+  });
+
+  // W1: Projekt anlegen (Projektersteller oder Org-Admin wird PL)
+  app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string } }>('/projects', async (req) => {
+    const user = requireUser(req);
+    if (!['org_admin', 'project_creator'].includes(user.globalRole)) throw forbidden('Nur Projektersteller dürfen Projekte anlegen');
+    const { key, name, description, mailAddress } = req.body ?? ({} as any);
+    if (!key || !name) throw badRequest('Kürzel und Name erforderlich');
+    if (!/^[A-Z0-9-]{2,12}$/.test(key)) throw badRequest('Kürzel: 2–12 Zeichen, Großbuchstaben, Ziffern, Bindestrich');
+    const exists = await db.maybeOne(`select id from projects where org_id = $1 and key = $2`, [user.orgId, key]);
+    if (exists) throw conflict('Kürzel bereits vergeben');
+    const p = await db.one(
+      `insert into projects (org_id, key, name, description, mail_address, created_by) values ($1,$2,$3,$4,$5,$6) returning *`,
+      [user.orgId, key, name, description ?? null, mailAddress ?? null, user.id]
+    );
+    await db.query(
+      `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
+      [p.id, user.id]
+    );
+    for (const [i, c] of DEFAULT_COLUMNS.entries()) {
+      await db.query(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4)`, [p.id, c, i, i === DEFAULT_COLUMNS.length - 1]);
+    }
+    await createDefaultFolders(db, p.id);
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name } });
+    return { project: { ...mapProject(p), myRole: 'pl' } };
+  });
+
+  app.get<{ Params: { id: string } }>('/projects/:id', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id);
+    const p = await db.one(`select * from projects where id = $1`, [req.params.id]);
+    const members = await db.query(
+      `select m.*, u.name, u.email from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by m.role desc, u.name`,
+      [p.id]
+    );
+    const columns = await db.query(`select * from board_columns where project_id = $1 order by position`, [p.id]);
+    const subprojects = await db.query(
+      `select s.*, u.name as responsible_name, u.email as responsible_email from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 order by s.position, s.created_at`,
+      [p.id]
+    );
+    const milestones = await db.query(`select * from milestones where project_id = $1 order by date`, [p.id]);
+    const lead = await resolveProjectLead(db, p.id);
+    return {
+      project: { ...mapProject(p), myRole: m.role, myMembership: m },
+      members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email })),
+      columns: columns.rows.map(mapColumn),
+      subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
+      milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: r.date }))
+    };
+  });
+
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null } }>('/projects/:id', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const b = req.body ?? {};
+    const p = await db.one(
+      `update projects set name = coalesce($2, name), description = coalesce($3, description), mail_address = case when $4::text is null then mail_address else nullif($4,'') end where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.mailAddress === undefined ? null : b.mailAddress ?? '']
+    );
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
+    return { project: mapProject(p) };
+  });
+
+  // W11: Projekt archivieren
+  app.post<{ Params: { id: string } }>('/projects/:id/archive', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    await db.query(`update projects set status = 'archived' where id = $1`, [req.params.id]);
+    // Mail-Ansichten trennen: Synchronisation endet, Kopien in Aufgaben bleiben.
+    await db.query(`delete from mail_views where project_id = $1`, [req.params.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.archive', objectType: 'project', objectId: req.params.id });
+    return { ok: true };
+  });
+
+  // W2: Einladung / Rolle ändern
+  app.put<{ Params: { id: string; userId: string }; Body: { role: ProjectRole; isDeputy?: boolean; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean } }>(
+    '/projects/:id/members/:userId',
+    async (req) => {
+      const user = requireUser(req);
+      await requireProject(db, user, req.params.id, 'pl');
+      const b = req.body ?? ({} as any);
+      if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
+      const target = await db.maybeOne(`select id from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
+      if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
+      // Stellvertreter = zweiter PL, vom PL bestimmt.
+      const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
+      const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
+      if (b.role === 'pl' && !isDeputy && primary && primary.user_id !== req.params.userId) {
+        await db.query(`update project_members set is_deputy = true where project_id = $1 and user_id = $2`, [req.params.id, primary.user_id]);
+      }
+      if (primary && primary.user_id === req.params.userId && b.role !== 'pl') {
+        const other = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and user_id <> $2`, [req.params.id, req.params.userId]);
+        if (!other) throw badRequest('Das Projekt braucht einen PL. Erst einen zweiten PL bestimmen.');
+        await db.query(`update project_members set is_deputy = false where project_id = $1 and user_id = $2`, [req.params.id, other.user_id]);
+      }
+      const row = await db.one(
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)
+         on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
+           can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai
+         returning *`,
+        [req.params.id, req.params.userId, b.role, isDeputy, Boolean(b.canEditPlan), Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi)]
+      );
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: b });
+      return { membership: mapMembership(row) };
+    }
+  );
+
+  app.delete<{ Params: { id: string; userId: string } }>('/projects/:id/members/:userId', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const m = await getMembership(db, req.params.id, req.params.userId);
+    if (!m) throw notFound('Mitglied nicht gefunden');
+    if (m.role === 'pl' && !m.isDeputy) throw badRequest('Der verantwortliche PL kann nicht entfernt werden');
+    await db.query(`delete from project_members where project_id = $1 and user_id = $2`, [req.params.id, req.params.userId]);
+    await db.query(`delete from sessions where user_id = $1 and false`, [req.params.userId]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.remove', objectType: 'membership', objectId: req.params.userId });
+    return { ok: true };
+  });
+
+  // Board-Spalten
+  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean }[] } }>('/projects/:id/columns', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const cols = req.body?.columns ?? [];
+    if (cols.length < 2) throw badRequest('Mindestens zwei Spalten');
+    const existing = await db.query(`select id from board_columns where project_id = $1`, [req.params.id]);
+    const keep = new Set<string>();
+    for (const [i, c] of cols.entries()) {
+      if (c.id) {
+        await db.query(`update board_columns set name = $2, position = $3, is_done = $4 where id = $1 and project_id = $5`, [c.id, c.name, i, Boolean(c.isDone), req.params.id]);
+        keep.add(c.id);
+      } else {
+        const r = await db.one(`insert into board_columns (project_id, name, position, is_done) values ($1,$2,$3,$4) returning id`, [req.params.id, c.name, i, Boolean(c.isDone)]);
+        keep.add(r.id);
+      }
+    }
+    const first = [...keep][0];
+    for (const e of existing.rows) {
+      if (!keep.has(e.id)) {
+        await db.query(`update tasks set column_id = $2 where column_id = $1`, [e.id, first]);
+        await db.query(`delete from board_columns where id = $1`, [e.id]);
+      }
+    }
+    const rows = await db.query(`select * from board_columns where project_id = $1 order by position`, [req.params.id]);
+    return { columns: rows.rows.map(mapColumn) };
+  });
+
+  // Teilprojekte
+  app.post<{ Params: { id: string }; Body: { name: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null } }>('/projects/:id/subprojects', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Teilprojekte anlegen erfordert das Recht „Projektplan ändern“');
+    const b = req.body ?? ({} as any);
+    if (!b.name) throw badRequest('Name erforderlich');
+    const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from subprojects where project_id = $1`, [req.params.id]);
+    const r = await db.one(
+      `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning *`,
+      [req.params.id, b.name, b.responsibleUserId ?? null, b.startDate ?? null, b.endDate ?? null, pos.p]
+    );
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.create', objectType: 'subproject', objectId: r.id, details: { name: b.name } });
+    return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)) };
+  });
+
+  app.patch<{ Params: { id: string; sid: string }; Body: { name?: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null } }>('/projects/:id/subprojects/:sid', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
+    const b = req.body ?? {};
+    const r = await db.maybeOne(
+      `update subprojects set name = coalesce($3, name),
+         responsible_user_id = case when $4 then $5::uuid else responsible_user_id end,
+         start_date = case when $6 then $7::date else start_date end,
+         end_date = case when $8 then $9::date else end_date end
+       where id = $1 and project_id = $2 returning *`,
+      [req.params.sid, req.params.id, b.name ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'startDate' in b, b.startDate ?? null, 'endDate' in b, b.endDate ?? null]
+    );
+    if (!r) throw notFound('Teilprojekt nicht gefunden');
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.update', objectType: 'subproject', objectId: r.id, details: b });
+    return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)) };
+  });
+
+  app.delete<{ Params: { id: string; sid: string } }>('/projects/:id/subprojects/:sid', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    await db.query(`delete from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.delete', objectType: 'subproject', objectId: req.params.sid });
+    return { ok: true };
+  });
+
+  // Meilensteine
+  app.post<{ Params: { id: string }; Body: { name: string; date: string; subprojectId?: string | null } }>('/projects/:id/milestones', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
+    const b = req.body ?? ({} as any);
+    if (!b.name || !b.date) throw badRequest('Name und Datum erforderlich');
+    const r = await db.one(`insert into milestones (project_id, subproject_id, name, date) values ($1,$2,$3,$4) returning *`, [req.params.id, b.subprojectId ?? null, b.name, b.date]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: b });
+    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: r.date } };
+  });
+
+  app.delete<{ Params: { id: string; mid: string } }>('/projects/:id/milestones/:mid', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
+    await db.query(`delete from milestones where id = $1 and project_id = $2`, [req.params.mid, req.params.id]);
+    return { ok: true };
+  });
+
+  // Projektkontakte (Externe)
+  app.get<{ Params: { id: string } }>('/projects/:id/contacts', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id);
+    const rows = await db.query(`select * from project_contacts where project_id = $1 order by email`, [req.params.id]);
+    return { contacts: rows.rows.map((r: any) => ({ id: r.id, email: r.email, name: r.name })) };
+  });
+
+  async function loadSub(id: string) {
+    return db.one(`select s.*, u.name as responsible_name, u.email as responsible_email from subprojects s left join users u on u.id = s.responsible_user_id where s.id = $1`, [id]);
+  }
+}
+
+export function mapColumn(r: any) {
+  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done };
+}
