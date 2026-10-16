@@ -157,7 +157,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     await db.query(`update projects set status = 'archived' where id = $1`, [req.params.id]);
-    // Mail-Ansichten trennen: Synchronisation endet, Kopien in Aufgaben bleiben.
+    // Mail-Ansichten trennen: Synchronisation endet, Kopien in Arbeitspaketen bleiben.
     await db.query(`delete from mail_views where project_id = $1`, [req.params.id]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.archive', objectType: 'project', objectId: req.params.id });
     return { ok: true };
@@ -299,7 +299,7 @@ export async function projectRoutes(app: FastifyInstance) {
       [req.params.sid, req.params.id, b.name ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'startDate' in b, b.startDate ?? null, 'endDate' in b, b.endDate ?? null]
     );
     if (!r) throw notFound('Teilprojekt nicht gefunden');
-    // Direkt zugewiesene Aufgaben der bisherigen Verantwortung mit übertragen (geerbte folgen ohnehin)
+    // Direkt zugewiesene Arbeitspakete der bisherigen Verantwortung mit übertragen (geerbte folgen ohnehin)
     let transferred = 0;
     if (b.transferTasks && 'responsibleUserId' in b) {
       const lead = await resolveProjectLead(db, req.params.id);

@@ -31,7 +31,7 @@ export function LoginPage() {
     <div className="login">
       <form className="card" onSubmit={submit}>
         <h1>Projekttool</h1>
-        <p className="muted">Alpha · Aufgaben, Mail und Doku auf einem Datenmodell</p>
+        <p className="muted">Arbeitspakete, Mail und Doku auf einem Datenmodell</p>
         <div className="form">
           <label className="field"><span>E-Mail</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus /></label>
           <label className="field"><span>Passwort</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>

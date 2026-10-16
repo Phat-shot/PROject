@@ -39,7 +39,7 @@ export function TimeView() {
   const total = data.totalMinutes ?? data.entries.reduce((a, e) => a + e.minutes, 0);
   const minutes = (Number(f.hours || 0) * 60) + Number(f.minutes || 0);
   const csv = () => {
-    const rows = [['Datum', 'Person', 'Aufgabe', 'Minuten', 'Notiz'], ...data.entries.map((e) => [e.date, e.userName ?? '', e.taskTitle ?? '', String(e.minutes), (e.note ?? '').replace(/\n/g, ' ')])];
+    const rows = [['Datum', 'Person', 'Arbeitspaket', 'Minuten', 'Notiz'], ...data.entries.map((e) => [e.date, e.userName ?? '', e.taskTitle ?? '', String(e.minutes), (e.note ?? '').replace(/\n/g, ' ')])];
     const blob = new Blob([rows.map((r) => r.map((c) => `"${c.replace(/"/g, '""')}"`).join(';')).join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `zeiten_${detail.project.key}.csv`; a.click();
   };
@@ -50,7 +50,7 @@ export function TimeView() {
           <h3>{me.role === 'pl' ? 'Gesamt gebucht' : 'Meine Buchungen'}</h3>
           <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtH(total)}</div>
           {budgetMin && me.role === 'pl' && <><div className={`time-bar mt ${total > budgetMin ? 'over' : ''}`}><div style={{ width: `${Math.min(100, (total / budgetMin) * 100)}%` }} /></div><div className="muted small">Budget {data.budgetHours} h · {Math.round((total / budgetMin) * 100)} %</div></>}
-          {data.estimateMinutes > 0 && <div className="muted small">Schätzung offener/aller Aufgaben: {fmtH(data.estimateMinutes)}</div>}
+          {data.estimateMinutes > 0 && <div className="muted small">Schätzung offener / aller Arbeitspakete: {fmtH(data.estimateMinutes)}</div>}
         </div>
         <div className="card">
           <h3>Je Person</h3>
@@ -65,7 +65,7 @@ export function TimeView() {
         <div className="card mb">
           <h3>Zeit buchen</h3>
           <div className="row">
-            <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })} style={{ width: 280 }}><option value="">– ohne Aufgabe –</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
+            <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })} style={{ width: 280 }}><option value="">– ohne Arbeitspaket –</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
             <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={{ width: 150 }} />
             <input type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} style={{ width: 70 }} />
             <input type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} style={{ width: 70 }} />
@@ -84,7 +84,7 @@ export function TimeView() {
           {me.role === 'pl' && <select value={range.userId} onChange={(e) => setRange({ ...range, userId: e.target.value })} style={{ width: 'auto' }}><option value="">Alle Personen</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select>}
           <button className="btn sm right" onClick={csv}>CSV-Export</button>
         </div>
-        <table className="table"><thead><tr><th>Datum</th><th>Person</th><th>Aufgabe</th><th>Dauer</th><th>Notiz</th><th /></tr></thead><tbody>
+        <table className="table"><thead><tr><th>Datum</th><th>Person</th><th>Arbeitspaket</th><th>Dauer</th><th>Notiz</th><th /></tr></thead><tbody>
           {data.entries.map((e) => <tr key={e.id}><td className="nowrap">{fmtDate(e.date)}</td><td>{e.userName}</td><td>{e.taskId ? <a href="#" onClick={(ev) => { ev.preventDefault(); openTask(e.taskId!); }}>{e.taskTitle}</a> : <span className="muted">–</span>}</td><td className="nowrap">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td>
             <td>{(e.userId === me.userId || me.role === 'pl') && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await d.reload(); })}>✕</button>}</td></tr>)}
           {data.entries.length === 0 && <tr><td colSpan={6} className="muted">Keine Buchungen im Zeitraum.</td></tr>}

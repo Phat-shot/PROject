@@ -6,8 +6,8 @@ import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
 
 /**
- * Seitenleiste: „Projekte“ (standardmäßig ausgeklappt) mit Gesamtsicht Aufgaben, gemeinsamem Postfach
- * und allen aktiven Projekten. Das gewählte Projekt zeigt darunter seine Bereiche (Übersicht, Aufgaben,
+ * Seitenleiste: „Projekte“ (standardmäßig ausgeklappt) mit Gesamtsicht Arbeitspakete, gemeinsamem Postfach
+ * und allen aktiven Projekten. Das gewählte Projekt zeigt darunter seine Bereiche (Übersicht, Arbeitspakete,
  * Postfach, Doku, Einstellungen nur für PL). Darunter die Benutzer-Einstellungen und die Verwaltung.
  */
 export function Layout({ children }: { children: ReactNode }) {
@@ -36,7 +36,7 @@ export function Layout({ children }: { children: ReactNode }) {
         </div>
         {open && (
           <div className="sub">
-            <NavLink to="/projekte/aufgaben" data-tour="aufgaben">Alle Aufgaben</NavLink>
+            <NavLink to="/projekte/aufgaben" data-tour="aufgaben">Meine Arbeit</NavLink>
             <NavLink to="/projekte/postfach" data-tour="postfach">Postfach</NavLink>
             {projects.map((p) => {
               const base = `/projekte/${p.id}`;
@@ -49,7 +49,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   {sel && (
                     <div className="sub2">
                       <NavLink to={base} end data-tour="p-uebersicht">Übersicht</NavLink>
-                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Aufgaben</NavLink>
+                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
                       <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
                       <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
                       {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
@@ -140,10 +140,10 @@ function SearchBox() {
   const go = (to: string) => { setQ(''); setRes(null); nav(to); };
   return (
     <div className="search-box">
-      <input type="text" placeholder="Suchen in Aufgaben, Seiten, Mails …" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input type="text" placeholder="Suchen in Arbeitspaketen, Seiten, Mails …" value={q} onChange={(e) => setQ(e.target.value)} />
       {res && (
         <div className="search-results">
-          {res.tasks.length > 0 && <div className="group">Aufgaben</div>}
+          {res.tasks.length > 0 && <div className="group">Arbeitspakete</div>}
           {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}/board?task=${t.id}`)}><span className="badge">{t.projectKey}</span> {t.title}</div>)}
           {res.pages.length > 0 && <div className="group">Seiten</div>}
           {res.pages.map((p) => <div key={p.id} className="item" onClick={() => go(`/projekte/${p.projectId}/doku/${p.id}`)}><span className="badge">{p.projectKey}</span> {p.title}</div>)}

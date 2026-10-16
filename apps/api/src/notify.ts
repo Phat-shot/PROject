@@ -7,7 +7,7 @@ export interface NotifyInput {
   title: string;
   body?: string | null;
   link?: string | null;
-  /** Gleicher Schlüssel je Benutzer → nur einmal (z. B. fällig-bald pro Aufgabe und Tag). */
+  /** Gleicher Schlüssel je Benutzer → nur einmal (z. B. fällig-bald pro Arbeitspaket und Tag). */
   dedupeKey?: string | null;
 }
 

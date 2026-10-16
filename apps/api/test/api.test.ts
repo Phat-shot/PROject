@@ -475,3 +475,20 @@ test('Übergeordnete Zuständigkeit wechseln: direkt zugewiesene Aufgaben nur au
   assert.equal(r2.json().transferred, 1);
   assert.equal((await t.api(pl).get(`/tasks/${direct.id}`)).json().task.responsible.userId, max.id);
 });
+
+test('Meine Arbeit: Projekte mit Teilprojekten, Arbeitspaketen und Tasks, eingeschränkte Teilprojekte gefiltert', async () => {
+  const pl0 = await t.login('pl@demo.local');
+  const vb = (await t.api(pl0).get(`/projects/${t.ids.projects.web}`)).json().subprojects.find((s: any) => s.name === 'Vertrag und Budget');
+  await t.api(pl0).patch(`/projects/${t.ids.projects.web}/subprojects/${vb.id}`, { restricted: true });
+  const max = await t.login('max@demo.local');
+  const r = await t.api(max).get('/my/work');
+  assert.equal(r.statusCode, 200, r.body);
+  const web = r.json().projects.find((p: any) => p.key === 'WEB');
+  assert.ok(web && web.lead.userId && Array.isArray(web.subprojects) && Array.isArray(web.tasks) && Array.isArray(web.checklist));
+  assert.ok(!web.subprojects.some((s: any) => s.name === 'Vertrag und Budget'), 'eingeschränktes Teilprojekt fehlt für Max');
+  assert.ok(!web.tasks.some((x: any) => x.title === 'Agenturvertrag verhandeln'));
+  assert.ok(web.checklist.every((c: any) => web.tasks.some((x: any) => x.id === c.taskId)));
+  const pl = await t.login('pl@demo.local');
+  const plWeb = (await t.api(pl).get('/my/work')).json().projects.find((p: any) => p.key === 'WEB');
+  assert.ok(plWeb.subprojects.some((s: any) => s.name === 'Vertrag und Budget'));
+});

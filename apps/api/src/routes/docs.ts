@@ -406,7 +406,7 @@ export async function docRoutes(app: FastifyInstance) {
     return { template: mapTemplate(r) };
   });
 
-  // Anhänge (Aufgabe oder Seite)
+  // Anhänge (Arbeitspaket oder Seite)
   app.post<{ Querystring: { taskId?: string; pageId?: string } }>('/attachments', async (req) => {
     const user = requireUser(req);
     const { taskId, pageId } = req.query;

@@ -58,7 +58,7 @@ export async function mailRoutes(app: FastifyInstance) {
     return { id: v.id, accountId: v.account_id, accountName: v.account_name, accountAddress: v.account_address, accountType: v.account_type, projectId: v.project_id, name: v.name, filter: v.filter ?? {}, myRights: rights };
   }
 
-  /** Darf der Benutzer diese Mail lesen? Über eine Ansicht mit Leserecht oder als Kopie in einer lesbaren Aufgabe. */
+  /** Darf der Benutzer diese Mail lesen? Über eine Ansicht mit Leserecht oder als Kopie in einer lesbaren Arbeitspaket. */
   async function mailReadable(user: User, mailId: string): Promise<{ ok: boolean; viewIds: string[]; rights: MailViewRights }> {
     const views = await db.query(`select view_id, (select project_id from mail_views where id = view_id) as project_id from mail_view_matches where mail_id = $1`, [mailId]);
     const merged: MailViewRights = { canRead: false, canDraft: false, canSend: false, canAi: false, canCreateTask: false };
@@ -264,7 +264,7 @@ export async function mailRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  /** Mails ohne Ansicht verschwinden; Kopien in Aufgaben bleiben. */
+  /** Mails ohne Ansicht verschwinden; Kopien in Arbeitspaketen bleiben. */
   async function purgeOrphanMails(accountId: string) {
     await db.query(
       `delete from mails m where m.account_id = $1 and not m.outgoing
@@ -362,15 +362,15 @@ export async function mailRoutes(app: FastifyInstance) {
     };
   });
 
-  // Mail ↔ Aufgabe: verknüpfen oder kopieren
+  // Mail ↔ Arbeitspaket: verknüpfen oder kopieren
   app.post<{ Params: { mid: string }; Body: { taskId: string; copy?: boolean; confirmed?: boolean } }>('/mail/mails/:mid/link', async (req) => {
     const user = requireUser(req);
     const mail = await db.maybeOne(`select m.*, a.type as account_type, a.owner_user_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [req.params.mid]);
     if (!mail) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, mail.id);
-    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Aufgabe erzeugen“ an der Ansicht');
+    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
     const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
-    if (!task) throw notFound('Aufgabe nicht gefunden');
+    if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.project_id, 'member');
     const copy = Boolean(req.body?.copy);
     if (copy) {
@@ -388,13 +388,13 @@ export async function mailRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
-  // W3: Mail → Aufgabe (vorbefüllt, ohne KI)
+  // W3: Mail → Arbeitspaket (vorbefüllt, ohne KI)
   app.post<{ Params: { mid: string }; Body: { projectId: string; title?: string; subprojectId?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; copy?: boolean } }>('/mail/mails/:mid/create-task', async (req) => {
     const user = requireUser(req);
     const mail = await db.maybeOne(`select m.*, a.type as account_type, a.owner_user_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [req.params.mid]);
     if (!mail) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, mail.id);
-    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Aufgabe erzeugen“ an der Ansicht');
+    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
     const b = req.body ?? ({} as any);
     await requireProject(db, user, b.projectId, 'member');
     const col = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [b.projectId]);
@@ -403,7 +403,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const t = await db.one(
       `insert into tasks (project_id, subproject_id, column_id, title, description, due_date, responsible_user_id, responsible_email, position, mail_code, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
-      [b.projectId, b.subprojectId ?? null, col.id, (b.title ?? mail.subject ?? 'Neue Aufgabe').slice(0, 200), desc, b.dueDate ?? null, b.responsibleUserId ?? null, b.responsibleEmail ?? null, pos.p, newMailCode(), user.id]
+      [b.projectId, b.subprojectId ?? null, col.id, (b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200), desc, b.dueDate ?? null, b.responsibleUserId ?? null, b.responsibleEmail ?? null, pos.p, newMailCode(), user.id]
     );
     const copy = Boolean(b.copy) && !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4)`, [mail.id, t.id, copy, user.id]);
@@ -411,7 +411,7 @@ export async function mailRoutes(app: FastifyInstance) {
     return { task: await loadTask(db, t.id) };
   });
 
-  // Mail → Aufgaben-Log (1:1-Zitat als Log-Eintrag, ohne KI)
+  // Mail → Arbeitspaket-Log (1:1-Zitat als Log-Eintrag, ohne KI)
   app.post<{ Params: { mid: string }; Body: { taskId: string; note?: string } }>('/mail/mails/:mid/to-task-log', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
@@ -419,7 +419,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const access = await mailReadable(user, mail.id);
     if (!access.ok) throw forbidden('Kein Leserecht an dieser Mail');
     const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
-    if (!task) throw notFound('Aufgabe nicht gefunden');
+    if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.project_id, 'member');
     const body = (req.body?.note?.trim() ? req.body.note.trim() + '\n\n' : '') + mailToLogEntry(mail);
     const c = await db.one(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4) returning *`, [task.id, user.id, body, mail.id]);
@@ -495,11 +495,11 @@ export async function mailRoutes(app: FastifyInstance) {
     const pages = await db.query(`select l.page_id, l.kind, p.title, p.project_id from mail_page_links l join doc_pages p on p.id = l.page_id where l.mail_id = $1`, [mail.id]);
     return {
       rule: [
-        { key: 'link_task', target: 'task', label: 'Mit Aufgabe verknüpfen', enabled: access.rights.canCreateTask },
-        { key: 'copy_task', target: 'task', label: 'In Aufgabe kopieren', enabled: access.rights.canCreateTask && canCopy },
-        { key: 'task_log', target: 'task', label: 'Ins Aufgaben-Log übernehmen', enabled: true },
-        { key: 'task_adjust', target: 'task', label: 'Aufgabe anpassen (Mail als Beleg)', enabled: true },
-        { key: 'create_task', target: 'task', label: 'Aufgabe erstellen', enabled: access.rights.canCreateTask },
+        { key: 'link_task', target: 'task', label: 'Mit Arbeitspaket verknüpfen', enabled: access.rights.canCreateTask },
+        { key: 'copy_task', target: 'task', label: 'In Arbeitspaket kopieren', enabled: access.rights.canCreateTask && canCopy },
+        { key: 'task_log', target: 'task', label: 'Ins Arbeitspaket-Log übernehmen', enabled: true },
+        { key: 'task_adjust', target: 'task', label: 'Arbeitspaket anpassen (Mail als Beleg)', enabled: true },
+        { key: 'create_task', target: 'task', label: 'Arbeitspaket erstellen', enabled: access.rights.canCreateTask },
         { key: 'to_page', target: 'doc', label: 'In Doku ablegen (eigene Seite)', enabled: canCopy },
         { key: 'append_page', target: 'doc', label: 'An Seite anhängen (Protokoll, Report)', enabled: canCopy }
       ],
@@ -548,7 +548,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!rights.canDraft && !rights.canSend) throw forbidden('Kein Entwurfsrecht an dieser Ansicht');
     if (b.taskId) {
       const t = await db.maybeOne(`select project_id from tasks where id = $1`, [b.taskId]);
-      if (!t || t.project_id !== b.projectId) throw badRequest('Aufgabe gehört nicht zum Projekt');
+      if (!t || t.project_id !== b.projectId) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
     }
     const d = await db.one(
       `insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft') returning *`,

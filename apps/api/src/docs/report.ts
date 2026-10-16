@@ -79,7 +79,7 @@ export async function reportFactsHtml(db: Db, projectId: string, today: string, 
   const li = (xs: string[]) => (xs.length ? `<ul>${xs.map((x) => `<li>${x}</li>`).join('')}</ul>` : '<p>–</p>');
   return `<h2>Kennzahlen (automatisch, Stand ${esc(new Date(today + 'T00:00:00Z').toLocaleDateString('de-DE'))})</h2>
 <table><tbody>
-<tr><td>Aufgaben gesamt / offen / erledigt</td><td>${tasks.length} / ${open.length} / ${tasks.length - open.length} (${pct} %)</td></tr>
+<tr><td>Arbeitspakete gesamt / offen / erledigt</td><td>${tasks.length} / ${open.length} / ${tasks.length - open.length} (${pct} %)</td></tr>
 <tr><td>Überfällig</td><td>${overdue.length}</td></tr>
 <tr><td>Blockiert</td><td>${blocked.length}</td></tr>
 <tr><td>Eskalationen</td><td>${escalations.filter((e) => e.targetLevel > 0).length}</td></tr>

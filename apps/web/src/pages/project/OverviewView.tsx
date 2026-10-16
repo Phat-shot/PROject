@@ -18,7 +18,7 @@ interface Overview {
 }
 
 const ACTION_LABEL: Record<string, string> = {
-  'task.create': 'Aufgabe angelegt', 'task.update': 'Aufgabe geändert', 'task.move': 'Aufgabe verschoben', 'task.archive': 'Aufgabe archiviert', 'task.create_from_mail': 'Aufgabe aus Mail',
+  'task.create': 'Arbeitspaket angelegt', 'task.update': 'Arbeitspaket geändert', 'task.move': 'Arbeitspaket verschoben', 'task.archive': 'Arbeitspaket archiviert', 'task.create_from_mail': 'Arbeitspaket aus Mail',
   'mail.send': 'Mail gesendet', 'mail.draft_submitted': 'Entwurf eingereicht', 'page.create': 'Seite angelegt', 'page.update': 'Seite geändert', 'page.final': 'Seite final', 'page.review': 'Seite in Prüfung',
   'page.share': 'Seite freigegeben', 'page.external_edit': 'Extern bearbeitet', 'plan.shift': 'Nachfolger verschoben', 'member.set': 'Mitglied gesetzt', 'task.recurrence_created': 'Wiederholung angelegt'
 };
@@ -47,7 +47,7 @@ export function OverviewView() {
       {o.escalations.length > 0 && (
         <div className="card mb" style={{ borderColor: '#f2d9a6' }}>
           <h2>Warnungen und Eskalationen <span className="muted small" style={{ fontWeight: 400 }}>Regelwerk: Verzug, Stillstand, Blockaden entlang der Kette Zuständig → Teilprojekt → PL → Eskalationskontakt</span></h2>
-          <table className="table"><thead><tr><th>Aufgabe</th><th>Grund</th><th>Stufe</th><th>Kette</th></tr></thead><tbody>
+          <table className="table"><thead><tr><th>Arbeitspaket</th><th>Grund</th><th>Stufe</th><th>Kette</th></tr></thead><tbody>
             {o.escalations.map((e) => (
               <tr key={e.taskId} className="clickable" onClick={() => openTask(e.taskId)}>
                 <td>{e.title}<div className="muted small">{e.responsible}</div></td>
@@ -69,7 +69,7 @@ export function OverviewView() {
                 <div className="bar"><div className="done" style={{ width: `${s.total ? (s.done / s.total) * 100 : 0}%` }} /><div className="over" style={{ width: `${s.total ? (s.overdue / s.total) * 100 : 0}%` }} /></div>
               </div>
             ))}
-            {o.counts.no_due > 0 && <p className="muted small">{o.counts.no_due} offene Aufgaben ohne Deadline.</p>}
+            {o.counts.no_due > 0 && <p className="muted small">{o.counts.no_due} offene Arbeitspakete ohne Deadline.</p>}
           </div>
           <div className="card">
             <h2>Überfällig</h2>
@@ -89,7 +89,7 @@ export function OverviewView() {
             {o.milestones.length === 0 ? <p className="muted small">Keine anstehenden Meilensteine.</p> : <ul>{o.milestones.map((m) => <li key={m.id}><strong>{fmtDate(m.date)}</strong> {m.name} <span className="muted small">{detail.subprojects.find((s) => s.id === m.subprojectId)?.name}</span></li>)}</ul>}
           </div>
           <div className="card">
-            <h2>Auslastung (offene Aufgaben je Person)</h2>
+            <h2>Auslastung (offene Arbeitspakete je Person)</h2>
             <table className="table"><tbody>{o.workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td className="nowrap">{w.open} offen{w.overdue ? <span style={{ color: 'var(--danger)' }}> · {w.overdue} überfällig</span> : ''}</td></tr>)}</tbody></table>
           </div>
           <div className="card">

@@ -78,7 +78,7 @@ export class MailService {
     return r.id;
   }
 
-  /** Antwort eines Externen: Plus-Adresse → Aufgabe; Fallback In-Reply-To auf eine gesendete Mail mit Aufgabenbezug. */
+  /** Antwort eines Externen: Plus-Adresse → Arbeitspaket; Fallback In-Reply-To auf eine gesendete Mail mit Aufgabenbezug. */
   private async linkByPlusAddress(account: AccountRow, mailId: string, m: IncomingMessage) {
     const code = taskCodeFromAddresses([...m.to, ...m.cc]);
     let taskId: string | null = null;

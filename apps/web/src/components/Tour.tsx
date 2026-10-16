@@ -18,16 +18,16 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
   const steps: Step[] = [
     { title: 'Willkommen bei PROject', text: 'In zwei Minuten durch die wichtigsten Bereiche. Du kannst jederzeit überspringen und das Tutorial später über „Tutorial“ unten links neu starten.' },
     { title: 'Projekte', text: 'Hier liegen alle aktiven Projekte. Ohne gewähltes Projekt siehst du die Gesamtsicht über alles, woran du beteiligt bist.', target: '[data-tour="projekte"]', go: '/projekte' },
-    { title: 'Alle Aufgaben', text: 'Alles, was dir zugewiesen ist, über alle Projekte hinweg. Umschaltbar auf „Alle“ für den Gesamtüberblick.', target: '[data-tour="aufgaben"]', go: '/projekte/aufgaben' },
-    { title: 'Postfach', text: 'Das gemeinsame Postfach zeigt die Mails aller Ansichten, für die du Leserecht hast. Aus jeder Mail lassen sich Aufgaben und Doku-Seiten erzeugen.', target: '[data-tour="postfach"]', go: '/projekte/postfach' },
+    { title: 'Meine Arbeit', text: 'Alles, was dir zugewiesen oder vererbt ist, geklammert als Projekt › Teilprojekt › Arbeitspaket › Task. Umschaltbar auf „Alle Arbeitspakete“ für den Gesamtüberblick.', target: '[data-tour="aufgaben"]', go: '/projekte/aufgaben' },
+    { title: 'Postfach', text: 'Das gemeinsame Postfach zeigt die Mails aller Ansichten, für die du Leserecht hast. Aus jeder Mail lassen sich Arbeitspakete und Doku-Seiten erzeugen.', target: '[data-tour="postfach"]', go: '/projekte/postfach' },
     ...(base ? [
-      { title: 'Ein Projekt', text: 'Ein Klick auf das Projekt öffnet seine Bereiche: Übersicht, Aufgaben, Postfach, Doku und, für die Projektleitung, Einstellungen.', target: '[data-tour="projekt"]', go: base },
+      { title: 'Ein Projekt', text: 'Ein Klick auf das Projekt öffnet seine Bereiche: Übersicht, Arbeitspakete, Postfach, Doku und, für die Projektleitung, Einstellungen.', target: '[data-tour="projekt"]', go: base },
       { title: 'Übersicht', text: 'Kennzahlen, Warnungen und Eskalationen des Projekts auf einen Blick.', target: '[data-tour="p-uebersicht"]', go: base },
-      { title: 'Aufgaben', text: 'Board mit Spalten, Swimlanes je Teilprojekt, Labels und WIP-Limits. Darüber die Reiter Plan (Gantt), Kalender und Zeiten. Tastatur: n neue Aufgabe, f filtern, q nur meine.', target: '[data-tour="p-aufgaben"]', go: `${base}/board` },
+      { title: 'Arbeitspakete', text: 'Board mit Spalten, Swimlanes je Teilprojekt, Labels und WIP-Limits. Darüber die Reiter Plan (Gantt), Kalender und Zeiten. Tastatur: n neues Arbeitspaket, f filtern, q nur meine.', target: '[data-tour="p-aufgaben"]', go: `${base}/board` },
       { title: 'Postfach des Projekts', text: 'Mail-Ansichten des Projektkontos und freigegebene persönliche Ansichten. Rechte hängen an der Ansicht.', target: '[data-tour="p-postfach"]', go: `${base}/mail` },
       { title: 'Doku', text: 'Seiten mit Unterseiten wie in einem Wiki: Protokolle, Berichte, Konzepte. Oberseiten geben Vorlage und PDF-Layout vor. Seiten lassen sich per Link freigeben und als PDF versenden.', target: '[data-tour="p-doku"]', go: `${base}/doku` }
     ] : []),
-    { title: 'Suche und Benachrichtigungen', text: 'Die Suche findet Aufgaben, Seiten und Mails. Die Glocke sammelt Zuweisungen, Erwähnungen, Fristen und Eskalationen.', target: '.topbar .search-box' },
+    { title: 'Suche und Benachrichtigungen', text: 'Die Suche findet Arbeitspakete, Seiten und Mails. Die Glocke sammelt Zuweisungen, Erwähnungen, Fristen und Eskalationen.', target: '.topbar .search-box' },
     { title: 'Meine Mail-Konten', text: 'Eigene IMAP-Konten anbinden. Geteilt werden nie ganze Konten, sondern nur gefilterte Ansichten.', target: '[data-tour="mailkonten"]' },
     ...(isAdmin ? [{ title: 'Verwaltung', text: 'Benutzer einladen, Gruppen pflegen, PDF-Stil und Vorlagen des Mandanten, Audit-Export.', target: '[data-tour="verwaltung"]' }] : []),
     { title: 'Fertig', text: 'Viel Erfolg. Das Tutorial lässt sich jederzeit unten links neu starten.' }

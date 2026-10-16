@@ -67,7 +67,7 @@ export function ProjectPage() {
     : ['einstellungen', 'audit'].includes(sub)
       ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
       : undefined;
-  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten'].includes(sub) ? 'Aufgaben' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : 'Einstellungen';
+  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <Ctx.Provider value={ctx}>

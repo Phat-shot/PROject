@@ -94,7 +94,7 @@ export async function loadTask(db: Db, id: string): Promise<Task | null> {
   return task;
 }
 
-/** Vererbung: Aufgabe → Teilprojekt → PL. Konflikte: Deadline nach Teilprojekt-Ende, Start vor Vorgänger-Ende. */
+/** Vererbung: Arbeitspaket → Teilprojekt → PL. Konflikte: Deadline nach Teilprojekt-Ende, Start vor Vorgänger-Ende. */
 export function mapTask(r: any, lead: LeadInfo): Task {
   let responsible: ResponsibleInfo;
   if (r.responsible_user_id) {
@@ -115,7 +115,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
   for (const p of preds) {
     const pDue = dateStr(p.due);
     const ref = start ?? due;
-    if (pDue && ref && ref < pDue) conflicts.push(`Vorgänger „${p.title}“ endet ${pDue}, Aufgabe beginnt ${ref}`);
+    if (pDue && ref && ref < pDue) conflicts.push(`Vorgänger „${p.title}“ endet ${pDue}, Arbeitspaket beginnt ${ref}`);
   }
   const predIds = typeof r.predecessor_ids === 'string' ? JSON.parse(r.predecessor_ids) : r.predecessor_ids ?? [];
   const labelIds = typeof r.label_ids === 'string' ? JSON.parse(r.label_ids) : r.label_ids ?? [];
@@ -158,7 +158,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
 }
 
 
-/** Reiht eine Aufgabe in einer Spalte an Position index ein und nummeriert die Spalte neu. */
+/** Reiht ein Arbeitspaket in einer Spalte an Position index ein und nummeriert die Spalte neu. */
 export async function moveTask(db: Db, taskId: string, columnId: string, index: number | null) {
   const others = await db.query(`select id from tasks where column_id = $1 and id <> $2 and archived_at is null order by position, created_at`, [columnId, taskId]);
   const ids = others.rows.map((r: any) => r.id as string);
@@ -169,7 +169,7 @@ export async function moveTask(db: Db, taskId: string, columnId: string, index: 
   }
 }
 
-/** Kopiert eine Aufgabe als nächste Instanz einer Wiederholung (Checkliste offen, Labels gleich). */
+/** Kopiert ein Arbeitspaket als nächste Instanz einer Wiederholung (Checkliste offen, Labels gleich). */
 export async function createRecurrenceInstance(db: Db, source: any, nextDue: string, keepRecurrence: boolean): Promise<string> {
   const firstCol = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [source.project_id]);
   const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [firstCol.id]);
@@ -190,7 +190,7 @@ export async function createRecurrenceInstance(db: Db, source: any, nextDue: str
 }
 
 
-/** Aktivität an einer Aufgabe vermerken (für die Regel „hängt seit n Tagen“). */
+/** Aktivität an einem Arbeitspaket vermerken (für die Regel „hängt seit n Tagen“). */
 export async function touchTask(db: Db, taskId: string) {
   await db.query(`update tasks set last_activity_at = now() where id = $1`, [taskId]);
 }

@@ -17,7 +17,7 @@ interface TaskDetail {
   attachments: { id: string; filename: string; size: number }[];
 }
 
-/** Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
+/** Arbeitspaket: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const { detail, users, tasks, reloadTasks } = useProject();
   const [d, setD] = useState<TaskDetail | null>(null);
@@ -29,7 +29,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const { busy, error, run, setError } = useAsync();
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
-  if (!d) return <Drawer title="Aufgabe" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
+  if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
   const t = d.task;
   const me = detail.project.myMembership;
   const canEdit = me.role !== 'reader' && !t.archivedAt;
@@ -49,7 +49,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         {me.role !== 'reader' && (t.archivedAt
           ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
           : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>)}
-        {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Aufgabe löschen?')) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); }}>Löschen</button>}
+        {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Arbeitspaket löschen?')) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); }}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
@@ -93,7 +93,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>
         </> : null}
         <div className="field"><span>Blockiert</span>
-          {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => { const reason = prompt('Warum hängt die Aufgabe?'); if (reason !== null) void patch({ blocked: true, blockedReason: reason }); }}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
+          {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => { const reason = prompt('Warum hängt das Arbeitspaket?'); if (reason !== null) void patch({ blocked: true, blockedReason: reason }); }}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
         <div className="field"><span>Antwortadresse</span><span className="small muted">{detail.project.mailAddress ? detail.project.mailAddress.replace('@', `+t${t.mailCode}@`) : `Kein Projektkonto · Code ${t.mailCode}`}</span></div>
         {!canDates && canEdit && <p className="muted small full" style={{ margin: 0 }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
       </div>
@@ -111,19 +111,22 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </div>
       )}
 
-      <h3 className="mt">Checkliste</h3>
+      <h3 className="mt">Tasks {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
       <ul className="checklist">
         {t.checklist?.map((i) => (
           <li key={i.id} className={i.done ? 'done' : ''}>
             <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await load(); await reloadTasks(); })} />
-            <span style={{ flex: 1 }}>{i.title}</span>
-            <span className="muted small">{i.responsibleUserId ? users.find((u) => u.id === i.responsibleUserId)?.name : `${t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)`}</span>
-            {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); })}>✕</button>}
+            <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
+            <select className="inline-select" value={i.responsibleUserId ?? ''} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: e.target.value || null }); await load(); })}>
+              <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
+              {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+            {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}
           </li>
         ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
-        <input type="text" placeholder="Neuer Punkt …" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
+        <input type="text" placeholder="Neuer Task … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
       <h3 className="mt">Verknüpfte Mails</h3>
       {d.mails.length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet.</p> : (
@@ -131,7 +134,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           {d.mails.map((m) => <tr key={m.id}><td><Link to={`/projekte/${detail.project.id}/mail/mail/${m.id}`}>{m.subject}</Link></td><td className="muted small">{m.fromAddr}</td><td className="muted small nowrap">{fmtDateTime(m.date)}</td><td>{m.copied && <span className="badge">Kopie</span>}</td></tr>)}
         </tbody></table>
       )}
-      {canEdit && <Link className="btn sm mt" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Aufgabe schreiben</Link>}
+      {canEdit && <Link className="btn sm mt" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>}
 
       <h3 className="mt">Anhänge</h3>
       <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
@@ -149,7 +152,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {shift && (
         <Modal title="Nachfolger verschieben – Vorschau" onClose={() => setShift(null)}>
           {shift.changes.length === 0 ? <p>Kein Nachfolger muss verschoben werden.</p> : (
-            <table className="table"><thead><tr><th>Aufgabe</th><th>Start</th><th>Deadline</th></tr></thead><tbody>
+            <table className="table"><thead><tr><th>Arbeitspaket</th><th>Start</th><th>Deadline</th></tr></thead><tbody>
               {shift.changes.map((c) => <tr key={c.id}><td>{c.title}</td><td>{c.from ? `${fmtDate(c.from)} → ${fmtDate(c.to)}` : '–'}</td><td>{c.dueFrom ? `${fmtDate(c.dueFrom)} → ${fmtDate(c.dueTo)}` : '–'}</td></tr>)}
             </tbody></table>
           )}
@@ -175,6 +178,14 @@ function TitleEdit({ value, canEdit, done, onSave }: { value: string; canEdit: b
       {done && <span className="badge ok">erledigt</span>}
     </span>
   );
+}
+
+/** Einzeiliger Text, der sich per Klick bearbeiten lässt (Enter/Verlassen speichert). */
+export function InlineText({ value, canEdit, onSave, className }: { value: string; canEdit: boolean; onSave: (v: string) => unknown; className?: string }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  const commit = () => { if (v.trim() && v.trim() !== value) onSave(v.trim()); else setV(value); };
+  return <input className={`inline-text ${className ?? ''}`} type="text" value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />;
 }
 
 function TextField({ label, value, canEdit, onSave, type = 'text', placeholder }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; type?: string; placeholder?: string }) {

@@ -35,7 +35,7 @@ export function InboxPage() {
                 <span><span className="badge" style={{ marginRight: 6 }}>{m.projectKey}</span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span>
                 <span className="date">{fmtDateTime(m.date)}</span>
               </div>
-              <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Aufgabe</span>}{m.hasAttachments && ' 📎'}<span className="muted small" style={{ marginLeft: 8 }}>· {m.viewName}</span></div>
+              <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}<span className="muted small" style={{ marginLeft: 8 }}>· {m.viewName}</span></div>
               <div className="snippet">{m.snippet}</div>
             </div>
           ))}

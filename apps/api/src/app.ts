@@ -82,7 +82,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
 
   const staticDir = opts.staticDir;
   if (staticDir && existsSync(path.join(staticDir, 'index.html'))) {
-    await app.register(fastifyStatic, { root: staticDir, wildcard: false });
+    await app.register(fastifyStatic, { root: staticDir });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) {
         reply.status(404).send({ error: 'Nicht gefunden' });

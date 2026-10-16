@@ -77,7 +77,7 @@ function ViewMails({ base, views }: { base: string; views: ViewRow[] }) {
         {list.data?.mails.map((m) => (
           <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''}`} onClick={() => nav(`${base}/${viewId}/${m.id}`)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
-            <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Aufgabe</span>}{m.hasAttachments && ' 📎'}</div>
+            <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
             <div className="snippet">{m.snippet}</div>
           </div>
         ))}
@@ -97,7 +97,7 @@ function ViewInfo({ view }: { view: ViewRow }) {
       <h2>{view.name}</h2>
       <p>Konto {view.accountAddress} ({view.accountType === 'personal' ? 'persönlich' : 'Projektkonto'})</p>
       <p>Filter: {parts.length ? parts.join(' · ') : 'alle Mails des Kontos'}</p>
-      <p>Meine Rechte: {[r.canRead && 'Lesen', r.canDraft && 'Entwurf', r.canSend && 'Senden', r.canCreateTask && 'Aufgabe erzeugen', r.canAi && 'KI'].filter(Boolean).join(', ') || 'keine'}</p>
+      <p>Meine Rechte: {[r.canRead && 'Lesen', r.canDraft && 'Entwurf', r.canSend && 'Senden', r.canCreateTask && 'Arbeitspaket erzeugen', r.canAi && 'KI'].filter(Boolean).join(', ') || 'keine'}</p>
     </div>
   );
 }
@@ -149,7 +149,7 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
       </div>
       <div className="row mb">
         {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
-        <span className="muted small">Aufgabe:</span>
+        <span className="muted small">Arbeitspaket:</span>
         {enabled('create_task') && <button className="btn sm" onClick={() => setDialog('createTask')}>Erstellen</button>}
         {enabled('link_task') && <button className="btn sm" onClick={() => setDialog('link')}>Verknüpfen / Kopieren</button>}
         <button className="btn sm" onClick={() => setDialog('log')}>Ins Log übernehmen</button>
@@ -164,7 +164,7 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
       </div>
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
-          {d.data.links.length > 0 && <>Aufgaben: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</>}
+          {d.data.links.length > 0 && <>Arbeitspakete: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</>}
           {(actions.data?.pages.length ?? 0) > 0 && <> · Doku: {actions.data!.pages.map((p) => <Link key={p.pageId} className="btn sm link" to={`/projekte/${detail.project.id}/doku/${p.pageId}`}>{p.title}{p.kind === 'section' ? ' (Abschnitt)' : ''}</Link>)}</>}
         </p>
       )}
@@ -172,14 +172,14 @@ function MailDetailPanel({ mailId, view, base, onChanged }: { mailId: string; vi
       {m.textBody ? <pre>{m.textBody}</pre> : m.htmlBody ? <div className="prose" dangerouslySetInnerHTML={{ __html: m.htmlBody.replace(/<script[\s\S]*?<\/script>/gi, '') }} /> : <p className="muted">Kein Inhalt</p>}
 
       {dialog === 'link' && (
-        <Modal title="Mit Aufgabe verknüpfen oder kopieren" onClose={() => setDialog(null)}>
-          <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die die Aufgabe lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
+        <Modal title="Mit Arbeitspaket verknüpfen oder kopieren" onClose={() => setDialog(null)}>
+          <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die das Arbeitspaket lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
           <table className="table"><tbody>
             {tasks.filter((t) => !t.done).map((t) => <tr key={t.id}><td>{t.title}</td><td className="nowrap"><button className="btn sm" onClick={() => void doLink(t.id, false)}>Verknüpfen</button> <button className="btn sm" disabled={!enabled('copy_task')} onClick={() => void doLink(t.id, true)}>Kopieren</button></td></tr>)}
           </tbody></table>
         </Modal>
       )}
-      {dialog === 'log' && <PickTaskDialog title="Ins Aufgaben-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an die Aufgabe gehängt und verknüpft. Essenz per KI folgt." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
+      {dialog === 'log' && <PickTaskDialog title="Ins Arbeitspaket-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an das Arbeitspaket gehängt und verknüpft. Essenz per KI folgt." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
         onPick={async (taskId, note) => { await run(async () => { await api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note }); setDialog(null); await refresh(); openTask(taskId); }); }} />}
       {dialog === 'adjust' && <AdjustTaskDialog mailId={m.id} onClose={() => setDialog(null)} onDone={async (taskId) => { setDialog(null); await refresh(); openTask(taskId); }} />}
       {dialog === 'toPage' && <ToPageDialog onClose={() => setDialog(null)} onSubmit={(folderId, title) => withConfirm(
@@ -211,7 +211,7 @@ function PickTaskDialog({ title, hint, noteLabel, onClose, onPick }: { title: st
     <Modal title={title} onClose={onClose}>
       <div className="form">
         <p className="muted small">{hint}</p>
-        <label className="field"><span>Aufgabe</span><select value={taskId} onChange={(e) => setTaskId(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.done ? '✓ ' : ''}{t.title}</option>)}</select></label>
+        <label className="field"><span>Arbeitspaket</span><select value={taskId} onChange={(e) => setTaskId(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.done ? '✓ ' : ''}{t.title}</option>)}</select></label>
         {noteLabel && <label className="field"><span>{noteLabel}</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>}
         <div><button className="btn primary" disabled={busy || !taskId} onClick={() => { setBusy(true); void onPick(taskId, note).finally(() => setBusy(false)); }}>Übernehmen</button></div>
       </div>
@@ -229,10 +229,10 @@ function AdjustTaskDialog({ mailId, onClose, onDone }: { mailId: string; onClose
   const { busy, error, run } = useAsync();
   const pick = (id: string) => { setTaskId(id); const t = tasks.find((x) => x.id === id); setColumnId(t?.columnId ?? ''); setDueDate(t?.dueDate ?? ''); };
   return (
-    <Modal title="Aufgabe anpassen – Mail als Beleg" onClose={onClose}>
+    <Modal title="Arbeitspaket anpassen – Mail als Beleg" onClose={onClose}>
       <div className="form">
-        <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Aufgaben-Log festgehalten. Per KI als Vorschlag folgt.</p>
-        <label className="field"><span>Aufgabe</span><select value={taskId} onChange={(e) => pick(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
+        <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Arbeitspaket-Log festgehalten. Per KI als Vorschlag folgt.</p>
+        <label className="field"><span>Arbeitspaket</span><select value={taskId} onChange={(e) => pick(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
         <label className="field"><span>Status</span><select value={columnId} onChange={(e) => setColumnId(e.target.value)}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label className="field"><span>Deadline</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
         <label className="field"><span>Begründung (optional)</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>
@@ -294,20 +294,20 @@ function CreateTaskFromMail({ mail, onClose, onCreated }: { mail: MailDetail; on
   const { busy, error, run } = useAsync();
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
   return (
-    <Modal title="Aufgabe aus Mail" onClose={onClose}>
+    <Modal title="Arbeitspaket aus Mail" onClose={onClose}>
       <div className="form cols-2">
         <label className="field full"><span>Titel</span><input type="text" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
         <label className="field"><span>Teilprojekt</span><select value={f.subprojectId} onChange={(e) => setF({ ...f, subprojectId: e.target.value })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         <label className="field"><span>Deadline</span><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></label>
         <label className="field"><span>Zuständig</span><select value={f.responsibleUserId} onChange={(e) => setF({ ...f, responsibleUserId: e.target.value })}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
         <label className="field"><span>oder extern</span><input type="email" value={f.responsibleEmail} onChange={(e) => setF({ ...f, responsibleEmail: e.target.value })} placeholder={mail.fromAddr} /></label>
-        <label className="check full"><input type="checkbox" checked={f.copy} onChange={(e) => setF({ ...f, copy: e.target.checked })} /> Mail als Kopie in die Aufgabe übernehmen (dann gelten die Aufgabenrechte)</label>
+        <label className="check full"><input type="checkbox" checked={f.copy} onChange={(e) => setF({ ...f, copy: e.target.checked })} /> Mail als Kopie in das Arbeitspaket übernehmen (dann gelten die Arbeitspaketrechte)</label>
         <p className="muted small full">Beschreibung wird aus dem Mailtext vorbefüllt. KI-Vorbefüllung folgt als letztes Modul.</p>
         {error && <div className="error full">{error}</div>}
         <div className="row full"><button className="btn primary" disabled={busy} onClick={() => void run(async () => {
           const r = await api.post<{ task: { id: string } }>(`/mail/mails/${mail.id}/create-task`, { projectId: detail.project.id, title: f.title, subprojectId: f.subprojectId || null, dueDate: f.dueDate || null, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null, copy: f.copy });
           await onCreated(r.task.id);
-        })}>Aufgabe anlegen</button></div>
+        })}>Arbeitspaket anlegen</button></div>
       </div>
     </Modal>
   );
@@ -329,7 +329,7 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
       }).catch(() => undefined);
     } else if (taskParam) {
       const t = tasks.find((x) => x.id === taskParam);
-      if (t) setF((x) => ({ ...x, to: t.responsible.email && !t.responsible.userId ? t.responsible.email : '', subject: `${detail.project.key}: ${t.title}`, body: `Guten Tag,\n\nzur Aufgabe „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}:\n\n\n\nMit freundlichen Grüßen\n` }));
+      if (t) setF((x) => ({ ...x, to: t.responsible.email && !t.responsible.userId ? t.responsible.email : '', subject: `${detail.project.key}: ${t.title}`, body: `Guten Tag,\n\nzum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}:\n\n\n\nMit freundlichen Grüßen\n` }));
     }
   }, [replyTo, taskParam]);
   const view = views.find((v) => v.id === f.viewId);
@@ -341,7 +341,7 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
       <div className="form">
         <label className="field"><span>Senden über Ansicht / Konto</span>
           <select value={f.viewId} onChange={(e) => setF({ ...f, viewId: e.target.value })}>{writable.map((v) => <option key={v.id} value={v.id}>{v.name} – {v.accountAddress}{v.myRights.canSend ? '' : ' (nur Entwurf, Versand nach Freigabe)'}</option>)}</select></label>
-        <label className="field"><span>Zu Aufgabe (setzt Antwortadresse mit Aufgaben-Code)</span>
+        <label className="field"><span>Zu Arbeitspaket (setzt Antwortadresse mit Arbeitspaket-Code)</span>
           <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}><option value="">– keine –</option>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
         <label className="field"><span>An</span><input type="text" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="mehrere mit Komma" /></label>
         <label className="field"><span>Cc</span><input type="text" value={f.cc} onChange={(e) => setF({ ...f, cc: e.target.value })} /></label>
@@ -437,7 +437,7 @@ function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () =>
         <div className="full"><strong className="small">Rechte für Rollen</strong> <span className="muted small">(du selbst erhältst alle Rechte; Senden aus persönlichen Konten nur du)</span></div>
         <label className="check"><input type="checkbox" checked={f.memberRead} onChange={(e) => setF({ ...f, memberRead: e.target.checked })} /> Mitglieder lesen</label>
         <label className="check"><input type="checkbox" checked={f.memberDraft} onChange={(e) => setF({ ...f, memberDraft: e.target.checked })} /> Mitglieder entwerfen</label>
-        <label className="check"><input type="checkbox" checked={f.memberTask} onChange={(e) => setF({ ...f, memberTask: e.target.checked })} /> Mitglieder: Aufgabe erzeugen</label>
+        <label className="check"><input type="checkbox" checked={f.memberTask} onChange={(e) => setF({ ...f, memberTask: e.target.checked })} /> Mitglieder: Arbeitspaket erzeugen</label>
         <label className="check"><input type="checkbox" checked={f.readerRead} onChange={(e) => setF({ ...f, readerRead: e.target.checked })} /> Leser lesen</label>
         {error && <div className="error full">{error}</div>}
         <div className="row full"><button className="btn primary" disabled={busy || !f.accountId || !f.name} onClick={() => void run(async () => {
@@ -461,7 +461,7 @@ function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: ()
   const [addUser, setAddUser] = useState('');
   const { busy, error, run } = useAsync();
   useEffect(() => { api.get<{ rights: RightRow[] }>(`/mail/views/${view.id}/rights`).then((r) => setRows(r.rights)); }, [view.id]);
-  const flags: [keyof RightRow, string][] = [['canRead', 'Lesen'], ['canDraft', 'Entwurf'], ['canSend', 'Senden'], ['canCreateTask', 'Aufgabe'], ['canAi', 'KI']];
+  const flags: [keyof RightRow, string][] = [['canRead', 'Lesen'], ['canDraft', 'Entwurf'], ['canSend', 'Senden'], ['canCreateTask', 'Arbeitspaket'], ['canAi', 'KI']];
   const [filterEdit, setFilterEdit] = useState(false);
   if (!rows) return null;
   const groups = useData<{ groups: Group[] }>('/groups');
@@ -485,7 +485,7 @@ function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: ()
       {error && <div className="error mt">{error}</div>}
       <div className="row mt">
         <button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/mail/views/${view.id}/rights`, { rights: rows }); onChanged(); onClose(); })}>Speichern</button>
-        <button className="btn danger right" onClick={() => { if (confirm('Ansicht entfernen? Mails verschwinden aus dem Projekt, Kopien in Aufgaben bleiben.')) void run(async () => { await api.del(`/mail/views/${view.id}`); onChanged(); onClose(); }); }}>Ansicht entfernen</button>
+        <button className="btn danger right" onClick={() => { if (confirm('Ansicht entfernen? Mails verschwinden aus dem Projekt, Kopien in Arbeitspaketen bleiben.')) void run(async () => { await api.del(`/mail/views/${view.id}`); onChanged(); onClose(); }); }}>Ansicht entfernen</button>
       </div>
       {filterEdit && <FilterEditor view={view} onClose={() => setFilterEdit(false)} onSaved={() => { setFilterEdit(false); onChanged(); }} />}
     </Modal>
@@ -506,7 +506,7 @@ function FilterEditor({ view, onClose, onSaved }: { view: ViewRow; onClose: () =
         <label className="field"><span>Stichwort</span><input type="text" value={f.keyword} onChange={(e) => setF({ ...f, keyword: e.target.value })} /></label>
         <label className="field"><span>Ordner</span><input type="text" value={f.folders} onChange={(e) => setF({ ...f, folders: e.target.value })} /></label>
         <label className="field"><span>Ab Datum</span><input type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} /></label>
-        <p className="muted small full">Nach dem Speichern werden die Treffer neu berechnet; Mails, die keine Ansicht mehr treffen, werden gelöscht (Kopien in Aufgaben bleiben).</p>
+        <p className="muted small full">Nach dem Speichern werden die Treffer neu berechnet; Mails, die keine Ansicht mehr treffen, werden gelöscht (Kopien in Arbeitspaketen bleiben).</p>
         {error && <div className="error full">{error}</div>}
         <div className="full"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.patch(`/mail/views/${view.id}`, { name: f.name, filter: { folders: f.folders, from: f.from, to: f.to, subject: f.subject, keyword: f.keyword, since: f.since || null } }); onSaved(); })}>Speichern</button></div>
       </div>

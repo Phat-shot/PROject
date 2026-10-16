@@ -1,6 +1,6 @@
 import type { Db } from '../db.js';
 
-/** Markdown-Darstellung einer Mail für Doku und Aufgaben-Log (1:1, ohne KI). */
+/** Markdown-Darstellung einer Mail für Doku und Arbeitspaket-Log (1:1, ohne KI). */
 export function mailToMarkdown(m: any, opts: { heading?: 1 | 2 | 3; withBody?: boolean } = {}): string {
   const h = '#'.repeat(opts.heading ?? 1);
   const date = new Date(m.date).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -39,7 +39,7 @@ export async function loadMailRow(db: Db, mailId: string) {
  * Jede läuft später als Vorschlag in der Freigabe-Liste; Ausführung durch den Worker.
  */
 export const AI_ACTIONS = [
-  { key: 'task_update_from_mail', target: 'task', label: 'Essenz übernehmen: Aufgabe und Log aktualisieren', mode: 'proposal' },
+  { key: 'task_update_from_mail', target: 'task', label: 'Essenz übernehmen: Arbeitspaket und Log aktualisieren', mode: 'proposal' },
   { key: 'doc_merge_jf', target: 'doc', label: 'Essenz in Jour-fixe-Protokoll einpflegen', mode: 'proposal' },
   { key: 'doc_merge_report', target: 'doc', label: 'Essenz in Report einpflegen', mode: 'proposal' },
   { key: 'summarize', target: 'mail', label: 'Zusammenfassen', mode: 'direct' }

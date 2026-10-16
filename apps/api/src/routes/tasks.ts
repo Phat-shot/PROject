@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
-import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { notify, notifyMany } from '../notify.js';
@@ -72,7 +72,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null } }>('/tasks/:id/move', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
     const col = await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2`, [req.body?.columnId, existing.project_id]);
     if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
@@ -89,7 +89,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/tasks/:id/archive', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
     await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1`, [existing.id]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.archive', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
@@ -98,12 +98,12 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/tasks/:id/unarchive', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
     await db.query(`update tasks set archived_at = null, updated_at = now() where id = $1`, [existing.id]);
     return { task: await loadTask(db, existing.id) };
   });
-  // Alle erledigten Aufgaben einer Spalte archivieren
+  // Alle erledigten Arbeitspakete einer Spalte archivieren
   app.post<{ Params: { id: string; cid: string } }>('/projects/:id/columns/:cid/archive-done', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'member');
@@ -112,8 +112,8 @@ export async function taskRoutes(app: FastifyInstance) {
     return { archived: r.rows.length };
   });
 
-  // Querschnitt: Meine Aufgaben über alle Projekte (ausdrücklich oder geerbt zuständig)
-  // Aufgaben über alle aktiven Projekte: scope=mine (Standard, nur eigene offene) oder scope=all (alle offenen, auch org-sichtbare Projekte)
+  // Querschnitt: Meine Arbeitspakete über alle Projekte (ausdrücklich oder geerbt zuständig)
+  // Arbeitspakete über alle aktiven Projekte: scope=mine (Standard, nur eigene offene) oder scope=all (alle offenen, auch org-sichtbare Projekte)
   app.get<{ Querystring: { scope?: string; done?: string } }>('/my/tasks', async (req) => {
     const user = requireUser(req);
     const all = req.query.scope === 'all';
@@ -127,6 +127,34 @@ export async function taskRoutes(app: FastifyInstance) {
     const keyOf = new Map(keys.rows.map((r: any) => [r.id, r.key]));
     const list = tasks.filter((t) => (all || t.responsible.userId === user.id) && (req.query.done === '1' || !t.done)).map((t) => ({ ...t, projectKey: keyOf.get(t.projectId) ?? '' }));
     return { tasks: list };
+  });
+
+  // Meine Arbeit: Projekte, Teilprojekte, Arbeitspakete und Tasks, geklammert nach Hierarchie; nur eigene bzw. geerbte Zuständigkeit (Filter im Client)
+  app.get('/my/work', async (req) => {
+    const user = requireUser(req);
+    const projects = await db.query(
+      `select p.id, p.key, p.name, m.role as my_role from projects p join project_members m on m.project_id = p.id and m.user_id = $1 where p.status = 'active' and p.org_id = $2 order by p.name`,
+      [user.id, user.orgId]
+    );
+    const out: any[] = [];
+    for (const p of projects.rows) {
+      const lead = await resolveProjectLead(db, p.id);
+      const subs = await db.query(
+        `select s.*, u.name as responsible_name, u.email as responsible_email from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1
+           and (not s.restricted or s.responsible_user_id = $2 or $3 or exists (select 1 from subproject_access a where a.subproject_id = s.id and (a.user_id = $2 or a.group_id in (select group_id from group_members gm where gm.user_id = $2))))
+         order by s.position, s.created_at`,
+        [p.id, user.id, p.my_role === 'pl']
+      );
+      const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and ${visibleSubprojectSql(2)}`, [p.id, user.id], lead);
+      const items = tasks.length ? (await db.query(`select * from checklist_items where task_id = any($1::uuid[]) order by position, title`, [tasks.map((t) => t.id)])).rows : [];
+      out.push({
+        id: p.id, key: p.key, name: p.name, myRole: p.my_role, lead,
+        subprojects: subs.rows.map((r: any) => mapSubproject(r, lead)),
+        tasks,
+        checklist: items.map((c: any) => ({ id: c.id, taskId: c.task_id, title: c.title, done: c.done, responsibleUserId: c.responsible_user_id, position: c.position }))
+      });
+    }
+    return { projects: out };
   });
 
   app.post<{ Params: { id: string }; Body: TaskBody }>('/projects/:id/tasks', async (req) => {
@@ -167,7 +195,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
     const task = await loadTask(db, req.params.id);
-    if (!task) throw notFound('Aufgabe nicht gefunden');
+    if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.projectId);
     if (!(await canSeeSubproject(db, user.id, task.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const comments = await db.query(
@@ -190,7 +218,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string }; Body: TaskBody }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     const m = await requireProject(db, user, existing.project_id, 'member');
     if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
@@ -206,8 +234,8 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     const planChange = ('startDate' in b && b.startDate !== dateStr(existing.start_date)) || ('dueDate' in b && b.dueDate !== dateStr(existing.due_date)) || 'predecessorIds' in b;
     if (planChange && m.role !== 'pl' && !m.canEditPlan && existing.responsible_user_id !== user.id) {
-      // Mitglieder ohne Planrecht dürfen Termine nur an eigenen Aufgaben ändern.
-      throw forbidden('Termine ändern erfordert das Recht „Projektplan ändern“ oder die Zuständigkeit für die Aufgabe');
+      // Mitglieder ohne Planrecht dürfen Termine nur an eigenen Arbeitspaketen ändern.
+      throw forbidden('Termine ändern erfordert das Recht „Projektplan ändern“ oder die Zuständigkeit für die Arbeitspaket');
     }
     await db.query(
       `update tasks set
@@ -256,7 +284,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const changed: Record<string, unknown> = {};
     for (const k of Object.keys(b)) if (k !== 'sourceMailId' && k !== 'note') changed[k] = (b as any)[k];
     if (b.sourceMailId) {
-      // Aufgabe anpassen mit Mail als Beleg: verknüpfen und Änderung im Log festhalten.
+      // Arbeitspaket anpassen mit Mail als Beleg: verknüpfen und Änderung im Log festhalten.
       const mail = await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [b.sourceMailId]);
       if (mail) {
         await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, req.params.id, user.id]);
@@ -273,7 +301,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'pl');
     await db.query(`delete from tasks where id = $1`, [req.params.id]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.delete', objectType: 'task', objectId: req.params.id, details: { title: existing.title } });
@@ -284,7 +312,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { apply?: boolean } }>('/tasks/:id/shift-successors', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     const m = await requireProject(db, user, existing.project_id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     const changes: { id: string; title: string; from: string | null; to: string; dueFrom: string | null; dueTo: string | null }[] = [];
@@ -312,7 +340,7 @@ export async function taskRoutes(app: FastifyInstance) {
         await db.query(`update tasks set start_date = $2, due_date = $3, updated_at = now() where id = $1`, [c.id, c.from ? c.to : null, c.dueTo]);
       }
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'plan.shift', objectType: 'task', objectId: existing.id, details: { changes } });
-      // Betroffene informieren (Zuständige der verschobenen Aufgaben)
+      // Betroffene informieren (Zuständige der verschobenen Arbeitspakete)
       for (const c of changes) {
         const t = (await loadTask(db, c.id))!;
         if (t.responsible.userId) await notify(db, { userId: t.responsible.userId, projectId: existing.project_id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${t.id}` });
@@ -325,7 +353,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { level: number; note?: string } }>('/tasks/:id/escalate', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select t.*, s.responsible_user_id as sub_resp from tasks t left join subprojects s on s.id = t.subproject_id where t.id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     const m = await requireProject(db, user, existing.project_id, 'member');
     const level = Number(req.body?.level);
     if (![1, 2, 3].includes(level)) throw badRequest('Stufe 1 bis 3');
@@ -349,7 +377,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/tasks/:id/escalation/reset', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Aufgabe nicht gefunden');
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'pl');
     await db.query(`update tasks set escalation_level = 0, escalated_at = null, last_activity_at = now() where id = $1`, [existing.id]);
     await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,'Eskalation durch PL zurückgesetzt.','system')`, [existing.id, user.id]);
@@ -361,7 +389,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null } }>('/tasks/:id/checklist', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Aufgabe nicht gefunden');
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     if (!req.body?.title?.trim()) throw badRequest('Titel erforderlich');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [req.params.id]);
@@ -372,7 +400,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string; itemId: string }; Body: { title?: string; done?: boolean; responsibleUserId?: string | null } }>('/tasks/:id/checklist/:itemId', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Aufgabe nicht gefunden');
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     const b = req.body ?? {};
     await db.query(
@@ -388,7 +416,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string; itemId: string } }>('/tasks/:id/checklist/:itemId', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Aufgabe nicht gefunden');
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     await db.query(`delete from checklist_items where id = $1 and task_id = $2`, [req.params.itemId, req.params.id]);
     return { task: await loadTask(db, req.params.id) };
@@ -398,7 +426,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: { body: string } }>('/tasks/:id/comments', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Aufgabe nicht gefunden');
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'member');
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
     const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);

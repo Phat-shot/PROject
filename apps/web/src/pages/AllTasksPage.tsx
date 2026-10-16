@@ -6,14 +6,15 @@ import { fmtDate, today } from '../lib/api';
 import { TopBar } from '../components/Layout';
 import { prioLabel } from '../components/ui';
 import { useAuth } from '../lib/auth';
+import { WorkTree } from './WorkTree';
 
 type Row = Task & { projectKey: string };
 
-/** Gesamtsicht der Aufgaben über alle aktiven Projekte (Projekte gewählt, kein konkretes Projekt). */
+/** Gesamtsicht der Arbeitspakete über alle aktiven Projekte (Projekte gewählt, kein konkretes Projekt). */
 export function AllTasksPage() {
   const { user } = useAuth();
   const [params, setParams] = useSearchParams();
-  const scope = params.get('scope') === 'mine' ? 'mine' : 'all';
+  const scope = params.get('scope') === 'all' ? 'all' : 'mine';
   const withDone = params.get('done') === '1';
   const project = params.get('projekt') ?? '';
   const q = params.get('q') ?? '';
@@ -30,21 +31,22 @@ export function AllTasksPage() {
   const overdue = rows.filter((x) => !x.done && x.dueDate && x.dueDate < t).length;
   return (
     <>
-      <TopBar title="Alle Aufgaben" />
+      <TopBar title={scope === 'mine' ? 'Meine Arbeit' : 'Alle Arbeitspakete'} />
       <div className="content">
         <div className="filterbar">
-          <span className={`chip ${scope === 'all' ? 'on' : ''}`} onClick={() => set('scope', '')}>Alle</span>
-          <span className={`chip ${scope === 'mine' ? 'on' : ''}`} onClick={() => set('scope', 'mine')}>Meine</span>
-          <select value={project} onChange={(e) => set('projekt', e.target.value)}><option value="">Alle Projekte</option>{projects.map((k) => <option key={k} value={k}>{k}</option>)}</select>
+          <span className={`chip ${scope === 'mine' ? 'on' : ''}`} onClick={() => set('scope', '')}>Meine Arbeit</span>
+          <span className={`chip ${scope === 'all' ? 'on' : ''}`} onClick={() => set('scope', 'all')}>Alle Arbeitspakete</span>
+          {scope === 'mine' && <span className="muted small">Projekt › Teilprojekt › Arbeitspaket › Task, nur was dir zugewiesen oder vererbt ist</span>}
+          {scope === 'all' && <><select value={project} onChange={(e) => set('projekt', e.target.value)}><option value="">Alle Projekte</option>{projects.map((k) => <option key={k} value={k}>{k}</option>)}</select>
           <input type="text" placeholder="Titel filtern …" value={q} onChange={(e) => set('q', e.target.value)} />
           <label className="check small"><input type="checkbox" checked={withDone} onChange={(e) => set('done', e.target.checked ? '1' : '')} /> erledigte zeigen</label>
-          <span className="muted small right">{rows.length} Aufgaben{overdue > 0 && <> · <span style={{ color: 'var(--danger)' }}>{overdue} überfällig</span></>}</span>
+          <span className="muted small right">{rows.length} Arbeitspakete{overdue > 0 && <> · <span style={{ color: 'var(--danger)' }}>{overdue} überfällig</span></>}</span></>}
         </div>
         {error && <div className="error mb">{error}</div>}
-        <div className="card">
-          {data && rows.length === 0 ? <div className="empty">Keine Aufgaben.</div> : (
+        {scope === 'mine' ? <><WorkTree /><MyWeek /></> : <div className="card">
+          {data && rows.length === 0 ? <div className="empty">Keine Arbeitspakete.</div> : (
             <table className="table">
-              <thead><tr><th>Projekt</th><th>Aufgabe</th><th>Priorität</th><th>Fällig</th><th>Zuständig</th><th>Status</th></tr></thead>
+              <thead><tr><th>Projekt</th><th>Arbeitspaket</th><th>Priorität</th><th>Fällig</th><th>Zuständig</th><th>Status</th></tr></thead>
               <tbody>
                 {rows.map((x) => (
                   <tr key={x.id} style={{ opacity: x.done ? 0.6 : 1 }}>
@@ -64,8 +66,7 @@ export function AllTasksPage() {
               </tbody>
             </table>
           )}
-        </div>
-        {scope === 'mine' && <MyWeek />}
+        </div>}
       </div>
     </>
   );
@@ -78,7 +79,7 @@ function MyWeek() {
   return (
     <div className="card mt">
       <h2>Meine Zeiten (letzte 7 Tage) <span className="badge">{h(data.totalMinutes)}</span></h2>
-      <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap">{fmtDate(e.date)}</td><td><span className="badge">{e.projectKey}</span></td><td>{e.taskTitle ?? <span className="muted">ohne Aufgabe</span>}</td><td className="nowrap">{h(e.minutes)}</td><td className="muted small">{e.note}</td></tr>)}</tbody></table>
+      <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap">{fmtDate(e.date)}</td><td><span className="badge">{e.projectKey}</span></td><td>{e.taskTitle ?? <span className="muted">ohne Arbeitspaket</span>}</td><td className="nowrap">{h(e.minutes)}</td><td className="muted small">{e.note}</td></tr>)}</tbody></table>
     </div>
   );
 }

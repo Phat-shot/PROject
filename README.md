@@ -1,4 +1,4 @@
-# Projekttool – Alpha (Konzept B)
+# PROject
 
 Aufgaben, Projektplan, Mail und Dokumentation auf **einem Datenmodell** mit zentraler Rechteprüfung.
 Umsetzung der Produktbeschreibung „Projekttool (Konzept B)“, Version 1.1. KI ist bewusst noch nicht enthalten
@@ -63,6 +63,10 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Eskalationsregelwerk je Projekt (Regel vor KI): Verzug, Stillstand („hängt“) und Blockaden eskalieren entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt (intern oder extern per Mail, als Entwurf zur Freigabe oder direkt); Kritikalität aus Priorität, Nachfolgern, nahem Meilenstein und Blockade halbiert die Fristen; jede Stufe mit Benachrichtigung und Log-Eintrag, automatische Rücksetzung; „Blockiert“-Meldung an der Aufgabe; Warnungen in der Übersicht; manuelle Eskalation
 - Reporting je Projekt (Regel vor KI): Vorlage (z. B. Statusbericht) im Rhythmus wöchentlich / zweiwöchentlich / monatlich; der Worker legt die Seite unter der gewählten Oberseite oder im Ordner „Berichte“ an, ergänzt Kennzahlen (Fortschritt, erledigt seit letztem Bericht, Verzug, Blockaden, Eskalationen, Meilensteine, gebuchte Zeit) und versendet sie als PDF über das Projektkonto an den Empfängerkreis; Modus „Prüfung“ (Entwurf, PL setzt final und versendet) oder „direkt“; manueller Lauf „Jetzt erzeugen“ in den Projekteinstellungen
 - Navigation: „Projekte“ mit Gesamtsicht aller Aufgaben und gemeinsamem Postfach über alle lesbaren Mail-Ansichten; je Projekt Übersicht, Aufgaben, Postfach, Doku, Einstellungen (PL); Projekt-Sichtbarkeit „nur Mitglieder“ oder „alle Benutzer des Mandanten (lesend)“
+- Hierarchie Projekt › Teilprojekt › Arbeitspaket › Task; „Meine Arbeit“ zeigt geklammert nur eigene und vererbte Zuständigkeit; Arbeitspakete, Tasks und Teilprojekte direkt editierbar; Wechsel der Verantwortung fragt, ob direkt zugewiesene Arbeitspakete mit übertragen werden
+- Benutzer einladen per Mail über das Org-Postfach (Kontotyp „org“), Annahme mit Passwort unter /einladung/:token, manuelles Anlegen als Fallback
+- Berechtigungsgruppen des Mandanten; eingeschränkte Teilprojekte (nur PL, Verantwortliche, benannte Benutzer und Gruppen); Gruppen auch in Mail-Ansicht-Rechten
+- Interaktives, überspringbares Tutorial beim ersten Login, jederzeit neu startbar
 - Zeiterfassung als optionales Modul je Projekt: Buchung je Aufgabe oder frei, Schätzung je Aufgabe, Budget je Projekt, Auswertung je Person und Teilprojekt, CSV-Export, „Meine Zeiten“; Mitglieder sehen eigene Buchungen, PL alle
 - Plan: Balken Start–Deadline, Punkt bei reiner Deadline, Teilprojekt-Sammelbalken, Meilensteine, Abhängigkeiten Ende → Anfang
 - Konflikte werden markiert, nichts verschiebt sich automatisch; „Nachfolger verschieben“ mit Vorschau (W7)

@@ -187,7 +187,7 @@ export async function userRoutes(app: FastifyInstance) {
     if (plOf.rows.length) throw badRequest(`Benutzer ist PL in: ${plOf.rows.map((r: any) => r.key).join(', ')}. Erst neuen PL setzen.`);
     await app.db.query(`update users set active = false where id = $1`, [target.id]);
     await app.db.query(`delete from sessions where user_id = $1`, [target.id]);
-    // Persönliche Konten trennen: Ansichten verschwinden, Kopien in Aufgaben bleiben.
+    // Persönliche Konten trennen: Ansichten verschwinden, Kopien in Arbeitspaketen bleiben.
     await app.db.query(`delete from mail_accounts where owner_user_id = $1 and type = 'personal'`, [target.id]);
     // Ausdrückliche Zuständigkeiten fallen zurück auf die Ebene darüber.
     const tasks = await app.db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 returning id, project_id, title`, [target.id]);

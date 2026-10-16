@@ -9,7 +9,7 @@ function mapEntry(r: any) {
   return { id: r.id, projectId: r.project_id, taskId: r.task_id, taskTitle: r.task_title ?? null, userId: r.user_id, userName: r.user_name ?? null, date: typeof r.date === 'string' ? r.date.slice(0, 10) : new Date(r.date).toISOString().slice(0, 10), minutes: r.minutes, note: r.note, createdAt: r.created_at };
 }
 
-/** Zeiterfassung: optionales Modul je Projekt. Buchungen je Aufgabe oder frei, Auswertung je Person, Teilprojekt, Aufgabe. */
+/** Zeiterfassung: optionales Modul je Projekt. Buchungen je Arbeitspaket oder frei, Auswertung je Person, Teilprojekt, Arbeitspaket. */
 export async function timeRoutes(app: FastifyInstance) {
   const db = app.db;
 
@@ -62,7 +62,7 @@ export async function timeRoutes(app: FastifyInstance) {
     if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 1440) throw badRequest('Minuten zwischen 1 und 1440');
     if (b.taskId) {
       const t = await db.maybeOne(`select id from tasks where id = $1 and project_id = $2`, [b.taskId, req.params.id]);
-      if (!t) throw badRequest('Aufgabe gehört nicht zum Projekt');
+      if (!t) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
     }
     const r = await db.one(
       `insert into time_entries (project_id, task_id, user_id, date, minutes, note) values ($1,$2,$3,$4,$5,$6) returning *`,
@@ -88,7 +88,7 @@ export async function timeRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/tasks/:id/time', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Aufgabe nicht gefunden');
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id);
     const rows = await db.query(`select e.*, u.name as user_name from time_entries e join users u on u.id = e.user_id where e.task_id = $1 order by e.date desc, e.created_at desc`, [req.params.id]);
     return { entries: rows.rows.map(mapEntry), totalMinutes: rows.rows.reduce((a: number, r: any) => a + r.minutes, 0) };

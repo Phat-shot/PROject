@@ -374,3 +374,26 @@ table.table { width: 100%; border-collapse: collapse; }
 .tour-box h3 { margin: 4px 0 6px; }
 .tour-box p { margin: 0 0 12px; font-size: 13px; line-height: 1.45; }
 .sidebar .footer .row { gap: 10px; }
+
+/* Inline-Bearbeitung in Tabellen und Listen */
+.inline-text { border: 1px solid transparent; background: transparent; padding: 3px 6px; border-radius: 5px; font: inherit; min-width: 120px; flex: 1; }
+.inline-text:hover:not([readonly]) { border-color: var(--border); background: var(--surface); }
+.inline-text:focus { border-color: var(--primary); background: var(--surface); outline: none; }
+.inline-select, .inline-date { border: 1px solid transparent; background: transparent; padding: 3px 4px; border-radius: 5px; font: inherit; font-size: 13px; width: auto; max-width: 220px; }
+.inline-select:hover:not(:disabled), .inline-date:hover { border-color: var(--border); background: var(--surface); }
+.checklist li { display: flex; align-items: center; gap: 8px; }
+.checklist li.done .inline-text { text-decoration: line-through; color: var(--muted); }
+
+/* Meine Arbeit: geklammerte Hierarchie */
+.wt-project { margin-bottom: 12px; }
+.wt-head { display: flex; align-items: center; gap: 10px; }
+.wt-lane { margin: 8px 0 0 10px; border-left: 2px solid #c7d2fe; padding-left: 12px; }
+.wt-sub { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
+.wt-ap { margin: 6px 0 0 10px; border-left: 2px solid #e2e6ee; padding-left: 12px; }
+.wt-ap-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 13px; }
+.wt-task { display: flex; align-items: center; gap: 8px; margin: 4px 0 0 12px; font-size: 13px; cursor: pointer; }
+.wt-task.done span { text-decoration: line-through; color: var(--muted); }
+.wt-bracket { display: inline-block; width: 8px; height: 2px; background: #c7d2fe; margin-left: -12px; }
+.wt-ap .wt-bracket, .wt-task .wt-bracket { background: #e2e6ee; }
+.task-fields .field, .task-fields div.field { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+.task-fields div.field > span:last-child, .task-fields div.field > div { color: var(--text); font-size: 13px; }

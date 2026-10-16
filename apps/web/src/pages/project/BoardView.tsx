@@ -29,7 +29,7 @@ export function BoardView() {
     if (!f.archived) setArchived(null);
   }, [f.archived]);
 
-  // Tastaturkürzel wie in Trello: f Filter, q nur meine, n neue Aufgabe, x Filter löschen
+  // Tastaturkürzel wie in Trello: f Filter, q nur meine, n neues Arbeitspaket, x Filter löschen
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
@@ -107,9 +107,9 @@ export function BoardView() {
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
-        {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: detail.columns[0].id, subprojectId: null })}>Neue Aufgabe<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
+        {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: detail.columns[0].id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
-      {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Aufgaben. Wiederherstellen über die Aufgabe.</div>}
+      {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen über die Arbeitspaket.</div>}
       {groups.map((g) => (
         <div key={g.key} className="swimlane">
           {g.name && <h2><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
@@ -129,7 +129,7 @@ export function BoardView() {
                     <span>{c.name}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
                     {!isCollapsed && <span className="tools">
                       <span>{inCol.length}</span>
-                      {canEdit && c.isDone && inCol.length > 0 && <button title="Alle erledigten archivieren" onClick={() => { if (confirm(`${total} erledigte Aufgaben archivieren?`)) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); }}>⌫</button>}
+                      {canEdit && c.isDone && inCol.length > 0 && <button title="Alle erledigten archivieren" onClick={() => { if (confirm(`${total} erledigte Arbeitspakete archivieren?`)) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); }}>⌫</button>}
                       <button title="Einklappen" onClick={() => setCollapsed(new Set([...collapsed, c.id]))}>«</button>
                     </span>}
                     {isCollapsed && <button className="btn sm link" onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}
@@ -197,7 +197,7 @@ function QuickAdd({ columnId, subprojectId, onMore }: { columnId: string; subpro
     if (!title.trim()) return;
     void run(async () => { await api.post(`/projects/${detail.project.id}/tasks`, { title: title.trim(), columnId, subprojectId }); setTitle(''); await reloadTasks(); });
   };
-  if (!open) return <button className="btn sm link" onClick={() => setOpen(true)}>+ Aufgabe</button>;
+  if (!open) return <button className="btn sm link" onClick={() => setOpen(true)}>+ Arbeitspaket</button>;
   return (
     <div className="quick-add">
       <textarea autoFocus placeholder="Titel eingeben, Enter zum Anlegen" value={title} onChange={(e) => setTitle(e.target.value)}
@@ -221,7 +221,7 @@ function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; sub
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
   return (
-    <Modal title="Neue Aufgabe" onClose={onClose}>
+    <Modal title="Neues Arbeitspaket" onClose={onClose}>
       <div className="form cols-2">
         <label className="field full"><span>Titel</span><input type="text" value={f.title} onChange={(e) => set('title', e.target.value)} autoFocus /></label>
         <label className="field full"><span>Beschreibung</span><textarea value={f.description} onChange={(e) => set('description', e.target.value)} /></label>

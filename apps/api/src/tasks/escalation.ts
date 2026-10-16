@@ -11,7 +11,7 @@ export interface EscalationPolicy {
   enabled: boolean;
   /** Tage überfällig bis Stufe 1/2/3 (Teilprojekt-Verantwortlicher / PL / Eskalationskontakt). */
   stageDays: [number, number, number];
-  /** Tage ohne Aktivität in einer aktiven Spalte, bis die Aufgabe als „hängt“ gilt (Stufe 1). */
+  /** Tage ohne Aktivität in einer aktiven Spalte, bis das Arbeitspaket als „hängt“ gilt (Stufe 1). */
   staleDays: number;
   /** Interner Eskalationskontakt (z. B. Vorgesetzte/r, Auftraggeber im Haus). */
   contactUserId: string | null;
@@ -62,7 +62,7 @@ export interface EscalationRow {
   score: number; dueDate: string | null; responsible: string | null; chain: string[]; reason: string;
 }
 
-/** Berechnet Soll-Stufen aller offenen Aufgaben eines Projekts (ohne Nebenwirkungen). */
+/** Berechnet Soll-Stufen aller offenen Arbeitspakete eines Projekts (ohne Nebenwirkungen). */
 export async function evaluateProject(db: Db, projectId: string, today: string): Promise<EscalationRow[]> {
   const policyRow = await db.one(`select escalation from projects where id = $1`, [projectId]);
   const p = policyOf(policyRow.escalation);
@@ -152,7 +152,7 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
   if (row.targetLevel >= 3 && p.contactEmail) {
     const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [pr.id]);
     if (account) {
-      const text = `Guten Tag,\n\nim Projekt „${pr.name}“ ist die Aufgabe „${row.title}“ ${row.reason}. Zuständig: ${row.responsible ?? '–'}. Fällig: ${row.dueDate ?? '–'}.\n\nWir bitten um Entscheidung bzw. Unterstützung.\n\nMit freundlichen Grüßen\n${lead.name ?? 'Projektleitung'}`;
+      const text = `Guten Tag,\n\nim Projekt „${pr.name}“ ist das Arbeitspaket „${row.title}“ ${row.reason}. Zuständig: ${row.responsible ?? '–'}. Fällig: ${row.dueDate ?? '–'}.\n\nWir bitten um Entscheidung bzw. Unterstützung.\n\nMit freundlichen Grüßen\n${lead.name ?? 'Projektleitung'}`;
       const d = await db.one(
         `insert into mail_drafts (account_id, project_id, task_id, user_id, to_addrs, subject, body, status) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
         [account.id, pr.id, row.taskId, lead.userId, JSON.stringify([p.contactEmail]), `Eskalation ${pr.key}: ${row.title}`, text, p.externalMode === 'direct' ? 'draft' : 'pending_approval']

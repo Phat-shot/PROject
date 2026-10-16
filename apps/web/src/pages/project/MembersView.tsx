@@ -96,7 +96,7 @@ export function MembersView() {
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
             if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
-              if (direct > 0) body.transferTasks = confirm(`${direct} Aufgabe(n)/Teilprojekt(e) sind ${primary.name} direkt zugewiesen. Auch an die neue Projektleitung übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+              if (direct > 0) body.transferTasks = confirm(`${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt zugewiesen. Auch an die neue Projektleitung übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
             }
             await api.put(`/projects/${detail.project.id}/members/${f.userId}`, body); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>
@@ -113,7 +113,7 @@ export function MembersView() {
         <div className="stack">
           {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><label className="check small"><input type="checkbox" checked={c.isDone} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, isDone: e.target.checked } : x)))} /> erledigt</label><label className="small nowrap">WIP <input type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} style={{ width: 56 }} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
           <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false, wipLimit: null }])}>+ Spalte</button>
-          <p className="muted small">WIP-Limit: Spalte färbt sich rot, wenn mehr Aufgaben darin liegen (Kanban-Prinzip: erst fertig machen, dann neu anfangen).</p>
+          <p className="muted small">WIP-Limit: Spalte färbt sich rot, wenn mehr Arbeitspakete darin liegen (Kanban-Prinzip: erst fertig machen, dann neu anfangen).</p>
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/columns`, { columns: cols }); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>

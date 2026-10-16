@@ -84,7 +84,7 @@ export async function seed(db: Db) {
   await db.query(`insert into time_entries (project_id, task_id, user_id, date, minutes, note) values ($1,$2,$3,current_date - 3, 240, 'Wireframes Startseite'), ($1,$2,$3,current_date - 1, 180, 'Produktübersicht'), ($1,$4,$5,current_date - 2, 90, 'Angebot gelesen, Rückfragen notiert')`, [web.id, t2.id, max, t4.id, pl]);
   const tag = (t: { id: string }, ...names: string[]) => Promise.all(names.map((n) => db.query(`insert into task_labels (task_id, label_id) values ($1,$2)`, [t.id, labels[n]])));
   await tag(t1, 'Design'); await tag(t2, 'Design'); await tag(t3, 'Design', 'Technik'); await tag(t4, 'Vertrag', 'Design'); await tag(t5, 'Technik', 'Blocker'); await tag(t6, 'Technik'); await tag(t7, 'Content'); await tag(t8, 'Technik'); await tag(t9, 'Technik', 'Content');
-  // W6: wiederkehrende Aufgabe (Statusbericht jeden Freitag, nächste nach Erledigung)
+  // W6: wiederkehrende Arbeitspaket (Statusbericht jeden Freitag, nächste nach Erledigung)
   const friday = (() => { const d = new Date(); d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7 || 7)); return d.toISOString().slice(0, 10); })();
   await db.query(
     `insert into tasks (project_id, column_id, title, description, priority, due_date, responsible_user_id, position, mail_code, created_by, recurrence) values ($1,$2,'Wochen-Statusbericht an Geschäftsführung','Statusbericht aus Vorlage erstellen, final setzen, an Verteiler senden.','normal',$3,$4,5,$5,$4,$6)`,
@@ -194,7 +194,7 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
 **Teilnehmer:** Petra Lenz, Anna Berger, Geschäftsführung
 
 ## Agenda
-1. Stand der Aufgaben
+1. Stand der Arbeitspakete
 2. Agenturauswahl
 3. Termine
 
@@ -202,8 +202,8 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
 - Agentur Müller-Design wird angefragt, Entscheidung bis 18.10.
 - Go-Live bleibt bei 25.02.2027.
 
-## Aufgaben
-| Aufgabe | Zuständig | Fällig |
+## Arbeitspakete
+| Arbeitspaket | Zuständig | Fällig |
 | --- | --- | --- |
 | Angebot Müller-Design prüfen | Petra Lenz | 18.10.2026 |
 | Wireframes vorlegen | Max Keller | 24.10.2026 |
@@ -220,15 +220,15 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
 **Teilnehmer:** 
 
 ## Agenda
-1. Stand der Aufgaben
+1. Stand der Arbeitspakete
 2. Offene Punkte: Angebot Müller-Design
 3. Planänderungen
 
 ## Beschlüsse
 - 
 
-## Aufgaben
-| Aufgabe | Zuständig | Fällig |
+## Arbeitspakete
+| Arbeitspaket | Zuständig | Fällig |
 | --- | --- | --- |
 |  |  |  |
 
@@ -290,7 +290,7 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
   );
   await db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,false,true,true)`, [hostingView.id, max]);
 
-  // Projekt 2: ERP-Einführung (Anna PL, Petra Mitglied) für "Meine Aufgaben"
+  // Projekt 2: ERP-Einführung (Anna PL, Petra Mitglied) für "Meine Arbeitspakete"
   const erp = await db.one(
     `insert into projects (org_id, key, name, description, created_by) values ($1,'ERP','ERP-Einführung','Ablösung des Altsystems durch ein neues ERP.',$2) returning id`,
     [org.id, anna]

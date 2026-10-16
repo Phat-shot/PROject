@@ -56,7 +56,7 @@ export const BUILTIN_TEMPLATES: { key: string; name: string; contentMd: string }
 
 ## Agenda
 
-1. Stand der Aufgaben
+1. Stand der Arbeitspakete
 2. Offene Punkte
 3. Planänderungen
 
@@ -64,9 +64,9 @@ export const BUILTIN_TEMPLATES: { key: string; name: string; contentMd: string }
 
 - 
 
-## Aufgaben
+## Arbeitspakete
 
-| Aufgabe | Zuständig | Fällig |
+| Arbeitspaket | Zuständig | Fällig |
 | --- | --- | --- |
 |  |  |  |
 
@@ -149,7 +149,7 @@ Lebendes Dokument: bei jedem Jour fixe durchgehen und aktualisieren.
 
 ## Entscheidungen
 
-| Nr | Entscheidung | Datum | Entschieden von | Begründung | Betroffene Aufgaben |
+| Nr | Entscheidung | Datum | Entschieden von | Begründung | Betroffene Arbeitspakete |
 | --- | --- | --- | --- | --- | --- |
 | E1 |  | {{datum}} |  |  |  |
 `
@@ -214,7 +214,7 @@ Lebendes Dokument: bei jedem Jour fixe durchgehen und aktualisieren.
 
 ## Nächste Schritte
 
-| Aufgabe | Zuständig | Fällig |
+| Arbeitspaket | Zuständig | Fällig |
 | --- | --- | --- |
 |  |  |  |
 `

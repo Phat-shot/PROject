@@ -37,7 +37,7 @@ export default function App() {
         <Route path="/projekte" element={<ProjectsPage />} />
         <Route path="/projekte/aufgaben" element={<AllTasksPage />} />
         <Route path="/projekte/postfach" element={<InboxPage />} />
-        <Route path="/meine-aufgaben" element={<Navigate to="/projekte/aufgaben?scope=mine" replace />} />
+        <Route path="/meine-aufgaben" element={<Navigate to="/projekte/aufgaben" replace />} />
         <Route path="/einstellungen/mail-konten" element={<MailAccountsPage />} />
         <Route path="/mail-konten" element={<Navigate to="/einstellungen/mail-konten" replace />} />
         <Route path="/verwaltung" element={<AdminPage />} />
