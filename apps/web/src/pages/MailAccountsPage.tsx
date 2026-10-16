@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { MailAccount, Project } from '@projekttool/shared';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
+import { useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
 import { Modal, useAsync } from '../components/ui';
 
@@ -38,7 +39,7 @@ export function MailAccountsPage() {
             {accounts.data?.accounts.map((a) => (
               <tr key={a.id}>
                 <td>{a.name}<div className="muted small">{a.address}</div></td>
-                <td>{a.type === 'personal' ? 'persönlich' : <>Projektkonto <span className="badge">{projects.data?.projects.find((p) => p.id === a.projectId)?.key}</span></>}</td>
+                <td>{a.type === 'personal' ? 'persönlich' : a.type === 'org' ? 'Org-Postfach' : <>Projektkonto <span className="badge">{projects.data?.projects.find((p) => p.id === a.projectId)?.key}</span></>}</td>
                 <td className="small">{a.provider === 'dev' ? 'Dev-Postfach (im Speicher)' : <>IMAP {a.imapHost}:{a.imapPort ?? 993}{a.imapSecure === false ? '' : ' SSL'}<br />SMTP {a.smtpHost}:{a.smtpPort ?? 587}{a.smtpSecure ? ' SSL' : ' STARTTLS'}</>}</td>
                 <td className="small">{a.viewCount ?? 0}{(a.viewCount ?? 0) === 0 && <div className="muted">noch keine</div>}</td>
                 <td className="small">{a.syncError ? <span className="badge warn" title={a.syncError}>Sync unterbrochen</span> : fmtDateTime(a.lastSyncAt) || '–'}{a.syncError && <div className="muted" style={{ maxWidth: 260 }}>{a.syncError}</div>}</td>
@@ -61,8 +62,10 @@ export function MailAccountsPage() {
 }
 
 function AccountForm({ existing, projects, onClose, onSaved }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void> }) {
+  const { user } = useAuth();
+  const isAdmin = user?.globalRole === 'org_admin';
   const [f, setF] = useState({
-    type: existing?.type ?? 'personal', projectId: existing?.projectId ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
+    type: existing?.type ?? 'personal' as MailAccount['type'], projectId: existing?.projectId ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
     imapHost: existing?.imapHost ?? '', imapPort: existing?.imapPort ?? 993, imapUser: existing?.imapUser ?? '', imapPassword: '', imapSecure: existing?.imapSecure ?? true,
     smtpHost: existing?.smtpHost ?? '', smtpPort: existing?.smtpPort ?? 587, smtpUser: existing?.smtpUser ?? '', smtpPassword: '', smtpSecure: existing?.smtpSecure ?? false
   });
@@ -73,7 +76,7 @@ function AccountForm({ existing, projects, onClose, onSaved }: { existing?: Mail
   return (
     <Modal title={existing ? `Konto bearbeiten: ${existing.name}` : 'Mail-Konto anbinden'} onClose={onClose}>
       <div className="form cols-2">
-        {!existing && <label className="field"><span>Typ</span><select value={f.type} onChange={(e) => set('type', e.target.value)}><option value="personal">Persönlich (nur ich teile Ansichten)</option><option value="project" disabled={!projects.length}>Projektkonto (als PL)</option></select></label>}
+        {!existing && <label className="field"><span>Typ</span><select value={f.type} onChange={(e) => set('type', e.target.value)}><option value="personal">Persönlich (nur ich teile Ansichten)</option><option value="project" disabled={!projects.length}>Projektkonto (als PL)</option>{isAdmin && <option value="org">Org-Postfach (Systemmails: Einladungen)</option>}</select></label>}
         {!existing && f.type === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename</span><input type="text" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
         <label className="field"><span>Adresse</span><input type="email" value={f.address} onChange={(e) => set('address', e.target.value)} /></label>

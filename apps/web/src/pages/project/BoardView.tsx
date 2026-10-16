@@ -112,7 +112,7 @@ export function BoardView() {
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Aufgaben. Wiederherstellen über die Aufgabe.</div>}
       {groups.map((g) => (
         <div key={g.key} className="swimlane">
-          {g.name && <h2>{g.name} <span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
+          {g.name && <h2><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
           <div className="board">
             {detail.columns.map((c) => {
               const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
@@ -143,6 +143,7 @@ export function BoardView() {
                       onDragOverCard={(e) => { if (!drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
                       onClick={() => openTask(x.id)} />
                   ))}
+                  {!isCollapsed && inCol.length === 0 && <div className="col-empty">{drag ? 'Hier ablegen' : 'leer'}</div>}
                   {!isCollapsed && canEdit && !f.archived && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} onMore={() => setCreate({ columnId: c.id, subprojectId: laneKey === 'none' || laneKey === 'all' ? null : laneKey })} />}
                 </div>
               );
@@ -163,7 +164,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   const dueClass = x.done ? 'done' : x.dueDate && x.dueDate < t ? 'overdue' : x.dueDate && x.dueDate <= soon ? 'soon' : '';
   const labels = x.labelIds.map((id) => detail.labels.find((l) => l.id === id)).filter(Boolean);
   return (
-    <div className={`task-card ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''}`} draggable={canEdit}
+    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''}`} draggable={canEdit}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
@@ -178,8 +179,8 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.attachmentCount > 0 && <span title="Anhänge">📎 {x.attachmentCount}</span>}
         {x.mailCount > 0 && <span title="Verknüpfte Mails">✉ {x.mailCount}</span>}
         {x.checklistTotal > 0 && <span title="Checkliste" className={x.checklistDone === x.checklistTotal ? 'ok' : ''}>☑ {x.checklistDone}/{x.checklistTotal}</span>}
-        <span className="right" title={x.responsible.inherited ? `${x.responsible.name ?? ''} · geerbt vom ${x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'}` : x.responsible.name ?? x.responsible.email ?? ''}>
-          {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar inherited' : ''} style={{ display: 'inline-flex' }}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
+        <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
+          {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
         </span>
       </div>
       {x.checklistTotal > 0 && <div className={`progress ${x.checklistDone === x.checklistTotal ? 'complete' : ''}`}><div style={{ width: `${Math.round((x.checklistDone / x.checklistTotal) * 100)}%` }} /></div>}
@@ -210,7 +211,7 @@ function SubprojectResp({ id }: { id: string }) {
   const { detail } = useProject();
   const s = detail.subprojects.find((x) => x.id === id);
   if (!s) return null;
-  return <span className="muted small" style={{ fontWeight: 400 }}>· verantwortlich {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}{s.startDate && ` · ${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`}</span>;
+  return <span className="muted small" style={{ fontWeight: 400 }}>{s.restricted && <span title="Eingeschränkt sichtbar">🔒 </span>}verantwortlich {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}{s.startDate && ` · ${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`}</span>;
 }
 
 function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; subprojectId: string | null; onClose: () => void }) {

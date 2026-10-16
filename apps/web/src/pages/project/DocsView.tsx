@@ -232,7 +232,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
       <div className="form">
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Verteiler (Mail-Adressen, Komma)</span><input type="text" value={list} onChange={(e) => setList(e.target.value)} placeholder="gf@firma.de, kunde@extern.de" /></label>
-        <p className="muted small">Finale Seiten dieses Ordners können als PDF an den Verteiler gesendet werden (W5). Versand über das Projektkonto.</p>
+        <p className="muted small">Finale Seiten dieses Ordners können als PDF an den Verteiler gesendet werden. Versand über das Projektkonto.</p>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !name} onClick={() => void run(async () => {
           const body = { name, distributionList: list.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) };

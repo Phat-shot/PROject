@@ -32,7 +32,7 @@ export interface OutgoingMessage {
 export interface AccountRow {
   id: string;
   org_id: string;
-  type: 'personal' | 'project';
+  type: 'personal' | 'project' | 'org';
   owner_user_id: string | null;
   project_id: string | null;
   name: string;

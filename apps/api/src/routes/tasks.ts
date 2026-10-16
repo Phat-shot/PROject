@@ -3,7 +3,7 @@ import type { TaskPriority } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
 import { createRecurrenceInstance, dateStr, loadTask, loadTasks, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
@@ -41,7 +41,7 @@ export async function taskRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id);
     const lead = await resolveProjectLead(db, req.params.id);
     const archived = req.query.archived === '1';
-    const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is ${archived ? 'not' : ''} null`, [req.params.id], lead);
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is ${archived ? 'not' : ''} null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
     return { tasks };
   });
 
@@ -120,7 +120,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const tasks = await loadTasks(
       db,
       `t.archived_at is null and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active' and p.org_id = $2
-         and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) ${all ? "or p.visibility = 'org'" : ''}))`,
+         and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) ${all ? "or p.visibility = 'org'" : ''})) and ${visibleSubprojectSql(1)}`,
       [user.id, user.orgId]
     );
     const keys = await db.query(`select id, key from projects where org_id = $1`, [user.orgId]);
@@ -169,6 +169,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const task = await loadTask(db, req.params.id);
     if (!task) throw notFound('Aufgabe nicht gefunden');
     await requireProject(db, user, task.projectId);
+    if (!(await canSeeSubproject(db, user.id, task.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const comments = await db.query(
       `select c.*, u.name as user_name from task_comments c join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at`,
       [task.id]
@@ -191,8 +192,10 @@ export async function taskRoutes(app: FastifyInstance) {
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
     if (!existing) throw notFound('Aufgabe nicht gefunden');
     const m = await requireProject(db, user, existing.project_id, 'member');
+    if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
     if (b.priority && !PRIORITIES.includes(b.priority)) throw badRequest('Ungültige Priorität');
+    if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     if (b.columnId) {
       const c = await db.maybeOne(`select id from board_columns where id = $1 and project_id = $2`, [b.columnId, existing.project_id]);
       if (!c) throw badRequest('Spalte gehört nicht zum Projekt');

@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import type { Project, ProjectRole } from '@projekttool/shared';
+import type { Membership, Project, ProjectRole, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { getMembership, mapMembership, requireProject } from '../rights.js';
+import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
 import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
@@ -79,8 +79,13 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     const columns = await db.query(`select * from board_columns where project_id = $1 order by position`, [p.id]);
     const subprojects = await db.query(
-      `select s.*, u.name as responsible_name, u.email as responsible_email from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 order by s.position, s.created_at`,
-      [p.id]
+      `select s.*, u.name as responsible_name, u.email as responsible_email,
+         coalesce((select json_agg(a.user_id) from subproject_access a where a.subproject_id = s.id and a.user_id is not null), '[]'::json) as access_user_ids,
+         coalesce((select json_agg(a.group_id) from subproject_access a where a.subproject_id = s.id and a.group_id is not null), '[]'::json) as access_group_ids
+       from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1
+         and (not s.restricted or s.responsible_user_id = $2 or $3 or exists (select 1 from subproject_access a where a.subproject_id = s.id and (a.user_id = $2 or a.group_id in (select group_id from group_members gm where gm.user_id = $2))))
+       order by s.position, s.created_at`,
+      [p.id, user.id, m.role === 'pl']
     );
     const milestones = await db.query(`select * from milestones where project_id = $1 order by date`, [p.id]);
     const lead = await resolveProjectLead(db, p.id);
@@ -159,7 +164,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // W2: Einladung / Rolle ändern
-  app.put<{ Params: { id: string; userId: string }; Body: { role: ProjectRole; isDeputy?: boolean; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean } }>(
+  app.put<{ Params: { id: string; userId: string }; Body: { role: ProjectRole; isDeputy?: boolean; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean; transferTasks?: boolean } }>(
     '/projects/:id/members/:userId',
     async (req) => {
       const user = requireUser(req);
@@ -171,8 +176,16 @@ export async function projectRoutes(app: FastifyInstance) {
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
       const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
+      let transferred = 0;
       if (b.role === 'pl' && !isDeputy && primary && primary.user_id !== req.params.userId) {
         await db.query(`update project_members set is_deputy = true where project_id = $1 and user_id = $2`, [req.params.id, primary.user_id]);
+        // Geerbte Zuständigkeiten folgen automatisch; direkt zugewiesene nur auf Wunsch
+        if (b.transferTasks) {
+          const t1 = await db.query(`update tasks set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 and archived_at is null returning id`, [req.params.id, primary.user_id, req.params.userId]);
+          const t2 = await db.query(`update subprojects set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 returning id`, [req.params.id, primary.user_id, req.params.userId]);
+          await db.query(`update checklist_items set responsible_user_id = $3 where responsible_user_id = $2 and task_id in (select id from tasks where project_id = $1)`, [req.params.id, primary.user_id, req.params.userId]);
+          transferred = t1.rows.length + t2.rows.length;
+        }
       }
       if (primary && primary.user_id === req.params.userId && b.role !== 'pl') {
         const other = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and user_id <> $2`, [req.params.id, req.params.userId]);
@@ -187,8 +200,8 @@ export async function projectRoutes(app: FastifyInstance) {
          returning *`,
         [req.params.id, req.params.userId, b.role, isDeputy, Boolean(b.canEditPlan), Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi)]
       );
-      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: b });
-      return { membership: mapMembership(row) };
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
+      return { membership: mapMembership(row), transferred };
     }
   );
 
@@ -233,7 +246,27 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Teilprojekte
-  app.post<{ Params: { id: string }; Body: { name: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null } }>('/projects/:id/subprojects', async (req) => {
+  type SubprojectBody = { name?: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null; restricted?: boolean; accessUserIds?: string[]; accessGroupIds?: string[]; transferTasks?: boolean };
+  /** Zugriffsliste eines eingeschränkten Teilprojekts setzen (nur PL). */
+  const setAccess = async (user: User, projectId: string, subprojectId: string, b: SubprojectBody, m: Membership) => {
+    if (b.restricted === undefined && !b.accessUserIds && !b.accessGroupIds) return;
+    if (m.role !== 'pl') throw forbidden('Sichtbarkeit von Teilprojekten regelt der PL');
+    if (b.restricted !== undefined) await db.query(`update subprojects set restricted = $2 where id = $1`, [subprojectId, Boolean(b.restricted)]);
+    if (b.accessUserIds || b.accessGroupIds) {
+      await db.query(`delete from subproject_access where subproject_id = $1`, [subprojectId]);
+      for (const uid of new Set(b.accessUserIds ?? [])) {
+        const ok = await db.maybeOne(`select 1 from users where id = $1 and org_id = $2`, [uid, user.orgId]);
+        if (ok) await db.query(`insert into subproject_access (subproject_id, user_id) values ($1,$2)`, [subprojectId, uid]);
+      }
+      for (const gid of new Set(b.accessGroupIds ?? [])) {
+        const ok = await db.maybeOne(`select 1 from groups where id = $1 and org_id = $2`, [gid, user.orgId]);
+        if (ok) await db.query(`insert into subproject_access (subproject_id, group_id) values ($1,$2)`, [subprojectId, gid]);
+      }
+    }
+    await audit(db, { orgId: user.orgId, projectId, userId: user.id, action: 'subproject.access', objectType: 'subproject', objectId: subprojectId, details: { restricted: b.restricted, users: b.accessUserIds, groups: b.accessGroupIds } });
+  };
+
+  app.post<{ Params: { id: string }; Body: SubprojectBody }>('/projects/:id/subprojects', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Teilprojekte anlegen erfordert das Recht „Projektplan ändern“');
@@ -244,15 +277,19 @@ export async function projectRoutes(app: FastifyInstance) {
       `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning *`,
       [req.params.id, b.name, b.responsibleUserId ?? null, b.startDate ?? null, b.endDate ?? null, pos.p]
     );
+    await setAccess(user, req.params.id, r.id, b, m);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.create', objectType: 'subproject', objectId: r.id, details: { name: b.name } });
     return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)) };
   });
 
-  app.patch<{ Params: { id: string; sid: string }; Body: { name?: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null } }>('/projects/:id/subprojects/:sid', async (req) => {
+  app.patch<{ Params: { id: string; sid: string }; Body: SubprojectBody }>('/projects/:id/subprojects/:sid', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
+    if (!(await canSeeSubproject(db, user.id, req.params.sid))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
+    await setAccess(user, req.params.id, req.params.sid, b, m);
+    const before = await db.maybeOne(`select responsible_user_id from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
     const r = await db.maybeOne(
       `update subprojects set name = coalesce($3, name),
          responsible_user_id = case when $4 then $5::uuid else responsible_user_id end,
@@ -262,8 +299,20 @@ export async function projectRoutes(app: FastifyInstance) {
       [req.params.sid, req.params.id, b.name ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'startDate' in b, b.startDate ?? null, 'endDate' in b, b.endDate ?? null]
     );
     if (!r) throw notFound('Teilprojekt nicht gefunden');
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.update', objectType: 'subproject', objectId: r.id, details: b });
-    return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)) };
+    // Direkt zugewiesene Aufgaben der bisherigen Verantwortung mit übertragen (geerbte folgen ohnehin)
+    let transferred = 0;
+    if (b.transferTasks && 'responsibleUserId' in b) {
+      const lead = await resolveProjectLead(db, req.params.id);
+      const oldEff = before?.responsible_user_id ?? lead.userId;
+      const newEff = r.responsible_user_id ?? lead.userId;
+      if (oldEff && newEff && oldEff !== newEff) {
+        const t1 = await db.query(`update tasks set responsible_user_id = $3 where subproject_id = $1 and responsible_user_id = $2 and archived_at is null returning id`, [r.id, oldEff, newEff]);
+        await db.query(`update checklist_items set responsible_user_id = $3 where responsible_user_id = $2 and task_id in (select id from tasks where subproject_id = $1)`, [r.id, oldEff, newEff]);
+        transferred = t1.rows.length;
+      }
+    }
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.update', objectType: 'subproject', objectId: r.id, details: { ...b, transferred } });
+    return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)), transferred };
   });
 
   app.delete<{ Params: { id: string; sid: string } }>('/projects/:id/subprojects/:sid', async (req) => {
@@ -325,7 +374,7 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     const lead = await resolveProjectLead(db, pid);
     const { loadTasks } = await import('../tasks/service.js');
-    const tasks = await loadTasks(db, 't.project_id = $1 and t.archived_at is null', [pid], lead);
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and ${visibleSubprojectSql(2)}`, [pid, user.id], lead);
     const conflicts = tasks.filter((t) => t.conflicts.length > 0 && !t.done).map((t) => ({ id: t.id, title: t.title, conflicts: t.conflicts }));
     const overdue = tasks.filter((t) => !t.done && t.dueDate && t.dueDate < today).sort((a, b) => a.dueDate!.localeCompare(b.dueDate!)).slice(0, 8)
       .map((t) => ({ id: t.id, title: t.title, dueDate: t.dueDate, responsible: t.responsible.name ?? t.responsible.email }));
@@ -369,7 +418,11 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   async function loadSub(id: string) {
-    return db.one(`select s.*, u.name as responsible_name, u.email as responsible_email from subprojects s left join users u on u.id = s.responsible_user_id where s.id = $1`, [id]);
+    return db.one(
+      `select s.*, u.name as responsible_name, u.email as responsible_email,
+         coalesce((select json_agg(a.user_id) from subproject_access a where a.subproject_id = s.id and a.user_id is not null), '[]'::json) as access_user_ids,
+         coalesce((select json_agg(a.group_id) from subproject_access a where a.subproject_id = s.id and a.group_id is not null), '[]'::json) as access_group_ids
+       from subprojects s left join users u on u.id = s.responsible_user_id where s.id = $1`, [id]);
   }
 }
 

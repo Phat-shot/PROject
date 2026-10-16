@@ -274,6 +274,12 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
   await db.query(`insert into mail_view_rights (view_id, role, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,'pl',true,true,true,true,true), ($1,'member',true,true,false,false,true)`, [agenturView.id]);
 
   // Persönliches Konto der PL mit einer geteilten Ansicht (nur Hosting-Partner)
+  await db.query(`insert into mail_accounts (org_id, type, name, address, provider) values ($1,'org','Org-Postfach','noreply@demo.local','dev')`, [org.id]);
+  const lenk = await db.one(`insert into groups (org_id, name, description) values ($1,'Lenkungskreis','Entscheider und Budgetverantwortliche') returning id`, [org.id]);
+  await db.query(`insert into group_members (group_id, user_id) values ($1,$2), ($1,$3)`, [lenk.id, pl, anna]);
+  const vertrag = await db.one(`insert into subprojects (project_id, name, responsible_user_id, position, restricted) values ($1,'Vertrag und Budget',$2,99,true) returning id`, [web.id, anna]);
+  await db.query(`insert into subproject_access (subproject_id, group_id) values ($1,$2)`, [vertrag.id, lenk.id]);
+  await db.query(`insert into tasks (project_id, subproject_id, column_id, title, description, priority, due_date, created_by, mail_code, position) select $1, $2, id, 'Agenturvertrag verhandeln', 'Vertraulich: Konditionen, Haftung, Laufzeit', 'high', $3, $4, $5, 50 from board_columns where project_id = $1 order by position limit 1`, [web.id, vertrag.id, '2026-11-15', pl, 'c0ffee11']);
   const persAcc = await db.one(
     `insert into mail_accounts (org_id, type, owner_user_id, name, address, provider) values ($1,'personal',$2,'Petra Lenz (persönlich)','pl@demo.local','dev') returning id`,
     [org.id, pl]

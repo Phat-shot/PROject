@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import type { AuditEntry, DocTemplate, OrgSettings, User } from '@projekttool/shared';
+import type { AuditEntry, DocTemplate, Group, Invitation, OrgSettings, User } from '@projekttool/shared';
+import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
@@ -15,16 +16,18 @@ export function AdminPage() {
   const { error, run, busy } = useAsync();
   return (
     <>
-      <TopBar title="Verwaltung (Org-Admin)"><button className="btn primary" onClick={() => setCreate(true)}>Benutzer anlegen</button></TopBar>
+      <TopBar title="Verwaltung"><button className="btn" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></TopBar>
       <div className="content">
+        <InvitationsCard onAccepted={() => void users.reload()} />
         <div className="card">
-          <h2>Benutzer des Mandanten</h2>
+          <h2>Benutzer</h2>
           {error && <div className="error mb">{error}</div>}
           <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th /></tr></thead><tbody>
             {users.data?.users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><span className="badge">{globalLabel[u.globalRole]}</span></td>
-              <td><button className="btn sm danger" disabled={busy} onClick={() => { if (confirm(`${u.name} deaktivieren? Login endet, persönliche Konten werden getrennt, Zuständigkeiten fallen zurück (W10).`)) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); }}>Deaktivieren</button></td></tr>)}
+              <td><button className="btn sm danger" disabled={busy} onClick={() => { if (confirm(`${u.name} deaktivieren? Login endet, persönliche Konten werden getrennt, Zuständigkeiten fallen zurück.`)) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); }}>Deaktivieren</button></td></tr>)}
           </tbody></table>
         </div>
+        <GroupsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
         <TemplatesCard />
         <div className="card">
@@ -36,6 +39,76 @@ export function AdminPage() {
       </div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await users.reload(); }} />}
     </>
+  );
+}
+
+const WEEK = 7 * 86400_000;
+
+function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
+  const { data, reload } = useData<{ invitations: Invitation[]; hasOrgAccount: boolean }>('/invitations');
+  const [f, setF] = useState({ email: '', name: '', globalRole: 'user' });
+  const [msg, setMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
+  const { busy, error, run } = useAsync();
+  void onAccepted; void WEEK;
+  const copy = async (link: string) => { try { await navigator.clipboard.writeText(link); setMsg({ ok: true, text: 'Link kopiert.' }); } catch { setMsg({ ok: false, text: link }); } };
+  return (
+    <div className="card">
+      <h2>Benutzer einladen</h2>
+      {data && !data.hasOrgAccount && <div className="notice mb small">Kein Org-Postfach angebunden. Einladungen werden dann nicht per Mail verschickt, der Einladungslink lässt sich aber kopieren und weitergeben. Org-Postfach anlegen unter <Link to="/einstellungen/mail-konten">Meine Mail-Konten</Link> (Typ „Org-Postfach“).</div>}
+      <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+        <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+        <label className="field"><span>E-Mail</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
+        <label className="field"><span>Globale Rolle</span><select value={f.globalRole} onChange={(e) => setF({ ...f, globalRole: e.target.value })}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
+        <button className="btn primary" disabled={busy || !f.email || !f.name} onClick={() => void run(async () => {
+          const r = await api.post<{ invitation: Invitation; sent: boolean; error?: string }>('/invitations', f);
+          setMsg(r.sent ? { ok: true, text: `Einladung an ${r.invitation.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: r.invitation.link });
+          setF({ email: '', name: '', globalRole: 'user' });
+          await reload();
+        })}>Einladen</button>
+      </div>
+      {error && <div className="error mt">{error}</div>}
+      {msg && <div className={`mt small ${msg.ok ? 'muted' : ''}`} style={msg.ok ? undefined : { color: 'var(--warn)' }}>{msg.text}{msg.link && <> · <button className="btn sm link" onClick={() => void copy(msg.link!)}>Link kopieren</button></>}</div>}
+      {data && data.invitations.length > 0 && (
+        <table className="table mt"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Status</th><th /></tr></thead><tbody>
+          {data.invitations.map((i) => <tr key={i.id}>
+            <td>{i.name}</td><td>{i.email}</td><td><span className="badge">{globalLabel[i.globalRole]}</span></td>
+            <td className="small">{i.sentAt ? <>verschickt {fmtDateTime(i.sentAt)}</> : <span style={{ color: 'var(--warn)' }}>nicht verschickt{i.sendError ? `: ${i.sendError}` : ''}</span>}<div className="muted">gültig bis {fmtDateTime(i.expiresAt)}</div></td>
+            <td className="nowrap"><button className="btn sm link" onClick={() => void copy(i.link)}>Link kopieren</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ sent: boolean; error?: string }>(`/invitations/${i.id}/resend`); setMsg(r.sent ? { ok: true, text: `Erneut an ${i.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: i.link }); await reload(); })}>Erneut senden</button><button className="btn sm link" onClick={() => void run(async () => { await api.del(`/invitations/${i.id}`); await reload(); })}>✕</button></td>
+          </tr>)}
+        </tbody></table>
+      )}
+    </div>
+  );
+}
+
+function GroupsCard({ users }: { users: User[] }) {
+  const { data, reload } = useData<{ groups: Group[] }>('/groups');
+  const [edit, setEdit] = useState<Group | null>(null);
+  const [f, setF] = useState({ name: '', description: '', memberIds: [] as string[] });
+  const { busy, error, run } = useAsync();
+  const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', memberIds: g?.memberIds ?? [] }); };
+  return (
+    <div className="card">
+      <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2><button className="btn sm" onClick={() => open(null)}>+ Gruppe</button></div>
+      <p className="muted small">Gruppen bündeln Benutzer für Sichtbarkeit und Rechte: eingeschränkte Teilprojekte und Mail-Ansichten lassen sich an Gruppen freigeben.</p>
+      {data && data.groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
+      {data && data.groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th /></tr></thead><tbody>
+        {data.groups.map((g) => <tr key={g.id}><td>{g.name}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{g.memberIds.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ') || <span className="muted">–</span>}</td>
+          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button><button className="btn sm link" onClick={() => { if (confirm(`Gruppe „${g.name}“ löschen? Freigaben über diese Gruppe enden.`)) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); }}>✕</button></td></tr>)}
+      </tbody></table>}
+      {error && <div className="error mt">{error}</div>}
+      {edit && (
+        <Modal title={edit.id ? `Gruppe: ${edit.name}` : 'Neue Gruppe'} onClose={() => setEdit(null)}>
+          <div className="form">
+            <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
+            <label className="field"><span>Beschreibung</span><input type="text" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
+            <div className="field"><span>Mitglieder</span>
+              <div className="grid cols-2" style={{ gap: 2 }}>{users.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: e.target.checked ? [...f.memberIds, u.id] : f.memberIds.filter((x) => x !== u.id) })} /> {u.name}</label>)}</div></div>
+            <div><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { if (edit.id) await api.patch(`/groups/${edit.id}`, f); else await api.post('/groups', f); setEdit(null); await reload(); })}>Speichern</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 

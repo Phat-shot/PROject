@@ -46,7 +46,7 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description }); onCreated(); })}>Anlegen</button></div>
-        <p className="muted small">Du wirst PL. Standard-Spalten, Ordner und ein leeres Board werden angelegt (W1). Die Projekt-Mailadresse ergibt sich später aus dem angebundenen Projektkonto.</p>
+        <p className="muted small">Du wirst PL. Die Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto.</p>
       </div>
     </Modal>
   );

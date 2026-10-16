@@ -109,7 +109,7 @@ test('Projekt-Übersicht liefert Kennzahlen', async () => {
   const j = o.json();
   assert.ok(j.counts.open > 0);
   assert.ok(j.milestones.length >= 1);
-  assert.ok(j.perSubproject.length === 3);
+  assert.ok(j.perSubproject.length === 4);
   assert.ok(j.conflicts.length >= 1);
   assert.ok(Array.isArray(j.workload) && j.workload.length >= 1);
   assert.ok(j.activity.length > 0);

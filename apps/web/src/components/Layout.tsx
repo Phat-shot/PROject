@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import type { Notification, Project } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import { Tour, tourDone } from './Tour';
 
 /**
  * Seitenleiste: „Projekte“ (standardmäßig ausgeklappt) mit Gesamtsicht Aufgaben, gemeinsamem Postfach
@@ -10,10 +11,12 @@ import { api } from '../lib/api';
  * Postfach, Doku, Einstellungen nur für PL). Darunter die Benutzer-Einstellungen und die Verwaltung.
  */
 export function Layout({ children }: { children: ReactNode }) {
-  const { user, logout } = useAuth();
+  const { user, orgName, logout } = useAuth();
   const loc = useLocation();
   const [projects, setProjects] = useState<Project[]>([]);
   const [open, setOpen] = useState(true);
+  const [tour, setTour] = useState(false);
+  useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
   const load = () => api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined);
   useEffect(() => { void load(); }, []);
@@ -26,30 +29,30 @@ export function Layout({ children }: { children: ReactNode }) {
   return (
     <div className="app">
       <nav className="sidebar">
-        <div className="brand">Projekttool<small>Alpha · Konzept B</small></div>
+        <div className="brand">PROject<small>{orgName}</small></div>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
-          <NavLink to="/projekte" end>Projekte</NavLink>
+          <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
           <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
         </div>
         {open && (
           <div className="sub">
-            <NavLink to="/projekte/aufgaben">Alle Aufgaben</NavLink>
-            <NavLink to="/projekte/postfach">Postfach</NavLink>
+            <NavLink to="/projekte/aufgaben" data-tour="aufgaben">Alle Aufgaben</NavLink>
+            <NavLink to="/projekte/postfach" data-tour="postfach">Postfach</NavLink>
             {projects.map((p) => {
               const base = `/projekte/${p.id}`;
               const sel = currentId === p.id;
               return (
                 <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
-                  <NavLink to={base} className={() => (sel ? 'proj-link sel' : 'proj-link')}>
+                  <NavLink to={base} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={p.id === projects[0]?.id ? 'projekt' : undefined}>
                     <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
                   </NavLink>
                   {sel && (
                     <div className="sub2">
-                      <NavLink to={base} end>Übersicht</NavLink>
-                      <NavLink to={`${base}/board`} className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Aufgaben</NavLink>
-                      <NavLink to={`${base}/mail`}>Postfach</NavLink>
-                      <NavLink to={`${base}/doku`}>Doku</NavLink>
-                      {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
+                      <NavLink to={base} end data-tour="p-uebersicht">Übersicht</NavLink>
+                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Aufgaben</NavLink>
+                      <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
+                      <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
+                      {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
                     </div>
                   )}
                 </div>
@@ -59,15 +62,16 @@ export function Layout({ children }: { children: ReactNode }) {
           </div>
         )}
         <div className="section">Einstellungen</div>
-        <NavLink to="/einstellungen/mail-konten">Meine Mail-Konten</NavLink>
-        {user?.globalRole === 'org_admin' && <NavLink to="/verwaltung">Verwaltung</NavLink>}
+        <NavLink to="/einstellungen/mail-konten" data-tour="mailkonten">Meine Mail-Konten</NavLink>
+        {user?.globalRole === 'org_admin' && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>
-          <button onClick={() => void logout()}>Abmelden</button>
+          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button></div>
         </div>
       </nav>
       <div className="main">{children}</div>
+      {tour && user && <Tour userId={user.id} isAdmin={user.globalRole === 'org_admin'} projects={projects} onDone={() => setTour(false)} />}
     </div>
   );
 }

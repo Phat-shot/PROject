@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
+import { visibleSubprojectSql } from '../rights.js';
 import { getMembership, getViewRights } from '../rights.js';
 
 export async function searchRoutes(app: FastifyInstance) {
@@ -10,7 +11,7 @@ export async function searchRoutes(app: FastifyInstance) {
     const like = `%${q}%`;
     const tasks = await app.db.query(
       `select t.id, t.title, t.project_id, p.key as project_key from tasks t join projects p on p.id = t.project_id
-       where t.project_id in (select project_id from project_members where user_id = $1) and (t.title ilike $2 or t.description ilike $2) order by t.updated_at desc limit 20`,
+       where t.project_id in (select project_id from project_members where user_id = $1) and (t.title ilike $2 or t.description ilike $2) and ${visibleSubprojectSql(1)} order by t.updated_at desc limit 20`,
       [user.id, like]
     );
     const pages = await app.db.query(

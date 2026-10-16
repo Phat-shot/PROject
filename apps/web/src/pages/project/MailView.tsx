@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, Route, Routes, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { MailDetail, MailDraft, MailSummary, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage } from '@projekttool/shared';
+import type { MailDetail, MailDraft, MailSummary, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, roleLabel, statusLabel, useAsync } from '../../components/ui';
@@ -32,7 +32,7 @@ export function MailView() {
         {me.role !== 'reader' && <button className="btn primary mt" style={{ width: '100%' }} onClick={() => nav(`${base}/neu`)}>Neue Mail</button>}
       </div>
       <Routes>
-        <Route index element={<><div className="mail-list"><div className="empty" style={{ margin: 12 }}>Ansicht wählen</div></div><div className="mail-detail muted">Konten werden angebunden, geteilt werden nur gefilterte Ansichten. Rechte hängen an der Ansicht, nicht an der Projektrolle.</div></>} />
+        <Route index element={<><div className="mail-list"><div className="empty" style={{ margin: 12 }}>Ansicht wählen</div></div><div className="mail-detail muted">Ansicht wählen.</div></>} />
         <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />
         <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />
         <Route path="mail/:mailId" element={<MailOnly base={base} />} />
@@ -98,7 +98,6 @@ function ViewInfo({ view }: { view: ViewRow }) {
       <p>Konto {view.accountAddress} ({view.accountType === 'personal' ? 'persönlich' : 'Projektkonto'})</p>
       <p>Filter: {parts.length ? parts.join(' · ') : 'alle Mails des Kontos'}</p>
       <p>Meine Rechte: {[r.canRead && 'Lesen', r.canDraft && 'Entwurf', r.canSend && 'Senden', r.canCreateTask && 'Aufgabe erzeugen', r.canAi && 'KI'].filter(Boolean).join(', ') || 'keine'}</p>
-      <p className="small">Gespeichert werden nur Treffer dieser Ansicht; Filter laufen beim Anbieter.</p>
     </div>
   );
 }
@@ -295,7 +294,7 @@ function CreateTaskFromMail({ mail, onClose, onCreated }: { mail: MailDetail; on
   const { busy, error, run } = useAsync();
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
   return (
-    <Modal title="Aufgabe aus Mail (W3)" onClose={onClose}>
+    <Modal title="Aufgabe aus Mail" onClose={onClose}>
       <div className="form cols-2">
         <label className="field full"><span>Titel</span><input type="text" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
         <label className="field"><span>Teilprojekt</span><select value={f.subprojectId} onChange={(e) => setF({ ...f, subprojectId: e.target.value })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
@@ -454,7 +453,7 @@ function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () =>
   );
 }
 
-interface RightRow { id?: string; userId: string | null; userName?: string | null; role: string | null; canRead: boolean; canDraft: boolean; canSend: boolean; canAi: boolean; canCreateTask: boolean }
+interface RightRow { id?: string; userId: string | null; userName?: string | null; role: string | null; groupId?: string | null; groupName?: string | null; canRead: boolean; canDraft: boolean; canSend: boolean; canAi: boolean; canCreateTask: boolean }
 
 function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: () => void; onChanged: () => void }) {
   const { detail } = useProject();
@@ -465,7 +464,8 @@ function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: ()
   const flags: [keyof RightRow, string][] = [['canRead', 'Lesen'], ['canDraft', 'Entwurf'], ['canSend', 'Senden'], ['canCreateTask', 'Aufgabe'], ['canAi', 'KI']];
   const [filterEdit, setFilterEdit] = useState(false);
   if (!rows) return null;
-  const label = (r: RightRow) => (r.userId ? r.userName ?? detail.members.find((m) => m.userId === r.userId)?.name ?? '?' : `Rolle ${roleLabel[r.role!]}`);
+  const groups = useData<{ groups: Group[] }>('/groups');
+  const label = (r: RightRow) => (r.userId ? r.userName ?? detail.members.find((m) => m.userId === r.userId)?.name ?? '?' : r.groupId ? `Gruppe ${r.groupName ?? groups.data?.groups.find((g) => g.id === r.groupId)?.name ?? '?'}` : `Rolle ${roleLabel[r.role!]}`);
   return (
     <Modal title={`Rechte: ${view.name}`} onClose={onClose}>
       <table className="table"><thead><tr><th>Person / Rolle</th>{flags.map(([k, l]) => <th key={k}>{l}</th>)}<th /></tr></thead><tbody>
@@ -476,8 +476,9 @@ function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onClose: ()
           <option value="">+ Person oder Rolle</option>
           {['pl', 'member', 'reader'].filter((ro) => !rows.some((r) => r.role === ro)).map((ro) => <option key={ro} value={`role:${ro}`}>Rolle {roleLabel[ro]}</option>)}
           {detail.members.filter((m) => !rows.some((r) => r.userId === m.userId)).map((m) => <option key={m.userId} value={`user:${m.userId}`}>{m.name}</option>)}
+          {(groups.data?.groups ?? []).filter((g) => !rows.some((r) => r.groupId === g.id)).map((g) => <option key={g.id} value={`group:${g.id}`}>Gruppe {g.name}</option>)}
         </select>
-        <button className="btn sm" disabled={!addUser} onClick={() => { const [kind, id] = addUser.split(':'); setRows([...rows, { userId: kind === 'user' ? id : null, role: kind === 'role' ? id : null, canRead: true, canDraft: false, canSend: false, canAi: false, canCreateTask: false }]); setAddUser(''); }}>Hinzufügen</button>
+        <button className="btn sm" disabled={!addUser} onClick={() => { const [kind, id] = addUser.split(':'); setRows([...rows, { userId: kind === 'user' ? id : null, role: kind === 'role' ? id : null, groupId: kind === 'group' ? id : null, canRead: true, canDraft: false, canSend: false, canAi: false, canCreateTask: false }]); setAddUser(''); }}>Hinzufügen</button>
         <button className="btn sm right" onClick={() => setFilterEdit(true)}>Filter bearbeiten</button>
       </div>
       {view.accountType === 'personal' && <p className="muted small mt">Persönliches Konto: Senden bleibt beim Eigentümer.</p>}

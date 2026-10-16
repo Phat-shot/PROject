@@ -65,7 +65,7 @@ export async function getViewRights(db: Db, viewId: string, user: User, membersh
   if (view.account_type === 'personal' && view.owner_user_id === user.id) return ALL_RIGHTS;
   if (!membership) return NO_RIGHTS;
   const rows = await db.query(
-    `select * from mail_view_rights where view_id = $1 and (user_id = $2 or role = $3)`,
+    `select * from mail_view_rights where view_id = $1 and (user_id = $2 or role = $3 or group_id in (select group_id from group_members where user_id = $2))`,
     [viewId, user.id, membership.role]
   );
   const r: MailViewRights = { ...NO_RIGHTS };
@@ -78,4 +78,27 @@ export async function getViewRights(db: Db, viewId: string, user: User, membersh
   }
   if (view.account_type === 'personal') r.canSend = false;
   return r;
+}
+
+/**
+ * Eingeschränkte Teilprojekte: sichtbar für PL, Teilprojekt-Verantwortung und benannte Benutzer/Gruppen.
+ * SQL-Fragment für Aufgabenabfragen (Alias t), $userParam ist die Platzhalternummer der Benutzer-ID.
+ */
+export function visibleSubprojectSql(userParam: number, alias = 't'): string {
+  const u = `$${userParam}`;
+  return `(${alias}.subproject_id is null or exists (select 1 from subprojects s where s.id = ${alias}.subproject_id and (not s.restricted
+      or s.responsible_user_id = ${u}
+      or exists (select 1 from project_members pm where pm.project_id = s.project_id and pm.user_id = ${u} and pm.role = 'pl')
+      or exists (select 1 from subproject_access a where a.subproject_id = s.id and (a.user_id = ${u} or a.group_id in (select group_id from group_members gm where gm.user_id = ${u}))))))`;
+}
+
+export async function canSeeSubproject(db: Db, userId: string, subprojectId: string | null): Promise<boolean> {
+  if (!subprojectId) return true;
+  const r = await db.maybeOne(
+    `select 1 from subprojects s where s.id = $1 and (not s.restricted or s.responsible_user_id = $2
+       or exists (select 1 from project_members pm where pm.project_id = s.project_id and pm.user_id = $2 and pm.role = 'pl')
+       or exists (select 1 from subproject_access a where a.subproject_id = s.id and (a.user_id = $2 or a.group_id in (select group_id from group_members gm where gm.user_id = $2))))`,
+    [subprojectId, userId]
+  );
+  return Boolean(r);
 }

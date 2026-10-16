@@ -2,6 +2,10 @@ import type { FastifyInstance } from 'fastify';
 import { hashPassword, mapUser, requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+import { randomBytes } from 'node:crypto';
+import { createSession, setSessionCookie } from '../auth.js';
+import { publicBase } from '../docs/share.js';
+import type { Group, Invitation } from '@projekttool/shared';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen).
@@ -23,6 +27,150 @@ export async function userRoutes(app: FastifyInstance) {
     );
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.create', objectType: 'user', objectId: row.id, details: { email, globalRole } });
     return { user: mapUser(row) };
+  });
+
+  // ---- Einladungen per Mail über das Org-Postfach; manuelles Anlegen (POST /users) bleibt als Fallback
+  const mapInvitation = (r: any): Invitation => ({ id: r.id, email: r.email, name: r.name, globalRole: r.global_role, createdAt: r.created_at, expiresAt: r.expires_at, sentAt: r.sent_at, sendError: r.send_error, acceptedAt: r.accepted_at, link: `${publicBase()}/einladung/${r.token}` });
+  const orgAccount = (orgId: string) => app.db.maybeOne(`select * from mail_accounts where org_id = $1 and type = 'org' order by created_at limit 1`, [orgId]);
+  const sendInvitation = async (inv: any, inviter: { id: string; name: string }) => {
+    const account = await orgAccount(inv.org_id);
+    if (!account) {
+      await app.db.query(`update invitations set send_error = $2 where id = $1`, [inv.id, 'Kein Org-Postfach angebunden']);
+      return { sent: false, error: 'Kein Org-Postfach angebunden. Link manuell weitergeben oder unter Meine Mail-Konten ein Org-Postfach anlegen.' };
+    }
+    const org = await app.db.one(`select name from orgs where id = $1`, [inv.org_id]);
+    const link = `${publicBase()}/einladung/${inv.token}`;
+    try {
+      await app.mail.sendFromAccount(account, {
+        to: [inv.email], subject: `Einladung zu PROject (${org.name})`,
+        text: `Guten Tag ${inv.name},\n\n${inviter.name} hat Sie zu PROject, dem Projekttool von ${org.name}, eingeladen.\n\nBitte legen Sie hier Ihr Passwort fest:\n${link}\n\nDer Link ist 14 Tage gültig.\n\nMit freundlichen Grüßen\n${org.name}`,
+        userId: inviter.id
+      });
+      await app.db.query(`update invitations set sent_at = now(), send_error = null where id = $1`, [inv.id]);
+      return { sent: true };
+    } catch (e: any) {
+      const error = String(e?.message ?? e);
+      await app.db.query(`update invitations set send_error = $2 where id = $1`, [inv.id, error]);
+      return { sent: false, error };
+    }
+  };
+
+  app.get('/invitations', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const rows = await app.db.query(`select * from invitations where org_id = $1 and accepted_at is null order by created_at desc`, [user.orgId]);
+    return { invitations: rows.rows.map(mapInvitation), hasOrgAccount: Boolean(await orgAccount(user.orgId)) };
+  });
+
+  app.post<{ Body: { email: string; name: string; globalRole?: string } }>('/invitations', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const { email, name, globalRole = 'user' } = req.body ?? ({} as any);
+    if (!email?.trim() || !name?.trim()) throw badRequest('E-Mail und Name erforderlich');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Gültige E-Mail erforderlich');
+    if (!['org_admin', 'project_creator', 'user'].includes(globalRole)) throw badRequest('Ungültige Rolle');
+    const addr = email.trim().toLowerCase();
+    if (await app.db.maybeOne(`select 1 from users where lower(email) = $1`, [addr])) throw badRequest('Für diese E-Mail existiert bereits ein Benutzer');
+    await app.db.query(`delete from invitations where org_id = $1 and email = $2 and accepted_at is null`, [user.orgId, addr]);
+    const inv = await app.db.one(
+      `insert into invitations (org_id, email, name, global_role, token, invited_by, expires_at) values ($1,$2,$3,$4,$5,$6, now() + interval '14 days') returning *`,
+      [user.orgId, addr, name.trim(), globalRole, randomBytes(24).toString('base64url'), user.id]
+    );
+    const r = await sendInvitation(inv, user);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.invite', objectType: 'invitation', objectId: inv.id, details: { email: addr, globalRole, sent: r.sent } });
+    return { invitation: mapInvitation(await app.db.one(`select * from invitations where id = $1`, [inv.id])), ...r };
+  });
+
+  app.post<{ Params: { id: string } }>('/invitations/:id/resend', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const inv = await app.db.maybeOne(`select * from invitations where id = $1 and org_id = $2 and accepted_at is null`, [req.params.id, user.orgId]);
+    if (!inv) throw notFound('Einladung nicht gefunden');
+    await app.db.query(`update invitations set expires_at = now() + interval '14 days' where id = $1`, [inv.id]);
+    const r = await sendInvitation(inv, user);
+    return { invitation: mapInvitation(await app.db.one(`select * from invitations where id = $1`, [inv.id])), ...r };
+  });
+
+  app.delete<{ Params: { id: string } }>('/invitations/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    await app.db.query(`delete from invitations where id = $1 and org_id = $2 and accepted_at is null`, [req.params.id, user.orgId]);
+    return { ok: true };
+  });
+
+  // Öffentlich: Einladung prüfen und annehmen (Passwort setzen, danach angemeldet)
+  const openInvitation = (token: string) => app.db.maybeOne(`select i.*, o.name as org_name from invitations i join orgs o on o.id = i.org_id where i.token = $1 and i.accepted_at is null and i.expires_at > now()`, [token]);
+  app.get<{ Params: { token: string } }>('/invitations/accept/:token', async (req) => {
+    const inv = await openInvitation(req.params.token);
+    if (!inv) throw notFound('Einladung ungültig oder abgelaufen');
+    return { email: inv.email, name: inv.name, orgName: inv.org_name };
+  });
+  app.post<{ Params: { token: string }; Body: { name?: string; password: string } }>('/invitations/accept/:token', async (req, reply) => {
+    const inv = await openInvitation(req.params.token);
+    if (!inv) throw notFound('Einladung ungültig oder abgelaufen');
+    const b = req.body ?? ({} as any);
+    if (!b.password || b.password.length < 10) throw badRequest('Passwort mit mindestens 10 Zeichen');
+    if (await app.db.maybeOne(`select 1 from users where lower(email) = $1`, [inv.email])) throw badRequest('Benutzer existiert bereits, bitte anmelden');
+    const row = await app.db.one(
+      `insert into users (org_id, email, name, password_hash, global_role) values ($1,$2,$3,$4,$5) returning *`,
+      [inv.org_id, inv.email, (b.name ?? inv.name).trim() || inv.name, hashPassword(b.password), inv.global_role]
+    );
+    await app.db.query(`update invitations set accepted_at = now(), user_id = $2 where id = $1`, [inv.id, row.id]);
+    await audit(app.db, { orgId: inv.org_id, userId: row.id, action: 'user.invite_accepted', objectType: 'user', objectId: row.id, details: { invitation: inv.id } });
+    const token = await createSession(app.db, row.id);
+    setSessionCookie(reply, token);
+    return { user: mapUser(row) };
+  });
+
+  // ---- Berechtigungsgruppen des Mandanten
+  const groupRows = async (orgId: string, id?: string) => {
+    const rows = await app.db.query(
+      `select g.*, coalesce((select json_agg(m.user_id) from group_members m where m.group_id = g.id), '[]'::json) as member_ids from groups g where g.org_id = $1 ${id ? 'and g.id = $2' : ''} order by g.name`,
+      id ? [orgId, id] : [orgId]
+    );
+    return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, memberIds: (typeof g.member_ids === 'string' ? JSON.parse(g.member_ids) : g.member_ids) ?? [] }));
+  };
+  const setMembers = async (orgId: string, groupId: string, ids: string[]) => {
+    await app.db.query(`delete from group_members where group_id = $1`, [groupId]);
+    for (const uid of new Set(ids)) {
+      const ok = await app.db.maybeOne(`select 1 from users where id = $1 and org_id = $2`, [uid, orgId]);
+      if (ok) await app.db.query(`insert into group_members (group_id, user_id) values ($1,$2)`, [groupId, uid]);
+    }
+  };
+
+  // Alle angemeldeten Benutzer sehen Gruppen (PL wählt sie für Teilprojekte und Mail-Ansichten); pflegen darf der Org-Admin
+  app.get('/groups', async (req) => {
+    const user = requireUser(req);
+    return { groups: await groupRows(user.orgId) };
+  });
+  app.post<{ Body: { name: string; description?: string | null; memberIds?: string[] } }>('/groups', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const b = req.body ?? ({} as any);
+    if (!b.name?.trim()) throw badRequest('Name erforderlich');
+    if (await app.db.maybeOne(`select 1 from groups where org_id = $1 and lower(name) = lower($2)`, [user.orgId, b.name.trim()])) throw badRequest('Gruppe existiert bereits');
+    const g = await app.db.one(`insert into groups (org_id, name, description) values ($1,$2,$3) returning id`, [user.orgId, b.name.trim(), b.description ?? null]);
+    await setMembers(user.orgId, g.id, b.memberIds ?? []);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.create', objectType: 'group', objectId: g.id, details: { name: b.name, members: b.memberIds } });
+    return { group: (await groupRows(user.orgId, g.id))[0] };
+  });
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string | null; memberIds?: string[] } }>('/groups/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const g = await app.db.maybeOne(`select * from groups where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!g) throw notFound('Gruppe nicht gefunden');
+    const b = req.body ?? {};
+    await app.db.query(`update groups set name = coalesce($2, name), description = case when $3 then $4 else description end where id = $1`, [g.id, b.name?.trim() || null, 'description' in b, b.description ?? null]);
+    if (b.memberIds) await setMembers(user.orgId, g.id, b.memberIds);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.update', objectType: 'group', objectId: g.id, details: b });
+    return { group: (await groupRows(user.orgId, g.id))[0] };
+  });
+  app.delete<{ Params: { id: string } }>('/groups/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    await app.db.query(`delete from groups where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.delete', objectType: 'group', objectId: req.params.id });
+    return { ok: true };
   });
 
   // W10: Benutzer deaktivieren

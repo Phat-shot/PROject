@@ -30,7 +30,10 @@ export function mapSubproject(r: any, lead: LeadInfo): Subproject {
     responsible,
     startDate: dateStr(r.start_date),
     endDate: dateStr(r.end_date),
-    position: r.position
+    position: r.position,
+    restricted: Boolean(r.restricted),
+    accessUserIds: (typeof r.access_user_ids === 'string' ? JSON.parse(r.access_user_ids) : r.access_user_ids) ?? [],
+    accessGroupIds: (typeof r.access_group_ids === 'string' ? JSON.parse(r.access_group_ids) : r.access_group_ids) ?? []
   };
 }
 

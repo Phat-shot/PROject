@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { api, fmtDate, today } from '../../lib/api';
 import { Modal, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { useData } from '../../lib/useData';
+import type { Group } from '@projekttool/shared';
 
 const DAY = 86400_000;
 const PX_PER_DAY = 4;
@@ -111,8 +113,8 @@ export function PlanView() {
     const [edit, setEdit] = useState(false);
     return (
       <tr>
-        <td>{s.name}</td>
-        <td>{s.responsible.name ?? '–'}{s.responsible.inherited && <span className="badge inherited" style={{ marginLeft: 6 }}>geerbt vom PL</span>}</td>
+        <td>{s.name}{s.restricted && <span className="badge" title="Eingeschränkt sichtbar" style={{ marginLeft: 6 }}>🔒 eingeschränkt</span>}</td>
+        <td>{s.responsible.name ?? '–'}{s.responsible.inherited && <span className="muted small"> (geerbt vom PL)</span>}</td>
         <td className="nowrap">{fmtDate(s.startDate)} – {fmtDate(s.endDate)}</td>
         <td className="nowrap">{canPlan && <><button className="btn sm link" onClick={() => setEdit(true)}>Bearbeiten</button>{me.role === 'pl' && <button className="btn sm link" onClick={() => { if (confirm('Teilprojekt löschen? Aufgaben bleiben erhalten.')) void api.del(`/projects/${detail.project.id}/subprojects/${s.id}`).then(async () => { await reload(); await reloadTasks(); }); }}>✕</button>}</>}
           {edit && <SubprojectForm existing={s} onClose={() => setEdit(false)} />}</td>
@@ -121,9 +123,11 @@ export function PlanView() {
   }
 
   function SubprojectForm({ existing, onClose }: { existing?: (typeof detail.subprojects)[number]; onClose: () => void }) {
-    const [f, setF] = useState({ name: existing?.name ?? '', responsibleUserId: existing?.responsibleUserId ?? '', startDate: existing?.startDate ?? '', endDate: existing?.endDate ?? '' });
+    const [f, setF] = useState({ name: existing?.name ?? '', responsibleUserId: existing?.responsibleUserId ?? '', startDate: existing?.startDate ?? '', endDate: existing?.endDate ?? '', restricted: existing?.restricted ?? false, accessUserIds: existing?.accessUserIds ?? [], accessGroupIds: existing?.accessGroupIds ?? [] });
     const { busy, error, run } = useAsync();
     const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
+    const groups = useData<{ groups: Group[] }>(me.role === 'pl' ? '/groups' : null);
+    const toggle = (k: 'accessUserIds' | 'accessGroupIds', id: string) => setF({ ...f, [k]: f[k].includes(id) ? f[k].filter((x) => x !== id) : [...f[k], id] });
     return (
       <Modal title={existing ? 'Teilprojekt bearbeiten' : 'Neues Teilprojekt'} onClose={onClose}>
         <div className="form cols-2">
@@ -131,9 +135,23 @@ export function PlanView() {
           <label className="field full"><span>Verantwortlich (Benutzer oder PL; keine eigene Rolle)</span><select value={f.responsibleUserId} onChange={(e) => setF({ ...f, responsibleUserId: e.target.value })}><option value="">– geerbt vom PL –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
           <label className="field"><span>Start</span><input type="date" value={f.startDate} onChange={(e) => setF({ ...f, startDate: e.target.value })} /></label>
           <label className="field"><span>Ende</span><input type="date" value={f.endDate} onChange={(e) => setF({ ...f, endDate: e.target.value })} /></label>
+          {me.role === 'pl' && <div className="full stack">
+            <label className="check"><input type="checkbox" checked={f.restricted} onChange={(e) => setF({ ...f, restricted: e.target.checked })} /> Eingeschränkt sichtbar: nur PL, Verantwortliche und die hier benannten Benutzer und Gruppen sehen Teilprojekt und Aufgaben</label>
+            {f.restricted && <div className="grid cols-2">
+              <div className="field"><span>Benutzer</span><div className="stack" style={{ gap: 2 }}>{members.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={f.accessUserIds.includes(u.id)} onChange={() => toggle('accessUserIds', u.id)} /> {u.name}</label>)}</div></div>
+              <div className="field"><span>Gruppen</span><div className="stack" style={{ gap: 2 }}>{(groups.data?.groups ?? []).map((g) => <label key={g.id} className="check small"><input type="checkbox" checked={f.accessGroupIds.includes(g.id)} onChange={() => toggle('accessGroupIds', g.id)} /> {g.name} <span className="muted">({g.memberIds.length})</span></label>)}{groups.data && groups.data.groups.length === 0 && <span className="muted small">Keine Gruppen. Der Org-Admin legt sie in der Verwaltung an.</span>}</div></div>
+            </div>}
+          </div>}
           {error && <div className="error full">{error}</div>}
           <div className="row full"><button className="btn primary" disabled={busy || !f.name} onClick={() => void run(async () => {
-            const body = { name: f.name, responsibleUserId: f.responsibleUserId || null, startDate: f.startDate || null, endDate: f.endDate || null };
+            const body: Record<string, unknown> = { name: f.name, responsibleUserId: f.responsibleUserId || null, startDate: f.startDate || null, endDate: f.endDate || null };
+            if (me.role === 'pl') { body.restricted = f.restricted; body.accessUserIds = f.accessUserIds; body.accessGroupIds = f.accessGroupIds; }
+            if (existing && (f.responsibleUserId || null) !== (existing.responsibleUserId ?? null)) {
+              const oldEff = existing.responsible.userId;
+              const newName = members.find((u) => u.id === f.responsibleUserId)?.name ?? 'den PL';
+              const direct = tasks.filter((x) => x.subprojectId === existing.id && !x.done && x.responsibleUserId && x.responsibleUserId === oldEff);
+              if (direct.length > 0) body.transferTasks = confirm(`${direct.length} Aufgabe(n) in diesem Teilprojekt sind ${existing.responsible.name ?? 'der bisherigen Verantwortung'} direkt zugewiesen. Auch an ${newName} übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+            }
             if (existing) await api.patch(`/projects/${detail.project.id}/subprojects/${existing.id}`, body); else await api.post(`/projects/${detail.project.id}/subprojects`, body);
             await reload(); await reloadTasks(); onClose();
           })}>Speichern</button></div>

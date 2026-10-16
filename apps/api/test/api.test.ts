@@ -373,3 +373,105 @@ test('Reporting: Policy, Fälligkeit, Bericht aus Vorlage mit Kennzahlen, Versan
   assert.equal(dist.statusCode, 200, dist.body);
   assert.deepEqual(dist.json().to, ['gf@kunde.de', 'lenkung@kunde.de']);
 });
+
+test('Einladungen über Org-Postfach, Annahme mit Passwort, manuelles Anlegen bleibt', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  assert.equal((await t.api(pl).post('/invitations', { email: 'neu@firma.de', name: 'Neu' })).statusCode, 403);
+  assert.equal((await t.api(admin).post('/invitations', { email: 'pl@demo.local', name: 'Doppelt' })).statusCode, 400, 'bestehender Benutzer');
+  const before = t.mail.dev.sent.length;
+  const inv = await t.api(admin).post('/invitations', { email: 'Neu@Firma.de', name: 'Nina Neu', globalRole: 'project_creator' });
+  assert.equal(inv.statusCode, 200, inv.body);
+  assert.equal(inv.json().sent, true);
+  assert.equal(t.mail.dev.sent.length, before + 1);
+  const mail = t.mail.dev.sent.at(-1)!.msg;
+  assert.deepEqual(mail.to, ['neu@firma.de']);
+  assert.ok(mail.text.includes(inv.json().invitation.link));
+  const token = inv.json().invitation.link.split('/einladung/')[1];
+  const info = await t.app.inject({ method: 'GET', url: `/api/invitations/accept/${token}` });
+  assert.equal(info.statusCode, 200);
+  assert.equal(info.json().email, 'neu@firma.de');
+  assert.equal((await t.app.inject({ method: 'POST', url: `/api/invitations/accept/${token}`, payload: { password: 'kurz' } })).statusCode, 400);
+  const acc = await t.app.inject({ method: 'POST', url: `/api/invitations/accept/${token}`, payload: { password: 'sicheres-passwort-1' } });
+  assert.equal(acc.statusCode, 200, acc.body);
+  assert.equal(acc.json().user.globalRole, 'project_creator');
+  assert.ok(acc.headers['set-cookie']);
+  assert.equal((await t.app.inject({ method: 'GET', url: `/api/invitations/accept/${token}` })).statusCode, 404, 'Token verbraucht');
+  assert.ok((await t.api(admin).get('/invitations')).json().invitations.every((i: any) => i.email !== 'neu@firma.de'));
+  const login = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'neu@firma.de', password: 'sicheres-passwort-1' } });
+  assert.equal(login.statusCode, 200);
+  assert.equal(login.json().orgName, 'Demo GmbH');
+  // Fallback: manuelles Anlegen
+  assert.equal((await t.api(admin).post('/users', { email: 'manuell@firma.de', name: 'Manuell', password: 'passwort-manuell' })).statusCode, 200);
+});
+
+test('Gruppen und eingeschränkte Teilprojekte: nur PL, Verantwortliche und benannte Benutzer/Gruppen sehen die Aufgaben', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const web = t.ids.projects.web;
+  const maxId = (await t.api(max).get('/auth/me')).json().user.id;
+  // Seed: Teilprojekt „Vertrag und Budget“ ist eingeschränkt (Gruppe Lenkungskreis = pl, anna)
+  const plSubs = (await t.api(pl).get(`/projects/${web}`)).json().subprojects;
+  const vertrag = plSubs.find((s: any) => s.name === 'Vertrag und Budget');
+  assert.ok(vertrag && vertrag.restricted);
+  assert.ok(!(await t.api(max).get(`/projects/${web}`)).json().subprojects.some((s: any) => s.id === vertrag.id), 'Max sieht das Teilprojekt nicht');
+  assert.ok((await t.api(anna).get(`/projects/${web}`)).json().subprojects.some((s: any) => s.id === vertrag.id), 'Anna über Gruppe');
+  const secret = (await t.api(pl).get(`/projects/${web}/tasks`)).json().tasks.find((x: any) => x.subprojectId === vertrag.id);
+  assert.ok(secret);
+  assert.ok(!(await t.api(max).get(`/projects/${web}/tasks`)).json().tasks.some((x: any) => x.id === secret.id));
+  assert.equal((await t.api(max).get(`/tasks/${secret.id}`)).statusCode, 403);
+  assert.equal((await t.api(max).patch(`/tasks/${secret.id}`, { title: 'x' })).statusCode, 403);
+  assert.ok(!(await t.api(max).get('/search?q=Agenturvertrag')).json().tasks.some((x: any) => x.id === secret.id));
+  assert.ok(!(await t.api(max).get('/my/tasks?scope=all')).json().tasks.some((x: any) => x.id === secret.id));
+  // Gruppe anlegen und Max aufnehmen → sichtbar
+  assert.equal((await t.api(pl).post('/groups', { name: 'Einkauf' })).statusCode, 403);
+  const g = await t.api(admin).post('/groups', { name: 'Einkauf', memberIds: [maxId] });
+  assert.equal(g.statusCode, 200, g.body);
+  assert.equal((await t.api(max).patch(`/projects/${web}/subprojects/${vertrag.id}`, { accessGroupIds: [g.json().group.id] })).statusCode, 403, 'Max darf Zugriff nicht selbst setzen');
+  const upd = await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { accessGroupIds: [...vertrag.accessGroupIds, g.json().group.id] });
+  assert.equal(upd.statusCode, 200, upd.body);
+  assert.ok((await t.api(max).get(`/projects/${web}/tasks`)).json().tasks.some((x: any) => x.id === secret.id), 'Max sieht nach Gruppenfreigabe');
+  assert.equal((await t.api(max).get(`/tasks/${secret.id}`)).statusCode, 200);
+  // Gruppe in Mail-Ansicht-Rechten
+  const leser = await t.login('leser@demo.local');
+  const leserId = (await t.api(leser).get('/auth/me')).json().user.id;
+  await t.api(admin).patch(`/groups/${g.json().group.id}`, { memberIds: [maxId, leserId] });
+  const rightsBefore = (await t.api(pl).get(`/mail/views/${t.ids.views.project}/rights`)).json().rights;
+  const put = await t.api(pl).put(`/mail/views/${t.ids.views.project}/rights`, { rights: [...rightsBefore.filter((r: any) => r.role !== 'reader'), { groupId: g.json().group.id, canRead: true, canCreateTask: true }] });
+  assert.equal(put.statusCode, 200, put.body);
+  assert.ok(put.json().rights.some((r: any) => r.groupId === g.json().group.id && r.groupName === 'Einkauf'));
+  const lv = await t.api(leser).get(`/mail/views/${t.ids.views.project}/mails`);
+  assert.equal(lv.statusCode, 200, 'Leser liest über Gruppe');
+  assert.equal(lv.json().view.myRights.canCreateTask, true);
+  // Entfernen der Freigabe → wieder unsichtbar
+  await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { accessGroupIds: vertrag.accessGroupIds });
+  assert.equal((await t.api(max).get(`/tasks/${secret.id}`)).statusCode, 403);
+  // Nicht eingeschränkt → alle Mitglieder
+  await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { restricted: false });
+  assert.equal((await t.api(max).get(`/tasks/${secret.id}`)).statusCode, 200);
+});
+
+test('Übergeordnete Zuständigkeit wechseln: direkt zugewiesene Aufgaben nur auf Wunsch mit übertragen', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const users = (await t.api(pl).get('/users')).json().users;
+  const anna = users.find((u: any) => u.email === 'anna@demo.local');
+  const max = users.find((u: any) => u.email === 'max@demo.local');
+  const sp = (await t.api(pl).post(`/projects/${web}/subprojects`, { name: 'Wechsel-TP', responsibleUserId: anna.id })).json().subproject;
+  const direct = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Direkt Anna', subprojectId: sp.id, responsibleUserId: anna.id })).json().task;
+  const inherited = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Geerbt', subprojectId: sp.id })).json().task;
+  assert.equal(inherited.responsible.userId, anna.id);
+  assert.equal(inherited.responsible.inherited, true);
+  // ohne transferTasks: geerbte folgen, direkte bleiben
+  const r1 = await t.api(pl).patch(`/projects/${web}/subprojects/${sp.id}`, { responsibleUserId: max.id });
+  assert.equal(r1.json().transferred, 0);
+  assert.equal((await t.api(pl).get(`/tasks/${inherited.id}`)).json().task.responsible.userId, max.id);
+  assert.equal((await t.api(pl).get(`/tasks/${direct.id}`)).json().task.responsible.userId, anna.id);
+  // zurück mit transferTasks: direkte wechseln mit
+  await t.api(pl).patch(`/projects/${web}/subprojects/${sp.id}`, { responsibleUserId: anna.id });
+  const r2 = await t.api(pl).patch(`/projects/${web}/subprojects/${sp.id}`, { responsibleUserId: max.id, transferTasks: true });
+  assert.equal(r2.json().transferred, 1);
+  assert.equal((await t.api(pl).get(`/tasks/${direct.id}`)).json().task.responsible.userId, max.id);
+});

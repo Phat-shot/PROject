@@ -42,7 +42,6 @@ export function AllTasksPage() {
         </div>
         {error && <div className="error mb">{error}</div>}
         <div className="card">
-          {scope === 'mine' && <p className="muted small">Offene Aufgaben, für die du ausdrücklich oder geerbt zuständig bist.</p>}
           {data && rows.length === 0 ? <div className="empty">Keine Aufgaben.</div> : (
             <table className="table">
               <thead><tr><th>Projekt</th><th>Aufgabe</th><th>Priorität</th><th>Fällig</th><th>Zuständig</th><th>Status</th></tr></thead>
@@ -58,7 +57,7 @@ export function AllTasksPage() {
                     </td>
                     <td><span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span></td>
                     <td className="nowrap" style={{ color: !x.done && x.dueDate && x.dueDate < t ? 'var(--danger)' : undefined }}>{fmtDate(x.dueDate)}</td>
-                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.userId === user?.id && <span className="muted"> (ich)</span>}{x.responsible.inherited && <span className="muted"> · geerbt</span>}</td>
+                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.inherited && <span className="muted"> (geerbt{x.responsible.inheritedFrom === 'subproject' ? ' vom Teilprojekt' : ' vom PL'})</span>}{x.responsible.userId === user?.id && <span className="badge" style={{ marginLeft: 6 }}>ich</span>}</td>
                     <td className="small muted">{x.done ? 'erledigt' : 'offen'}</td>
                   </tr>
                 ))}

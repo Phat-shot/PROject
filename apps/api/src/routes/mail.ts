@@ -42,6 +42,7 @@ export async function mailRoutes(app: FastifyInstance) {
 
   async function canManageAccount(user: User, account: AccountRow): Promise<boolean> {
     if (account.type === 'personal') return account.owner_user_id === user.id;
+    if (account.type === 'org') return user.globalRole === 'org_admin';
     const m = await getMembership(db, account.project_id!, user.id);
     return m?.role === 'pl';
   }
@@ -86,13 +87,13 @@ export async function mailRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const rows = await db.query(
       `select a.*, (select count(*)::int from mail_views v where v.account_id = a.id) as view_count from mail_accounts a
-       where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl')) order by a.type, a.name`,
-      [user.orgId, user.id]
+       where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl') or (a.type = 'org' and $3)) order by a.type, a.name`,
+      [user.orgId, user.id, user.globalRole === 'org_admin']
     );
     return { accounts: rows.rows.map(mapAccount) };
   });
 
-  app.post<{ Body: Partial<AccountRow> & { type: 'personal' | 'project'; projectId?: string; provider?: 'imap' | 'dev'; imapHost?: string; imapPort?: number; imapUser?: string; imapPassword?: string; imapSecure?: boolean; smtpHost?: string; smtpPort?: number; smtpUser?: string; smtpPassword?: string; smtpSecure?: boolean } }>(
+  app.post<{ Body: Partial<AccountRow> & { type: 'personal' | 'project' | 'org'; projectId?: string; provider?: 'imap' | 'dev'; imapHost?: string; imapPort?: number; imapUser?: string; imapPassword?: string; imapSecure?: boolean; smtpHost?: string; smtpPort?: number; smtpUser?: string; smtpPassword?: string; smtpSecure?: boolean } }>(
     '/mail/accounts',
     async (req) => {
       const user = requireUser(req);
@@ -106,7 +107,10 @@ export async function mailRoutes(app: FastifyInstance) {
         if (!b.projectId) throw badRequest('projectId erforderlich');
         await requireProject(db, user, b.projectId, 'pl');
         projectId = b.projectId;
-      } else if (b.type !== 'personal') throw badRequest('Typ personal oder project');
+      } else if (b.type === 'org') {
+        if (user.globalRole !== 'org_admin') throw forbidden('Org-Postfach legt der Org-Admin an');
+        if (await db.maybeOne(`select 1 from mail_accounts where org_id = $1 and type = 'org'`, [user.orgId])) throw badRequest('Es gibt bereits ein Org-Postfach');
+      } else if (b.type !== 'personal') throw badRequest('Typ personal, project oder org');
       const r = await db.one(
         `insert into mail_accounts (org_id, type, owner_user_id, project_id, name, address, provider, imap_host, imap_port, imap_user, imap_password, imap_secure, smtp_host, smtp_port, smtp_user, smtp_password, smtp_secure)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
@@ -276,11 +280,11 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!v) throw notFound('Ansicht nicht gefunden');
     const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [v.account_id]);
     if (!(await canManageAccount(user, a))) throw forbidden();
-    const rows = await db.query(`select r.*, u.name as user_name from mail_view_rights r left join users u on u.id = r.user_id where r.view_id = $1`, [v.id]);
+    const rows = await db.query(`select r.*, u.name as user_name, g.name as group_name from mail_view_rights r left join users u on u.id = r.user_id left join groups g on g.id = r.group_id where r.view_id = $1`, [v.id]);
     return { rights: rows.rows.map(mapRight) };
   });
 
-  app.put<{ Params: { vid: string }; Body: { rights: { userId?: string | null; role?: ProjectRole | null; canRead?: boolean; canDraft?: boolean; canSend?: boolean; canAi?: boolean; canCreateTask?: boolean }[] } }>('/mail/views/:vid/rights', async (req) => {
+  app.put<{ Params: { vid: string }; Body: { rights: { userId?: string | null; role?: ProjectRole | null; groupId?: string | null; canRead?: boolean; canDraft?: boolean; canSend?: boolean; canAi?: boolean; canCreateTask?: boolean }[] } }>('/mail/views/:vid/rights', async (req) => {
     const user = requireUser(req);
     const v = await loadView(req.params.vid);
     if (!v) throw notFound('Ansicht nicht gefunden');
@@ -288,14 +292,15 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!(await canManageAccount(user, a))) throw forbidden();
     await db.query(`delete from mail_view_rights where view_id = $1`, [v.id]);
     for (const r of req.body?.rights ?? []) {
-      if (!r.userId && !r.role) continue;
+      if (!r.userId && !r.role && !r.groupId) continue;
+      if (r.groupId && !(await db.maybeOne(`select 1 from groups where id = $1 and org_id = $2`, [r.groupId, user.orgId]))) continue;
       await db.query(
-        `insert into mail_view_rights (view_id, user_id, role, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [v.id, r.userId ?? null, r.userId ? null : r.role, r.canRead ?? true, Boolean(r.canDraft), Boolean(r.canSend) && a.type === 'project', Boolean(r.canAi), Boolean(r.canCreateTask)]
+        `insert into mail_view_rights (view_id, user_id, role, group_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [v.id, r.userId ?? null, r.userId || r.groupId ? null : r.role, r.userId ? null : r.groupId ?? null, r.canRead ?? true, Boolean(r.canDraft), Boolean(r.canSend) && a.type === 'project', Boolean(r.canAi), Boolean(r.canCreateTask)]
       );
     }
     await audit(db, { orgId: user.orgId, projectId: v.project_id, userId: user.id, action: 'mail_view.rights', objectType: 'mail_view', objectId: v.id, details: { rights: req.body?.rights } });
-    const rows = await db.query(`select r.*, u.name as user_name from mail_view_rights r left join users u on u.id = r.user_id where r.view_id = $1`, [v.id]);
+    const rows = await db.query(`select r.*, u.name as user_name, g.name as group_name from mail_view_rights r left join users u on u.id = r.user_id left join groups g on g.id = r.group_id where r.view_id = $1`, [v.id]);
     return { rights: rows.rows.map(mapRight) };
   });
 
@@ -644,7 +649,7 @@ export async function mailRoutes(app: FastifyInstance) {
 }
 
 function mapRight(r: any) {
-  return { id: r.id, userId: r.user_id, userName: r.user_name, role: r.role, canRead: r.can_read, canDraft: r.can_draft, canSend: r.can_send, canAi: r.can_ai, canCreateTask: r.can_create_task };
+  return { id: r.id, userId: r.user_id, userName: r.user_name, role: r.role, groupId: r.group_id ?? null, groupName: r.group_name ?? null, canRead: r.can_read, canDraft: r.can_draft, canSend: r.can_send, canAi: r.can_ai, canCreateTask: r.can_create_task };
 }
 
 function normalizeFilter(f?: MailViewFilter): MailViewFilter {

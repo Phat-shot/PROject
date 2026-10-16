@@ -7,7 +7,7 @@ import { useData } from '../../lib/useData';
 import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
-  const { detail, users, reload } = useProject();
+  const { detail, users, reload, tasks, reloadTasks } = useProject();
   const me = detail.project.myMembership;
   const [edit, setEdit] = useState<MemberRow | null>(null);
   const [invite, setInvite] = useState(false);
@@ -35,7 +35,6 @@ export function MembersView() {
               </tr>
             ))}
           </tbody></table>
-          <p className="muted small mt">Rechte vor Funktion: Jede Aktion prüft Projektmitgliedschaft und Einzelrecht. Org-Admins sehen Projektinhalte nur als Mitglied. Keine externen Gäste.</p>
         </div>
         <div className="stack">
           <div className="card">
@@ -50,7 +49,7 @@ export function MembersView() {
             </dl>
             {isPl && <div className="row mt">
               <button className="btn sm" onClick={() => setColumns(true)}>Board-Spalten</button>
-              {detail.project.status === 'active' && <button className="btn sm danger" onClick={() => { if (confirm('Projekt archivieren? Nur lesend, Mail-Ansichten werden getrennt, Automatik stoppt (W11).')) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); }}>Archivieren</button>}
+              {detail.project.status === 'active' && <button className="btn sm danger" onClick={() => { if (confirm('Projekt archivieren? Nur lesend, Mail-Ansichten werden getrennt, Automatik stoppt.')) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); }}>Archivieren</button>}
             </div>}
           </div>
           <div className="card">
@@ -78,13 +77,13 @@ export function MembersView() {
     const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
     const { busy, error, run } = useAsync();
     return (
-      <Modal title={member ? `Rolle: ${member.name}` : 'Mitglied einladen (W2)'} onClose={onClose}>
+      <Modal title={member ? `Rolle: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
         <div className="form">
           {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select></label>}
           <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
           {f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
           {f.role === 'member' && <>
-            <strong className="small">Optionale Rechte („opt.“)</strong>
+            <strong className="small">Zusätzliche Rechte</strong>
             <label className="check"><input type="checkbox" checked={f.canEditPlan} onChange={(e) => setF({ ...f, canEditPlan: e.target.checked })} /> Projektplan, Meilensteine ändern</label>
             <label className="check"><input type="checkbox" checked={f.canApprove} onChange={(e) => setF({ ...f, canApprove: e.target.checked })} /> KI-Vorschläge freigeben</label>
             <label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> Dokument final setzen, Versand auslösen</label>
@@ -92,7 +91,14 @@ export function MembersView() {
           </>}
           {f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
           {error && <div className="error">{error}</div>}
-          <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/members/${f.userId}`, f); await reload(); onClose(); })}>Speichern</button></div>
+          <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
+            const body: Record<string, unknown> = { ...f };
+            const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
+            if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
+              const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
+              if (direct > 0) body.transferTasks = confirm(`${direct} Aufgabe(n)/Teilprojekt(e) sind ${primary.name} direkt zugewiesen. Auch an die neue Projektleitung übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+            }
+            await api.put(`/projects/${detail.project.id}/members/${f.userId}`, body); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>
       </Modal>
     );
@@ -157,7 +163,7 @@ function EscalationForm() {
   }
   return (
     <div className="form">
-      <p className="muted small">Regel vor KI: Verzug, Stillstand und Blockaden eskalieren automatisch entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt. Kritikalität (Priorität, Nachfolger, naher Meilenstein, Blockade) halbiert die Fristen. Jede Stufe erzeugt Benachrichtigung und Log-Eintrag; die KI ergänzt später Einschätzung und Text.</p>
+      <p className="muted small">Verzug, Stillstand und Blockaden eskalieren entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt. Hohe Kritikalität halbiert die Fristen.</p>
       <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Eskalation aktiv</label>
       <div className="row small">
         <span>Stufe 1 nach</span><input type="number" min={0} value={f.d1} onChange={(e) => setF({ ...f, d1: Number(e.target.value) })} style={{ width: 60 }} />
@@ -194,7 +200,7 @@ function ReportingForm() {
   const save = (): Partial<ReportingPolicy> => ({ enabled: f.enabled, templateKey: f.templateKey, interval: f.interval, weekday: Number(f.weekday), dayOfMonth: Number(f.dayOfMonth), recipients: f.recipientsText.split(/[,;\s]+/).filter(Boolean), mode: f.mode, parentPageId: f.parentPageId || null });
   return (
     <div className="form">
-      <p className="muted small">Regel vor KI: Der Worker legt im Rhythmus eine Seite aus der Vorlage an, ergänzt Kennzahlen (Fortschritt, Verzug, Blockaden, Eskalationen, Meilensteine) und versendet sie als PDF über das Projektkonto. Die KI formuliert später nur die Zusammenfassung.</p>
+      <p className="muted small">Im Rhythmus entsteht eine Seite aus der Vorlage mit Kennzahlen (Fortschritt, Verzug, Blockaden, Eskalationen, Meilensteine) und geht als PDF über das Projektkonto an den Empfängerkreis.</p>
       <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Reporting aktiv</label>
       <div className="grid cols-2">
         <label className="field"><span>Vorlage</span><select value={f.templateKey} onChange={(e) => setF({ ...f, templateKey: e.target.value })}>{(templates.data?.templates ?? []).map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}</select></label>

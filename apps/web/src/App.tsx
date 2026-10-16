@@ -10,6 +10,7 @@ import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
 import { SharePage } from './pages/SharePage';
 import { SetupPage } from './pages/SetupPage';
+import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { useEffect, useState } from 'react';
 import { api } from './lib/api';
 
@@ -17,6 +18,9 @@ export default function App() {
   const { user, loading } = useAuth();
   if (window.location.pathname.startsWith('/s/')) {
     return <Routes><Route path="/s/:token" element={<SharePage />} /></Routes>;
+  }
+  if (window.location.pathname.startsWith('/einladung/')) {
+    return <AcceptInvitePage token={window.location.pathname.split('/')[2] ?? ''} />;
   }
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   useEffect(() => {

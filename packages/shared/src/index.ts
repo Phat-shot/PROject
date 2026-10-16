@@ -4,7 +4,7 @@ export type GlobalRole = 'org_admin' | 'project_creator' | 'user';
 export type ProjectRole = 'pl' | 'member' | 'reader';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
 export type DocStatus = 'draft' | 'review' | 'final';
-export type MailAccountType = 'personal' | 'project';
+export type MailAccountType = 'personal' | 'project' | 'org';
 export type MailProviderKind = 'imap' | 'dev';
 export type DraftStatus = 'draft' | 'pending_approval' | 'sent' | 'failed';
 
@@ -133,6 +133,30 @@ export interface Subproject {
   startDate: string | null;
   endDate: string | null;
   position: number;
+  /** Nur für PL, Verantwortliche und benannte Benutzer/Gruppen sichtbar */
+  restricted: boolean;
+  accessUserIds: string[];
+  accessGroupIds: string[];
+}
+
+export interface Group {
+  id: string;
+  name: string;
+  description: string | null;
+  memberIds: string[];
+}
+
+export interface Invitation {
+  id: string;
+  email: string;
+  name: string;
+  globalRole: GlobalRole;
+  createdAt: string;
+  expiresAt: string;
+  sentAt: string | null;
+  sendError: string | null;
+  acceptedAt: string | null;
+  link: string;
 }
 
 export interface ResponsibleInfo {

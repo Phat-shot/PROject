@@ -12,7 +12,8 @@ export async function authRoutes(app: FastifyInstance) {
     const token = await createSession(app.db, row.id);
     setSessionCookie(reply, token);
     await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id });
-    return { user: mapUser(row) };
+    const org = await app.db.one(`select name from orgs where id = $1`, [row.org_id]);
+    return { user: mapUser(row), orgName: org.name };
   });
 
   app.post('/auth/logout', async (req, reply) => {
@@ -24,6 +25,7 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.get('/auth/me', async (req) => {
     const user = requireUser(req);
-    return { user };
+    const org = await app.db.one(`select name from orgs where id = $1`, [user.orgId]);
+    return { user, orgName: org.name };
   });
 }
