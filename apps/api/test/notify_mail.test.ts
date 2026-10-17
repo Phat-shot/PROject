@@ -50,3 +50,28 @@ test('Gelesene Meldungen werden nicht per Mail verschickt', async () => {
   await runNotificationMails(t.db, t.mail, new Date('2026-10-20T09:00:00'));
   assert.equal(mailsTo('max@demo.local').length, before);
 });
+
+test('Erinnerungen an Externe: vor Fälligkeit und bei Verzug über das Projektkonto, höchstens einmal je Tag und Art', async () => {
+  const { runReminders } = await import('../src/tasks/reminders.js');
+  const web = t.ids.projects.web;
+  await t.db.query(`update projects set reminders = '{"enabled":true,"daysBefore":[3,0],"overdueEveryDays":2}' where id = $1`, [web]);
+  const pl = await t.login('pl@demo.local');
+  const task = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Externer Liefertermin', responsibleEmail: 'lieferant@extern.de', dueDate: '2026-11-10' })).json().task;
+  const before = mailsTo('lieferant@extern.de').length;
+  assert.equal((await runReminders(t.db, t.mail, '2026-11-07')).sent >= 1, true, '3 Tage vorher');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 1);
+  await runReminders(t.db, t.mail, '2026-11-07');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 1, 'nicht doppelt am selben Tag');
+  await runReminders(t.db, t.mail, '2026-11-08');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 1, '2 Tage vorher ist nicht konfiguriert');
+  await runReminders(t.db, t.mail, '2026-11-10');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 2, 'am Fälligkeitstag');
+  await runReminders(t.db, t.mail, '2026-11-11');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 2, 'Verzug Tag 1: noch nicht (alle 2 Tage)');
+  await runReminders(t.db, t.mail, '2026-11-12');
+  assert.equal(mailsTo('lieferant@extern.de').length, before + 3, 'Verzug Tag 2');
+  const last = mailsTo('lieferant@extern.de').at(-1)!;
+  assert.match(String(last.msg.subject), /überfällig seit 2 Tag/);
+  assert.ok(String(last.msg.replyTo ?? '').includes('+t'), 'Antwortadresse mit Task-Code');
+  void task;
+});

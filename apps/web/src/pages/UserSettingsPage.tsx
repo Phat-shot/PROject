@@ -4,6 +4,7 @@ import { api } from '../lib/api';
 import { applyTheme, useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
 import { useAsync } from '../components/ui';
+import { useData } from '../lib/useData';
 
 /** Benutzereinstellungen: Name, Sprache, Theme, Passwort. Gilt nur für die eigene Person. */
 export function UserSettingsPage() {
@@ -50,6 +51,7 @@ export function UserSettingsPage() {
               <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language, mailNotifications } }, 'Gespeichert.')}>Speichern</button></div>
             </div>
           </div>
+          <IcsCard />
           <div className="card">
             <h2>Passwort ändern</h2>
             <div className="form">
@@ -63,5 +65,28 @@ export function UserSettingsPage() {
         </div>
       </div>
     </>
+  );
+}
+
+
+/** Kalender-Abo: persönliche ICS-Adresse für Outlook, Google, Apple; neu erzeugen macht alte Abos ungültig. */
+function IcsCard() {
+  const d = useData<{ token: string | null; urls: { all: string } | null }>('/me/ics-token');
+  const { busy, error, run } = useAsync();
+  const [msg, setMsg] = useState<string | null>(null);
+  const copy = async (s: string) => { try { await navigator.clipboard.writeText(s); setMsg('Adresse kopiert.'); } catch { setMsg(s); } };
+  return (
+    <div className="card">
+      <h2>Kalender-Abo</h2>
+      <p className="muted small">Deadlines, Starts und Meilensteine deiner Projekte als Abo in Outlook, Google oder Apple Kalender. Die Adresse ist dein persönlicher Schlüssel, nicht weitergeben.</p>
+      {d.data?.urls ? (
+        <div className="stack">
+          <code style={{ wordBreak: 'break-all' }}>{d.data.urls.all}</code>
+          <div className="row"><button className="btn sm" onClick={() => void copy(d.data!.urls!.all)}>Adresse kopieren</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { await api.post('/me/ics-token'); await d.reload(); setMsg('Neue Adresse erzeugt, alte Abos sind ungültig.'); })}>Neu erzeugen</button></div>
+        </div>
+      ) : <button className="btn sm primary" disabled={busy || !d.data} onClick={() => void run(async () => { await api.post('/me/ics-token'); await d.reload(); })}>Abo-Adresse erzeugen</button>}
+      {error && <div className="error mt">{error}</div>}
+      {msg && <div className="muted small mt">{msg}</div>}
+    </div>
   );
 }

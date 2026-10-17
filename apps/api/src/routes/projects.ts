@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
-import type { Membership, Project, ProjectRole, User } from '@projekttool/shared';
+import type { Membership, Project, ProjectRole, User, ReminderPolicy } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
 import { dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
+import { remindersOf } from '../tasks/reminders.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
@@ -25,6 +26,7 @@ export function mapProject(r: any): Project {
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     escalation: policyOf(r.escalation),
     reporting: reportingOf(r.reporting),
+    reminders: remindersOf(r.reminders),
     visibility: r.visibility ?? 'members',
     myRole: r.my_role ?? undefined
   };
@@ -106,7 +108,7 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy> } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy> } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
@@ -129,6 +131,12 @@ export async function projectRoutes(app: FastifyInstance) {
       }
       await db.query(`update projects set reporting = $2 where id = $1`, [req.params.id, JSON.stringify(next)]);
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'reporting.policy', objectType: 'project', objectId: req.params.id, details: next as any });
+    }
+    if (b.reminders) {
+      const cur = remindersOf((await db.one(`select reminders from projects where id = $1`, [req.params.id])).reminders);
+      const next = remindersOf({ ...cur, ...b.reminders });
+      await db.query(`update projects set reminders = $2 where id = $1`, [req.params.id, JSON.stringify(next)]);
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'reminders.policy', objectType: 'project', objectId: req.params.id, details: next as any });
     }
     if (b.escalation) {
       const cur = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);

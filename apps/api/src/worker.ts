@@ -7,6 +7,7 @@ import { audit } from './audit.js';
 import { runEscalations } from './tasks/escalation.js';
 import { runReports } from './docs/report.js';
 import { runNotificationMails } from './notifyMail.js';
+import { runReminders } from './tasks/reminders.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -64,6 +65,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
         await db.query(`delete from doc_pages where deleted_at < now() - interval '30 days'`);
         await runDailyRules(db, today);
         await runEscalations(db, today);
+        await runReminders(db, mail, today);
         await runReports(db, mail, today);
         lastDaily = today;
       }

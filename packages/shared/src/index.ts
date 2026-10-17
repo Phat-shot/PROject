@@ -48,6 +48,7 @@ export interface Project {
   budgetHours: number | null;
   escalation?: EscalationPolicy;
   reporting?: ReportingPolicy;
+  reminders?: ReminderPolicy;
   myRole?: ProjectRole;
   myMembership?: Membership;
   /** Kennzahlen für Projektkarten (nur in der Projektliste) */
@@ -61,6 +62,17 @@ export interface EscalationPolicy {
   contactUserId: string | null;
   contactEmail: string | null;
   externalMode: 'proposal' | 'direct';
+}
+
+/** Erinnerungen über das Projektkonto an externe (und wahlweise interne) Zuständige vor und nach der Fälligkeit. */
+export interface ReminderPolicy {
+  enabled: boolean;
+  /** Tage vor Fälligkeit, z. B. [3, 0] = drei Tage vorher und am Tag selbst */
+  daysBefore: number[];
+  /** Nach Fälligkeit alle n Tage erinnern; null = keine Erinnerung bei Verzug */
+  overdueEveryDays: number | null;
+  /** Auch interne Zuständige per Mail erinnern (zusätzlich zu den In-App-Meldungen) */
+  includeInternal: boolean;
 }
 
 /** Reporting: Vorlage im Rhythmus an einen Empfängerkreis, erzeugt und versendet vom Worker. */
