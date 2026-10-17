@@ -12,7 +12,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
   calls.push({ url, body });
   if (url === 'http://llm.local:8000/v1/chat/completions') {
     if (body.model !== 'qwen3') return new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 404 });
-    const content = body.response_format ? JSON.stringify({ reasoning: 'Stand unklar, Lieferant fragen.', actions: nextActions }) : 'bereit';
+    const content = body.response_format ? JSON.stringify({ note: 'Stand unklar, Lieferant gefragt.', actions: nextActions }) : 'bereit';
     return new Response(JSON.stringify({ model: 'qwen3', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 500, completion_tokens: 40 } }), { status: 200 });
   }
   return new Response('{}', { status: 404 });

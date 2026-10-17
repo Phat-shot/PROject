@@ -23,9 +23,9 @@ export type AgentAction =
   | { type: 'none'; reason?: string };
 
 const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['reasoning', 'actions'],
+  type: 'object', additionalProperties: false, required: ['note', 'actions'],
   properties: {
-    reasoning: { type: 'string' },
+    note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was veranlasst wurde und warum' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['type'], properties: {
       type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'mail', 'blocked', 'escalate', 'none'] },
       text: { type: 'string' }, column: { type: 'string' }, itemId: { type: 'string' }, to: { type: 'array', items: { type: 'string' } }, subject: { type: 'string' }, reason: { type: 'string' }
@@ -54,7 +54,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = new Date().toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema. Wenn nichts zu tun ist, gib eine Aktion vom Typ none mit Begründung. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn nichts zu tun ist, gib eine Aktion vom Typ none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
   const prompt = `Heute: ${today}
 Arbeitspaket ${task.project_key}-${task.number} „${task.title}“ · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -112,7 +112,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     }
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens) values ($1,$2,$3,$4,$5,'ok',$6,$7,$8,$9,$10) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, cut(String(j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens]);
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     return { runId: run.id, taskId: task.id, status: 'ok', actions: applied };
   } catch (e: any) {

@@ -83,7 +83,7 @@ export function AiView() {
       </div>
       <div className="card mb">
         <div className="row between"><h2 style={{ margin: 0 }}>Agenten-Läufe</h2><button className="btn sm" onClick={() => void runs.reload()}>Aktualisieren</button></div>
-        <p className="muted small">KI-Agenten sind Mitglieder mit Stellvertretung; sie handeln nur bei Arbeitspaketen, die ihnen die PL zugewiesen hat. Jeder Lauf zeigt Anlass, Begründung und ausgeführte Aktionen; Log-Einträge stehen am Arbeitspaket unter dem Namen des Agenten.</p>
+        <p className="muted small">KI-Agenten sind Mitglieder mit Stellvertretung; sie handeln nur bei Arbeitspaketen, die ihnen die PL zugewiesen hat. Jeder Lauf zeigt Anlass, Protokollnotiz und ausgeführte Aktionen; Log-Einträge stehen am Arbeitspaket unter dem Namen des Agenten.</p>
         {runs.data && runs.data.runs.length === 0 && <div className="empty">Noch keine Läufe. Einen Agenten unter Einstellungen › Mitglieder aufnehmen und ihm ein Arbeitspaket zuweisen.</div>}
         {(runs.data?.runs ?? []).slice(0, 40).map((r) => (
           <div key={r.id} className={`ai-proposal ${r.status === 'error' ? 'rejected' : ''}`}>
