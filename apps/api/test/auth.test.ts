@@ -40,3 +40,27 @@ test('Passwort vergessen verrät nicht, ob die Adresse existiert', async () => {
   assert.equal(r.statusCode, 200);
   assert.equal(r.json().sent, true);
 });
+
+test('PL lädt per Mail direkt ins Projekt ein; Annahme macht die Person zum Mitglied', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const r = await t.api(pl).post('/invitations', { name: 'Nina Neu', email: 'nina@extern.de', projectId: web, projectRole: 'reader', globalRole: 'org_admin' });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(r.json().invitation.globalRole, 'user', 'PL kann keine globale Rolle vergeben');
+  assert.equal(r.json().invitation.projectRole, 'reader');
+  const list = await t.api(pl).get(`/invitations?projectId=${web}`);
+  assert.equal(list.statusCode, 200);
+  assert.equal(list.json().invitations.length, 1);
+  const noProject = await t.api(pl).post('/invitations', { name: 'X', email: 'x@extern.de' });
+  assert.equal(noProject.statusCode, 403, 'ohne Projekt nur Org-Admin');
+  const member = await t.login('leser@demo.local');
+  const forbidden = await t.api(member).post('/invitations', { name: 'Y', email: 'y@extern.de', projectId: web });
+  assert.equal(forbidden.statusCode, 403);
+  const token = r.json().invitation.link.split('/einladung/')[1];
+  const accept = await t.app.inject({ method: 'POST', url: `/api/invitations/accept/${token}`, payload: { password: 'willkommen123' } });
+  assert.equal(accept.statusCode, 200, accept.body);
+  const detail = await t.api(pl).get(`/projects/${web}`);
+  const m = detail.json().members.find((x: any) => x.email === 'nina@extern.de');
+  assert.ok(m, 'Mitglied angelegt');
+  assert.equal(m.role, 'reader');
+});

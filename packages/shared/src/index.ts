@@ -165,6 +165,9 @@ export interface Invitation {
   email: string;
   name: string;
   globalRole: GlobalRole;
+  /** Einladung direkt in ein Projekt (durch den PL): Annahme macht die Person zum Mitglied mit dieser Rolle */
+  projectId?: string | null;
+  projectRole?: 'member' | 'reader' | null;
   createdAt: string;
   expiresAt: string;
   sentAt: string | null;

@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
 import type { Group, Invitation } from '@projekttool/shared';
+import { requireProject } from '../rights.js';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen).
@@ -50,7 +51,13 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   // ---- Einladungen per Mail über das Org-Postfach; manuelles Anlegen (POST /users) bleibt als Fallback
-  const mapInvitation = (r: any): Invitation => ({ id: r.id, email: r.email, name: r.name, globalRole: r.global_role, createdAt: r.created_at, expiresAt: r.expires_at, sentAt: r.sent_at, sendError: r.send_error, acceptedAt: r.accepted_at, link: `${publicBase()}/einladung/${r.token}` });
+  const mapInvitation = (r: any): Invitation => ({ id: r.id, email: r.email, name: r.name, globalRole: r.global_role, projectId: r.project_id ?? null, projectRole: r.project_role ?? null, createdAt: r.created_at, expiresAt: r.expires_at, sentAt: r.sent_at, sendError: r.send_error, acceptedAt: r.accepted_at, link: `${publicBase()}/einladung/${r.token}` });
+  /** Org-Admin darf alles; ein PL darf Einladungen seines Projekts anlegen, erneut senden und löschen. */
+  const mayManage = async (user: any, inv: { project_id: string | null }) => {
+    if (user.globalRole === 'org_admin') return true;
+    if (!inv.project_id) return false;
+    try { await requireProject(app.db, user, inv.project_id, 'pl'); return true; } catch { return false; }
+  };
   const orgAccount = (orgId: string) => app.db.maybeOne(`select * from mail_accounts where org_id = $1 and type = 'org' order by created_at limit 1`, [orgId]);
   const sendInvitation = async (inv: any, inviter: { id: string; name: string }) => {
     const account = await orgAccount(inv.org_id);
@@ -59,11 +66,12 @@ export async function userRoutes(app: FastifyInstance) {
       return { sent: false, error: 'Kein Org-Postfach angebunden. Link manuell weitergeben oder unter Meine Mail-Konten ein Org-Postfach anlegen.' };
     }
     const org = await app.db.one(`select name from orgs where id = $1`, [inv.org_id]);
+    const project = inv.project_id ? await app.db.maybeOne(`select key, name from projects where id = $1`, [inv.project_id]) : null;
     const link = `${publicBase()}/einladung/${inv.token}`;
     try {
       await app.mail.sendFromAccount(account, {
-        to: [inv.email], subject: `Einladung zu PROject (${org.name})`,
-        text: `Guten Tag ${inv.name},\n\n${inviter.name} hat Sie zu PROject, dem Projekttool von ${org.name}, eingeladen.\n\nBitte legen Sie hier Ihr Passwort fest:\n${link}\n\nDer Link ist 14 Tage gültig.\n\nMit freundlichen Grüßen\n${org.name}`,
+        to: [inv.email], subject: project ? `Einladung zum Projekt „${project.name}“ – PROject (${org.name})` : `Einladung zu PROject (${org.name})`,
+        text: `Guten Tag ${inv.name},\n\n${inviter.name} hat Sie ${project ? `zum Projekt „${project.name}“ (${project.key}) in PROject` : `zu PROject, dem Projekttool von ${org.name},`} eingeladen.\n\nBitte legen Sie hier Ihr Passwort fest:\n${link}\n\nDer Link ist 14 Tage gültig.\n\nMit freundlichen Grüßen\n${org.name}`,
         userId: inviter.id
       });
       await app.db.query(`update invitations set sent_at = now(), send_error = null where id = $1`, [inv.id]);
@@ -75,17 +83,30 @@ export async function userRoutes(app: FastifyInstance) {
     }
   };
 
-  app.get('/invitations', async (req) => {
+  app.get<{ Querystring: { projectId?: string } }>('/invitations', async (req) => {
     const user = requireUser(req);
+    if (req.query.projectId) {
+      await requireProject(app.db, user, req.query.projectId, 'pl');
+      const rows = await app.db.query(`select * from invitations where org_id = $1 and project_id = $2 and accepted_at is null order by created_at desc`, [user.orgId, req.query.projectId]);
+      return { invitations: rows.rows.map(mapInvitation), hasOrgAccount: Boolean(await orgAccount(user.orgId)) };
+    }
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const rows = await app.db.query(`select * from invitations where org_id = $1 and accepted_at is null order by created_at desc`, [user.orgId]);
     return { invitations: rows.rows.map(mapInvitation), hasOrgAccount: Boolean(await orgAccount(user.orgId)) };
   });
 
-  app.post<{ Body: { email: string; name: string; globalRole?: string } }>('/invitations', async (req) => {
+  // Org-Admin lädt mit globaler Rolle ein; ein PL lädt in sein Projekt ein (globale Rolle „Benutzer“, Projektrolle Mitglied oder Leser)
+  app.post<{ Body: { email: string; name: string; globalRole?: string; projectId?: string | null; projectRole?: 'member' | 'reader' | null } }>('/invitations', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
-    const { email, name, globalRole = 'user' } = req.body ?? ({} as any);
+    const b = req.body ?? ({} as any);
+    const projectId: string | null = b.projectId || null;
+    let projectRole: 'member' | 'reader' | null = null;
+    if (projectId) {
+      await requireProject(app.db, user, projectId, 'pl');
+      projectRole = b.projectRole === 'reader' ? 'reader' : 'member';
+    } else if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin oder ein PL für sein Projekt');
+    const { email, name } = b;
+    const globalRole = user.globalRole === 'org_admin' ? (b.globalRole ?? 'user') : 'user';
     if (!email?.trim() || !name?.trim()) throw badRequest('E-Mail und Name erforderlich');
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Gültige E-Mail erforderlich');
     if (!['org_admin', 'project_creator', 'user'].includes(globalRole)) throw badRequest('Ungültige Rolle');
@@ -93,19 +114,19 @@ export async function userRoutes(app: FastifyInstance) {
     if (await app.db.maybeOne(`select 1 from users where lower(email) = $1`, [addr])) throw badRequest('Für diese E-Mail existiert bereits ein Benutzer');
     await app.db.query(`delete from invitations where org_id = $1 and email = $2 and accepted_at is null`, [user.orgId, addr]);
     const inv = await app.db.one(
-      `insert into invitations (org_id, email, name, global_role, token, invited_by, expires_at) values ($1,$2,$3,$4,$5,$6, now() + interval '14 days') returning *`,
-      [user.orgId, addr, name.trim(), globalRole, randomBytes(24).toString('base64url'), user.id]
+      `insert into invitations (org_id, email, name, global_role, token, invited_by, expires_at, project_id, project_role) values ($1,$2,$3,$4,$5,$6, now() + interval '14 days', $7, $8) returning *`,
+      [user.orgId, addr, name.trim(), globalRole, randomBytes(24).toString('base64url'), user.id, projectId, projectRole]
     );
     const r = await sendInvitation(inv, user);
-    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.invite', objectType: 'invitation', objectId: inv.id, details: { email: addr, globalRole, sent: r.sent } });
+    await audit(app.db, { orgId: user.orgId, projectId, userId: user.id, action: 'user.invite', objectType: 'invitation', objectId: inv.id, details: { email: addr, globalRole, projectRole, sent: r.sent } });
     return { invitation: mapInvitation(await app.db.one(`select * from invitations where id = $1`, [inv.id])), ...r };
   });
 
   app.post<{ Params: { id: string } }>('/invitations/:id/resend', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const inv = await app.db.maybeOne(`select * from invitations where id = $1 and org_id = $2 and accepted_at is null`, [req.params.id, user.orgId]);
     if (!inv) throw notFound('Einladung nicht gefunden');
+    if (!(await mayManage(user, inv))) throw forbidden('Nur Org-Admin oder der PL des Projekts');
     await app.db.query(`update invitations set expires_at = now() + interval '14 days' where id = $1`, [inv.id]);
     const r = await sendInvitation(inv, user);
     return { invitation: mapInvitation(await app.db.one(`select * from invitations where id = $1`, [inv.id])), ...r };
@@ -113,7 +134,8 @@ export async function userRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string } }>('/invitations/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const inv = await app.db.maybeOne(`select * from invitations where id = $1 and org_id = $2 and accepted_at is null`, [req.params.id, user.orgId]);
+    if (inv && !(await mayManage(user, inv))) throw forbidden('Nur Org-Admin oder der PL des Projekts');
     await app.db.query(`delete from invitations where id = $1 and org_id = $2 and accepted_at is null`, [req.params.id, user.orgId]);
     return { ok: true };
   });
@@ -136,6 +158,13 @@ export async function userRoutes(app: FastifyInstance) {
       [inv.org_id, inv.email, (b.name ?? inv.name).trim() || inv.name, hashPassword(b.password), inv.global_role]
     );
     await app.db.query(`update invitations set accepted_at = now(), user_id = $2 where id = $1`, [inv.id, row.id]);
+    if (inv.project_id) {
+      await app.db.query(
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,$3,false,false,false,false,true) on conflict (project_id, user_id) do nothing`,
+        [inv.project_id, row.id, inv.project_role ?? 'member']
+      );
+      await audit(app.db, { orgId: inv.org_id, projectId: inv.project_id, userId: row.id, action: 'member.set', objectType: 'membership', objectId: row.id, details: { role: inv.project_role ?? 'member', viaInvitation: inv.id } });
+    }
     await audit(app.db, { orgId: inv.org_id, userId: row.id, action: 'user.invite_accepted', objectType: 'user', objectId: row.id, details: { invitation: inv.id } });
     const token = await createSession(app.db, row.id);
     setSessionCookie(reply, token);

@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
+import { InviteCard } from './InviteCard';
 import { InlineText } from './TaskDrawer';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -47,7 +48,7 @@ export function MembersView() {
                 </tr>
               ))}
             </tbody></table>
-            {isPl && <p className="muted small mt" style={{ margin: 0 }}>Nur Benutzer des Mandanten. Neue Personen lädt der Org-Admin unter <Link to="/verwaltung">Verwaltung</Link> per Mail ein.</p>}
+            {isPl && <InviteCard />}
           </div>
           <div className="card" id="planung">
             <h2>Teilprojekte</h2>
