@@ -11,6 +11,7 @@ import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
+import { CopyMoveDialog } from './CopyMove';
 import { today } from '../../lib/api';
 
 interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string }
@@ -25,7 +26,7 @@ interface TaskDetail {
 
 /** Arbeitspaket: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
-  const { detail, users, tasks, reloadTasks } = useProject();
+  const { detail, users, tasks, reloadTasks, openTask } = useProject();
   const { timeTracking } = useAuth();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [shift, setShift] = useState<{ changes: any[] } | null>(null);
@@ -38,6 +39,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [agentMsg, setAgentMsg] = useState<string | null>(null);
   const { busy, error, run, setError } = useAsync();
   const dialog = useDialog();
+  const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
@@ -59,12 +61,15 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
     <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
         {saved && <span className="muted small">gespeichert</span>}
+        {me.role !== 'reader' && !t.deletedAt && <button className="btn sm" title="Kopie anlegen, hier oder in einem anderen Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>}
+        {canPlan && !t.deletedAt && <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>}
         {me.role !== 'reader' && (t.archivedAt
           ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
           : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>)}
         {me.role === 'pl' && !t.deletedAt && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${t.title}“ in den Papierkorb legen? Dort bleibt es 30 Tage und lässt sich in den Projekteinstellungen wiederherstellen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
+      {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
         <div className={`notice mb ${t.escalationLevel >= 2 || t.blocked ? 'danger' : ''}`}>

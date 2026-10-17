@@ -5,6 +5,7 @@ import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject, type Milestone } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
+import { CopyMoveDialog } from './CopyMove';
 
 /**
  * Teilprojekte und Meilensteine: Tabellen mit Inline-Bearbeitung und Formulare.
@@ -47,6 +48,7 @@ function SubRow({ s, canPlan }: { s: Subproject; canPlan: boolean }) {
   const askTransfer = useTransferQuestion();
   const members = useMembers();
   const [edit, setEdit] = useState(false);
+  const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
   const save = async (body: Record<string, unknown>) => {
     if ('responsibleUserId' in body) {
       const direct = tasks.filter((x) => x.subprojectId === s.id && !x.done && x.responsibleUserId && x.responsibleUserId === s.responsible.userId);
@@ -71,6 +73,9 @@ function SubRow({ s, canPlan }: { s: Subproject; canPlan: boolean }) {
       <td className="nowrap"><input type="date" className="inline-date" value={s.startDate ?? ''} onChange={(e) => void save({ startDate: e.target.value || null })} /> – <input type="date" className="inline-date" value={s.endDate ?? ''} onChange={(e) => void save({ endDate: e.target.value || null })} /></td>
       <td className="nowrap">
         {me.role === 'pl' && <button className="btn sm link" title="Sichtbarkeit, Zugriff" onClick={() => setEdit(true)}>Sichtbarkeit</button>}
+        <button className="btn sm link" title="Teilprojekt mit Arbeitspaketen kopieren, hier oder in ein anderes Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>
+        <button className="btn sm link" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>
+        {copyMove && <CopyMoveDialog kind="subproject" op={copyMove} detail={detail} subproject={s} tasks={tasks.filter((x) => x.subprojectId === s.id && !x.archivedAt && !x.deletedAt)} onClose={() => setCopyMove(null)} onDone={async () => { await reload(); await reloadTasks(); }} />}
         {me.role === 'pl' && <button className="btn sm link" title="Teilprojekt löschen" onClick={() => void dialog.confirm({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Die Arbeitspakete bleiben erhalten und stehen danach unter „Ohne Teilprojekt“.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void api.del(`/projects/${detail.project.id}/subprojects/${s.id}`).then(async () => { await reload(); await reloadTasks(); }); })}>✕</button>}
         {edit && <SubprojectForm existing={s} onClose={() => setEdit(false)} />}
       </td>
