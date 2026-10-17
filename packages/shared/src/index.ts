@@ -56,6 +56,8 @@ export interface Project {
   reporting?: ReportingPolicy;
   reminders?: ReminderPolicy;
   health?: ProjectHealth;
+  /** KI-Profil für die Projekt-KI (Zusammenfassen, Essenz, Fragen, Statusbericht); null = aus */
+  aiProfileId?: string | null;
   myRole?: ProjectRole;
   myMembership?: Membership;
   /** Kennzahlen für Projektkarten (nur in der Projektliste) */
@@ -112,7 +114,7 @@ export interface OrgSettings {
   /** Zeiterfassung mandantenweit aus: blendet Zeiten, Aufwand und Buchungen überall aus */
   timeTracking?: boolean;
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie */
-  ai?: { enabled?: boolean; provider?: 'anthropic' | 'local'; baseUrl?: string | null; model?: string; agentDailyBudget?: number };
+  ai?: { defaultProfileId?: string | null; agentDailyBudget?: number };
 }
 
 export type AiProposalKind = 'task_update' | 'page_append';
@@ -610,5 +612,6 @@ export interface Meeting {
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
-export interface AgentUser { id: string; name: string; email: string; active: boolean; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
+export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean }
+export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
 export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string }[]; inputTokens: number; outputTokens: number; error: string | null; createdAt: string }

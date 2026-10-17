@@ -24,6 +24,7 @@ export function mapProject(r: any): Project {
     status: r.status,
     mailAddress: r.mail_address,
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
+    aiProfileId: r.ai_profile_id ?? null,
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     escalation: policyOf(r.escalation),
     reporting: reportingOf(r.reporting),
@@ -114,10 +115,14 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy> } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if ('aiProfileId' in b) {
+      if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
+      await db.query(`update projects set ai_profile_id = $2 where id = $1`, [req.params.id, b.aiProfileId ?? null]);
+    }
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
     if (b.reporting) {
       const cur = reportingOf((await db.one(`select reporting from projects where id = $1`, [req.params.id])).reporting);

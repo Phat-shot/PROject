@@ -26,29 +26,35 @@ const t = await testApp({ fetchFn: fakeFetch });
 test.after(() => t.close());
 const mailBySubject = async (s: string) => (await t.db.one(`select id from mails where subject = $1`, [s])).id as string;
 
-test('KI aus ohne Schlüssel; Org-Admin aktiviert mit Schlüssel und Modell, Test prüft den Schlüssel', async () => {
+test('Ohne Profil keine KI; Org-Admin legt Profile an, Test prüft den Schlüssel; Projekt-KI erst nach Zuweisung durch die PL', async () => {
   const pl = await t.login('pl@demo.local');
   const admin = await t.login('admin@demo.local');
-  const st = await t.api(pl).get('/ai/status');
-  assert.equal(st.json().enabled, false);
+  const pid = t.ids.projects.web;
+  assert.equal((await t.api(pl).get('/ai/status')).json().enabled, false);
   const mid = await mailBySubject('Angebot Website-Relaunch – Design und Umsetzung');
-  const off = await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`);
-  assert.equal(off.statusCode, 400);
-  assert.equal((await t.api(pl).put('/ai/settings', { enabled: true, apiKey: 'k' })).statusCode, 403, 'nur Org-Admin');
-  const bad = await t.api(admin).put('/ai/settings', { enabled: true, apiKey: 'bad', model: 'claude-opus-5-5' });
-  assert.equal(bad.json().enabled, true);
-  assert.equal(bad.json().source, 'org');
-  const test1 = await t.api(admin).post('/ai/test');
+  assert.equal((await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`)).statusCode, 400);
+  assert.equal((await t.api(pl).post('/ai/profiles', { name: 'x', provider: 'anthropic', apiKey: 'k' })).statusCode, 403, 'nur Org-Admin');
+  const bad = (await t.api(admin).post('/ai/profiles', { name: 'Claude Test', provider: 'anthropic', model: 'claude-opus-5-5', apiKey: 'bad' })).json().profile;
+  assert.equal(bad.hasKey, true);
+  const test1 = await t.api(admin).post(`/ai/profiles/${bad.id}/test`);
   assert.equal(test1.statusCode, 400);
   assert.match(test1.json().error, /ungültig/);
-  const ok = await t.api(admin).put('/ai/settings', { enabled: true, apiKey: 'good' });
-  assert.equal(ok.json().hasKey, true);
-  const test2 = await t.api(admin).post('/ai/test');
+  const okP = (await t.api(admin).patch(`/ai/profiles/${bad.id}`, { apiKey: 'good' })).json().profile;
+  assert.equal(okP.id, bad.id);
+  const test2 = await t.api(admin).post(`/ai/profiles/${bad.id}/test`);
   assert.equal(test2.json().reply, 'bereit');
   assert.equal(calls[calls.length - 1].body.model, 'claude-opus-5-5');
   assert.equal(calls[calls.length - 1].body.fallbacks, 'default', 'Refusal-Fallback aktiv');
-  const settings = await t.api(admin).get('/org/settings');
-  assert.equal(JSON.stringify(settings.json()).includes('good'), false, 'Schlüssel bleibt auf dem Server');
+  const st = (await t.api(pl).get('/ai/status')).json();
+  assert.equal(st.enabled, true);
+  assert.equal(st.defaultProfileId, bad.id, 'erstes Profil wird Standard');
+  assert.equal(JSON.stringify(st).includes('good'), false, 'Schlüssel bleibt auf dem Server');
+  // Projekt-KI ist aus, bis die PL ein Profil zuweist
+  assert.equal((await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`)).statusCode, 400);
+  assert.equal((await t.api(await t.login('max@demo.local')).patch(`/projects/${pid}`, { aiProfileId: bad.id })).statusCode, 403);
+  const set = await t.api(pl).patch(`/projects/${pid}`, { aiProfileId: bad.id });
+  assert.equal(set.statusCode, 200, set.body);
+  assert.equal((await t.api(pl).get(`/projects/${pid}`)).json().project.aiProfileId, bad.id);
 });
 
 test('Zusammenfassen: nur mit KI-Recht der Ansicht, Ergebnis wird an der Mail gespeichert', async () => {

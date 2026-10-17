@@ -6,7 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
-import { aiConfig, aiStatus, complete, MODELS } from '../ai/client.js';
+import { aiConfigForProfile, aiConfigForProject, aiStatus, complete, MODELS } from '../ai/client.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -24,31 +24,72 @@ function mapProposal(r: any): AiProposal {
  */
 export async function aiRoutes(app: FastifyInstance) {
   const db = app.db;
-  const cfgOrFail = async (orgId: string) => { const c = await aiConfig(db, orgId); if (!c) throw badRequest('KI ist nicht aktiviert. Die Verwaltung hinterlegt Schlüssel und Modell.'); return c; };
+  const cfgOrFail = async (projectId: string) => { const c = await aiConfigForProject(db, projectId); if (!c) throw badRequest('KI ist in diesem Projekt nicht aktiv. Die PL weist in den Projekteinstellungen ein KI-Profil zu (Profile verwaltet der Org-Admin).'); return c; };
   const canUse = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canUseAi) throw forbidden('Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)'); return m; };
   const canApprove = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe nur mit Recht „KI-Vorschläge freigeben“ oder als PL'); return m; };
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { enabled?: boolean; provider?: 'anthropic' | 'local'; baseUrl?: string | null; model?: string; apiKey?: string | null; agentDailyBudget?: number } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { defaultProfileId?: string | null; agentDailyBudget?: number } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
-    if (b.model && !/^[\w.:\/-]+$/i.test(b.model)) throw badRequest('Ungültiges Modell');
-    const provider = b.provider === 'local' ? 'local' : 'anthropic';
-    if (provider === 'local' && b.baseUrl && !/^https?:\/\//.test(b.baseUrl)) throw badRequest('Adresse des lokalen LLM als http(s)://…/v1');
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, enabled: b.enabled !== false, provider, baseUrl: provider === 'local' ? (b.baseUrl?.trim().replace(/\/$/, '') || cur.baseUrl || null) : null, model: b.model?.trim() || (provider === 'local' ? cur.model || '' : undefined), agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget } })]);
-    if (b.apiKey === null) await db.query(`update orgs set ai_api_key = null where id = $1`, [user.orgId]);
-    else if (typeof b.apiKey === 'string' && b.apiKey.trim()) await db.query(`update orgs set ai_api_key = $2 where id = $1`, [user.orgId, seal(b.apiKey.trim())]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled !== false, provider, model: b.model, baseUrl: b.baseUrl, keyChanged: b.apiKey !== undefined } });
+    if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget } })]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: b });
     return aiStatus(db, user.orgId);
   });
 
-  app.post('/ai/test', async (req) => {
+  // KI-Profile: Anbieter, Adresse, Modell, Schlüssel (nur schreibend); Org-Admin
+  const validProfile = (b: any, cur?: any) => {
+    const provider = (b.provider ?? cur?.provider) === 'local' ? 'local' : 'anthropic';
+    const model = String(b.model ?? cur?.model ?? (provider === 'anthropic' ? MODELS[0] : '')).trim();
+    if (!model || !/^[\w.:\/-]+$/i.test(model)) throw badRequest('Modell erforderlich (Name wie beim Anbieter)');
+    const baseUrl = provider === 'local' ? String(b.baseUrl ?? cur?.base_url ?? '').trim().replace(/\/$/, '') : null;
+    if (provider === 'local' && !/^https?:\/\//.test(baseUrl ?? '')) throw badRequest('Adresse des lokalen LLM als http(s)://…/v1');
+    const name = String(b.name ?? cur?.name ?? '').trim();
+    if (!name) throw badRequest('Name erforderlich');
+    return { provider, model, baseUrl, name };
+  };
+  app.get('/ai/profiles', async (req) => { const user = requireUser(req); return { profiles: (await aiStatus(db, user.orgId)).profiles }; });
+  app.post<{ Body: any }>('/ai/profiles', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
-    const cfg = await cfgOrFail(user.orgId);
+    const b: any = req.body ?? {};
+    const v = validProfile(b);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key) values ($1,$2,$3,$4,$5,$6) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null]);
+    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
+    if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl } });
+    return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === r.id) };
+  });
+  app.patch<{ Params: { id: string }; Body: any }>('/ai/profiles/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const cur = await db.maybeOne(`select * from ai_profiles where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!cur) throw notFound('Profil nicht gefunden');
+    const b: any = req.body ?? {};
+    const v = validProfile(b, cur);
+    const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
+    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, keyChanged: b.apiKey !== undefined } });
+    return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id) };
+  });
+  app.delete<{ Params: { id: string } }>('/ai/profiles/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    await db.query(`delete from ai_profiles where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
+    if (cur.defaultProfileId === req.params.id) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: null } })]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.delete', objectType: 'ai_profile', objectId: req.params.id });
+    return { ok: true };
+  });
+  app.post<{ Params: { id: string } }>('/ai/profiles/:id/test', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const cfg = await aiConfigForProfile(db, user.orgId, req.params.id);
+    if (!cfg) throw badRequest('Profil unvollständig oder inaktiv (Adresse, Modell, Schlüssel prüfen)');
     const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
   });
@@ -61,8 +102,9 @@ export async function aiRoutes(app: FastifyInstance) {
     const access = await mailAccess(db, user, mail.id);
     if (!access.ok) throw forbidden();
     if (!access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
-    const cfg = await cfgOrFail(user.orgId);
     const pid = access.viewIds.length ? (await db.maybeOne(`select project_id from mail_views where id = $1`, [access.viewIds[0]]))?.project_id ?? null : null;
+    if (!pid) throw badRequest('Mail gehört zu keiner Projektansicht');
+    const cfg = await cfgOrFail(pid);
     return { summary: await summarizeMail(db, cfg, app.fetchFn, user, mail, pid) };
   });
 
@@ -76,7 +118,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const task = await db.maybeOne(`select t.*, c.name as column_name from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await canUse(user, task.project_id);
-    const cfg = await cfgOrFail(user.orgId);
+    const cfg = await cfgOrFail(task.project_id);
     const cols = await db.query(`select name from board_columns where project_id = $1 order by position`, [task.project_id]);
     const e = await essenceForTask(db, cfg, app.fetchFn, user, mail, { id: task.id, title: task.title, description: task.description, dueDate: task.due_date ? String(task.due_date).slice(0, 10) : null, columnName: task.column_name, projectId: task.project_id }, cols.rows.map((c: any) => c.name));
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
@@ -96,7 +138,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!page) throw notFound('Seite nicht gefunden');
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
     await canUse(user, page.project_id);
-    const cfg = await cfgOrFail(user.orgId);
+    const cfg = await cfgOrFail(page.project_id);
     const section = await essenceForPage(db, cfg, app.fetchFn, user, mail, page);
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'page_append', pageId: page.id, mailId: mail.id } });
@@ -174,7 +216,7 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/projects/:id/ai/status-report', async (req) => {
     const user = requireUser(req);
     await canUse(user, req.params.id);
-    const cfg = await cfgOrFail(user.orgId);
+    const cfg = await cfgOrFail(req.params.id);
     const today = new Date().toISOString().slice(0, 10);
     const md = await statusReportDraft(db, cfg, app.fetchFn, user, req.params.id, today);
     const folder = await db.maybeOne(`select id from doc_folders where project_id = $1 and name = 'Berichte'`, [req.params.id]);
@@ -191,7 +233,7 @@ export async function aiRoutes(app: FastifyInstance) {
     await canUse(user, req.params.id);
     const q = req.body?.question?.trim();
     if (!q || q.length < 3) throw badRequest('Frage erforderlich');
-    const cfg = await cfgOrFail(user.orgId);
+    const cfg = await cfgOrFail(req.params.id);
     return askProject(db, cfg, app.fetchFn, user, req.params.id, q);
   });
 

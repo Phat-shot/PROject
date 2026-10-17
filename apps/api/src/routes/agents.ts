@@ -14,7 +14,7 @@ const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g,
  */
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
-  const mapAgent = (r: any) => ({ id: r.id, name: r.name, email: r.email, active: r.active, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null });
+  const mapAgent = (r: any) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null });
 
   app.get('/agents', async (req) => {
     const user = requireUser(req);
@@ -25,24 +25,27 @@ export async function agentRoutes(app: FastifyInstance) {
     return { agents: rows.rows.map(mapAgent) };
   });
 
-  app.post<{ Body: { name: string } }>('/agents', async (req) => {
+  app.post<{ Body: { name: string; aiProfileId?: string | null } }>('/agents', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin legt Agenten an');
     const name = req.body?.name?.trim();
     if (!name) throw badRequest('Name erforderlich');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
-    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind) values ($1,$2,$3,'','user','agent') returning *`, [user.orgId, email, name]);
+    const profileId = req.body?.aiProfileId ?? (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai?.defaultProfileId ?? null;
+    if (profileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [profileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
+    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id) values ($1,$2,$3,'','user','agent',$4) returning *`, [user.orgId, email, name, profileId]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name } });
     return { agent: mapAgent(r) };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean } }>('/agents/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const a = await db.maybeOne(`select * from users where id = $1 and org_id = $2 and kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
     const b = req.body ?? {};
-    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active) where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null]);
+    if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
+    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active), ai_profile_id = case when $4 then $5::uuid else ai_profile_id end where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null, 'aiProfileId' in b, b.aiProfileId ?? null]);
     if (b.active === false) await db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 and archived_at is null`, [a.id]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.update', objectType: 'user', objectId: a.id, details: b });
     return { agent: mapAgent(await db.one(`select * from users where id = $1`, [a.id])) };

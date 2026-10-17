@@ -21,22 +21,24 @@ delete process.env.ANTHROPIC_API_KEY;
 const t = await testApp({ fetchFn: fakeFetch });
 test.after(() => t.close());
 
-test('Lokales LLM: Org-Admin konfiguriert Anbieter, Adresse und Modell; Verbindungstest; Schlüssel optional', async () => {
+let profileId = '';
+test('Lokales LLM als Profil: Org-Admin legt es an (Adresse, Modell, optional Schlüssel), Verbindungstest, Tagesbudget', async () => {
   const admin = await t.login('admin@demo.local');
-  const r = await t.api(admin).put('/ai/settings', { enabled: true, provider: 'local', baseUrl: 'http://llm.local:8000/v1/', model: 'qwen3', agentDailyBudget: 5 });
+  const r = await t.api(admin).post('/ai/profiles', { name: 'Qwen auf vLLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1/', model: 'qwen3' });
   assert.equal(r.statusCode, 200, r.body);
-  assert.equal(r.json().provider, 'local');
-  assert.equal(r.json().baseUrl, 'http://llm.local:8000/v1');
-  assert.equal(r.json().enabled, true, 'ohne Schlüssel aktiv');
-  assert.equal(r.json().agentDailyBudget, 5);
-  const ok = await t.api(admin).post('/ai/test');
+  profileId = r.json().profile.id;
+  assert.equal(r.json().profile.baseUrl, 'http://llm.local:8000/v1');
+  assert.equal((await t.api(admin).get('/ai/status')).json().enabled, true, 'ohne Schlüssel aktiv');
+  const ok = await t.api(admin).post(`/ai/profiles/${profileId}/test`);
   assert.equal(ok.statusCode, 200, ok.body);
   assert.equal(ok.json().reply, 'bereit');
   assert.ok(calls.some((c) => c.url === 'http://llm.local:8000/v1/chat/completions' && c.body.messages[0].role === 'system'));
-  const bad = await t.api(admin).put('/ai/settings', { enabled: true, provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'gibtsnicht' });
-  assert.equal(bad.statusCode, 200);
-  assert.equal((await t.api(admin).post('/ai/test')).statusCode, 400);
-  await t.api(admin).put('/ai/settings', { enabled: true, provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen3' });
+  const wrong = (await t.api(admin).post('/ai/profiles', { name: 'Kaputt', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'gibtsnicht' })).json().profile;
+  assert.equal((await t.api(admin).post(`/ai/profiles/${wrong.id}/test`)).statusCode, 400);
+  assert.equal((await t.api(admin).post('/ai/profiles', { name: 'Ohne Adresse', provider: 'local', model: 'x' })).statusCode, 400);
+  const s = await t.api(admin).put('/ai/settings', { agentDailyBudget: 5, defaultProfileId: profileId });
+  assert.equal(s.json().agentDailyBudget, 5);
+  assert.equal(s.json().defaultProfileId, profileId);
 });
 
 test('Agent: nur Org-Admin legt an; kein Login; Mitgliedschaft wird Mitglied mit Stellvertretung; Zuweisung nur durch PL', async () => {
@@ -46,6 +48,10 @@ test('Agent: nur Org-Admin legt an; kein Login; Mitgliedschaft wird Mitglied mit
   assert.equal((await t.api(pl).post('/agents', { name: 'Nachfasser' })).statusCode, 403);
   const a = (await t.api(admin).post('/agents', { name: 'Nachfasser' })).json().agent;
   assert.match(a.email, /@agent\.local$/);
+  assert.equal(a.aiProfileId, profileId, 'Standardprofil des Mandanten');
+  const wrong = (await t.api(admin).get('/ai/profiles')).json().profiles.find((p: any) => p.name === 'Kaputt');
+  assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { aiProfileId: wrong.id })).json().agent.aiProfileId, wrong.id);
+  assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { aiProfileId: profileId })).json().agent.aiProfileId, profileId);
   const login = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: a.email, password: 'irgendwas' } });
   assert.equal(login.statusCode, 401);
   const forgot = await t.app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: a.email } });
@@ -135,7 +141,7 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   const r3 = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 2 * 3600_000));
   assert.equal(r3.length, 0, 'pausiert');
   await t.api(pl).post(`/tasks/${taskId}/agent-pause`, { paused: false });
-  await t.api(admin).put('/ai/settings', { enabled: true, provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen3', agentDailyBudget: 3 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 3 });
   const r4 = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 4 * 3600_000));
   assert.equal(r4.length, 0, 'Tagesbudget (3) durch die bisherigen Läufe aufgebraucht');
   // Deaktivieren nimmt die Zuweisung weg

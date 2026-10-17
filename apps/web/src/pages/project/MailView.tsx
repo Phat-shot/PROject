@@ -235,14 +235,14 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       </div>
       <div className="row mb small">
         <span className="muted">KI:</span>
-        {ai?.enabled ? (
+        {ai?.enabled && detail.project.aiProfileId ? (
           <>
             <button className="btn sm" disabled={!r.canAi} title={r.canAi ? 'Kurzfassung der Mail (wird gespeichert)' : 'Kein KI-Recht in dieser Ansicht'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
             <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
             <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
             <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
           </>
-        ) : <span className="muted">{ai ? 'nicht aktiviert (Verwaltung › KI)' : '…'}</span>}
+        ) : <span className="muted">{ai ? (ai.enabled ? 'im Projekt aus (Einstellungen › Projekt › Projekt-KI)' : 'kein KI-Profil (Verwaltung)') : '…'}</span>}
       </div>
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
       {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Zur Freigabe</Link></div>}

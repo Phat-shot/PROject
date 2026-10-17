@@ -12,29 +12,43 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 export type AiProvider = 'anthropic' | 'local';
 
-export interface AiConfig { provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; source: 'env' | 'org' | null; agentDailyBudget: number }
-export interface AiStatus { enabled: boolean; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; source: 'env' | 'org' | null; agentDailyBudget: number }
+export interface AiProfileRow { id: string; org_id: string; name: string; provider: AiProvider; base_url: string | null; model: string; api_key: string | null; active: boolean }
+export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null }
+export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean }[]; defaultProfileId: string | null; agentDailyBudget: number }
 
-async function readCfg(db: Db, orgId: string): Promise<AiConfig & { enabledFlag: boolean }> {
-  const o = await db.one(`select settings, ai_api_key from orgs where id = $1`, [orgId]);
+/** Konfiguration aus einem Profil; Anthropic-Schlüssel darf aus ANTHROPIC_API_KEY kommen. */
+export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
+  if (!r || !r.active) return null;
+  const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY ?? null : null);
+  if (r.provider === 'local' ? !(r.base_url && r.model) : !apiKey) return null;
+  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null };
+}
+
+export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultProfileId: string | null; agentDailyBudget: number }> {
+  const o = await db.one(`select settings from orgs where id = $1`, [orgId]);
   const ai = o.settings?.ai ?? {};
-  const provider: AiProvider = ai.provider === 'local' ? 'local' : 'anthropic';
-  const apiKey = unseal(o.ai_api_key) || (provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY ?? null : null);
-  const source = o.ai_api_key ? 'org' : apiKey ? 'env' : null;
-  return { provider, apiKey, model: ai.model || (provider === 'local' ? '' : DEFAULT_MODEL), baseUrl: provider === 'local' ? String(ai.baseUrl ?? '').replace(/\/$/, '') || null : null, source, agentDailyBudget: Number(ai.agentDailyBudget) || 50, enabledFlag: ai.enabled !== false };
+  return { defaultProfileId: ai.defaultProfileId ?? null, agentDailyBudget: Number(ai.agentDailyBudget) || 50 };
 }
 
 export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
-  const c = await readCfg(db, orgId);
-  const ready = c.provider === 'local' ? Boolean(c.baseUrl && c.model) : Boolean(c.apiKey);
-  return { enabled: c.enabledFlag && ready, provider: c.provider, model: c.model, baseUrl: c.baseUrl, hasKey: Boolean(c.apiKey), source: c.source, agentDailyBudget: c.agentDailyBudget };
+  const rows = await db.query(`select * from ai_profiles where org_id = $1 order by created_at`, [orgId]);
+  const s = await orgAiSettings(db, orgId);
+  const profiles = (rows.rows as AiProfileRow[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active }));
+  return { enabled: (rows.rows as AiProfileRow[]).some((r) => profileConfig(r)), profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget };
 }
 
-export async function aiConfig(db: Db, orgId: string): Promise<AiConfig | null> {
-  const c = await readCfg(db, orgId);
-  if (!c.enabledFlag) return null;
-  if (c.provider === 'local' ? !(c.baseUrl && c.model) : !c.apiKey) return null;
-  return c;
+/** Projekt-KI: das dem Projekt zugewiesene Profil; ohne Zuweisung ist die KI im Projekt aus. */
+export async function aiConfigForProject(db: Db, projectId: string): Promise<AiConfig | null> {
+  const r = await db.maybeOne<AiProfileRow>(`select a.* from projects p join ai_profiles a on a.id = p.ai_profile_id where p.id = $1`, [projectId]);
+  return profileConfig(r);
+}
+/** Agent: eigenes Profil, sonst das Standardprofil des Mandanten. */
+export async function aiConfigForAgent(db: Db, agentUserId: string): Promise<AiConfig | null> {
+  const r = await db.maybeOne<AiProfileRow>(`select a.* from users u join ai_profiles a on a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) where u.id = $1`, [agentUserId]);
+  return profileConfig(r);
+}
+export async function aiConfigForProfile(db: Db, orgId: string, profileId: string): Promise<AiConfig | null> {
+  return profileConfig(await db.maybeOne<AiProfileRow>(`select * from ai_profiles where id = $1 and org_id = $2`, [profileId, orgId]));
 }
 
 export interface Completion { text: string; inputTokens: number; outputTokens: number; model: string }

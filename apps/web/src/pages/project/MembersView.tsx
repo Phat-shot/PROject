@@ -5,6 +5,7 @@ import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
 import { AccountForm, OAuthStartDialog } from '../MailAccountsPage';
+import { useAiStatus } from '../../lib/useAi';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
 import { HealthDialog } from '../PortfolioPage';
@@ -87,6 +88,7 @@ export function MembersView() {
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
+              <dt>Projekt-KI</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
             </dl>
             {isPl && detail.project.status === 'active' && <div className="row mt">
               <button className="btn sm" title="Spalten, Labels, Teilprojekte, Meilensteine, Ordner und Regeln als Vorlage für neue Projekte" onClick={() => setAsTemplate(true)}>Als Vorlage speichern</button>
@@ -364,3 +366,13 @@ function BudgetInput() {
   return <span className="row"><input type="number" min={0} value={v} onChange={(e) => setV(e.target.value)} style={{ width: 100 }} /><button className="btn sm" onClick={() => void api.patch(`/projects/${detail.project.id}`, { budgetHours: v ? Number(v) : null }).then(reload)}>Speichern</button></span>;
 }
 
+
+/** Projekt-KI: Profil aus der Verwaltung zuweisen; ohne Profil sind Zusammenfassen, Essenz, Fragen und Statusbericht-Entwurf aus. */
+function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
+  const { detail, reload } = useProject();
+  const ai = useAiStatus();
+  const { busy, run } = useAsync();
+  if (!ai) return null;
+  if (readOnly) return <>{ai.profiles.find((p) => p.id === detail.project.aiProfileId)?.name ?? <span className="muted">aus</span>}</>;
+  return <span className="row"><select value={detail.project.aiProfileId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { aiProfileId: e.target.value || null }); await reload(); })}><option value="">aus</option>{ai.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>{ai.profiles.length === 0 && <span className="muted small">Noch kein KI-Profil (Verwaltung › KI-Profile).</span>}</span>;
+}

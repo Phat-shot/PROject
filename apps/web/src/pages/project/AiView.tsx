@@ -27,7 +27,8 @@ export function AiView() {
   const runs = useData<{ runs: AgentRun[] }>(`/projects/${pid}/agent-runs`);
   const { busy, error, run } = useAsync();
   const nav = useNavigate();
-  if (ai && !ai.enabled) return <div className="content"><div className="card"><h2>KI</h2><p className="muted">KI ist für diesen Mandanten nicht aktiviert. Die Verwaltung hinterlegt Schlüssel und Modell unter „Verwaltung › KI“.</p></div></div>;
+  const projectAiOff = Boolean(ai && (!ai.enabled || !detail.project.aiProfileId));
+  const profileName = ai?.profiles.find((p) => p.id === detail.project.aiProfileId)?.name;
   const decide = (p: AiProposal, ok: boolean) => run(async () => {
     if (ok) {
       const body = p.kind === 'task_update' ? { logEntry: edits[p.id] } : { section: edits[p.id] };
@@ -40,6 +41,8 @@ export function AiView() {
   return (
     <div className="content">
       {error && <div className="error mb">{error}</div>}
+      {projectAiOff && <div className="notice mb">Projekt-KI ist aus{ai && !ai.enabled ? ': kein KI-Profil im Mandanten (Verwaltung › KI-Profile)' : isPl ? ': unter Einstellungen › Projekt ein KI-Profil zuweisen' : ': die PL weist unter Einstellungen › Projekt ein KI-Profil zu'}. Agenten laufen unabhängig davon mit ihrem eigenen Profil.</div>}
+      {profileName && <p className="muted small">Projekt-KI: {profileName}</p>}
       <div className="card mb">
         <div className="row between"><h2 style={{ margin: 0 }}>Vorschläge zur Freigabe</h2><span className="row" style={{ gap: 2 }}><button className={`chip ${status === 'pending' ? 'on' : ''}`} onClick={() => setStatus('pending')}>offen</button><button className={`chip ${status === 'all' ? 'on' : ''}`} onClick={() => setStatus('all')}>alle</button></span></div>
         <p className="muted small">Essenz einer Mail als Log-Eintrag, Status- oder Terminänderung im Arbeitspaket oder als Abschnitt einer Seite. Entsteht im Postfach über „KI: Essenz …“; angewendet wird erst nach Freigabe{props.data?.canApprove ? ' (du darfst freigeben)' : ' durch PL oder Personen mit Freigaberecht'}.</p>
@@ -70,8 +73,8 @@ export function AiView() {
         <p className="muted small">Antwort aus Arbeitspaketen, Seiten und den Mails, die du lesen darfst, mit Quellenangabe. Keine Änderung an Daten.</p>
         {!canUse && <p className="notice small">Kein KI-Recht in diesem Projekt („KI nutzen“ in der Mitgliedschaft).</p>}
         <form className="row" onSubmit={(e) => { e.preventDefault(); void run(async () => setAnswer(await api.post(`/projects/${pid}/ai/ask`, { question }))); }}>
-          <input type="text" style={{ flex: 1 }} value={question} placeholder="z. B. Was blockiert den Go-Live? Wer liefert das Design?" onChange={(e) => setQuestion(e.target.value)} disabled={!canUse} />
-          <button className="btn primary" disabled={busy || !canUse || question.trim().length < 3}>Fragen</button>
+          <input type="text" style={{ flex: 1 }} value={question} placeholder="z. B. Was blockiert den Go-Live? Wer liefert das Design?" onChange={(e) => setQuestion(e.target.value)} disabled={!canUse || projectAiOff} />
+          <button className="btn primary" disabled={busy || !canUse || projectAiOff || question.trim().length < 3}>Fragen</button>
         </form>
         {answer && <div className="mt">
           <div style={{ whiteSpace: 'pre-wrap' }}>{answer.answer}</div>

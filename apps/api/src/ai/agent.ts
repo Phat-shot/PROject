@@ -4,7 +4,7 @@ import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { touchTask } from '../tasks/service.js';
-import { aiConfig, complete, parseJson, type AiConfig } from './client.js';
+import { aiConfigForAgent, complete, orgAiSettings, parseJson, type AiConfig } from './client.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -43,8 +43,8 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   if (!task) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Arbeitspaket nicht gefunden' };
   const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
   if (!m) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Agent ist kein Mitglied' };
-  const c = cfg ?? (await aiConfig(db, agent.org_id));
-  if (!c) return { runId: null, taskId, status: 'skipped', actions: [], error: 'KI nicht aktiviert' };
+  const c = cfg ?? (await aiConfigForAgent(db, agent.id));
+  if (!c) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Dem Agenten ist kein aktives KI-Profil zugewiesen (Verwaltung › KI-Agenten)' };
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
   const comments = await db.query(`select c.body, c.source, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
@@ -113,7 +113,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens) values ($1,$2,$3,$4,$5,'ok',$6,$7,$8,$9,$10) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, cut(String(j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens]);
-    await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+    await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     return { runId: run.id, taskId: task.id, status: 'ok', actions: applied };
   } catch (e: any) {
     const msg = String(e?.message ?? e).slice(0, 300);
@@ -138,10 +138,11 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
   const out: AgentRunResult[] = [];
   const agents = await db.query(`select id, name, org_id from users where kind = 'agent' and active`);
   for (const agent of agents.rows as any[]) {
-    const cfg = await aiConfig(db, agent.org_id);
+    const cfg = await aiConfigForAgent(db, agent.id);
     if (!cfg) continue;
+    const settings = await orgAiSettings(db, agent.org_id);
     const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
-    let budget = Math.max(0, cfg.agentDailyBudget - used.c);
+    let budget = Math.max(0, settings.agentDailyBudget - used.c);
     const tasks = await db.query(
       `select t.id, t.due_date from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id
        where t.responsible_user_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active' order by t.due_date nulls last`, [agent.id]);
