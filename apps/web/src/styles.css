@@ -612,3 +612,8 @@ a.tkey { color: var(--primary); }
 .weeks .b.done { background: var(--ok); }
 .weeks .l { font-size: 10px; color: var(--muted); margin-top: 4px; white-space: nowrap; }
 .weeks .esc { color: var(--danger); font-weight: 700; margin-left: 2px; }
+
+/* Besprechungen */
+.meeting { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 8px; background: var(--bg); }
+.meeting.open { background: var(--surface-2); }
+.cal .ev.meeting, .cal-agenda .ev.meeting { background: var(--purple-soft); color: var(--purple); }

@@ -17,6 +17,7 @@ import { TaskDrawer } from './project/TaskDrawer';
 import { RaidView } from './project/RaidView';
 import { AiView } from './project/AiView';
 import { AnalyticsView } from './project/AnalyticsView';
+import { MeetingsView } from './project/MeetingsView';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string }
@@ -80,18 +81,19 @@ function ProjectBody() {
   // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt nur die Unterreiter des aktuellen Bereichs
   const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
   const isPl = p.myMembership.role === 'pl';
-  const tabs = ['board', 'plan', 'kalender', 'zeiten', 'auswertung'].includes(sub)
+  const tabs = ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub)
     ? [
         { to: `${base}/board`, label: 'Board' },
         { to: `${base}/plan`, label: 'Plan' },
         { to: `${base}/kalender`, label: 'Kalender' },
+        { to: `${base}/besprechungen`, label: 'Besprechungen' },
         ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
         { to: `${base}/auswertung`, label: 'Auswertung' }
       ]
     : ['einstellungen', 'audit'].includes(sub)
       ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
       : undefined;
-  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
+  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <>
@@ -103,6 +105,7 @@ function ProjectBody() {
         <Route path="kalender" element={<CalendarView />} />
         <Route path="zeiten" element={<TimeView />} />
         <Route path="auswertung" element={<AnalyticsView />} />
+        <Route path="besprechungen" element={<MeetingsView />} />
         <Route path="mail/*" element={<MailView />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
         <Route path="einstellungen" element={<MembersView />} />

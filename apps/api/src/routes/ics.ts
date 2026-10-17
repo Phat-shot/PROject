@@ -31,10 +31,12 @@ export async function icsRoutes(app: FastifyInstance) {
   const nextDay = (iso: string) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
   const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
 
-  const build = (name: string, events: { uid: string; title: string; start: string; end: string; desc?: string; url?: string }[]) => {
+  const build = (name: string, events: { uid: string; title: string; start: string; end: string; desc?: string; url?: string; timed?: boolean; location?: string | null }[]) => {
     const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PROject//Kalender//DE', 'CALSCALE:GREGORIAN', `X-WR-CALNAME:${esc(name)}`, 'METHOD:PUBLISH'];
     for (const e of events) {
-      lines.push('BEGIN:VEVENT', `UID:${e.uid}@project`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${dt(e.start)}`, `DTEND;VALUE=DATE:${dt(nextDay(e.end))}`, `SUMMARY:${esc(e.title)}`);
+      if (e.timed) lines.push('BEGIN:VEVENT', `UID:${e.uid}@project`, `DTSTAMP:${stamp}`, `DTSTART:${e.start}`, `DTEND:${e.end}`, `SUMMARY:${esc(e.title)}`);
+      else lines.push('BEGIN:VEVENT', `UID:${e.uid}@project`, `DTSTAMP:${stamp}`, `DTSTART;VALUE=DATE:${dt(e.start)}`, `DTEND;VALUE=DATE:${dt(nextDay(e.end))}`, `SUMMARY:${esc(e.title)}`);
+      if (e.location) lines.push(`LOCATION:${esc(e.location)}`);
       if (e.desc) lines.push(`DESCRIPTION:${esc(e.desc)}`);
       if (e.url) lines.push(`URL:${e.url}`);
       lines.push('END:VEVENT');
@@ -54,8 +56,14 @@ export async function icsRoutes(app: FastifyInstance) {
       `select m.*, p.key from milestones m join projects p on p.id = m.project_id where p.org_id = $1 ${projectId ? 'and m.project_id = $3' : "and p.status = 'active'"} and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2) or p.visibility = 'org')`,
       projectId ? [userRow.org_id, userRow.id, projectId] : [userRow.org_id, userRow.id]
     );
+    const meetings = await db.query(
+      `select m.*, p.key from meetings m join projects p on p.id = m.project_id where p.org_id = $1 ${projectId ? 'and m.project_id = $3' : "and p.status = 'active'"} and exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2)`,
+      projectId ? [userRow.org_id, userRow.id, projectId] : [userRow.org_id, userRow.id]
+    );
+    const tstamp = (d: any) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
     const base = publicBase();
     const events = [
+      ...meetings.rows.map((m: any) => ({ uid: `meeting-${m.id}`, title: `${m.key} ${m.title}`, start: tstamp(m.starts_at), end: tstamp(m.ends_at), timed: true, location: m.location, desc: m.description ?? undefined, url: `${base}/projekte/${m.project_id}/besprechungen` })),
       ...tasks.filter((t) => !t.done).map((t) => { const k = keys.get(t.projectId); return { uid: `task-${t.id}`, title: `${k?.key ?? ''}-${t.number} ${t.title}`, start: t.startDate ?? t.dueDate!, end: t.dueDate!, desc: `${k?.name ?? ''} · zuständig ${t.responsible.name ?? t.responsible.email ?? '–'}`, url: `${base}/projekte/${t.projectId}/board?task=${t.id}` }; }),
       ...ms.rows.map((m: any) => ({ uid: `ms-${m.id}`, title: `◆ ${m.key} ${m.name}`, start: dateStr(m.date)!, end: dateStr(m.date)!, url: `${base}/projekte/${m.project_id}/plan` }))
     ];

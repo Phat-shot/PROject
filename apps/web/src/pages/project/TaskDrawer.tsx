@@ -20,6 +20,7 @@ interface TaskDetail {
   comments: TaskComment[];
   mails: TaskMail[];
   attachments: { id: string; filename: string; size: number }[];
+  meetings?: { id: string; title: string; startsAt: string; pageId: string | null }[];
 }
 
 /** Arbeitspaket: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
@@ -139,6 +140,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
         <input type="text" placeholder="Neuer Task … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
+      {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
       <h3 className="mt">Mails zum Arbeitspaket</h3>
       {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />

@@ -1,0 +1,93 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { testApp } from './helpers.js';
+
+const t = await testApp();
+test.after(() => t.close());
+
+test('Besprechung: anlegen mit Teilnehmern aus Mitgliedern und Kontakten, Kalender und ICS-Abo zeigen sie, Bearbeiten nur Ersteller/PL', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const pid = t.ids.projects.web;
+  const startsAt = new Date(Date.now() + 2 * 86400_000); startsAt.setUTCHours(9, 0, 0, 0);
+  const r = await t.api(max).post(`/projects/${pid}/meetings`, { title: 'Jour fixe Auftraggeber', startsAt: startsAt.toISOString(), durationMinutes: 45, location: 'Teams', attendees: [{ email: 'PL@demo.local' }, { email: 'GF@kunde.example', name: 'Geschäftsführung' }, { email: 'kaputt' }] });
+  assert.equal(r.statusCode, 200, r.body);
+  const m = r.json().meeting;
+  assert.equal(m.attendees.length, 2);
+  assert.equal(m.attendees[0].name, 'Petra Lenz');
+  assert.equal(m.attendees[0].userId, t.ids.users.pl, 'Adresse eines Benutzers wird als Mitglied erkannt');
+  assert.equal(m.attendees[1].email, 'gf@kunde.example');
+  assert.equal(new Date(m.endsAt).getTime() - new Date(m.startsAt).getTime(), 45 * 60_000);
+  assert.equal((await t.api(max).post(`/projects/${pid}/meetings`, { title: 'x', startsAt: 'kein datum' })).statusCode, 400);
+  const list = await t.api(pl).get(`/projects/${pid}/meetings`);
+  assert.ok(list.json().meetings.some((x: any) => x.id === m.id));
+  const cal = await t.api(pl).get('/my/calendar');
+  assert.ok(cal.json().meetings.some((x: any) => x.id === m.id && x.projectKey === 'WEB'));
+  const tok = (await t.api(pl).post('/me/ics-token')).json().token;
+  const ics = await t.app.inject({ method: 'GET', url: `/api/ics/${tok}/projekt/${pid}.ics` });
+  assert.match(ics.body, /UID:meeting-/);
+  assert.match(ics.body, /DTSTART:\d{8}T090000Z/);
+  assert.match(ics.body, /LOCATION:Teams/);
+  // Leser darf nicht ändern, Ersteller und PL schon
+  const leser = await t.login('leser@demo.local');
+  assert.equal((await t.api(leser).patch(`/meetings/${m.id}`, { title: 'Nein' })).statusCode, 403);
+  const up = await t.api(pl).patch(`/meetings/${m.id}`, { title: 'JF Auftraggeber', durationMinutes: 30 });
+  assert.equal(up.statusCode, 200, up.body);
+  assert.equal(up.json().meeting.title, 'JF Auftraggeber');
+  assert.equal(new Date(up.json().meeting.endsAt).getTime() - new Date(up.json().meeting.startsAt).getTime(), 30 * 60_000);
+});
+
+test('Protokoll aus Vorlage mit Termin und Teilnehmern im Ordner Protokolle; Aktionspunkte als Arbeitspakete mit Log und Verknüpfung; Einladung per ICS über das Projektkonto', async () => {
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  const m = (await t.api(pl).get(`/projects/${pid}/meetings`)).json().meetings[0];
+  const p1 = await t.api(pl).post(`/meetings/${m.id}/protocol`);
+  assert.equal(p1.statusCode, 200, p1.body);
+  assert.equal(p1.json().existed, false);
+  const page = p1.json().page;
+  assert.match(page.title, /^JF Auftraggeber \d{2}\.\d{2}\.\d{4}$/);
+  assert.match(page.contentHtml, /Teilnehmer:<\/strong> Petra Lenz \(pl@demo\.local\), Geschäftsführung \(gf@kunde\.example\)/);
+  assert.match(page.contentHtml, /Termin:<\/strong>/);
+  const folder = await t.db.one(`select f.name from doc_pages p join doc_folders f on f.id = p.folder_id where p.id = $1`, [page.id]);
+  assert.equal(folder.name, 'Protokolle');
+  const p2 = await t.api(pl).post(`/meetings/${m.id}/protocol`);
+  assert.equal(p2.json().existed, true);
+  assert.equal(p2.json().page.id, page.id);
+
+  const ai = await t.api(pl).post(`/meetings/${m.id}/tasks`, { title: 'Angebot nachfassen', responsibleUserId: t.ids.users.max, dueDate: '2026-12-01' });
+  assert.equal(ai.statusCode, 200, ai.body);
+  assert.equal(ai.json().task.title, 'Angebot nachfassen');
+  assert.equal(ai.json().task.dueDate, '2026-12-01');
+  assert.equal(ai.json().meeting.tasks.length, 1);
+  const c = await t.db.one(`select body, source from task_comments where task_id = $1`, [ai.json().task.id]);
+  assert.match(c.body, /Aktionspunkt aus Besprechung „JF Auftraggeber“/);
+  const det = await t.api(pl).get(`/tasks/${ai.json().task.id}`);
+  assert.equal(det.json().meetings[0].id, m.id);
+  const link = await t.api(pl).post(`/meetings/${m.id}/tasks`, { taskId: t.ids.tasks.t2 });
+  assert.equal(link.json().meeting.tasks.length, 2);
+  const unlink = await t.api(pl).del(`/meetings/${m.id}/tasks/${t.ids.tasks.t2}`);
+  assert.equal(unlink.json().meeting.tasks.length, 1);
+
+  const before = t.mail.dev.sent.length;
+  const inv = await t.api(pl).post(`/meetings/${m.id}/invite`, { text: 'Bitte Agenda vorbereiten.' });
+  assert.equal(inv.statusCode, 200, inv.body);
+  assert.equal(inv.json().sent, 2);
+  assert.ok(inv.json().meeting.inviteSentAt);
+  const sent = t.mail.dev.sent.slice(before);
+  assert.equal(sent.length, 1);
+  const msg = sent[0].msg;
+  assert.deepEqual([...msg.to].sort(), ['gf@kunde.example', 'pl@demo.local']);
+  assert.match(String(msg.subject), /^Einladung: JF Auftraggeber/);
+  assert.match(String(msg.text), /Bitte Agenda vorbereiten/);
+  const att = msg.attachments?.[0];
+  assert.ok(att && att.filename === 'einladung.ics');
+  const body = att!.content.toString('utf8');
+  assert.match(body, /METHOD:REQUEST/);
+  assert.match(body, /ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE;CN=Geschäftsführung:mailto:gf@kunde\.example/);
+  assert.match(body, /ORGANIZER;CN=WEB [^:]+:mailto:projekt-web@demo\.local/);
+  const own = await t.api(pl).get(`/meetings/${m.id}/ics`);
+  assert.match(own.body, /BEGIN:VEVENT/);
+  const del = await t.api(pl).del(`/meetings/${m.id}`);
+  assert.equal(del.statusCode, 200);
+  assert.ok(await t.db.maybeOne(`select 1 from doc_pages where id = $1`, [page.id]), 'Protokoll bleibt');
+});

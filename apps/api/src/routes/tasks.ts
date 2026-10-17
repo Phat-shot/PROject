@@ -137,7 +137,14 @@ export async function taskRoutes(app: FastifyInstance) {
        where p.org_id = $2 and p.status = 'active' and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) or p.visibility = 'org') order by m.date`,
       [user.id, user.orgId]
     );
-    return { milestones: rows.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), projectId: r.project_id, projectKey: r.key })) };
+    const meetings = await db.query(
+      `select m.id, m.title, m.starts_at, m.ends_at, m.project_id, p.key from meetings m join projects p on p.id = m.project_id
+       where p.org_id = $2 and p.status = 'active' and exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) order by m.starts_at`,
+      [user.id, user.orgId]).catch(() => ({ rows: [] as any[] }));
+    return {
+      milestones: rows.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), projectId: r.project_id, projectKey: r.key })),
+      meetings: meetings.rows.map((r: any) => ({ id: r.id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), projectId: r.project_id, projectKey: r.key }))
+    };
   });
 
   // Wartet auf dich über alle Projekte: Mail-Entwürfe zur Freigabe (PL), Seiten in Prüfung (PL oder „Final setzen“), blockierte und eskalierte Arbeitspakete (eigene oder als PL)
@@ -238,8 +245,10 @@ export async function taskRoutes(app: FastifyInstance) {
       [task.id]
     );
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
+    const meetings = await db.query(`select m.id, m.title, m.starts_at, m.page_id from meeting_tasks mt join meetings m on m.id = mt.meeting_id where mt.task_id = $1 order by m.starts_at desc`, [task.id]);
     return {
       task,
+      meetings: meetings.rows.map((m: any) => ({ id: m.id, title: m.title, startsAt: new Date(m.starts_at).toISOString(), pageId: m.page_id })),
       comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
       mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id })),
       attachments: attachments.rows.map(mapAttachment)

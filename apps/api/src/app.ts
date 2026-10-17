@@ -23,8 +23,10 @@ import { portfolioRoutes } from './routes/portfolio.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { aiRoutes } from './routes/ai.js';
 import { analyticsRoutes } from './routes/analytics.js';
+import { meetingRoutes } from './routes/meetings.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
+import { publicBase } from './docs/share.js';
 
 export interface AppOptions {
   db: Db;
@@ -67,7 +69,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     const src = req.headers.origin ?? (req.headers.referer ? safeOrigin(req.headers.referer) : null);
     if (!src) return; // kein Browser-Kontext (API-Client, Tests)
     const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim();
-    const allowed = new Set([host, safeHost(process.env.PUBLIC_URL)].filter(Boolean));
+    const allowed = new Set([host, safeHost(publicBase())].filter(Boolean));
     if (!allowed.has(safeHost(src))) {
       reply.status(403).send({ error: 'Anfrage von fremder Herkunft abgelehnt' });
     }
@@ -108,6 +110,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(oauthRoutes);
       await api.register(aiRoutes);
       await api.register(analyticsRoutes);
+      await api.register(meetingRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

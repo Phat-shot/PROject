@@ -4,7 +4,9 @@ import { useIsMobile } from '../lib/useMedia';
 
 export interface CalItem {
   id: string;
-  kind: 'task' | 'ms';
+  kind: 'task' | 'ms' | 'meeting';
+  /** Uhrzeit (nur Besprechungen) */
+  time?: string;
   title: string;
   /** Beginn (nur Arbeitspakete mit Start); läuft bis date */
   start: string | null;
@@ -23,7 +25,7 @@ const monday = (d: Date) => addDays(new Date(d.getFullYear(), d.getMonth(), d.ge
 
 /**
  * Kalender mit Monat, Woche und Agenda. Deadlines und Meilensteine stehen am Tag, Arbeitspakete mit Start
- * erscheinen am Starttag (▶) und in der Wochenansicht an jedem laufenden Tag. Auf dem Telefon startet die Agenda.
+ * erscheinen am Starttag (▶) und in der Wochenansicht an jedem laufenden Tag; Besprechungen mit Uhrzeit. Auf dem Telefon startet die Agenda.
  */
 export function Calendar({ items, hint }: { items: CalItem[]; hint?: string }) {
   const mobile = useIsMobile();
@@ -54,7 +56,7 @@ export function Calendar({ items, hint }: { items: CalItem[]; hint?: string }) {
   const Ev = ({ item, role }: { item: CalItem; role: 'due' | 'start' | 'running' }) => (
     <span className={`ev ${item.kind} ${role} ${item.done ? 'done' : ''} ${!item.done && item.kind === 'task' && item.date < t && role === 'due' ? 'overdue' : ''}`}
       title={`${item.title}${item.start ? ` · ${item.start.split('-').reverse().join('.')} – ${item.date.split('-').reverse().join('.')}` : ''}`} onClick={item.onOpen}>
-      {role === 'start' ? '▶ ' : role === 'running' ? '· ' : item.kind === 'ms' ? '◆ ' : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
+      {role === 'start' ? '▶ ' : role === 'running' ? '· ' : item.kind === 'ms' ? '◆ ' : item.kind === 'meeting' ? `${item.time ?? ''} ` : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
     </span>
   );
 

@@ -579,3 +579,23 @@ export interface AuditEntry {
 }
 
 export const ROLE_RANK: Record<ProjectRole, number> = { reader: 1, member: 2, pl: 3 };
+
+export interface MeetingAttendee { userId?: string | null; email: string; name?: string | null }
+export interface Meeting {
+  id: string;
+  projectId: string;
+  title: string;
+  startsAt: string;
+  endsAt: string;
+  location: string | null;
+  description: string | null;
+  seriesPageId: string | null;
+  seriesPageTitle?: string | null;
+  pageId: string | null;
+  pageTitle?: string | null;
+  attendees: MeetingAttendee[];
+  inviteSentAt: string | null;
+  createdBy: string | null;
+  tasks: { id: string; title: string; done: boolean; number?: number | null }[];
+  createdAt: string;
+}
