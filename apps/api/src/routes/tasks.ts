@@ -129,6 +129,17 @@ export async function taskRoutes(app: FastifyInstance) {
     return { tasks: list };
   });
 
+  // Kalender über alle Projekte: Meilensteine der Projekte, in denen ich Mitglied bin oder die für alle sichtbar sind
+  app.get('/my/calendar', async (req) => {
+    const user = requireUser(req);
+    const rows = await db.query(
+      `select m.id, m.name, m.date, m.project_id, p.key from milestones m join projects p on p.id = m.project_id
+       where p.org_id = $2 and p.status = 'active' and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) or p.visibility = 'org') order by m.date`,
+      [user.id, user.orgId]
+    );
+    return { milestones: rows.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), projectId: r.project_id, projectKey: r.key })) };
+  });
+
   // Wartet auf dich über alle Projekte: Mail-Entwürfe zur Freigabe (PL), Seiten in Prüfung (PL oder „Final setzen“), blockierte und eskalierte Arbeitspakete (eigene oder als PL)
   app.get('/my/waiting', async (req) => {
     const user = requireUser(req);

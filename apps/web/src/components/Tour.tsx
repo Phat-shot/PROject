@@ -19,6 +19,7 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
     { title: 'Willkommen bei PROject', text: 'In zwei Minuten durch die wichtigsten Bereiche. Du kannst jederzeit überspringen und das Tutorial später über „Tutorial“ unten links neu starten.' },
     { title: 'Dashboard', text: 'Soll und Ist deiner Arbeit über alle Projekte: offen, überfällig, fällig, blockiert. Darunter alles, was dir zugewiesen oder vererbt ist, geklammert als Projekt › Teilprojekt › Arbeitspaket › Task.', target: '[data-tour="dashboard"]', go: '/dashboard' },
     { title: 'Postfach', text: 'Das gemeinsame Postfach zeigt die Mails aller Ansichten, für die du Leserecht hast. Aus jeder Mail lassen sich Arbeitspakete und Doku-Seiten erzeugen.', target: '[data-tour="postfach"]', go: '/postfach' },
+    { title: 'Kalender', text: 'Deadlines, Starts und Meilensteine aller Projekte als Monat, Woche oder Agenda.', target: '[data-tour="kalender"]', go: '/kalender' },
     { title: 'Projekte', text: 'Alle aktiven Projekte mit Fortschritt und nächstem Meilenstein. Ein Klick öffnet die Bereiche des Projekts. „Alle Arbeitspakete“ darunter listet die Arbeitspakete aller Projekte.', target: '[data-tour="projekte"]', go: '/projekte' },
     ...(base ? [
       { title: 'Ein Projekt', text: 'Ein Klick auf das Projekt öffnet seine Bereiche: Übersicht, Arbeitspakete, Postfach, Doku und, für die Projektleitung, Einstellungen.', target: '[data-tour="projekt"]', go: base },

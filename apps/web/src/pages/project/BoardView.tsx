@@ -34,6 +34,13 @@ export function BoardView() {
   const mobile = useIsMobile();
   const [showFilters, setShowFilters] = useState(false);
   const pid = detail.project.id;
+  // Mehrfachauswahl: Modus über Chip „Auswählen“ oder Strg/Cmd+Klick auf eine Karte; Aktionen in der Leiste unten
+  const [selectMode, setSelectMode] = useState(false);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const toggleSelect = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const clearSelection = () => { setSelected(new Set()); setSelectMode(false); };
+  const bulk = useAsync();
+  const bulkRun = (fn: (id: string) => Promise<unknown>) => bulk.run(async () => { for (const id of selected) await fn(id); await reloadTasks(); clearSelection(); });
   const [params, setParams] = useSearchParams();
   const f = useMemo(() => readFilter(params), [params]);
   const setF = (next: Filter | ((x: Filter) => Filter)) => setParams(writeFilter(params, typeof next === 'function' ? next(f) : next), { replace: true });
@@ -66,6 +73,7 @@ export function BoardView() {
       if (e.key === 'f') { e.preventDefault(); searchRef.current?.focus(); }
       if (e.key === 'q') setF((x) => ({ ...x, mine: !x.mine }));
       if (e.key === 'x') setF(EMPTY);
+      if (e.key === 'Escape') clearSelection();
       if (e.key === 'n' && canEdit) setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null });
     };
     window.addEventListener('keydown', h);
@@ -141,6 +149,7 @@ export function BoardView() {
         <button className={`chip ${f.conflicts ? 'on' : ''}`} onClick={() => setF({ ...f, conflicts: !f.conflicts })}>Konflikte</button>
         <button className={`chip ${f.escalated ? 'on' : ''}`} onClick={() => setF({ ...f, escalated: !f.escalated })}>Blockiert / eskaliert</button>
         <button className={`chip ${f.archived ? 'on' : ''}`} onClick={() => setF({ ...f, archived: !f.archived })}>Archiv</button>
+        {canEdit && <button className={`chip ${selectMode ? 'on' : ''}`} title="Mehrere Arbeitspakete auswählen (auch Strg+Klick)" onClick={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}>Auswählen</button>}
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
@@ -174,12 +183,13 @@ export function BoardView() {
                   </h3>
                   {!isCollapsed && inCol.map((x, i) => (
                     <TaskCard key={x.id} task={x} t={t} soon={soon} canEdit={canEdit}
+                      selectable={selectMode} selected={selected.has(x.id)}
                       dragging={drag === x.id}
                       dropMarker={drop && drop.col === c.id && drop.lane === laneKey ? (drop.index === i ? 'before' : drop.index === i + 1 && i === inCol.length - 1 ? 'after' : null) : null}
                       onDragStart={() => setDrag(x.id)}
                       onDragEnd={() => { setDrag(null); setDrop(null); }}
                       onDragOverCard={(e) => { if (!drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
-                      onClick={() => openTask(x.id)} />
+                      onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
                   {!isCollapsed && inCol.length === 0 && <div className="col-empty">{drag ? 'Hier ablegen' : 'leer'}</div>}
                   {!isCollapsed && canEdit && !f.archived && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} onMore={() => setCreate({ columnId: c.id, subprojectId: laneKey === 'none' || laneKey === 'all' ? null : laneKey })} />}
@@ -190,20 +200,48 @@ export function BoardView() {
         </div>
       ))}
       {create && <CreateTask columnId={create.columnId} subprojectId={create.subprojectId} onClose={() => setCreate(null)} />}
+      {selectMode && canEdit && (
+        <div className="bulkbar">
+          <strong>{selected.size} ausgewählt</strong>
+          <button className="btn sm link" onClick={() => setSelected(new Set(filtered.map((x) => x.id)))}>alle sichtbaren</button>
+          <button className="btn sm link" onClick={clearSelection}>aufheben <kbd>Esc</kbd></button>
+          <span className="sep" />
+          <select disabled={!selected.size || bulk.busy} value="" onChange={(e) => { const v = e.target.value; if (v) void bulkRun((id) => api.post(`/tasks/${id}/move`, { columnId: v, index: 0 })); }}>
+            <option value="">Spalte …</option>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select disabled={!selected.size || bulk.busy} value="" onChange={(e) => { const v = e.target.value; if (v) void bulkRun((id) => api.patch(`/tasks/${id}`, { subprojectId: v === 'none' ? null : v })); }}>
+            <option value="">Teilprojekt …</option><option value="none">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select disabled={!selected.size || bulk.busy} value="" onChange={(e) => { const v = e.target.value; if (v) void bulkRun((id) => api.patch(`/tasks/${id}`, { responsibleUserId: v === 'none' ? null : v, responsibleEmail: null })); }}>
+            <option value="">Zuständig …</option><option value="none">– geerbt –</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}
+          </select>
+          <select disabled={!selected.size || bulk.busy} value="" onChange={(e) => { const v = e.target.value; if (v) void bulkRun((id) => { const cur = tasks.find((x) => x.id === id); return api.patch(`/tasks/${id}`, { labelIds: Array.from(new Set([...(cur?.labelIds ?? []), v])) }); }); }}>
+            <option value="">Label hinzufügen …</option>{detail.labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <select disabled={!selected.size || bulk.busy} value="" onChange={(e) => { const v = e.target.value; if (v) void bulkRun((id) => api.patch(`/tasks/${id}`, { priority: v })); }}>
+            <option value="">Priorität …</option>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+          </select>
+          <button className="btn sm" disabled={!selected.size || bulk.busy} onClick={() => void dialog.confirm({ title: 'Archivieren', text: `${selected.size} Arbeitspakete vom Board nehmen? Sie bleiben über den Filter „Archiv“ erreichbar.`, confirmLabel: 'Archivieren' }).then((ok) => { if (ok) void bulkRun((id) => api.post(`/tasks/${id}/archive`)); })}>Archivieren</button>
+          {detail.project.myMembership.role === 'pl' && <button className="btn sm danger" disabled={!selected.size || bulk.busy} onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `${selected.size} Arbeitspakete in den Papierkorb legen? Wiederherstellen in den Projekteinstellungen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void bulkRun((id) => api.del(`/tasks/${id}`)); })}>Papierkorb</button>}
+          {bulk.busy && <span className="muted small">läuft …</span>}
+          {bulk.error && <span className="error small">{bulk.error}</span>}
+        </div>
+      )}
     </div>
   );
 }
 
-function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart, onDragEnd, onDragOverCard, onClick }: {
+function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart, onDragEnd, onDragOverCard, onClick, selectable = false, selected = false }: {
   task: Task; t: string; soon: string; canEdit: boolean; dragging: boolean; dropMarker: 'before' | 'after' | null;
-  onDragStart: () => void; onDragEnd: () => void; onDragOverCard: (e: React.DragEvent) => void; onClick: () => void;
+  onDragStart: () => void; onDragEnd: () => void; onDragOverCard: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; selectable?: boolean; selected?: boolean;
 }) {
   const { detail } = useProject();
   const dueClass = x.done ? 'done' : x.dueDate && x.dueDate < t ? 'overdue' : x.dueDate && x.dueDate <= soon ? 'soon' : '';
   const labels = x.labelIds.map((id) => detail.labels.find((l) => l.id === id)).filter(Boolean);
   return (
-    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''}`} draggable={canEdit}
+    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''}`} draggable={canEdit && !selectable}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
+      {(selectable || selected) && <input type="checkbox" className="select-box" checked={selected} readOnly aria-label="Auswählen" />}
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
       <div className="badges">

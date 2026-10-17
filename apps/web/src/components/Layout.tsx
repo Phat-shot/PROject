@@ -41,6 +41,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="brand">PROject<small>{orgName}</small><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
         <NavLink to="/dashboard" data-tour="dashboard">Dashboard</NavLink>
         <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
+        <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
           <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
           <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>

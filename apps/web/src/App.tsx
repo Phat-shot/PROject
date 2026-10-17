@@ -7,6 +7,7 @@ import { AllTasksPage } from './pages/AllTasksPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { UserSettingsPage } from './pages/UserSettingsPage';
 import { InboxPage } from './pages/InboxPage';
+import { CalendarPage } from './pages/CalendarPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
@@ -42,6 +43,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
         <Route path="/dashboard" element={<DashboardPage />} />
         <Route path="/postfach/*" element={<InboxPage />} />
+        <Route path="/kalender" element={<CalendarPage />} />
         <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
         <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />
