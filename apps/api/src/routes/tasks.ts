@@ -4,6 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
+import { onWorkflowTaskDone } from '../workflows/engine.js';
 
 /** Arbeitspakete, Tasks und Teilprojekte bekommen einen KI-Agenten nur von der PL. */
 async function assertAgentAssignment(db: any, m: { role: string }, userId: string | null | undefined) {
@@ -545,6 +546,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   /** W6: Wiederholung „nach Erledigung“ erzeugt die nächste Instanz. */
   async function onTaskDone(existing: any, user: { id: string; orgId: string }) {
+    if (existing.workflow_run_id) await onWorkflowTaskDone(db, app.mail, existing.id);
     const r: Recurrence | null = existing.recurrence ?? null;
     if (!r || r.mode !== 'after_done' || !existing.due_date) return;
     const next = nextDueDate(dateStr(existing.due_date)!, r);

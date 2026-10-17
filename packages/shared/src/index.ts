@@ -266,6 +266,8 @@ export interface Task {
   blockedReason: string | null;
   escalationLevel: number;
   escalatedAt: string | null;
+  /** Arbeitspaket stammt aus einem Workflow-Lauf */
+  workflowRunId?: string | null;
   hasDescription: boolean;
   commentCount: number;
   attachmentCount: number;

@@ -69,6 +69,7 @@ export function Layout({ children }: { children: ReactNode }) {
                       <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
                       <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
                       <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
+                      <NavLink to={`${base}/workflows`} data-tour="p-workflows">Workflows</NavLink>
                       <NavLink to={`${base}/chat`} data-tour="p-chat">Chat{(chat.projects[p.id] ?? 0) > 0 && <span className="badge danger nav-count">{chat.projects[p.id]}</span>}</NavLink>
                       <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
                       {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}

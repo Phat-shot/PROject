@@ -5,6 +5,8 @@ import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { contactLabel, useContacts } from '../../lib/useContacts';
+import { useData } from '../../lib/useData';
+import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { EMPTY_FILTER, isFilterActive, readFilter, writeFilter, type BoardFilter } from '../../lib/boardFilter';
@@ -239,6 +241,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.priority !== 'normal' && <span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span>}
         {x.dueDate && <span className={`due ${dueClass}`} title={x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline'}>{x.done ? '✓ ' : '⏰ '}{fmtDate(x.dueDate)}</span>}
         {x.conflicts.length > 0 && <span className="conflict" title={x.conflicts.join('\n')}>⚠</span>}
+        {x.workflowRunId && <Link to={`/projekte/${x.projectId}/workflows/${x.workflowRunId}`} title="Aus einem Workflow-Lauf" onClick={(e) => e.stopPropagation()}>⟳</Link>}
         {x.hasDescription && <span title="Beschreibung vorhanden">≡</span>}
         {x.commentCount > 0 && <span title="Kommentare">💬 {x.commentCount}</span>}
         {x.attachmentCount > 0 && <span title="Anhänge">📎 {x.attachmentCount}</span>}
@@ -256,13 +259,14 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
 function QuickAdd({ columnId, subprojectId, onMore }: { columnId: string; subprojectId: string | null; onMore: () => void }) {
   const { detail, reloadTasks } = useProject();
   const [open, setOpen] = useState(false);
+  const [wf, setWf] = useState<'pick' | WorkflowDef | null>(null);
   const [title, setTitle] = useState('');
   const { busy, run } = useAsync();
   const submit = () => {
     if (!title.trim()) return;
     void run(async () => { await api.post(`/projects/${detail.project.id}/tasks`, { title: title.trim(), columnId, subprojectId }); setTitle(''); await reloadTasks(); });
   };
-  if (!open) return <button className="btn sm link" onClick={() => setOpen(true)}>+ Arbeitspaket</button>;
+  if (!open) return <span className="row" style={{ gap: 2 }}><button className="btn sm link" onClick={() => setOpen(true)}>+ Arbeitspaket</button><button className="btn sm link" title="Workflow statt eines einzelnen Arbeitspakets starten: die Arbeitspakete des Ablaufs landen in dieser Spalte" onClick={() => setWf('pick')}>+ Workflow</button>{wf === 'pick' && <WorkflowPicker onPick={(d) => setWf(d)} onClose={() => setWf(null)} />}{wf && wf !== 'pick' && <StartRunDialog def={wf} columnId={columnId} subprojectId={subprojectId} onClose={() => setWf(null)} onStarted={async () => { setWf(null); await reloadTasks(); }} />}</span>;
   return (
     <div className="quick-add">
       <textarea autoFocus placeholder="Titel eingeben, Enter zum Anlegen" value={title} onChange={(e) => setTitle(e.target.value)}
@@ -339,5 +343,19 @@ export function LabelPicker({ value, onChange }: { value: string[]; onChange: (v
         </span>
       )}
     </div>
+  );
+}
+
+/** Auswahl eines Workflows zum Start aus dem Board. */
+function WorkflowPicker({ onPick, onClose }: { onPick: (d: WorkflowDef) => void; onClose: () => void }) {
+  const { detail } = useProject();
+  const d = useData<{ definitions: WorkflowDef[] }>(`/projects/${detail.project.id}/workflows`);
+  const defs = (d.data?.definitions ?? []).filter((x) => x.active);
+  return (
+    <Modal title="Workflow starten" onClose={onClose}>
+      {!d.data && <div className="muted small">Lade …</div>}
+      {d.data && defs.length === 0 && <div className="muted small">Noch kein Workflow definiert. Unter „Workflows“ anlegen.</div>}
+      <div className="form">{defs.map((w) => <button key={w.id} className="btn" style={{ textAlign: 'left' }} onClick={() => onPick(w)}><strong>{w.name}</strong>{w.description && <span className="muted small"> · {w.description}</span>}<span className="muted small"> · {w.steps.length} Schritte</span></button>)}</div>
+    </Modal>
   );
 }

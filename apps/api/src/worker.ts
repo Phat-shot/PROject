@@ -9,6 +9,7 @@ import { runReports } from './docs/report.js';
 import { runNotificationMails } from './notifyMail.js';
 import { runReminders } from './tasks/reminders.js';
 import { runAgents } from './ai/agent.js';
+import { runWorkflows } from './workflows/engine.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -61,7 +62,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
-      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); }
+      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);

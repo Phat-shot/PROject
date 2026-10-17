@@ -134,6 +134,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     blocked: Boolean(r.blocked),
     blockedReason: r.blocked_reason ?? null,
     escalationLevel: r.escalation_level ?? 0,
+    workflowRunId: r.workflow_run_id ?? null,
     escalatedAt: r.escalated_at ?? null,
     hasDescription: Boolean(r.description && String(r.description).trim()),
     commentCount: r.comment_count ?? 0,

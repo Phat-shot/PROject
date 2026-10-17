@@ -652,3 +652,24 @@ a.tkey { color: var(--primary); }
   .chat-page.dm { flex-direction: column; }
   .dm-list { width: auto; max-height: 40vh; }
 }
+
+/* Workflows */
+.wf-steps { margin: 8px 0 0; padding-left: 18px; }
+.wf-steps li { margin: 2px 0; }
+.wf-icon { display: inline-block; width: 16px; text-align: center; }
+.wf-run .progress { height: 6px; background: var(--surface-2); border-radius: 3px; overflow: hidden; }
+.wf-run .progress div { height: 100%; background: var(--primary); }
+.wf-timeline { list-style: none; margin: 0; padding: 0; }
+.wf-step { display: flex; gap: 12px; padding: 10px 0; border-left: 2px solid var(--border); margin-left: 12px; position: relative; }
+.wf-step .wf-dot { position: absolute; left: -11px; top: 10px; width: 20px; height: 20px; border-radius: 50%; background: var(--surface); border: 2px solid var(--border); display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--muted); }
+.wf-step.done .wf-dot { border-color: var(--ok, #2e9e5b); color: var(--ok, #2e9e5b); }
+.wf-step.active .wf-dot, .wf-step.current .wf-dot { border-color: var(--primary); color: var(--primary); }
+.wf-step.skipped .wf-dot { border-style: dashed; }
+.wf-step.current .wf-body { background: var(--primary-soft); border-radius: 8px; }
+.wf-step .wf-body { padding: 4px 12px 4px 20px; flex: 1; }
+.wf-step.pending .wf-body { color: var(--muted); }
+.wf-editor .wf-edit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.wf-editor .wf-edit-list .card { padding: 10px 12px; }
+.wf-editor textarea { width: 100%; }
+.modal .card:has(.wf-editor) { width: min(820px, 95vw); }
+.badge.ok { background: var(--ok-soft, #e6f6ec); color: var(--ok, #2e9e5b); border-color: var(--ok-soft, #cdebd8); }
