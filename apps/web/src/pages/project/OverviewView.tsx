@@ -45,7 +45,7 @@ export function OverviewView() {
         {o.time.enabled && <div className={`kpi ${o.time.budgetHours && o.time.loggedMinutes > o.time.budgetHours * 60 ? 'bad' : ''}`}><div className="v">{Math.round(o.time.loggedMinutes / 60)} h</div><div className="l">gebucht{o.time.budgetHours ? ` von ${o.time.budgetHours} h Budget` : ''}</div></div>}
       </div>
       {o.escalations.length > 0 && (
-        <div className="card mb" style={{ borderColor: '#f2d9a6' }}>
+        <div className="card mb warn">
           <h2>Warnungen und Eskalationen <span className="muted small" style={{ fontWeight: 400 }}>Regelwerk: Verzug, Stillstand, Blockaden entlang der Kette Zuständig → Teilprojekt → PL → Eskalationskontakt</span></h2>
           <table className="table"><thead><tr><th>Arbeitspaket</th><th>Grund</th><th>Stufe</th><th>Kette</th></tr></thead><tbody>
             {o.escalations.map((e) => (

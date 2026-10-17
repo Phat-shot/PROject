@@ -36,11 +36,17 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get('/projects', async (req) => {
     const user = requireUser(req);
     const rows = await db.query(
-      `select p.*, coalesce(m.role, 'reader') as my_role from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
+      `select p.*, coalesce(m.role, 'reader') as my_role,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and not c.is_done)::int as open_count,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and not c.is_done and t.due_date < $3)::int as overdue_count,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and c.is_done)::int as done_count,
+         (select ms.name from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_name,
+         (select ms.date from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_date
+       from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
        where p.org_id = $2 and (m.user_id is not null or p.visibility = 'org') order by p.status, p.name`,
-      [user.id, user.orgId]
+      [user.id, user.orgId, new Date().toISOString().slice(0, 10)]
     );
-    return { projects: rows.rows.map(mapProject) };
+    return { projects: rows.rows.map((r: any) => ({ ...mapProject(r), stats: { open: r.open_count, overdue: r.overdue_count, done: r.done_count, nextMilestone: r.next_ms_name ? { name: r.next_ms_name, date: dateStr(r.next_ms_date)! } : null } })) };
   });
 
   // W1: Projekt anlegen (Projektersteller oder Org-Admin wird PL)

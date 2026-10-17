@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import { Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import type { BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
@@ -91,7 +91,7 @@ function ProjectBody() {
   const taskId = params.get('task');
   return (
     <>
-      <TopBar title={<><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
+      <TopBar title={<><Link to={base} style={{ color: 'inherit' }} title="Zur Übersicht"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
       <Routes>
         <Route index element={<OverviewView />} />
         <Route path="board" element={<BoardView />} />

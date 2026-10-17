@@ -48,6 +48,8 @@ export interface Project {
   reporting?: ReportingPolicy;
   myRole?: ProjectRole;
   myMembership?: Membership;
+  /** Kennzahlen für Projektkarten (nur in der Projektliste) */
+  stats?: { open: number; overdue: number; done: number; nextMilestone: { name: string; date: string } | null };
 }
 
 export interface EscalationPolicy {

@@ -42,10 +42,10 @@ export function DashboardPage() {
       <div className="content">
         {work.error && <div className="error mb">{work.error}</div>}
         <div className="kpis mb">
-          <div className="kpi"><div className="v">{open.length}</div><div className="l">offene Arbeitspakete</div></div>
-          <div className={`kpi ${overdue.length ? 'bad' : 'ok'}`}><div className="v">{overdue.length}</div><div className="l">überfällig</div></div>
-          <div className={`kpi ${dueWeek.length ? 'warn' : ''}`}><div className="v">{dueWeek.length}</div><div className="l">fällig in 7 Tagen</div></div>
-          <div className={`kpi ${trouble.length ? 'bad' : 'ok'}`}><div className="v">{trouble.length}</div><div className="l">blockiert / eskaliert / Konflikt</div></div>
+          <Link className="kpi" to="/projekte/aufgaben?mine=1" title="Als Liste öffnen"><div className="v">{open.length}</div><div className="l">offene Arbeitspakete</div></Link>
+          <Link className={`kpi ${overdue.length ? 'bad' : 'ok'}`} to="/projekte/aufgaben?mine=1&filter=overdue" title="Als Liste öffnen"><div className="v">{overdue.length}</div><div className="l">überfällig</div></Link>
+          <Link className={`kpi ${dueWeek.length ? 'warn' : ''}`} to="/projekte/aufgaben?mine=1&filter=week" title="Als Liste öffnen"><div className="v">{dueWeek.length}</div><div className="l">fällig in 7 Tagen</div></Link>
+          <Link className={`kpi ${trouble.length ? 'bad' : 'ok'}`} to="/projekte/aufgaben?mine=1&filter=trouble" title="Als Liste öffnen"><div className="v">{trouble.length}</div><div className="l">blockiert / eskaliert / Konflikt</div></Link>
           <div className={`kpi ${pct < 80 ? 'warn' : 'ok'}`}><div className="v">{pct}%</div><div className="l">im Plan ({inPlan}/{open.length} Soll erreicht)</div></div>
           <div className="kpi"><div className="v">{tasksOpen}</div><div className="l">offene Tasks</div></div>
           <div className={`kpi ${notes.data?.unread ? 'warn' : ''}`}><div className="v">{notes.data?.unread ?? 0}</div><div className="l">ungelesene Meldungen</div></div>

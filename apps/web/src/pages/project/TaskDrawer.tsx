@@ -61,7 +61,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       </>}>
       {error && <div className="error mb">{error}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
-        <div className="notice mb" style={t.escalationLevel >= 2 || t.blocked ? { background: '#fdecea', borderColor: '#f5c2c0', color: '#7f1d1d' } : undefined}>
+        <div className={`notice mb ${t.escalationLevel >= 2 || t.blocked ? 'danger' : ''}`}>
           <strong>{t.blocked ? `Blockiert${t.blockedReason ? `: ${t.blockedReason}` : ''}` : 'Eskaliert'}</strong>
           {t.escalationLevel > 0 && <div className="small">Eskalation {ESC_LABEL[t.escalationLevel]} seit {fmtDateTime(t.escalatedAt)}.</div>}
           <div className="row mt small">
@@ -102,7 +102,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </> : null}
         <div className="field"><span>Blockiert</span>
           {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
-        <div className="field"><span>Antwortadresse</span><span className="small muted">{detail.project.mailAddress ? detail.project.mailAddress.replace('@', `+t${t.mailCode}@`) : `Kein Projektkonto · Code ${t.mailCode}`}</span></div>
+        {detail.project.mailAddress && <div className="field"><span>Antwortadresse</span><span className="small muted" title="Antworten an diese Adresse landen automatisch im Arbeitspaket">{detail.project.mailAddress.replace('@', `+t${t.mailCode}@`)}</span></div>}
         {!canDates && canEdit && <p className="muted small full" style={{ margin: 0 }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
       </div>
 

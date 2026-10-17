@@ -73,7 +73,7 @@ export function PlanView() {
           <thead><tr><th className="label">Element</th><th style={{ width }}><div style={{ position: 'relative', height: 24, width }}>{months.map((m) => <div key={m.label + m.left} className="month" style={{ position: 'absolute', left: m.left, width: m.w, top: 0, bottom: 0 }}>{m.label}</div>)}</div></th></tr></thead>
           <tbody>
             {rows.map((r) => (
-              <tr key={r.kind + r.id}>
+              <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
                 <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' ? 'pointer' : undefined }} onClick={() => r.kind === 'task' && openTask(r.id)}>
                   {r.kind === 'task' && <span style={{ paddingLeft: 10 }} />}{r.kind === 'ms' && '◆ '}{r.label}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
@@ -83,7 +83,7 @@ export function PlanView() {
                     <div className="today" style={{ left: x(today()) }} />
                     {r.kind === 'ms' && r.start && <div className="milestone" style={{ left: x(r.start) - 8 }} title={fmtDate(r.start)} />}
                     {r.kind !== 'ms' && r.start && r.end && r.start <= r.end && <div className={`bar ${r.kind} ${r.done ? 'done' : ''} ${r.conflict ? 'conflict' : ''}`} style={{ left: x(r.start), width: Math.max(6, x(r.end) - x(r.start) + PX_PER_DAY) }} title={`${fmtDate(r.start)} – ${fmtDate(r.end)}`}>{r.kind === 'sub' ? '' : `${fmtDate(r.start)} – ${fmtDate(r.end)}`}</div>}
-                    {r.kind === 'task' && !r.start && r.end && <div className={`dot ${r.conflict ? 'conflict' : ''}`} style={{ left: x(r.end) - 6, background: r.conflict ? '#e08b2b' : undefined }} title={`Deadline ${fmtDate(r.end)}`} />}
+                    {r.kind === 'task' && !r.start && r.end && <div className={`dot ${r.conflict ? 'conflict' : ''}`} style={{ left: x(r.end) - 6 }} title={`Deadline ${fmtDate(r.end)}`} />}
                   </div>
                 </td>
               </tr>

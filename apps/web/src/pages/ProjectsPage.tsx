@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Project } from '@projekttool/shared';
 import { useData } from '../lib/useData';
-import { api } from '../lib/api';
+import { api, fmtDate } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
 import { Modal, roleLabel, useAsync } from '../components/ui';
@@ -17,15 +17,26 @@ export function ProjectsPage() {
       <TopBar title="Projekte">{canCreate && <button className="btn primary" onClick={() => setCreate(true)}>Neues Projekt</button>}</TopBar>
       <div className="content">
         {data && data.projects.length === 0 && <div className="empty">Du bist noch in keinem Projekt Mitglied.</div>}
-        <div className="grid cols-3">
-          {data?.projects.map((p) => (
-            <Link key={p.id} to={`/projekte/${p.id}`} className="card" style={{ color: 'inherit' }}>
-              <div className="row between"><span className="badge">{p.key}</span><span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></div>
-              <h2 className="mt">{p.name}</h2>
-              <p className="muted small">{p.description}</p>
-              {p.status === 'archived' && <span className="badge">archiviert</span>}
-            </Link>
-          ))}
+        <div className="grid cols-3 proj-cards">
+          {data?.projects.map((p) => {
+            const s = p.stats;
+            const total = s ? s.open + s.done : 0;
+            return (
+              <Link key={p.id} to={`/projekte/${p.id}`} className="card">
+                <div className="row between"><span className="badge">{p.key}</span><span className="row" style={{ gap: 4 }}>{p.status === 'archived' && <span className="badge">archiviert</span>}<span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></span></div>
+                <h2 className="mt">{p.name}</h2>
+                <p className="muted small">{p.description}</p>
+                {s && p.status === 'active' && <>
+                  <div className="bar" title={`${s.done} von ${total} erledigt`}><div className="done" style={{ width: `${total ? (s.done / total) * 100 : 0}%` }} /></div>
+                  <div className="stats">
+                    <span><b>{s.open}</b> offen</span>
+                    <span className={s.overdue ? 'bad' : ''}><b>{s.overdue}</b> überfällig</span>
+                    {s.nextMilestone ? <span title="Nächster Meilenstein">◆ {fmtDate(s.nextMilestone.date)} {s.nextMilestone.name}</span> : <span>kein Meilenstein</span>}
+                  </div>
+                </>}
+              </Link>
+            );
+          })}
         </div>
       </div>
       {create && <CreateProject onClose={() => setCreate(false)} onCreated={() => { setCreate(false); void reload(); }} />}

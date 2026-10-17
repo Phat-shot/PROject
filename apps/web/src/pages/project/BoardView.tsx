@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
@@ -7,15 +8,39 @@ import { useProject } from '../ProjectPage';
 
 interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean; escalated: boolean }
 const EMPTY: Filter = { q: '', member: '', label: '', mine: false, overdue: false, conflicts: false, prio: '', archived: false, escalated: false };
+const FLAGS: (keyof Filter)[] = ['mine', 'overdue', 'conflicts', 'archived', 'escalated'];
+
+/** Board-Filter leben in der URL (teilbar, Zurück-Taste); eingeklappte Spalten und Swimlanes je Projekt im Browser. */
+function readFilter(p: URLSearchParams): Filter {
+  const f: Filter = { ...EMPTY, q: p.get('q') ?? '', member: p.get('person') ?? '', label: p.get('label') ?? '', prio: p.get('prio') ?? '' };
+  for (const k of FLAGS) if (p.get(k) === '1') (f as any)[k] = true;
+  return f;
+}
+function writeFilter(p: URLSearchParams, f: Filter): URLSearchParams {
+  const n = new URLSearchParams(p);
+  const set = (k: string, v: string) => { if (v) n.set(k, v); else n.delete(k); };
+  set('q', f.q); set('person', f.member); set('label', f.label); set('prio', f.prio);
+  for (const k of FLAGS) set(k, f[k] ? '1' : '');
+  return n;
+}
+function readSet(key: string): Set<string> { try { return new Set(JSON.parse(localStorage.getItem(key) ?? '[]')); } catch { return new Set(); } }
+function writeSet(key: string, s: Set<string>) { try { localStorage.setItem(key, JSON.stringify([...s])); } catch { /* ignore */ } }
 
 export function BoardView() {
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const { user } = useAuth();
-  const [lanes, setLanes] = useState(true);
   const dialog = useDialog();
-  const [f, setF] = useState<Filter>(EMPTY);
+  const pid = detail.project.id;
+  const [params, setParams] = useSearchParams();
+  const f = useMemo(() => readFilter(params), [params]);
+  const setF = (next: Filter | ((x: Filter) => Filter)) => setParams(writeFilter(params, typeof next === 'function' ? next(f) : next), { replace: true });
+  const [lanes, setLanesState] = useState(() => { try { return localStorage.getItem(`pt_swim_${pid}`) !== '0'; } catch { return true; } });
+  const setLanes = (v: boolean) => { setLanesState(v); try { localStorage.setItem(`pt_swim_${pid}`, v ? '1' : '0'); } catch { /* ignore */ } };
   const [archived, setArchived] = useState<Task[] | null>(null);
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [collapsed, setCollapsedState] = useState<Set<string>>(() => readSet(`pt_cols_${pid}`));
+  const setCollapsed = (s: Set<string>) => { setCollapsedState(s); writeSet(`pt_cols_${pid}`, s); };
+  const [laneClosed, setLaneClosedState] = useState<Set<string>>(() => readSet(`pt_lanes_${pid}`));
+  const toggleLane = (k: string) => { const n = new Set(laneClosed); if (n.has(k)) n.delete(k); else n.add(k); setLaneClosedState(n); writeSet(`pt_lanes_${pid}`, n); };
   const [create, setCreate] = useState<{ columnId: string; subprojectId: string | null } | null>(null);
   const [drag, setDrag] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ col: string; lane: string; index: number } | null>(null);
@@ -112,9 +137,9 @@ export function BoardView() {
       </div>
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen über die Arbeitspaket.</div>}
       {groups.map((g) => (
-        <div key={g.key} className="swimlane">
-          {g.name && <h2><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
-          <div className="board">
+        <div key={g.key} className={`swimlane ${laneClosed.has(g.key) ? 'collapsed' : ''}`}>
+          {g.name && <h2><button className="lane-toggle" title={laneClosed.has(g.key) ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{laneClosed.has(g.key) ? '▸' : '▾'}</button><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
+          {g.name && laneClosed.has(g.key) ? null : <div className="board">
             {detail.columns.map((c) => {
               const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
               const total = columnCount(c.id);
@@ -149,7 +174,7 @@ export function BoardView() {
                 </div>
               );
             })}
-          </div>
+          </div>}
         </div>
       ))}
       {create && <CreateTask columnId={create.columnId} subprojectId={create.subprojectId} onClose={() => setCreate(null)} />}
@@ -212,7 +237,7 @@ function SubprojectResp({ id }: { id: string }) {
   const { detail } = useProject();
   const s = detail.subprojects.find((x) => x.id === id);
   if (!s) return null;
-  return <span className="muted small" style={{ fontWeight: 400 }}>{s.restricted && <span title="Eingeschränkt sichtbar">🔒 </span>}verantwortlich {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}{s.startDate && ` · ${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`}</span>;
+  return <span className="muted small" style={{ fontWeight: 400 }}>{s.restricted && <span title="Eingeschränkt sichtbar">🔒 </span>}verantwortlich {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}{s.startDate && ` · ${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`} · <Link to={`/projekte/${detail.project.id}/plan#sp-${s.id}`}>Plan</Link></span>;
 }
 
 function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; subprojectId: string | null; onClose: () => void }) {
