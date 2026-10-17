@@ -120,6 +120,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
   const predIds = typeof r.predecessor_ids === 'string' ? JSON.parse(r.predecessor_ids) : r.predecessor_ids ?? [];
   const labelIds = typeof r.label_ids === 'string' ? JSON.parse(r.label_ids) : r.label_ids ?? [];
   return {
+    number: r.number ?? 0,
     labelIds,
     archivedAt: r.archived_at,
     recurrence: r.recurrence ?? null,

@@ -129,6 +129,26 @@ export async function taskRoutes(app: FastifyInstance) {
     return { tasks: list };
   });
 
+  // Wartet auf dich über alle Projekte: Mail-Entwürfe zur Freigabe (PL), Seiten in Prüfung (PL oder „Final setzen“), blockierte und eskalierte Arbeitspakete (eigene oder als PL)
+  app.get('/my/waiting', async (req) => {
+    const user = requireUser(req);
+    const ms = await db.query(`select m.*, p.key, p.name from project_members m join projects p on p.id = m.project_id where m.user_id = $1 and p.status = 'active'`, [user.id]);
+    const drafts: any[] = []; const pages: any[] = []; const tasksOut: any[] = [];
+    for (const m of ms.rows) {
+      if (m.role === 'pl') {
+        const c = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [m.project_id]);
+        if (c.c > 0) drafts.push({ projectId: m.project_id, projectKey: m.key, count: c.c });
+      }
+      if (m.role === 'pl' || m.can_finalize) {
+        const r = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' order by updated_at desc limit 5`, [m.project_id]);
+        for (const p of r.rows) pages.push({ id: p.id, title: p.title, projectId: m.project_id, projectKey: m.key, updatedAt: p.updated_at });
+      }
+      const esc = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and (t.blocked or t.escalation_level > 0)`, [m.project_id]);
+      for (const t of esc) if (!t.done && (m.role === 'pl' || t.responsible.userId === user.id)) tasksOut.push({ id: t.id, number: t.number, title: t.title, projectId: t.projectId, projectKey: m.key, blocked: t.blocked, escalationLevel: t.escalationLevel });
+    }
+    return { drafts, pagesInReview: pages, tasks: tasksOut };
+  });
+
   // Meine Arbeit: Projekte, Teilprojekte, Arbeitspakete und Tasks, geklammert nach Hierarchie; nur eigene bzw. geerbte Zuständigkeit (Filter im Client)
   app.get('/my/work', async (req) => {
     const user = requireUser(req);

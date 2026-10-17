@@ -51,7 +51,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const inheritedFrom = t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
   return (
-    <Drawer title={<TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} />} onClose={onClose}
+    <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
         {saved && <span className="muted small">gespeichert</span>}
         {me.role !== 'reader' && (t.archivedAt
@@ -111,10 +111,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       <button className="btn sm link mt" onClick={() => setMore(!more)}>{more ? '▾' : '▸'} Vorgänger, Wiederholung</button>
       {more && (
         <div className="form cols-2 mt">
-          <label className="field full"><span>Vorgänger (Ende → Anfang)</span>
-            <select multiple value={t.predecessorIds ?? []} disabled={!canEdit || !canPlan} onChange={(e) => void patch({ predecessorIds: Array.from(e.target.selectedOptions).map((o) => o.value) })} style={{ height: 90 }}>
-              {tasks.filter((x) => x.id !== t.id).map((x) => <option key={x.id} value={x.id}>{x.title}</option>)}
-            </select></label>
+          <PredecessorPicker task={t} all={tasks} projectKey={detail.project.key} canEdit={canEdit && canPlan} onChange={(ids) => patch({ predecessorIds: ids })} />
           <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />
         </div>
       )}
@@ -149,8 +146,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       </div>}
 
       <h3 className="mt">Anhänge</h3>
-      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
-      {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); }); }} />}
+      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{canEdit && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await load(); await reloadTasks(); }); })}>✕</button>}</li>)}</ul>
+      {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} />}
 
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
@@ -180,6 +177,26 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </Modal>
       )}
     </Drawer>
+  );
+}
+
+/** Vorgänger (Ende → Anfang): durchsuchbare Liste mit Häkchen statt Mehrfachauswahl. */
+function PredecessorPicker({ task, all, projectKey, canEdit, onChange }: { task: Task; all: Task[]; projectKey: string; canEdit: boolean; onChange: (ids: string[]) => Promise<void> }) {
+  const [q, setQ] = useState('');
+  const sel = new Set(task.predecessorIds ?? []);
+  const needle = q.trim().toLowerCase();
+  const list = all.filter((x) => x.id !== task.id && !x.archivedAt && (sel.has(x.id) || !needle || x.title.toLowerCase().includes(needle) || `${projectKey}-${x.number}`.toLowerCase().includes(needle)));
+  const toggle = (id: string) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); void onChange([...n]); };
+  return (
+    <div className="field full"><span>Vorgänger (Ende → Anfang){sel.size > 0 && <span className="muted"> · {sel.size} gewählt</span>}</span>
+      <div className="pred-picker">
+        <input type="text" placeholder="Titel oder Kennung filtern …" value={q} onChange={(e) => setQ(e.target.value)} disabled={!canEdit} />
+        <div className="list">
+          {list.length === 0 && <div className="muted small">Keine Treffer.</div>}
+          {list.map((x) => <label key={x.id} className={`check small ${sel.has(x.id) ? 'on' : ''}`}><input type="checkbox" checked={sel.has(x.id)} disabled={!canEdit} onChange={() => toggle(x.id)} /> <span className="tkey">{projectKey}-{x.number}</span> {x.title}{x.dueDate && <span className="muted"> · bis {fmtDate(x.dueDate)}</span>}</label>)}
+        </div>
+      </div>
+    </div>
   );
 }
 

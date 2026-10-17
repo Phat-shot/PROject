@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { DocStatus } from '@projekttool/shared';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, writeFile, unlink } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -469,6 +469,21 @@ export async function docRoutes(app: FastifyInstance) {
     reply.header('content-type', a.mime);
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(a.filename)}"`);
     return reply.send(createReadStream(a.storage_path));
+  });
+
+  app.delete<{ Params: { id: string } }>('/attachments/:id', async (req) => {
+    const user = requireUser(req);
+    const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.id]);
+    if (!a) throw notFound('Anhang nicht gefunden');
+    await requireProject(db, user, a.project_id, 'member');
+    if (a.page_id) {
+      const pg = await db.maybeOne(`select status from doc_pages where id = $1`, [a.page_id]);
+      if (pg?.status === 'final') throw badRequest('Anhänge einer finalen Seite bleiben erhalten');
+    }
+    await db.query(`delete from attachments where id = $1`, [a.id]);
+    await unlink(a.storage_path).catch(() => undefined);
+    await audit(db, { orgId: user.orgId, projectId: a.project_id, userId: user.id, action: 'attachment.delete', objectType: 'attachment', objectId: a.id, details: { filename: a.filename } });
+    return { ok: true };
   });
 
   // Eingebaute Vorlagen bereitstellen (für seed und Tests)

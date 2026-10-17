@@ -187,6 +187,8 @@ export interface ResponsibleInfo {
 export interface Task {
   id: string;
   projectId: string;
+  /** Fortlaufende Nummer im Projekt; Kennung = Projektkürzel-Nummer (WEB-12) */
+  number: number;
   subprojectId: string | null;
   columnId: string;
   title: string;

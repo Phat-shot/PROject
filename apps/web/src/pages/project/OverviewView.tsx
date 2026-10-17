@@ -23,8 +23,32 @@ const ACTION_LABEL: Record<string, string> = {
   'page.share': 'Seite freigegeben', 'page.external_edit': 'Extern bearbeitet', 'plan.shift': 'Nachfolger verschoben', 'member.set': 'Mitglied gesetzt', 'task.recurrence_created': 'Wiederholung angelegt'
 };
 
+/** Leeres Projekt: die nächsten Schritte, solange sie offen sind und das Projekt noch klein ist. Nur für die Projektleitung. */
+function SetupChecklist({ taskCount }: { taskCount: number }) {
+  const { detail } = useProject();
+  const p = detail.project;
+  const base = `/projekte/${p.id}`;
+  if (p.myMembership.role !== 'pl' || taskCount >= 10) return null;
+  const items: { done: boolean; label: string; to: string }[] = [
+    { done: detail.members.length > 1, label: 'Mitglieder hinzufügen oder einladen', to: `${base}/einstellungen#mitglieder` },
+    { done: detail.subprojects.length > 0, label: 'Teilprojekte anlegen', to: `${base}/einstellungen#planung` },
+    { done: detail.milestones.length > 0, label: 'Meilensteine setzen', to: `${base}/einstellungen#planung` },
+    { done: taskCount > 0, label: 'Erste Arbeitspakete aufs Board', to: `${base}/board` },
+    { done: Boolean(p.mailAddress), label: 'Projektkonto anbinden (Mail, Nachfragen, PDF-Versand)', to: `${base}/einstellungen#mail` },
+    { done: Boolean(p.escalation?.enabled && (p.escalation.contactUserId || p.escalation.contactEmail)), label: 'Eskalationskontakt festlegen', to: `${base}/einstellungen#eskalation` }
+  ];
+  const open = items.filter((i) => !i.done);
+  if (open.length === 0) return null;
+  return (
+    <div className="card mb setup">
+      <h2>Projekt einrichten <span className="muted small" style={{ fontWeight: 400 }}>{items.length - open.length} von {items.length} erledigt</span></h2>
+      <ul className="setup-list">{items.map((i) => <li key={i.label} className={i.done ? 'done' : ''}>{i.done ? '✓' : '○'} {i.done ? <span>{i.label}</span> : <Link to={i.to}>{i.label}</Link>}</li>)}</ul>
+    </div>
+  );
+}
+
 export function OverviewView() {
-  const { detail, openTask } = useProject();
+  const { detail, openTask, tasks } = useProject();
   const { data: o, error } = useData<Overview>(`/projects/${detail.project.id}/overview`);
   const base = `/projekte/${detail.project.id}`;
   if (error) return <div className="content"><div className="error">{error}</div></div>;
@@ -34,6 +58,7 @@ export function OverviewView() {
   return (
     <div className="content">
       {detail.project.description && <p className="muted mb">{detail.project.description}</p>}
+      <SetupChecklist taskCount={tasks.length} />
       <div className="kpis mb">
         <div className="kpi"><div className="v">{o.counts.open}</div><div className="l">offen</div></div>
         <div className={`kpi ${o.counts.overdue ? 'bad' : 'ok'}`}><div className="v">{o.counts.overdue}</div><div className="l">überfällig</div></div>

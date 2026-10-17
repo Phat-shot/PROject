@@ -330,6 +330,19 @@ table.table { width: 100%; border-collapse: collapse; }
 .section-nav a:hover { text-decoration: none; border-color: var(--primary); color: var(--primary); }
 .settings .card[id] { scroll-margin-top: 100px; }
 
+/* Kennung, Vorgänger-Auswahl, Einrichtung */
+.tkey { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); letter-spacing: 0.2px; }
+a.tkey { color: var(--primary); }
+.badge.tkey-badge { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; margin-right: 8px; white-space: nowrap; }
+.pred-picker { border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.pred-picker input { border: 0; border-bottom: 1px solid var(--border); border-radius: 6px 6px 0 0; }
+.pred-picker .list { max-height: 160px; overflow: auto; padding: 4px 8px; display: flex; flex-direction: column; gap: 2px; }
+.pred-picker .check.on { font-weight: 600; }
+.setup-list { list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 4px 16px; }
+.setup-list li.done { color: var(--muted); }
+.card.setup { border-color: #c7d6ff; background: var(--primary-soft); }
+:root[data-theme='dark'] .card.setup { background: #141c30; border-color: #2b3d6e; }
+
 /* Board v2 */
 .filterbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; margin-bottom: 12px; }
 .filterbar input[type=text] { width: 220px; }

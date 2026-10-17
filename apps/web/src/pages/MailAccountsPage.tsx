@@ -62,11 +62,12 @@ export function MailAccountsPage() {
   );
 }
 
-function AccountForm({ existing, projects, onClose, onSaved }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void> }) {
+/** Konto anbinden/bearbeiten; mit fixedProject nur als Projektkonto dieses Projekts (aus den Projekteinstellungen). */
+export function AccountForm({ existing, projects, onClose, onSaved, fixedProject }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void>; fixedProject?: Project }) {
   const { user } = useAuth();
   const isAdmin = user?.globalRole === 'org_admin';
   const [f, setF] = useState({
-    type: existing?.type ?? 'personal' as MailAccount['type'], projectId: existing?.projectId ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
+    type: existing?.type ?? (fixedProject ? 'project' : 'personal') as MailAccount['type'], projectId: existing?.projectId ?? fixedProject?.id ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
     imapHost: existing?.imapHost ?? '', imapPort: existing?.imapPort ?? 993, imapUser: existing?.imapUser ?? '', imapPassword: '', imapSecure: existing?.imapSecure ?? true,
     smtpHost: existing?.smtpHost ?? '', smtpPort: existing?.smtpPort ?? 587, smtpUser: existing?.smtpUser ?? '', smtpPassword: '', smtpSecure: existing?.smtpSecure ?? false
   });
@@ -77,8 +78,9 @@ function AccountForm({ existing, projects, onClose, onSaved }: { existing?: Mail
   return (
     <Modal title={existing ? `Konto bearbeiten: ${existing.name}` : 'Mail-Konto anbinden'} onClose={onClose}>
       <div className="form cols-2">
-        {!existing && <label className="field"><span>Typ</span><select value={f.type} onChange={(e) => set('type', e.target.value)}><option value="personal">Persönlich (nur ich teile Ansichten)</option><option value="project" disabled={!projects.length}>Projektkonto (als PL)</option>{isAdmin && <option value="org">Org-Postfach (Systemmails: Einladungen)</option>}</select></label>}
-        {!existing && f.type === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
+        {!existing && fixedProject && <div className="field full"><span>Projektkonto für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name} · die Adresse wird zur Projekt-Mailadresse</span></div>}
+        {!existing && !fixedProject && <label className="field"><span>Typ</span><select value={f.type} onChange={(e) => set('type', e.target.value)}><option value="personal">Persönlich (nur ich teile Ansichten)</option><option value="project" disabled={!projects.length}>Projektkonto (als PL)</option>{isAdmin && <option value="org">Org-Postfach (Systemmails: Einladungen)</option>}</select></label>}
+        {!existing && !fixedProject && f.type === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename</span><input type="text" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
         <label className="field"><span>Adresse</span><input type="email" value={f.address} onChange={(e) => set('address', e.target.value)} /></label>
         {!existing && <label className="field full"><span>Anbindung</span><select value={f.provider} onChange={(e) => set('provider', e.target.value)}><option value="imap">IMAP/SMTP (Passwort oder App-Passwort; OAuth2 für M365/Google folgt)</option><option value="dev">Dev-Postfach (zum Testen, im Speicher)</option></select></label>}

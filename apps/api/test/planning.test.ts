@@ -202,3 +202,39 @@ test('RAID- und weitere Vorlagen vorhanden', async () => {
   const keys = (await t.api(pl).get('/docs/templates')).json().templates.map((x: any) => x.key);
   for (const k of ['raid', 'aenderungsantrag', 'kickoff', 'lessons', 'protokoll']) assert.ok(keys.includes(k), k);
 });
+
+test('Kennung: fortlaufende Nummer je Projekt, Suche nach WEB-12, Anhang löschen, Wartet auf dich', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const list = (await t.api(pl).get(`/projects/${web}/tasks`)).json().tasks;
+  const numbers = list.map((x: any) => x.number).sort((a: number, b: number) => a - b);
+  assert.ok(numbers.length > 0 && numbers[0] >= 1 && new Set(numbers).size === numbers.length, 'Nummern eindeutig und gesetzt');
+  const created = await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Nummerntest' });
+  assert.equal(created.statusCode, 200, created.body);
+  const n = created.json().task.number;
+  assert.equal(n, Math.max(...numbers) + 1, 'nächste freie Nummer');
+  const byKey = await t.api(pl).get(`/search?q=${encodeURIComponent(`WEB-${n}`)}`);
+  assert.equal(byKey.statusCode, 200);
+  assert.ok(byKey.json().tasks.some((x: any) => x.id === created.json().task.id), 'Suche nach Kennung findet das Arbeitspaket');
+  const byNumber = await t.api(pl).get(`/search?q=${encodeURIComponent(`#${n}`)}`);
+  assert.ok(byNumber.json().tasks.some((x: any) => x.id === created.json().task.id));
+
+  const waiting = await t.api(pl).get('/my/waiting');
+  assert.equal(waiting.statusCode, 200, waiting.body);
+  assert.ok(Array.isArray(waiting.json().pagesInReview) && waiting.json().pagesInReview.length >= 1, 'Seiten in Prüfung für den PL');
+  const reader = await t.login('leser@demo.local');
+  assert.equal((await t.api(reader).get('/my/waiting')).json().pagesInReview.length, 0, 'Leser sieht keine Prüfungen');
+
+  const upload = await t.app.inject({
+    method: 'POST', url: `/api/attachments?taskId=${created.json().task.id}`, cookies: pl,
+    headers: { 'content-type': 'multipart/form-data; boundary=XX' },
+    payload: `--XX\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\nContent-Type: text/plain\r\n\r\nhallo\r\n--XX--\r\n`
+  });
+  assert.equal(upload.statusCode, 200, upload.body);
+  const aid = upload.json().attachment.id;
+  const denied = await t.api(reader).del(`/attachments/${aid}`);
+  assert.equal(denied.statusCode, 403);
+  const del = await t.api(pl).del(`/attachments/${aid}`);
+  assert.equal(del.statusCode, 200, del.body);
+  assert.equal((await t.api(pl).get(`/attachments/${aid}`)).statusCode, 404);
+});

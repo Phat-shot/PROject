@@ -54,11 +54,11 @@ export function AllTasksPage() {
         {<div className="card">
           {data && rows.length === 0 ? <div className="empty">Keine Arbeitspakete.</div> : (
             <table className="table">
-              <thead><tr><th>Projekt</th><th>Arbeitspaket</th><th>Priorität</th><th>Fällig</th><th>Zuständig</th><th>Status</th></tr></thead>
+              <thead><tr><th>Kennung</th><th>Arbeitspaket</th><th>Priorität</th><th>Fällig</th><th>Zuständig</th><th>Status</th></tr></thead>
               <tbody>
                 {rows.map((x) => (
                   <tr key={x.id} style={{ opacity: x.done ? 0.6 : 1 }}>
-                    <td><Link to={`/projekte/${x.projectId}`}><span className="badge">{x.projectKey}</span></Link></td>
+                    <td className="nowrap"><Link to={`/projekte/${x.projectId}/board?task=${x.id}`} className="tkey">{x.projectKey}-{x.number}</Link></td>
                     <td>
                       <Link to={`/projekte/${x.projectId}/board?task=${x.id}`}>{x.title}</Link>
                       {x.blocked && <span className="badge warn" style={{ marginLeft: 6 }}>blockiert</span>}

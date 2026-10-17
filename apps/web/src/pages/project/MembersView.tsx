@@ -4,6 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
+import { AccountForm } from '../MailAccountsPage';
 import { InlineText } from './TaskDrawer';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -210,7 +211,9 @@ function EscalationForm() {
 }
 
 function MailViewsCard() {
-  const { detail } = useProject();
+  const { detail, reload } = useProject();
+  const [account, setAccount] = useState(false);
+  const isPl = detail.project.myMembership.role === 'pl';
   const views = useData<{ views: ViewRow[] }>(`/projects/${detail.project.id}/mail/views`);
   const [newView, setNewView] = useState(false);
   const [rightsFor, setRightsFor] = useState<ViewRow | null>(null);
@@ -224,7 +227,9 @@ function MailViewsCard() {
         {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
+      {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button></>}</p>}
       <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      {account && <AccountForm projects={[detail.project]} fixedProject={detail.project} onClose={() => setAccount(false)} onSaved={async () => { setAccount(false); await reload(); await views.reload(); }} />}
       {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
       {rightsFor && <RightsEditor view={rightsFor} onClose={() => setRightsFor(null)} onChanged={() => void views.reload()} />}
       {filterFor && <FilterEditor view={filterFor} onClose={() => setFilterFor(null)} onSaved={() => { setFilterFor(null); void views.reload(); }} />}

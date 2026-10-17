@@ -138,7 +138,7 @@ function Bell() {
 }
 
 interface SearchResult {
-  tasks: { id: string; title: string; projectId: string; projectKey: string }[];
+  tasks: { id: string; title: string; number?: number; projectId: string; projectKey: string }[];
   pages: { id: string; title: string; projectId: string; projectKey: string; status: string }[];
   mails: { id: string; subject: string; fromAddr: string; viewId: string; projectId: string }[];
 }
@@ -155,11 +155,11 @@ function SearchBox() {
   const go = (to: string) => { setQ(''); setRes(null); nav(to); };
   return (
     <div className="search-box">
-      <input type="text" placeholder="Suchen in Arbeitspaketen, Seiten, Mails …" value={q} onChange={(e) => setQ(e.target.value)} />
+      <input type="text" placeholder="Suchen … (auch Kennung wie WEB-12)" value={q} onChange={(e) => setQ(e.target.value)} />
       {res && (
         <div className="search-results">
           {res.tasks.length > 0 && <div className="group">Arbeitspakete</div>}
-          {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}/board?task=${t.id}`)}><span className="badge">{t.projectKey}</span> {t.title}</div>)}
+          {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}/board?task=${t.id}`)}><span className="tkey">{t.projectKey}{t.number ? `-${t.number}` : ''}</span> {t.title}</div>)}
           {res.pages.length > 0 && <div className="group">Seiten</div>}
           {res.pages.map((p) => <div key={p.id} className="item" onClick={() => go(`/projekte/${p.projectId}/doku/${p.id}`)}><span className="badge">{p.projectKey}</span> {p.title}</div>)}
           {res.mails.length > 0 && <div className="group">Mails</div>}

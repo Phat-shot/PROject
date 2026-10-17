@@ -15,6 +15,7 @@ export function DashboardPage() {
   const { user, timeTracking } = useAuth();
   const work = useData<{ projects: WorkProject[] }>('/my/work');
   const notes = useData<{ notifications: Notification[]; unread: number }>('/notifications');
+  const waiting = useData<{ drafts: { projectId: string; projectKey: string; count: number }[]; pagesInReview: { id: string; title: string; projectId: string; projectKey: string }[]; tasks: { id: string; number: number; title: string; projectId: string; projectKey: string; blocked: boolean; escalationLevel: number }[] }>('/my/waiting');
   const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>(timeTracking ? '/my/time' : null);
   const { showDone, setShowDone } = useShowDone();
   const t = today();
@@ -51,7 +52,7 @@ export function DashboardPage() {
           <div className={`kpi ${notes.data?.unread ? 'warn' : ''}`}><div className="v">{notes.data?.unread ?? 0}</div><div className="l">ungelesene Meldungen</div></div>
           {time.data && time.data.totalMinutes > 0 && <div className="kpi"><div className="v">{h(time.data.totalMinutes)}</div><div className="l">gebucht, 7 Tage</div></div>}
         </div>
-        <div className="grid cols-3 mb">
+        <div className="grid cols-2 mb">
           <div className="card">
             <h2>Soll / Ist je Projekt</h2>
             {perProject.length === 0 && <div className="muted small">Keine offenen Arbeitspakete.</div>}
@@ -70,6 +71,15 @@ export function DashboardPage() {
                 {upcoming.map(({ ap }) => <tr key={ap.id}><td className="nowrap" style={ap.dueDate! < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</td><td><Link to={`/projekte/${ap.projectId}/board?task=${ap.id}`}>{ap.title}</Link></td></tr>)}
               </tbody></table>
             )}
+          </div>
+          <div className="card">
+            <h2>Wartet auf dich</h2>
+            {waiting.data && waiting.data.drafts.length + waiting.data.pagesInReview.length + waiting.data.tasks.length === 0 && <div className="muted small">Nichts offen.</div>}
+            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              {waiting.data?.drafts.map((d) => <li key={d.projectId}><Link to={`/projekte/${d.projectId}/mail/freigaben`}><span className="badge">{d.projectKey}</span> {d.count} Mail-Entwürfe zur Freigabe</Link></li>)}
+              {waiting.data?.pagesInReview.map((p) => <li key={p.id}><Link to={`/projekte/${p.projectId}/doku/${p.id}`}><span className="badge">{p.projectKey}</span> Seite „{p.title}“ in Prüfung</Link></li>)}
+              {waiting.data?.tasks.map((x) => <li key={x.id}><Link to={`/projekte/${x.projectId}/board?task=${x.id}`}><span className="tkey">{x.projectKey}-{x.number}</span> {x.title}</Link> {x.blocked && <span className="badge blocked">blockiert</span>}{x.escalationLevel > 0 && <span className="badge danger">Esk. {x.escalationLevel}</span>}</li>)}
+            </ul>
           </div>
           <div className="card">
             <h2>Meldungen {notes.data && notes.data.unread > 0 && <span className="badge warn">{notes.data.unread} neu</span>}</h2>

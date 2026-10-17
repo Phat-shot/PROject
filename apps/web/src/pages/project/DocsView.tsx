@@ -197,7 +197,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
         </div>
         <div className="card">
           <h3>Anhänge</h3>
-          <ul>{d.data.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span></li>)}</ul>
+          <ul>{d.data.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{me.role !== 'reader' && p.status !== 'final' && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await d.reload(); }); })}>✕</button>}</li>)}</ul>
           {me.role !== 'reader' && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?pageId=${p.id}`, fd); await d.reload(); }); }} />}
         </div>
       </div>

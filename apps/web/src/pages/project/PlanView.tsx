@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fmtDate, today } from '../../lib/api';
 import { useProject } from '../ProjectPage';
 import { MilestoneForm, MilestonesTable, SubprojectForm, SubprojectsTable } from './planForms';
 
 const DAY = 86400_000;
-const PX_PER_DAY = 4;
+const ZOOM: [number, string][] = [[2, 'Quartal'], [4, 'Monat'], [10, 'Woche'], [24, 'Tag']];
 
 export function PlanView() {
   const { detail, tasks, openTask } = useProject();
@@ -12,6 +12,9 @@ export function PlanView() {
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const [newSp, setNewSp] = useState(false);
   const [newMs, setNewMs] = useState(false);
+  const [PX_PER_DAY, setZoom] = useState(() => { try { return Number(localStorage.getItem('pt_gantt_zoom')) || 4; } catch { return 4; } });
+  const zoomTo = (v: number) => { setZoom(v); try { localStorage.setItem('pt_gantt_zoom', String(v)); } catch { /* ignore */ } };
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const range = useMemo(() => {
     const dates: string[] = [today()];
@@ -26,6 +29,8 @@ export function PlanView() {
   }, [tasks, detail]);
   const x = (d: string) => Math.round((new Date(d + 'T00:00:00').getTime() - range.min.getTime()) / DAY) * PX_PER_DAY;
   const width = range.days * PX_PER_DAY;
+  // „heute“ beim Öffnen und nach Zoom in Sicht bringen
+  useEffect(() => { const el = scrollRef.current; if (el) el.scrollLeft = Math.max(0, x(today()) + 280 - el.clientWidth / 2); }, [PX_PER_DAY, range.min.getTime()]);
   const months = useMemo(() => {
     const out: { label: string; left: number; w: number }[] = [];
     const d = new Date(range.min); d.setDate(1);
@@ -62,9 +67,10 @@ export function PlanView() {
     <div className="content">
       <div className="row mb">
         <span className="muted small">Balken = Start bis Deadline, Punkt = nur Deadline. Teilprojekt-Balken = frühester Start bis späteste Deadline. Konflikte orange, nichts verschiebt sich automatisch.</span>
-        {canPlan && <><button className="btn right" onClick={() => setNewSp(true)}>Teilprojekt</button><button className="btn" onClick={() => setNewMs(true)}>Meilenstein</button></>}
+        <span className="row right" style={{ gap: 2 }}>{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
+        {canPlan && <><button className="btn" onClick={() => setNewSp(true)}>Teilprojekt</button><button className="btn" onClick={() => setNewMs(true)}>Meilenstein</button></>}
       </div>
-      <div className="card gantt" style={{ padding: 0 }}>
+      <div className="card gantt" style={{ padding: 0 }} ref={scrollRef}>
         <table>
           <thead><tr><th className="label">Element</th><th style={{ width }}><div style={{ position: 'relative', height: 24, width }}>{months.map((m) => <div key={m.label + m.left} className="month" style={{ position: 'absolute', left: m.left, width: m.w, top: 0, bottom: 0 }}>{m.label}</div>)}</div></th></tr></thead>
           <tbody>

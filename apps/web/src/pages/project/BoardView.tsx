@@ -207,6 +207,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
       <div className="badges">
+        <span className="tkey" title="Kennung">{detail.project.key}-{x.number}</span>
         {x.blocked && <span className="badge blocked" title={x.blockedReason ?? 'blockiert'}>Blockiert</span>}
         {x.escalationLevel > 0 && <span className={`badge esc${x.escalationLevel}`} title="Eskalationsstufe">Esk. {x.escalationLevel}</span>}
         {x.priority !== 'normal' && <span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span>}
