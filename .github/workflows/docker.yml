@@ -1,10 +1,10 @@
 name: Docker
 
 # Baut das Image und veröffentlicht es in der GitHub Container Registry (ghcr.io).
-# Tags: Branch-Name, Commit-SHA, Git-Tag (v1.2.3 → 1.2.3, 1.2, latest), "latest" für den Standard-Branch.
+# Läuft nur für main (und Release-Tags). Tags: Branch-Name, Commit-SHA, Git-Tag (v1.2.3 → 1.2.3, 1.2, latest), "latest" für main.
 on:
   push:
-    branches: [main, master, 'claude/**']
+    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch:
 

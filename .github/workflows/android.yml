@@ -12,7 +12,7 @@ on:
         default: https://project.srz.one
   push:
     tags: ['v*.*.*']
-    branches: [main, master, 'claude/**']
+    branches: [main]
     paths: ['apps/mobile/**', '.github/workflows/android.yml']
 
 jobs:
