@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
@@ -28,15 +28,28 @@ export function DocsView() {
     for (const p of docs.data?.pages ?? []) { const k = p.folderId; map.set(k, [...(map.get(k) ?? []), p]); }
     return map;
   }, [docs.data]);
-  const tree = (pages: DocPage[], parent: string | null, depth: number): JSX.Element[] =>
-    pages.filter((p) => (p.parentPageId ?? null) === parent).flatMap((p) => [
-      <div key={p.id} className={`page ${pageId === p.id ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => nav(`${base}/${p.id}`)}>
-        <span className="t">{(p.childCount ?? 0) > 0 ? '▾ ' : ''}{p.title}</span><span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
-      </div>,
-      ...tree(pages, p.id, depth + 1)
-    ]);
   // Unterseiten können in einem anderen Ordner liegen: Baum je Ordner nur mit Wurzeln dieses Ordners, Kinder aus allen Seiten
   const all = docs.data?.pages ?? [];
+  /** Vorlage für Unterseiten: eigene Einstellung oder die der nächsten Oberseite, die eine hat. */
+  const childTemplateOf = (p: DocPage): string | null => {
+    let cur: DocPage | undefined = p;
+    const seen = new Set<string>();
+    while (cur && !seen.has(cur.id)) { seen.add(cur.id); if (cur.settings?.childTemplateKey) return cur.settings.childTemplateKey; cur = all.find((x) => x.id === cur!.parentPageId); }
+    return null;
+  };
+  const canWrite = me.role !== 'reader';
+  const row = (p: DocPage, depth: number) => (
+    <div key={p.id} className={`page ${pageId === p.id ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => nav(`${base}/${p.id}`)}>
+      <span className="t">{(p.childCount ?? 0) > 0 ? '▾ ' : ''}{p.title}</span>
+      {canWrite && <span className="acts" onClick={(e) => e.stopPropagation()}>
+        <button title="Unterseite anlegen" onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}>+</button>
+        <button title="Seiteneinstellungen" onClick={() => nav(`${base}/${p.id}?einstellungen=1`)}>⋯</button>
+      </span>}
+      <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
+    </div>
+  );
+  const tree = (pages: DocPage[], parent: string | null, depth: number): JSX.Element[] =>
+    pages.filter((p) => (p.parentPageId ?? null) === parent).flatMap((p) => [row(p, depth), ...tree(pages, p.id, depth + 1)]);
   const rootsIn = (folderId: string | null) => (byFolder.get(folderId) ?? []).filter((p) => !p.parentPageId || !all.some((x) => x.id === p.parentPageId));
   return (
     <div className="docs-layout">
@@ -46,16 +59,11 @@ export function DocsView() {
           <div key={f.id}>
             <div className="folder"><span>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> ✉</span>}</span>
               {me.role === 'pl' && <button className="btn sm link" onClick={() => setEditFolder(f)}>⋯</button>}</div>
-            {rootsIn(f.id).flatMap((root) => [
-              <div key={root.id} className={`page ${pageId === root.id ? 'active' : ''}`} style={{ paddingLeft: 8 }} onClick={() => nav(`${base}/${root.id}`)}>
-                <span className="t">{(root.childCount ?? 0) > 0 ? '▾ ' : ''}{root.title}</span><span className={`badge ${root.status}`}>{statusLabel[root.status]}</span>
-              </div>,
-              ...tree(all, root.id, 1)
-            ])}
+            {rootsIn(f.id).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}
             {rootsIn(f.id).length === 0 && <div className="muted small" style={{ padding: '2px 8px' }}>leer</div>}
           </div>
         ))}
-        {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [<div key={root.id} className={`page ${pageId === root.id ? 'active' : ''}`} onClick={() => nav(`${base}/${root.id}`)}><span className="t">{root.title}</span><span className={`badge ${root.status}`}>{statusLabel[root.status]}</span></div>, ...tree(all, root.id, 1)])}</>}
+        {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}
         {me.role === 'pl' && <button className="btn sm link mt" onClick={() => setNewFolder(true)}>+ Ordner</button>}
       </div>
       {pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} /> : (
@@ -80,10 +88,14 @@ export function DocsView() {
 function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; docs: DocsData | null; reloadTree: () => Promise<void>; onNewChild: (p: DocPage, inherited: string | null) => void }) {
   const { detail } = useProject();
   const nav = useNavigate();
+  const [params, setParams] = useSearchParams();
   const d = useData<PageData>(`/docs/pages/${pageId}`);
   const [edit, setEdit] = useState(false);
+  const [editor, setEditor] = useState<{ save: () => Promise<void>; busy: boolean } | null>(null);
   const [share, setShare] = useState(false);
-  const [settings, setSettings] = useState(false);
+  const [settings, setSettingsState] = useState(() => params.get('einstellungen') === '1');
+  const setSettings = (v: boolean) => { setSettingsState(v); if (!v && params.get('einstellungen')) { const n = new URLSearchParams(params); n.delete('einstellungen'); setParams(n, { replace: true }); } };
+  const [menu, setMenu] = useState(false);
   const [showVersion, setShowVersion] = useState<DocPageVersion | null>(null);
   const dialog = useDialog();
   const { busy, error, run, setError } = useAsync();
@@ -97,6 +109,12 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   const canEdit = me.role !== 'reader' && p.status !== 'final';
   const canFinal = me.role === 'pl' || me.canFinalize;
   const setStatus = (status: string) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status }); await d.reload(); await reloadTree(); });
+  const changeStatus = async (status: string) => {
+    if (status === p.status) return;
+    if (p.status === 'final') { const ok = await dialog.confirm({ title: 'Finale Seite wieder öffnen', text: 'Es entsteht eine neue Version; die Seite ist danach wieder bearbeitbar.', confirmLabel: 'Wieder öffnen' }); if (!ok) return; }
+    if (status === 'final') { const ok = await dialog.confirm({ title: 'Final setzen', text: 'Die Seite wird gesperrt und kann als PDF an den Verteiler gehen. Später lässt sie sich wieder öffnen.', confirmLabel: 'Final setzen' }); if (!ok) return; }
+    await setStatus(status);
+  };
   const s = p.settings ?? {};
   const isTop = d.data.children.length > 0 || Boolean(s.kind) || Boolean(s.childTemplateKey);
   const childTemplate = s.childTemplateKey ?? d.data.inheritedTemplateKey;
@@ -106,28 +124,38 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
       <div className="row mb small muted">
         <Link to={base}>Doku</Link><span>›</span>{folder && <span>{folder.name}</span>}{parent && <><span>›</span><Link to={`${base}/${parent.id}`}>{parent.title}</Link></>}<span>›</span><span>{p.title}</span>
       </div>
-      <div className="row mb">
+      <div className="row mb doc-actions">
         <span className="muted small">Version {p.version} · {p.updatedByName} · {fmtDateTime(p.updatedAt)}</span>
-        <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
+        {me.role === 'reader' ? <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span> : (
+          <select className={`status-select ${p.status}`} value={p.status} disabled={busy} title="Status: Entwurf, In Prüfung (meldet sich bei der Projektleitung), Final (gesperrt, PDF-Versand)" onChange={(e) => void changeStatus(e.target.value)}>
+            <option value="draft">Entwurf</option>
+            <option value="review">In Prüfung</option>
+            <option value="final" disabled={!canFinal}>Final</option>
+          </select>
+        )}
         {s.kind && <span className="badge">{KIND_LABEL[s.kind]}</span>}
         <span className="right" />
-        {canEdit && !edit && <button className="btn sm primary" onClick={() => setEdit(true)}>Bearbeiten</button>}
-        {me.role !== 'reader' && <button className="btn sm" onClick={() => onNewChild(p, childTemplate ?? null)}>+ Unterseite{childTemplate ? ` (${tplName(childTemplate)})` : ''}</button>}
-        {me.role !== 'reader' && <button className="btn sm" onClick={() => setSettings(true)}>Seiteneinstellungen</button>}
-        <a className="btn sm" href={`/api/docs/pages/${p.id}/pdf`} target="_blank" rel="noreferrer">PDF</a>
-        {canFinal && <button className="btn sm" onClick={() => setShare(true)}>Teilen{d.data.activeShares > 0 && <span className="badge" style={{ marginLeft: 4 }}>{d.data.activeShares}</span>}</button>}
-        {p.status === 'draft' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('review')}>In Prüfung geben</button>}
-        {p.status === 'review' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('draft')}>Zurück auf Entwurf</button>}
-        {p.status !== 'final' && canFinal && <button className="btn sm" disabled={busy} onClick={() => void setStatus('final')}>Final setzen</button>}
-        {p.status === 'final' && canFinal && <>
-          <button className="btn sm" disabled={busy} onClick={() => void dialog.confirm({ title: 'Finale Seite wieder öffnen', text: 'Es entsteht eine neue Version; die Seite ist danach wieder Entwurf.', confirmLabel: 'Wieder öffnen' }).then((ok) => { if (ok) void setStatus('draft'); })}>Wieder öffnen</button>
-          <button className="btn sm primary" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); await dialog.notify({ title: 'PDF versendet', text: `„${r.filename}“ ging an: ${r.to.join(', ')}` }); })}>Als PDF an Verteiler senden</button>
+        {edit ? <>
+          <button className="btn sm primary" disabled={!editor || editor.busy} onClick={() => void editor?.save()}>Speichern <kbd>Strg+S</kbd></button>
+          <button className="btn sm" onClick={() => setEdit(false)}>Abbrechen</button>
+        </> : <>
+          {canEdit && <button className="btn sm primary" onClick={() => setEdit(true)}>Bearbeiten</button>}
+          {p.status === 'final' && canFinal && <button className="btn sm" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); await dialog.notify({ title: 'PDF versendet', text: `„${r.filename}“ ging an: ${r.to.join(', ')}` }); })}>Als PDF an Verteiler senden</button>}
+          {me.role !== 'reader' && <button className="btn sm" onClick={() => onNewChild(p, childTemplate ?? null)} title={childTemplate ? `Vorlage: ${tplName(childTemplate)}` : undefined}>+ Unterseite</button>}
+          <span className="menu-wrap">
+            <button className="btn sm" title="Weitere Aktionen" onClick={() => setMenu(!menu)}>⋯</button>
+            {menu && <><div className="menu-backdrop" onClick={() => setMenu(false)} /><div className="menu" onClick={() => setMenu(false)}>
+              {me.role !== 'reader' && <button onClick={() => setSettings(true)}>Seiteneinstellungen</button>}
+              <a href={`/api/docs/pages/${p.id}/pdf`} target="_blank" rel="noreferrer">PDF öffnen</a>
+              {canFinal && <button onClick={() => setShare(true)}>Teilen per Link{d.data.activeShares > 0 ? ` (${d.data.activeShares} aktiv)` : ''}</button>}
+              {me.role === 'pl' && <button className="danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
+            </div></>}
+          </span>
         </>}
-        {me.role === 'pl' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
       </div>
       {p.status === 'final' && <div className="success mb small">Final seit {fmtDateTime(p.finalizedAt)}. Die Seite ist gesperrt und versioniert.</div>}
       {error && <div className="error mb">{error}</div>}
-      {edit ? <Editor page={p} onCancel={() => setEdit(false)} onSaved={async () => { setEdit(false); await d.reload(); await reloadTree(); }} /> : <HtmlView html={p.contentHtml} />}
+      {edit ? <Editor page={p} onApi={setEditor} onSaved={async () => { setEdit(false); setEditor(null); await d.reload(); await reloadTree(); }} /> : <HtmlView html={p.contentHtml} />}
       {!edit && (isTop || s.showChildren) && (
         <div className="children-index">
           <h3>Unterseiten <span className="badge">{d.data.children.length}</span>{me.role !== 'reader' && <button className="btn sm link" onClick={() => onNewChild(p, childTemplate ?? null)}>+ neue Unterseite{childTemplate ? ` aus „${tplName(childTemplate)}“` : ''}</button>}</h3>
@@ -158,14 +186,16 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   );
 }
 
-function Editor({ page, onCancel, onSaved }: { page: DocPage; onCancel: () => void; onSaved: () => Promise<void> }) {
+function Editor({ page, onApi, onSaved }: { page: DocPage; onApi: (api: { save: () => Promise<void>; busy: boolean }) => void; onSaved: () => Promise<void> }) {
   const [title, setTitle] = useState(page.title);
   const [html, setHtml] = useState(page.contentHtml);
   const { busy, error, run } = useAsync();
-  const save = () => run(async () => { await api.patch(`/docs/pages/${page.id}`, { title, contentHtml: html, baseVersion: page.version }); await onSaved(); });
+  const save = async () => { await run(async () => { await api.patch(`/docs/pages/${page.id}`, { title, contentHtml: html, baseVersion: page.version }); await onSaved(); }); };
+  // Speichern-Knopf liegt in der Aktionsleiste der Seite; Zustand dorthin melden
+  useEffect(() => { onApi({ save, busy }); }, [title, html, busy]);
   return (
     <div>
-      <div className="row mb"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ fontSize: 18, fontWeight: 600 }} /><button className="btn primary" disabled={busy} onClick={() => void save()}>Speichern (Strg+S)</button><button className="btn" onClick={onCancel}>Abbrechen</button></div>
+      <div className="row mb"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ fontSize: 18, fontWeight: 600 }} placeholder="Titel" /></div>
       {error && <div className="error mb">{error}</div>}
       <RichEditor html={html} onChange={setHtml} pageId={page.id} onSave={() => void save()} />
       <p className="muted small mt">Jede Speicherung erzeugt eine neue Version; Speichern auf einer veralteten Version wird abgelehnt. Bilder werden als Anhang der Seite gespeichert.</p>
