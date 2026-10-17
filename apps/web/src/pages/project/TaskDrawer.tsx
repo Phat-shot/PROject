@@ -40,7 +40,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
   const t = d.task;
   const me = detail.project.myMembership;
-  const canEdit = me.role !== 'reader' && !t.archivedAt;
+  const canEdit = me.role !== 'reader' && !t.archivedAt && !t.deletedAt;
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const canDates = canPlan || t.responsibleUserId === me.userId;
   const patch = async (body: Record<string, unknown>) => {
@@ -57,9 +57,10 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         {me.role !== 'reader' && (t.archivedAt
           ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
           : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>)}
-        {me.role === 'pl' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Arbeitspaket löschen', text: `„${t.title}“ mit Tasks, Kommentaren, Zeiten und Mail-Verknüpfungen endgültig löschen? Zum Aufheben ohne Datenverlust besser archivieren.`, confirmLabel: 'Endgültig löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
+        {me.role === 'pl' && !t.deletedAt && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${t.title}“ in den Papierkorb legen? Dort bleibt es 30 Tage und lässt sich in den Projekteinstellungen wiederherstellen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
+      {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
         <div className={`notice mb ${t.escalationLevel >= 2 || t.blocked ? 'danger' : ''}`}>
           <strong>{t.blocked ? `Blockiert${t.blockedReason ? `: ${t.blockedReason}` : ''}` : 'Eskaliert'}</strong>

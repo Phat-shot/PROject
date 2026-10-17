@@ -25,6 +25,7 @@ export function mapPage(r: any): DocPage {
     settings: r.settings ?? {},
     childCount: r.child_count ?? undefined,
     isFolderPage: r.is_folder_page === undefined ? undefined : Boolean(r.is_folder_page),
+    deletedAt: r.deleted_at ?? null,
     status: r.status,
     version: r.version,
     templateKey: r.template_key,

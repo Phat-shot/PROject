@@ -35,9 +35,9 @@ export async function docRoutes(app: FastifyInstance) {
     const folders = await db.query(`select * from doc_folders where project_id = $1 order by position, name`, [req.params.id]);
     const pages = await db.query(
       `select p.id, p.project_id, p.folder_id, p.parent_page_id, p.title, p.status, p.version, p.template_key, p.settings, p.created_by, p.updated_by, p.created_at, p.updated_at, p.finalized_at, '' as content_md, '' as content_html, u.name as updated_by_name,
-              (select count(*)::int from doc_pages c where c.parent_page_id = p.id) as child_count,
+              (select count(*)::int from doc_pages c where c.parent_page_id = p.id and c.deleted_at is null) as child_count,
               exists (select 1 from doc_folders f where f.page_id = p.id) as is_folder_page
-       from doc_pages p left join users u on u.id = p.updated_by where p.project_id = $1 order by p.title`,
+       from doc_pages p left join users u on u.id = p.updated_by where p.project_id = $1 and p.deleted_at is null order by p.title`,
       [req.params.id]
     );
     const templates = await db.query(`select distinct on (key) * from doc_templates where org_id = $1 or org_id is null order by key, org_id nulls last`, [user.orgId]);
@@ -80,8 +80,9 @@ export async function docRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id, 'pl');
     const f = await db.maybeOne(`select * from doc_folders where id = $1 and project_id = $2`, [req.params.fid, req.params.id]);
     if (!f) throw notFound('Ordner nicht gefunden');
-    const cnt = await db.one(`select count(*)::int as c from doc_pages where folder_id = $1 and id is distinct from $2`, [f.id, f.page_id]);
+    const cnt = await db.one(`select count(*)::int as c from doc_pages where folder_id = $1 and id is distinct from $2 and deleted_at is null`, [f.id, f.page_id]);
     if (cnt.c > 0) throw badRequest('Ordner enthält Seiten');
+    await db.query(`delete from doc_pages where folder_id = $1 and deleted_at is not null`, [f.id]);
     await db.query(`delete from doc_folders where id = $1`, [f.id]);
     if (f.page_id) await db.query(`delete from doc_pages where id = $1`, [f.page_id]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'folder.delete', objectType: 'doc_folder', objectId: f.id, details: { name: f.name } });
@@ -161,7 +162,7 @@ export async function docRoutes(app: FastifyInstance) {
     );
     const page = mapPage(r);
     if (!r.updated_by && r.updated_by_external) page.updatedByName = `${r.updated_by_external} (extern)`;
-    const children = await db.query(`select id, title, status, version, updated_at, template_key from doc_pages where parent_page_id = $1 order by title desc`, [r.id]);
+    const children = await db.query(`select id, title, status, version, updated_at, template_key from doc_pages where parent_page_id = $1 and deleted_at is null order by title desc`, [r.id]);
     return { page, versions: versions.rows.map(mapVersion), attachments: attachments.rows.map(mapAttachment), activeShares: shares.c,
       children: children.rows.map((c: any) => ({ id: c.id, title: c.title, status: c.status, version: c.version, updatedAt: c.updated_at, templateKey: c.template_key })),
       inheritedTemplateKey: await inheritedTemplate(r.id) };
@@ -240,16 +241,36 @@ export async function docRoutes(app: FastifyInstance) {
     return { page: mapPage(u) };
   });
 
-  app.delete<{ Params: { pid: string } }>('/docs/pages/:pid', async (req) => {
+  // Löschen = Papierkorb; Unterseiten rücken eine Ebene hoch. ?permanent=1 löscht endgültig.
+  app.delete<{ Params: { pid: string }; Querystring: { permanent?: string } }>('/docs/pages/:pid', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id, 'pl');
     if (await db.maybeOne(`select 1 from doc_folders where page_id = $1`, [r.id])) throw badRequest('Ordnerseite: den Ordner löschen, nicht die Seite');
     await db.query(`update doc_pages set parent_page_id = $2 where parent_page_id = $1`, [r.id, r.parent_page_id]);
-    await db.query(`delete from doc_pages where id = $1`, [r.id]);
-    await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.delete', objectType: 'doc_page', objectId: r.id, details: { title: r.title } });
-    return { ok: true };
+    if (req.query.permanent === '1') {
+      await db.query(`delete from doc_pages where id = $1`, [r.id]);
+      await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.delete', objectType: 'doc_page', objectId: r.id, details: { title: r.title, permanent: true } });
+      return { ok: true };
+    }
+    if (!r.deleted_at) {
+      await db.query(`update doc_pages set deleted_at = now(), parent_page_id = null where id = $1`, [r.id]);
+      await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.trash', objectType: 'doc_page', objectId: r.id, details: { title: r.title } });
+    }
+    return { ok: true, trashed: true };
+  });
+
+  app.post<{ Params: { pid: string } }>('/docs/pages/:pid/restore', async (req) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
+    if (!r) throw notFound('Seite nicht gefunden');
+    await requireProject(db, user, r.project_id, 'member');
+    if (r.deleted_at) {
+      await db.query(`update doc_pages set deleted_at = null where id = $1`, [r.id]);
+      await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.restore', objectType: 'doc_page', objectId: r.id, details: { title: r.title } });
+    }
+    return { page: mapPage(await db.one(`select * from doc_pages where id = $1`, [r.id])) };
   });
 
   // W5: Finale Seite an den Verteiler des Ordners senden (über Projektkonto, als Mailtext; PDF später)

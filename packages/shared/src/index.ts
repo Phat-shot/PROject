@@ -205,6 +205,8 @@ export interface Task {
   conflicts: string[];
   labelIds: string[];
   archivedAt: string | null;
+  /** Im Papierkorb seit; zählt nirgends mehr mit, bis es wiederhergestellt wird */
+  deletedAt: string | null;
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;
@@ -410,6 +412,8 @@ export interface DocPage {
   childCount?: number;
   /** Seite eines Ordners: erscheint nicht als Seite im Baum, sondern über den Ordnernamen */
   isFolderPage?: boolean;
+  /** Im Papierkorb seit */
+  deletedAt?: string | null;
   status: DocStatus;
   version: number;
   templateKey: string | null;

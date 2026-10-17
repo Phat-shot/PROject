@@ -15,12 +15,12 @@ export async function searchRoutes(app: FastifyInstance) {
     const keyParams = key ? (key.length === 3 ? [key[1], Number(key[2])] : [Number(key[1])]) : [];
     const tasks = await app.db.query(
       `select t.id, t.title, t.number, t.project_id, p.key as project_key from tasks t join projects p on p.id = t.project_id
-       where t.project_id in (select project_id from project_members where user_id = $1) and (t.title ilike $2 or t.description ilike $2 ${keyCond}) and ${visibleSubprojectSql(1)} order by t.updated_at desc limit 20`,
+       where t.project_id in (select project_id from project_members where user_id = $1) and t.deleted_at is null and (t.title ilike $2 or t.description ilike $2 ${keyCond}) and ${visibleSubprojectSql(1)} order by t.updated_at desc limit 20`,
       [user.id, like, ...keyParams]
     );
     const pages = await app.db.query(
       `select d.id, d.title, d.project_id, d.status, p.key as project_key from doc_pages d join projects p on p.id = d.project_id
-       where d.project_id in (select project_id from project_members where user_id = $1) and (d.title ilike $2 or d.content_md ilike $2) order by d.updated_at desc limit 20`,
+       where d.project_id in (select project_id from project_members where user_id = $1) and d.deleted_at is null and (d.title ilike $2 or d.content_md ilike $2) order by d.updated_at desc limit 20`,
       [user.id, like]
     );
     const views = await app.db.query(`select id, project_id from mail_views where project_id in (select project_id from project_members where user_id = $1)`, [user.id]);

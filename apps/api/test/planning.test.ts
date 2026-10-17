@@ -238,3 +238,35 @@ test('Kennung: fortlaufende Nummer je Projekt, Suche nach WEB-12, Anhang lösche
   assert.equal(del.statusCode, 200, del.body);
   assert.equal((await t.api(pl).get(`/attachments/${aid}`)).statusCode, 404);
 });
+
+test('Papierkorb: Arbeitspaket und Seite landen im Papierkorb, zählen nicht mehr, lassen sich wiederherstellen oder endgültig löschen', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const created = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Papierkorbtest' })).json().task;
+  const before = (await t.api(pl).get(`/projects/${web}/overview`)).json().counts.open;
+  const del = await t.api(pl).del(`/tasks/${created.id}`);
+  assert.equal(del.statusCode, 200, del.body);
+  assert.equal(del.json().trashed, true);
+  assert.equal((await t.api(pl).get(`/projects/${web}/overview`)).json().counts.open, before - 1, 'zählt nicht mehr');
+  assert.ok(!(await t.api(pl).get(`/projects/${web}/tasks`)).json().tasks.some((x: any) => x.id === created.id), 'nicht auf dem Board');
+  assert.ok(!(await t.api(pl).get(`/projects/${web}/tasks?archived=1`)).json().tasks.some((x: any) => x.id === created.id), 'nicht im Archiv');
+  const trash = (await t.api(pl).get(`/projects/${web}/trash`)).json();
+  assert.ok(trash.tasks.some((x: any) => x.id === created.id), 'im Papierkorb');
+  const restored = await t.api(pl).post(`/tasks/${created.id}/restore`);
+  assert.equal(restored.statusCode, 200);
+  assert.equal(restored.json().task.deletedAt, null);
+  assert.equal(restored.json().task.archivedAt, null, 'war nicht archiviert, ist es nach Wiederherstellen auch nicht');
+  assert.ok((await t.api(pl).get(`/projects/${web}/tasks`)).json().tasks.some((x: any) => x.id === created.id));
+  await t.api(pl).del(`/tasks/${created.id}`);
+  const hard = await t.api(pl).del(`/tasks/${created.id}?permanent=1`);
+  assert.equal(hard.statusCode, 200);
+  assert.equal((await t.api(pl).get(`/tasks/${created.id}`)).statusCode, 404);
+
+  const page = (await t.api(pl).post(`/projects/${web}/docs/pages`, { title: 'Papierkorbseite' })).json().page;
+  const pdel = await t.api(pl).del(`/docs/pages/${page.id}`);
+  assert.equal(pdel.json().trashed, true);
+  assert.ok(!(await t.api(pl).get(`/projects/${web}/docs`)).json().pages.some((x: any) => x.id === page.id), 'nicht mehr im Baum');
+  assert.ok((await t.api(pl).get(`/projects/${web}/trash`)).json().pages.some((x: any) => x.id === page.id));
+  assert.equal((await t.api(pl).post(`/docs/pages/${page.id}/restore`)).statusCode, 200);
+  assert.ok((await t.api(pl).get(`/projects/${web}/docs`)).json().pages.some((x: any) => x.id === page.id), 'wieder im Baum');
+});

@@ -41,7 +41,7 @@ export async function taskRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id);
     const lead = await resolveProjectLead(db, req.params.id);
     const archived = req.query.archived === '1';
-    const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is ${archived ? 'not' : ''} null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is null and t.archived_at is ${archived ? 'not' : ''} null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
     return { tasks };
   });
 
@@ -140,7 +140,7 @@ export async function taskRoutes(app: FastifyInstance) {
         if (c.c > 0) drafts.push({ projectId: m.project_id, projectKey: m.key, count: c.c });
       }
       if (m.role === 'pl' || m.can_finalize) {
-        const r = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' order by updated_at desc limit 5`, [m.project_id]);
+        const r = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' and deleted_at is null order by updated_at desc limit 5`, [m.project_id]);
         for (const p of r.rows) pages.push({ id: p.id, title: p.title, projectId: m.project_id, projectKey: m.key, updatedAt: p.updated_at });
       }
       const esc = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and (t.blocked or t.escalation_level > 0)`, [m.project_id]);
@@ -318,14 +318,44 @@ export async function taskRoutes(app: FastifyInstance) {
     return { task: await loadTask(db, req.params.id) };
   });
 
-  app.delete<{ Params: { id: string } }>('/tasks/:id', async (req) => {
+  // Löschen = Papierkorb (archived_at wird mitgesetzt, damit nichts mehr zählt); ?permanent=1 löscht endgültig
+  app.delete<{ Params: { id: string }; Querystring: { permanent?: string } }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
     if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'pl');
-    await db.query(`delete from tasks where id = $1`, [req.params.id]);
-    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.delete', objectType: 'task', objectId: req.params.id, details: { title: existing.title } });
-    return { ok: true };
+    if (req.query.permanent === '1') {
+      await db.query(`delete from tasks where id = $1`, [req.params.id]);
+      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.delete', objectType: 'task', objectId: req.params.id, details: { title: existing.title, permanent: true } });
+      return { ok: true };
+    }
+    if (!existing.deleted_at) {
+      await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), updated_at = now() where id = $1`, [existing.id]);
+      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.trash', objectType: 'task', objectId: req.params.id, details: { title: existing.title } });
+    }
+    return { ok: true, trashed: true };
+  });
+
+  app.post<{ Params: { id: string } }>('/tasks/:id/restore', async (req) => {
+    const user = requireUser(req);
+    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
+    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
+    await requireProject(db, user, existing.project_id, 'member');
+    if (existing.deleted_at) {
+      await db.query(`update tasks set deleted_at = null, archived_at = case when deleted_was_archived then archived_at else null end, deleted_was_archived = false, updated_at = now() where id = $1`, [existing.id]);
+      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.restore', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
+    }
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  // Papierkorb des Projekts: Arbeitspakete und Seiten, endgültig gelöscht nach 30 Tagen
+  app.get<{ Params: { id: string } }>('/projects/:id/trash', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id);
+    const lead = await resolveProjectLead(db, req.params.id);
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is not null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
+    const pages = await db.query(`select id, title, status, deleted_at, folder_id from doc_pages where project_id = $1 and deleted_at is not null order by deleted_at desc`, [req.params.id]);
+    return { tasks, pages: pages.rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, deletedAt: p.deleted_at, folderId: p.folder_id })), purgeAfterDays: 30 };
   });
 
   // W7: Nachfolger verschieben – Vorschau und Ausführung

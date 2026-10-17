@@ -397,7 +397,7 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     const milestones = await db.query(`select * from milestones where project_id = $1 and date >= $2 order by date limit 5`, [pid, today]);
     const pending = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [pid]);
-    const review = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' order by updated_at desc limit 5`, [pid]);
+    const review = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' and deleted_at is null order by updated_at desc limit 5`, [pid]);
     const activity = await db.query(
       `select a.action, a.object_type, a.object_id, a.details, a.created_at, u.name as user_name from audit_log a left join users u on u.id = a.user_id where a.project_id = $1 order by a.created_at desc limit 12`,
       [pid]

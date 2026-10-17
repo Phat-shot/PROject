@@ -127,7 +127,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const folderChildren: ChildRow[] = isFolderPage ? (docs?.pages ?? []).filter((x) => x.folderId === p.folderId && !x.parentPageId && x.id !== p.id).map((x) => ({ id: x.id, title: x.title, status: x.status, version: x.version, updatedAt: x.updatedAt, templateKey: x.templateKey })) : [];
   const children = isFolderPage ? folderChildren : d.data.children;
   const newChild = () => (isFolderPage ? onNewInFolder(p.folderId) : onNewChild(p, childTemplate ?? null));
-  const canEdit = me.role !== 'reader' && p.status !== 'final';
+  const canEdit = me.role !== 'reader' && p.status !== 'final' && !p.deletedAt;
   const canFinal = me.role === 'pl' || me.canFinalize;
   const setStatus = (status: string) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status }); await d.reload(); await reloadTree(); });
   const changeStatus = async (status: string) => {
@@ -170,11 +170,12 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
               {isFolderPage && me.role === 'pl' && <button onClick={() => setEditFolder(true)}>Ordner bearbeiten (Name, Verteiler)</button>}
               <a href={`/api/docs/pages/${p.id}/pdf`} target="_blank" rel="noreferrer">PDF öffnen</a>
               {canFinal && <button onClick={() => setShare(true)}>Teilen per Link{d.data.activeShares > 0 ? ` (${d.data.activeShares} aktiv)` : ''}</button>}
-              {me.role === 'pl' && !isFolderPage && <button className="danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
+              {me.role === 'pl' && !isFolderPage && !p.deletedAt && <button className="danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${p.title}“ in den Papierkorb legen? Unterseiten rücken eine Ebene hoch. Wiederherstellen in den Projekteinstellungen, endgültig gelöscht nach 30 Tagen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
             </div></>}
           </span>
         </>}
       </div>
+      {p.deletedAt && <div className="notice danger mb small"><strong>Im Papierkorb</strong> seit {fmtDateTime(p.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/docs/pages/${p.id}/restore`); await d.reload(); await reloadTree(); })}>Wiederherstellen</button>}</div>}
       {p.status === 'final' && <div className="success mb small">Final seit {fmtDateTime(p.finalizedAt)}. Die Seite ist gesperrt und versioniert.</div>}
       {error && <div className="error mb">{error}</div>}
       {edit ? <Editor page={p} onApi={setEditor} onSaved={async () => { setEdit(false); setEditor(null); await d.reload(); await reloadTree(); }} /> : <HtmlView html={p.contentHtml} />}

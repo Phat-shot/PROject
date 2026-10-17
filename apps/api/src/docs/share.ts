@@ -38,7 +38,7 @@ export async function sharedPageIds(db: Db, share: any): Promise<string[]> {
     `with recursive tree as (
        select id from doc_pages where id = $1
        union all
-       select p.id from doc_pages p join tree t on p.parent_page_id = t.id
+       select p.id from doc_pages p join tree t on p.parent_page_id = t.id where p.deleted_at is null
      ) select id from tree`,
     [share.page_id]
   );

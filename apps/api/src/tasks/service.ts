@@ -123,6 +123,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     number: r.number ?? 0,
     labelIds,
     archivedAt: r.archived_at,
+    deletedAt: r.deleted_at ?? null,
     recurrence: r.recurrence ?? null,
     estimateMinutes: r.estimate_minutes ?? null,
     loggedMinutes: r.logged_minutes ?? 0,

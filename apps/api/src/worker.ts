@@ -60,6 +60,8 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       await runNotificationMails(db, mail);
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
+        await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);
+        await db.query(`delete from doc_pages where deleted_at < now() - interval '30 days'`);
         await runDailyRules(db, today);
         await runEscalations(db, today);
         await runReports(db, mail, today);

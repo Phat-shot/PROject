@@ -5,6 +5,7 @@ import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
 import { AccountForm } from '../MailAccountsPage';
+import { TrashCard } from './TrashCard';
 import { InlineText } from './TaskDrawer';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -27,7 +28,7 @@ export function MembersView() {
   return (
     <div className="content settings">
       <nav className="section-nav">
-        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
         <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
       </nav>
       <div className="card mb" id="allgemein">
@@ -92,6 +93,10 @@ export function MembersView() {
           <div className="card" id="mail">
             <h2>Mail-Ansichten und Filter</h2>
             <MailViewsCard />
+          </div>
+          <div className="card" id="papierkorb">
+            <h2>Papierkorb</h2>
+            <TrashCard />
           </div>
         </div>
       </div>
