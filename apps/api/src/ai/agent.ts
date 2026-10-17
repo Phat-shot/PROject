@@ -5,6 +5,13 @@ import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { touchTask } from '../tasks/service.js';
 import { aiConfigForAgent, complete, orgAiSettings, parseJson, type AiConfig } from './client.js';
+import { htmlToMd, mdToHtml } from '../docs/html.js';
+import { htmlToPdf } from '../docs/pdfHtml.js';
+import * as L from '../docs/layout.js';
+import { mkdir, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { randomUUID, createHash } from 'node:crypto';
+import { publicBase } from '../docs/share.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -21,29 +28,53 @@ export type AgentAction =
   | { type: 'blocked'; reason: string }
   | { type: 'escalate'; text: string }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
+  | { type: 'add_item'; text: string }
+  | { type: 'update_item'; itemId: string; text: string }
+  | { type: 'doc_create'; title: string; folder?: string | null; text: string }
+  | { type: 'doc_append'; pageId: string; text: string }
+  | { type: 'doc_send_pdf'; pageId: string; to: string[]; subject: string; text: string }
   | { type: 'none'; reason?: string };
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean }
 const H = 3600_000;
-const clampH = (v: unknown, def: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(24 * 14, Math.max(0.5, n)) : def; };
+const clampH = (v: unknown, def: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(24 * 14, Math.max(0.1, n)) : def; };
+/** Termin aus until: ISO-Datum/-Zeit, YYYY-MM-DD oder HH:MM (heute, sonst morgen); Zeiten ohne Zone gelten als Europe/Berlin. */
+function parseUntil(v: unknown, now: Date): Date | null {
+  const s = String(v ?? '').trim();
+  if (!s) return null;
+  const berlinOffsetMin = (d: Date) => { const z = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', timeZoneName: 'shortOffset' }).formatToParts(d).find((x) => x.type === 'timeZoneName')?.value ?? 'GMT+1'; const m = z.match(/GMT([+-])(\d+)(?::(\d+))?/); return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 60; };
+  const hm = s.match(/^(\d{1,2}):(\d{2})$/);
+  if (hm) {
+    const local = new Date(now.getTime() + berlinOffsetMin(now) * 60_000);
+    const d = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), Number(hm[1]), Number(hm[2])) - berlinOffsetMin(now) * 60_000);
+    return d.getTime() <= now.getTime() ? new Date(d.getTime() + 86400_000) : d;
+  }
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(new Date(s + 'T09:00:00Z').getTime() - berlinOffsetMin(now) * 60_000);
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) { const d = new Date(s + 'Z'); return isNaN(d.getTime()) ? null : new Date(d.getTime() - berlinOffsetMin(now) * 60_000); }
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
 
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['note', 'actions'],
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'mail', 'blocked', 'escalate', 'wait', 'none'] },
-        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail: Mailtext; escalate: Text an die PL; sonst null' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'doc_create', 'doc_append', 'doc_send_pdf', 'blocked', 'escalate', 'wait', 'none'] },
+        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_append: Seiteninhalt in Markdown; sonst null' },
         column: { type: ['string', 'null'], description: 'set_status: Zielstatus (exakt aus der Liste); sonst null' },
-        itemId: { type: ['string', 'null'], description: 'check_item: itemId aus der Task-Liste; sonst null' },
+        itemId: { type: ['string', 'null'], description: 'check_item/update_item: itemId aus der Task-Liste; sonst null' },
+        pageId: { type: ['string', 'null'], description: 'doc_append/doc_send_pdf: pageId aus der Seitenliste; sonst null' },
+        title: { type: ['string', 'null'], description: 'doc_create: Seitentitel; sonst null' },
+        folder: { type: ['string', 'null'], description: 'doc_create: Ordnername aus der Ordnerliste (z. B. Protokolle); sonst null' },
         to: { type: ['array', 'null'], items: { type: 'string' }, description: 'mail: Empfängeradressen; sonst null' },
         subject: { type: ['string', 'null'], description: 'mail: Betreff; sonst null' },
         reason: { type: ['string', 'null'], description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst null' },
         kind: { type: ['string', 'null'], description: 'wait: genau einer der Werte reply, date, task, info; sonst null' },
         checkAfterHours: { type: ['number', 'null'], description: 'wait: Stunden bis zur nächsten Prüfung; sonst null' },
-        until: { type: ['string', 'null'], description: 'wait mit kind date: Datum YYYY-MM-DD; sonst null' },
+        until: { type: ['string', 'null'], description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); sonst null' },
         remindAfterHours: { type: ['number', 'null'], description: 'wait mit kind reply: Stunden bis zum Nachfassen; sonst null' },
         escalateAfterHours: { type: ['number', 'null'], description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst null' }
       } } }
@@ -67,11 +98,13 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const comments = await db.query(`select c.body, c.source, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
   const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc limit 6`, [task.id]);
   const members = await db.query(`select u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
+  const folders = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
+  const pages = await db.query(`select p.id, p.title, p.status, p.updated_at, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 40`, [task.project_id]);
   const pls = members.rows.filter((x: any) => x.role === 'pl' && !x.is_deputy);
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; ein Task-Abhaken braucht itemId; ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; doc_create braucht title und text (Markdown); doc_append und doc_send_pdf brauchen pageId; ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
   const prompt = `Heute: ${today}
 Arbeitspaket ${task.project_key}-${task.number} „${task.title}“ · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -82,18 +115,21 @@ Log (neueste zuerst):
 ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
 Mails zum Arbeitspaket:
 ${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}: ${x.subject} – ${cut(x.text_body ?? x.snippet, 500)}`).join('\n') || '–'}
+Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
+Doku-Seiten (neueste zuerst):
+${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
 Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
-Deine Rechte: Mails ${canMail ? 'direkt senden' : 'nur als Entwurf zur Freigabe'}${account ? '' : ' (kein Projektkonto)'}; Status setzen; Tasks abhaken; Log schreiben; Blockade melden; an PL eskalieren.
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : ' (kein Projektkonto)'}; Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku-Seiten anlegen (doc_create mit title, folder, text in Markdown) und ergänzen (doc_append mit pageId, text); PDF einer Seite per Mail senden (doc_send_pdf mit pageId, to, subject, text); Log schreiben; Blockade melden; an PL eskalieren.
 ${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
-Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Höchstens eine Mail je Lauf.`;
+Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
   try {
     const r = await complete(c, fetchFn, { system, prompt, maxTokens: 1500, schema: SCHEMA });
     const j = parseJson(r.text);
     const actions: AgentAction[] = Array.isArray(j.actions) ? j.actions.slice(0, 5) : [];
     const applied: AgentAction[] = [];
     const errors: string[] = [];
-    let mailed = false;
+    let mailsSent = 0;
     let waited = false;
     for (const a of actions) {
       if (a.type === 'comment' && a.text?.trim()) {
@@ -108,14 +144,69 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
         if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);
         if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
+      } else if (a.type === 'add_item') {
+        if (!a.text?.trim()) errors.push('Task ohne Text verworfen');
+        else { const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [task.id]); await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [task.id, a.text.trim().slice(0, 300), pos.p]); applied.push(a); }
+      } else if (a.type === 'update_item') {
+        const it = items.rows.find((i: any) => i.id === a.itemId);
+        if (!it || !a.text?.trim()) errors.push(`Task-Änderung verworfen: ${!it ? 'itemId unbekannt' : 'kein Text'}`);
+        else { await db.query(`update checklist_items set title = $2 where id = $1`, [it.id, a.text.trim().slice(0, 300)]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task umformuliert: „${it.title}“ → „${a.text.trim().slice(0, 300)}“`]); applied.push(a); }
+      } else if (a.type === 'doc_create') {
+        if (!a.title?.trim() || !a.text?.trim()) errors.push('Seite verworfen: Titel oder Inhalt fehlt');
+        else {
+          const folder = a.folder ? await db.maybeOne(`select id from doc_folders where project_id = $1 and lower(name) = lower($2)`, [task.project_id, a.folder]) : null;
+          const fid = folder?.id ?? (await db.maybeOne(`select id from doc_folders where project_id = $1 and name = 'Protokolle'`, [task.project_id]))?.id ?? null;
+          const html = mdToHtml(a.text);
+          const page = await db.one(`insert into doc_pages (project_id, folder_id, title, content_md, content_html, status, created_by, updated_by) values ($1,$2,$3,$4,$5,'draft',$6,$6) returning *`, [task.project_id, fid, a.title.trim().slice(0, 200), htmlToMd(html), html, agent.id]);
+          await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,1,$2,$3,$4,'draft',$5)`, [page.id, page.title, page.content_md, page.content_html, agent.id]);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite angelegt: „${page.title}“ ${publicBase()}/projekte/${task.project_id}/doku/${page.id}`]);
+          pages.rows.unshift({ id: page.id, title: page.title, status: 'draft', updated_at: new Date(), folder: a.folder ?? null });
+          applied.push({ ...a, pageId: page.id } as any);
+        }
+      } else if (a.type === 'doc_append') {
+        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        if (!page || !a.text?.trim()) errors.push(`Seitenergänzung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
+        else if (page.status === 'final') errors.push(`Seite „${page.title}“ ist final und gesperrt`);
+        else {
+          const html = `${(page.content_html ?? mdToHtml(page.content_md)).replace(/\s+$/, '')}\n${mdToHtml(a.text)}`;
+          const u = await db.one(`update doc_pages set content_html = $2, content_md = $3, version = version + 1, updated_by = $4, updated_at = now() where id = $1 returning *`, [page.id, html, htmlToMd(html), agent.id]);
+          await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, agent.id]);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite ergänzt: „${page.title}“ (Version ${u.version})`]);
+          applied.push(a);
+        }
+      } else if (a.type === 'doc_send_pdf') {
+        const to = (Array.isArray(a.to) ? a.to : []).map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
+        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        if (!page) errors.push('PDF-Versand verworfen: pageId unbekannt');
+        else if (!to.length || !a.subject) errors.push('PDF-Versand verworfen: Empfänger oder Betreff fehlt');
+        else if (!account) errors.push('PDF-Versand nicht möglich: kein Projektkonto');
+        else if (!canMail) errors.push('PDF-Versand nicht erlaubt: Agent darf keine Mails senden');
+        else if (mailsSent >= 3) errors.push('PDF-Versand verworfen: mehr als drei Mails im Lauf');
+        else {
+          try {
+            const pdf = await htmlToPdf(db, page.content_html ?? mdToHtml(page.content_md), { title: page.title, project: task.project_name, version: page.version, status: page.status, author: agent.name, date: new Date(), folder: await L.folderName(db, page.folder_id) }, await L.layoutFor(db, page.id));
+            const filename = `${String(page.title).replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${page.version}.pdf`;
+            await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text ?? `Anbei „${page.title}“ als PDF.`, taskId: task.id, userId: agent.id, projectId: task.project_id, attachments: [{ filename, content: pdf, contentType: 'application/pdf' }] });
+            await mkdir(L.uploadDir, { recursive: true });
+            const storage = path.join(L.uploadDir, `${randomUUID()}.pdf`);
+            await writeFile(storage, pdf);
+            await db.query(`insert into attachments (project_id, page_id, filename, mime, size, storage_path, uploaded_by) values ($1,$2,$3,'application/pdf',$4,$5,$6)`, [task.project_id, page.id, filename, pdf.length, storage, agent.id]);
+            mailsSent++;
+            applied.push({ ...a, to });
+          } catch (e: any) {
+            const msg = `PDF von „${page.title}“ an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
+            errors.push(msg);
+            await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, msg]);
+          }
+        }
       } else if (a.type === 'mail' && (!Array.isArray(a.to) || !a.to.length || !a.subject || !a.text)) errors.push('Mail verworfen: Empfänger, Betreff oder Text fehlt');
-      else if (a.type === 'mail' && mailed) errors.push('Zweite Mail im selben Lauf verworfen');
+      else if (a.type === 'mail' && mailsSent >= 3) errors.push('Mail verworfen: mehr als drei Mails im Lauf');
       else if (a.type === 'mail') {
         const to = a.to.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
         if (!to.length) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
         else if (!account) errors.push('Mail nicht gesendet: kein Projektkonto angebunden');
         else {
-          mailed = true;
+          mailsSent++;
           if (canMail) {
             try {
               await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text, taskId: task.id, userId: agent.id, projectId: task.project_id });
@@ -144,7 +235,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       else if (a.type === 'wait') {
         const prev: AgentWait | null = task.agent_wait ?? null;
         const keepSince = prev && prev.kind === a.kind && trigger !== 'reply' && trigger !== 'comment' && trigger !== 'mail' ? prev.since : now.toISOString();
-        const check = a.kind === 'date' && a.until && !isNaN(new Date(a.until).getTime()) ? new Date(a.until) : new Date(now.getTime() + clampH(a.checkAfterHours, a.kind === 'reply' ? 24 : 24) * H);
+        const untilAt = a.kind === 'date' ? parseUntil(a.until, now) : null;
+        if (a.kind === 'date' && !untilAt) errors.push(`Termin „${a.until ?? ''}“ nicht lesbar, Prüfung nach ${clampH(a.checkAfterHours, 24)} h`);
+        const check = untilAt && untilAt.getTime() > now.getTime() ? untilAt : new Date(now.getTime() + clampH(a.checkAfterHours, 24) * H);
         const w: AgentWait = { kind: a.kind, reason: (String(a.reason ?? '').trim() || 'keine Angabe').slice(0, 300), since: keepSince };
         if (a.kind === 'reply') {
           const base = new Date(keepSince).getTime();
@@ -187,6 +280,7 @@ function triggerText(trigger: string, task: any): string {
   switch (trigger) {
     case 'assigned': return 'Das Arbeitspaket wurde dir gerade zugewiesen. Verschaffe dir den Stand und beginne.';
     case 'comment': return 'Neuer Log-Eintrag oder Kommentar einer Person am Arbeitspaket.';
+    case 'task_changed': return 'Eine Person hat das Arbeitspaket oder seine Tasks geändert (Text, Termin, Status). Lies die Änderung und handle entsprechend.';
     case 'mail': case 'reply': return 'Neue Mail zum Arbeitspaket (möglicherweise die erwartete Rückmeldung). Werte sie aus.';
     case 'check': return `Wiedervorlage: deine Wartefrist ist abgelaufen${w ? ` (gewartet auf ${KIND_DE[w.kind] ?? w.kind})` : ''}. Prüfe, ob das Erwartete eingetreten ist.`;
     case 'reminder_due': return 'Nachfassen fällig: die Rückmeldung ist bisher nicht eingegangen. Fasse jetzt nach (Erinnerung per Mail oder Log) oder begründe, warum nicht; setze danach erneut wait.';
@@ -212,9 +306,11 @@ export async function fingerprintOf(db: Db, taskId: string): Promise<string> {
   const r = await db.one(`select t.column_id, t.due_date, t.blocked,
       (select count(*)::int from task_comments c where c.task_id = t.id and c.source <> 'ai') as comments,
       (select count(*)::int from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = t.id and not m.outgoing) as mails,
-      (select count(*)::int from checklist_items i where i.task_id = t.id and i.done) as done_items
+      (select count(*)::int from checklist_items i where i.task_id = t.id and i.done) as done_items,
+      (select string_agg(i.title, '|' order by i.position) from checklist_items i where i.task_id = t.id) as item_titles, t.title, t.description
     from tasks t where t.id = $1`, [taskId]);
-  return `${r.column_id}|${r.due_date ? String(r.due_date).slice(0, 10) : ''}|${r.blocked}|${r.comments}|${r.mails}|${r.done_items}`;
+  const h = createHash('sha1').update(`${r.title}|${r.description ?? ''}|${r.item_titles ?? ''}`).digest('hex').slice(0, 10);
+  return `${r.column_id}|${r.due_date ? String(r.due_date).slice(0, 10) : ''}|${r.blocked}|${r.comments}|${r.mails}|${r.done_items}|${h}`;
 }
 
 /** Worker: alle aktiven Agenten über ihre offenen, direkt zugewiesenen Arbeitspakete; Anlass aus Zustandsänderung, Fälligkeit oder Tagesrhythmus; Tagesbudget je Agent. */

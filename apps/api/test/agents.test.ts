@@ -224,3 +224,85 @@ test('Sofortlauf bei Zuweisung und Kommentar; Wartezustand mit Wiedervorlage, Na
   await flushAgentRuns();
   assert.equal((await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length, countBefore);
 });
+
+test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umformulieren, Termin mit Uhrzeit, Task-Änderung als Auslöser', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
+  const agent = (await t.api(admin).post('/agents', { name: 'Schreiber' })).json().agent;
+  await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true });
+  nextActions = [{ type: 'none', reason: 'erst lesen' }];
+  const created = await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Jour fixe dokumentieren', responsibleUserId: agent.id });
+  const taskId = created.json().task.id;
+  await flushAgentRuns();
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Doku-Ordner: .*Protokolle/);
+
+  // Task-Änderung durch Person löst Lauf aus; Agent legt Seite im Ordner an, ergänzt Tasks, wartet bis 20:20
+  const now = new Date();
+  nextActions = [
+    { type: 'doc_create', title: 'JF 2026-10-17', folder: 'protokolle', text: '# Jour fixe\n\n- Thema A\n- Thema B' },
+    { type: 'add_item', text: 'PDF an Teilnehmer senden' },
+    { type: 'wait', kind: 'date', reason: 'Versand um 20:20', until: '20:20' }
+  ];
+  const n0 = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
+  await t.api(pl).post(`/tasks/${taskId}/checklist`, { title: 'Protokoll anlegen' });
+  await flushAgentRuns();
+  const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
+  assert.equal(runs.length, n0 + 1, 'Lauf nach Task-Änderung');
+  assert.equal(runs[0].trigger, 'task_changed');
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Arbeitspaket oder seine Tasks geändert/);
+  const page = await t.db.one(`select p.*, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.title = 'JF 2026-10-17'`, [pid]);
+  assert.equal(page.folder, 'Protokolle');
+  assert.equal(page.created_by, agent.id);
+  assert.match(page.content_html, /<h1>Jour fixe<\/h1>/);
+  assert.equal((await t.db.one(`select count(*)::int as n from doc_page_versions where page_id = $1`, [page.id])).n, 1);
+  const items = await t.db.query(`select id, title from checklist_items where task_id = $1 order by position`, [taskId]);
+  assert.deepEqual(items.rows.map((i: any) => i.title), ['Protokoll anlegen', 'PDF an Teilnehmer senden']);
+  const t1 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(t1.agentWait.kind, 'date');
+  const check = new Date(t1.agentNextCheckAt);
+  assert.ok(check.getTime() > now.getTime() && check.getTime() < now.getTime() + 24 * 3600_000 + 60_000, 'Prüfung innerhalb 24 h');
+  const berlin = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Berlin', hour: '2-digit', minute: '2-digit' }).format(check);
+  assert.equal(berlin, '20:20', 'Uhrzeit in Europe/Berlin');
+  assert.ok(t1.agentWait.reason.includes('20:20'));
+  assert.ok((await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Doku-Seite angelegt%'`, [taskId])));
+
+  // Zum Termin: Seite ergänzen, Task umformulieren, PDF versenden (mit Anhang), Seitenliste enthält die neue Seite
+  const itemId = items.rows[1].id;
+  nextActions = [
+    { type: 'doc_append', pageId: page.id, text: '## Beschlüsse\n\nAlles klar.' },
+    { type: 'update_item', itemId, text: 'PDF an Teilnehmer gesendet' },
+    { type: 'doc_send_pdf', pageId: page.id, to: ['gf@demo.local'], subject: 'Protokoll JF', text: 'Anbei das Protokoll. Schreiber (KI-Agent, Projekt WEB)' },
+    { type: 'check_item', itemId }
+  ];
+  const before = t.mail.dev.sent.length;
+  const r = await runAgents(t.db, t.mail, fakeFetch, new Date(check.getTime() + 60_000));
+  assert.equal(r.filter((x) => x.taskId === taskId).length, 1, 'Lauf zum Termin');
+  assert.match(calls[calls.length - 1].body.messages[1].content, new RegExp(`„JF 2026-10-17“ \\(pageId ${page.id}`));
+  const p2 = await t.db.one(`select * from doc_pages where id = $1`, [page.id]);
+  assert.equal(p2.version, 2);
+  assert.match(p2.content_html, /<h2>Beschlüsse<\/h2>/);
+  assert.equal((await t.db.one(`select count(*)::int as n from doc_page_versions where page_id = $1`, [page.id])).n, 2);
+  assert.equal((await t.db.one(`select title, done from checklist_items where id = $1`, [itemId])).title, 'PDF an Teilnehmer gesendet');
+  assert.equal(t.mail.dev.sent.length, before + 1);
+  const sent = t.mail.dev.sent[before].msg;
+  assert.equal(sent.subject, 'Protokoll JF');
+  assert.equal(sent.attachments?.length, 1);
+  assert.match(sent.attachments![0].filename, /^JF_2026-10-17_v2\.pdf$/);
+  assert.equal(sent.attachments![0].content.subarray(0, 4).toString(), '%PDF');
+  assert.ok(await t.db.maybeOne(`select 1 from attachments where page_id = $1 and uploaded_by = $2`, [page.id, agent.id]), 'PDF liegt an der Seite');
+  const t2 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(t2.agentWait, null);
+
+  // Finale Seite wird nicht ergänzt; unbekannter Ordner fällt auf Protokolle zurück
+  await t.db.query(`update doc_pages set status = 'final' where id = $1`, [page.id]);
+  nextActions = [{ type: 'doc_append', pageId: page.id, text: 'Nachtrag' }, { type: 'doc_create', title: 'Notiz', folder: 'Gibtsnicht', text: 'Text' }];
+  const rr = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.equal(rr.statusCode, 200, rr.body);
+  assert.deepEqual(rr.json().actions.map((x: any) => x.type), ['doc_create']);
+  assert.match(String(rr.json().error), /final/);
+  assert.equal((await t.db.one(`select version from doc_pages where id = $1`, [page.id])).version, 2);
+  const note = await t.db.one(`select f.name as folder from doc_pages p join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.title = 'Notiz'`, [pid]);
+  assert.equal(note.folder, 'Protokolle');
+});

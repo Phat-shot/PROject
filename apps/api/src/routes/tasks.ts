@@ -347,6 +347,7 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.update', objectType: 'task', objectId: req.params.id, details: changed });
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id) queueAgentRun(req.params.id, 'assigned');
+    else if (user.kind !== 'agent' && ['title', 'description', 'dueDate', 'startDate', 'columnId', 'blocked'].some((k) => k in b)) queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -476,6 +477,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!req.body?.title?.trim()) throw badRequest('Titel erforderlich');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [req.params.id]);
     await db.query(`insert into checklist_items (task_id, title, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5)`, [req.params.id, req.body.title.trim(), req.body.responsibleUserId ?? null, req.body.responsibleEmail?.trim().toLowerCase() || null, pos.p]);
+    if (user.kind !== 'agent') queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -493,6 +495,7 @@ export async function taskRoutes(app: FastifyInstance) {
       [req.params.itemId, req.params.id, b.title ?? null, b.done ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'responsibleEmail' in b, b.responsibleEmail?.trim().toLowerCase() || null]
     );
     await touchTask(db, req.params.id);
+    if (user.kind !== 'agent' && (b.title !== undefined || b.done !== undefined)) queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
   });
 

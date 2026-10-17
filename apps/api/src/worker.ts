@@ -61,7 +61,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
-      if (Date.now() - lastAgents >= 5 * 60_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); }
+      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);
