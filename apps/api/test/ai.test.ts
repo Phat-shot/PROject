@@ -6,11 +6,11 @@ import { testApp } from './helpers.js';
 const calls: { body: any }[] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const url = String(input);
-  if (url !== 'https://api.anthropic.com/v1/messages') return new Response('{}', { status: 404 });
+  if (!url.startsWith('https://api.anthropic.com/v1/messages')) return new Response('{}', { status: 404 });
   const body = JSON.parse(String(init?.body));
   calls.push({ body });
-  const key = (init?.headers as any)?.['x-api-key'];
-  if (key === 'bad') return new Response(JSON.stringify({ error: { type: 'authentication_error', message: 'invalid x-api-key' } }), { status: 401 });
+  const key = new Headers(init?.headers as any).get('x-api-key');
+  if (key === 'bad') return new Response(JSON.stringify({ type: 'error', error: { type: 'authentication_error', message: 'invalid x-api-key' } }), { status: 401, headers: { 'content-type': 'application/json' } });
   const prompt: string = body.messages[0].content;
   let text = 'bereit';
   if (prompt.startsWith('Fasse diese Mail')) text = 'Zusammenfassung: Angebot liegt vor, Entscheidung bis Freitag.';
@@ -18,7 +18,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
   else if (prompt.includes('Schreibe einen Abschnitt in Markdown')) text = '## Angebot Design – 13.10.\n\n- Angebot liegt vor\n- Entscheidung bis Freitag';
   else if (prompt.includes('Statusberichts')) text = '## Management-Summary\n\nProjekt im Plan.\n\n## Fortschritt\n\n…';
   else if (prompt.startsWith('Frage:')) text = 'Das Angebot kam von Katrin Müller [Q1].';
-  return new Response(JSON.stringify({ model: body.model, content: [{ type: 'text', text }], usage: { input_tokens: 100, output_tokens: 20 } }), { status: 200, headers: { 'content-type': 'application/json' } });
+  return new Response(JSON.stringify({ id: 'msg_1', type: 'message', role: 'assistant', model: body.model, content: [{ type: 'text', text }], stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 100, output_tokens: 20 } }), { status: 200, headers: { 'content-type': 'application/json' } });
 };
 
 delete process.env.ANTHROPIC_API_KEY;
@@ -35,7 +35,7 @@ test('KI aus ohne Schlüssel; Org-Admin aktiviert mit Schlüssel und Modell, Tes
   const off = await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`);
   assert.equal(off.statusCode, 400);
   assert.equal((await t.api(pl).put('/ai/settings', { enabled: true, apiKey: 'k' })).statusCode, 403, 'nur Org-Admin');
-  const bad = await t.api(admin).put('/ai/settings', { enabled: true, apiKey: 'bad', model: 'claude-sonnet-5-5' });
+  const bad = await t.api(admin).put('/ai/settings', { enabled: true, apiKey: 'bad', model: 'claude-opus-5-5' });
   assert.equal(bad.json().enabled, true);
   assert.equal(bad.json().source, 'org');
   const test1 = await t.api(admin).post('/ai/test');
@@ -45,7 +45,8 @@ test('KI aus ohne Schlüssel; Org-Admin aktiviert mit Schlüssel und Modell, Tes
   assert.equal(ok.json().hasKey, true);
   const test2 = await t.api(admin).post('/ai/test');
   assert.equal(test2.json().reply, 'bereit');
-  assert.equal(calls[calls.length - 1].body.model, 'claude-sonnet-5-5');
+  assert.equal(calls[calls.length - 1].body.model, 'claude-opus-5-5');
+  assert.equal(calls[calls.length - 1].body.fallbacks, 'default', 'Refusal-Fallback aktiv');
   const settings = await t.api(admin).get('/org/settings');
   assert.equal(JSON.stringify(settings.json()).includes('good'), false, 'Schlüssel bleibt auf dem Server');
 });

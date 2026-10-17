@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
+import type { AgentUser, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
 import { api, downloadCsv, fmtDateTime } from '../lib/api';
@@ -32,6 +32,7 @@ export function AdminPage() {
         <GroupsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
         <AiCard />
+        <AgentsCard />
         <ProjectTemplatesCard />
         <TemplatesCard />
         <div className="card">
@@ -215,33 +216,62 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
   );
 }
 
-/** KI-Modul: an/aus, Schlüssel (nur schreiben), Modell, Verbindungstest. */
+/** KI-Modul: Anbieter (Anthropic oder lokales LLM), Schlüssel (nur schreiben), Modell, Tagesbudget je Agent, Verbindungstest. */
 function AiCard() {
   const st = useAiStatus();
-  const [enabled, setEnabled] = useState<boolean | null>(null);
-  const [model, setModel] = useState<string | null>(null);
-  const [key, setKey] = useState('');
+  const [f, setF] = useState<{ enabled: boolean; provider: 'anthropic' | 'local'; baseUrl: string; model: string; apiKey: string; agentDailyBudget: number } | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const en = enabled ?? st.enabled;
-  const mo = model ?? st.model;
+  const v = f ?? { enabled: st.enabled || st.hasKey || Boolean(st.baseUrl), provider: st.provider, baseUrl: st.baseUrl ?? '', model: st.model, apiKey: '', agentDailyBudget: st.agentDailyBudget };
+  const set = (k: string, val: unknown) => setF({ ...v, [k]: val });
   return (
     <div className="card">
       <h2>KI</h2>
-      <p className="muted small">Regel vor KI: Zusammenfassen läuft direkt, alles andere (Essenz in Arbeitspaket oder Seite) nur als Vorschlag mit Freigabe; der Statusbericht entsteht als Entwurfsseite. Wer KI nutzen und Vorschläge freigeben darf, steht in der Projektmitgliedschaft; in Mail-Ansichten zusätzlich das Recht „KI“. Jede Anfrage steht im Audit mit Modell und Token.</p>
+      <p className="muted small">Regel vor KI: Zusammenfassen läuft direkt, Essenz in Arbeitspaket oder Seite nur als Vorschlag mit Freigabe, der Statusbericht als Entwurfsseite. KI-Agenten (unten) handeln nur bei Arbeitspaketen, die ihnen eine PL zuweist. Wer KI nutzen und Vorschläge freigeben darf, steht in der Projektmitgliedschaft; in Mail-Ansichten zusätzlich das Recht „KI“. Jede Anfrage steht im Audit mit Modell und Token.</p>
       <div className="form cols-2">
-        <label className="check full"><input type="checkbox" checked={en} onChange={(e) => setEnabled(e.target.checked)} /> KI für diesen Mandanten aktiv</label>
-        <label className="field"><span>API-Schlüssel (Anthropic){st.hasKey && <span className="muted"> · gesetzt ({st.source === 'env' ? 'aus der Umgebung' : 'im Mandanten'}), leer = unverändert</span>}</span><input type="password" value={key} autoComplete="new-password" placeholder={st.hasKey ? '••••••••' : 'sk-ant-…'} onChange={(e) => setKey(e.target.value)} /></label>
-        <label className="field"><span>Modell</span><select value={mo} onChange={(e) => setModel(e.target.value)}>{(st.models.includes(mo) ? st.models : [mo, ...st.models]).map((m) => <option key={m} value={m}>{m}</option>)}</select></label>
+        <label className="check full"><input type="checkbox" checked={v.enabled} onChange={(e) => set('enabled', e.target.checked)} /> KI für diesen Mandanten aktiv</label>
+        <label className="field"><span>Anbieter</span><select value={v.provider} onChange={(e) => set('provider', e.target.value)}><option value="local">Lokales LLM (OpenAI-kompatibel: vLLM, Ollama, LM Studio)</option><option value="anthropic">Anthropic (Claude)</option></select></label>
+        {v.provider === 'local'
+          ? <label className="field"><span>Adresse der API</span><input type="url" value={v.baseUrl} placeholder="http://llm.intern:8000/v1" onChange={(e) => set('baseUrl', e.target.value)} /><span className="muted small">vLLM: Port 8000, Pfad /v1 · Ollama: http://host:11434/v1</span></label>
+          : <label className="field"><span>API-Schlüssel{st.hasKey && st.provider === 'anthropic' && <span className="muted"> · gesetzt ({st.source === 'env' ? 'aus der Umgebung' : 'im Mandanten'}), leer = unverändert</span>}</span><input type="password" value={v.apiKey} autoComplete="new-password" placeholder={st.hasKey ? '••••••••' : 'sk-ant-…'} onChange={(e) => set('apiKey', e.target.value)} /></label>}
+        <label className="field"><span>Modell</span>{v.provider === 'local'
+          ? <input type="text" value={v.model} placeholder="Name wie in vLLM/Ollama, z. B. Qwen/Qwen3-32B" onChange={(e) => set('model', e.target.value)} />
+          : <select value={v.model} onChange={(e) => set('model', e.target.value)}>{(st.models.includes(v.model) ? st.models : [v.model, ...st.models]).filter(Boolean).map((m) => <option key={m} value={m}>{m}</option>)}</select>}</label>
+        {v.provider === 'local' && <label className="field"><span>Schlüssel (optional, Bearer)</span><input type="password" value={v.apiKey} autoComplete="new-password" placeholder={st.hasKey ? '••••••••' : 'leer, wenn der Server keinen verlangt'} onChange={(e) => set('apiKey', e.target.value)} /></label>}
+        <label className="field"><span>Tagesbudget je Agent (Läufe)</span><input type="number" min={0} max={1000} value={v.agentDailyBudget} onChange={(e) => set('agentDailyBudget', Number(e.target.value))} /></label>
         {error && <div className="error full">{error}</div>}
         {msg && <div className="success full small">{msg}</div>}
         <div className="full row">
-          <button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: en, model: mo, apiKey: key || undefined }); setKey(''); setMsg('Gespeichert.'); await invalidateAi(); })}>Speichern</button>
-          <button className="btn sm" disabled={busy || !st.hasKey} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>('/ai/test'); setMsg(`Verbindung ok: ${r.model} antwortet „${r.reply}“.`); })}>Verbindung testen</button>
-          {st.source === 'org' && <button className="btn sm danger" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: en, model: mo, apiKey: null }); setMsg('Schlüssel entfernt.'); await invalidateAi(); })}>Schlüssel entfernen</button>}
+          <button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: v.enabled, provider: v.provider, baseUrl: v.baseUrl || null, model: v.model, apiKey: v.apiKey || undefined, agentDailyBudget: v.agentDailyBudget }); setF(null); setMsg('Gespeichert.'); await invalidateAi(); })}>Speichern</button>
+          <button className="btn sm" disabled={busy || !st.enabled} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>('/ai/test'); setMsg(`Verbindung ok: ${r.model} antwortet „${r.reply}“.`); })}>Verbindung testen</button>
+          {st.source === 'org' && <button className="btn sm danger" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: v.enabled, provider: v.provider, baseUrl: v.baseUrl || null, model: v.model, apiKey: null }); setMsg('Schlüssel entfernt.'); await invalidateAi(); })}>Schlüssel entfernen</button>}
         </div>
       </div>
+    </div>
+  );
+}
+
+/** KI-Agenten: Benutzer ohne Login, vom Org-Admin benannt; in Projekten nur Mitglied mit Stellvertretung, Arbeitspakete weist die PL zu. */
+function AgentsCard() {
+  const d = useData<{ agents: AgentUser[] }>('/agents');
+  const [name, setName] = useState('');
+  const dialog = useDialog();
+  const { busy, error, run } = useAsync();
+  return (
+    <div className="card">
+      <h2>KI-Agenten</h2>
+      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie PL oder Org-Admin. Die PL nimmt ihn als Mitglied mit Stellvertretung ins Projekt (dort auch „darf Mails senden“) und weist ihm Arbeitspakete zu. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Nachfragen per Mail, Blockade melden, Eskalation an die PL. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
+      {error && <div className="error mb">{error}</div>}
+      {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Projekte</th><th>Läufe</th><th>Letzter Lauf</th><th /></tr></thead><tbody>
+        {d.data.agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.email}</div></td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}{a.projects.length === 0 && <span className="muted">–</span>}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
+          <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => { const n = window.prompt('Neuer Name', a.name); if (n?.trim()) void run(async () => { await api.patch(`/agents/${a.id}`, { name: n.trim() }); await d.reload(); }); }}>Umbenennen</button>{' '}
+            {a.active ? <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Agent deaktivieren', text: `${a.name} deaktivieren? Zuweisungen werden entfernt, Mitgliedschaften und Historie bleiben.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.patch(`/agents/${a.id}`, { active: false }); await d.reload(); }); })}>Deaktivieren</button> : <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: true }); await d.reload(); })}>Aktivieren</button>}</td></tr>)}
+      </tbody></table>}
+      <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post('/agents', { name }); setName(''); await d.reload(); }); }}>
+        <input type="text" placeholder="Name des Agenten, z. B. Nachfasser" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 280 }} />
+        <button className="btn primary sm" disabled={busy || !name.trim()}>Agent anlegen</button>
+      </form>
     </div>
   );
 }

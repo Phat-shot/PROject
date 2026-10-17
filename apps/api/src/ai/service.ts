@@ -27,12 +27,14 @@ export async function summarizeMail(db: Db, cfg: AiConfig, fetchFn: typeof fetch
   return c.text;
 }
 
+const ESSENCE_SCHEMA = { type: 'object', additionalProperties: false, required: ['summary', 'logEntry', 'columnName', 'dueDate', 'questions'], properties: { summary: { type: 'string' }, logEntry: { type: 'string' }, columnName: { type: ['string', 'null'] }, dueDate: { type: ['string', 'null'] }, questions: { type: 'array', items: { type: 'string' } } } };
+
 export interface TaskEssence { summary: string; logEntry: string; columnName: string | null; dueDate: string | null; questions: string[] }
 
 /** Essenz einer Mail für ein Arbeitspaket: Log-Eintrag, ggf. neuer Status oder Termin, offene Fragen. Nur Vorschlag. */
 export async function essenceForTask(db: Db, cfg: AiConfig, fetchFn: typeof fetch, user: User, mail: any, task: { id: string; title: string; description: string | null; dueDate: string | null; columnName: string; projectId: string }, columns: string[]): Promise<TaskEssence> {
   const prompt = `Arbeitspaket: „${task.title}“ (Status: ${task.columnName}${task.dueDate ? `, Termin ${task.dueDate}` : ''})\nBeschreibung: ${cut(task.description, 1500) || '–'}\nMögliche Status: ${columns.join(', ')}\n\nMail:\n${mailText(mail)}\n\nLiefere JSON mit den Feldern:\n- summary: ein Satz, was die Mail für das Arbeitspaket bedeutet\n- logEntry: 2–6 Sätze als Log-Eintrag (Fakten, Zusagen, Termine, Verantwortliche)\n- columnName: einer der möglichen Status, wenn die Mail eine Statusänderung klar belegt, sonst null\n- dueDate: neues Datum als YYYY-MM-DD, wenn die Mail einen neuen Termin klar nennt, sonst null\n- questions: Liste offener Fragen (leer, wenn keine)`;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM + ' Antworte ausschließlich mit einem JSON-Objekt.', maxTokens: 900, prompt });
+  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM + ' Antworte ausschließlich mit einem JSON-Objekt.', maxTokens: 900, prompt, schema: ESSENCE_SCHEMA });
   const j = parseJson(c.text);
   await logCall(db, user, task.projectId, 'task_essence', c, 'task', task.id);
   const col = typeof j.columnName === 'string' ? columns.find((x) => x.toLowerCase() === j.columnName.toLowerCase()) ?? null : null;

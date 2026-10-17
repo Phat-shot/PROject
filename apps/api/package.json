@@ -13,6 +13,7 @@
     "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.135.0",
     "@electric-sql/pglite": "^0.5.10",
     "@fastify/cookie": "^11.0.2",
     "@fastify/multipart": "^9.0.3",

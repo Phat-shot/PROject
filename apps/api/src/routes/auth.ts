@@ -11,7 +11,7 @@ export async function authRoutes(app: FastifyInstance) {
     const { email, password } = req.body ?? ({} as any);
     if (!email || !password) throw badRequest('E-Mail und Passwort erforderlich');
     const row = await app.db.maybeOne(`select * from users where lower(email) = lower($1) and active`, [email]);
-    if (!row || !verifyPassword(password, row.password_hash)) throw unauthorized('E-Mail oder Passwort falsch');
+    if (!row || row.kind === 'agent' || !verifyPassword(password, row.password_hash)) throw unauthorized('E-Mail oder Passwort falsch');
     // Zweiter Faktor: Passwort stimmt, Code folgt in einem zweiten Schritt (Challenge 5 Minuten gültig)
     if (row.totp_enabled && row.totp_secret) {
       const challenge = randomBytes(24).toString('base64url');

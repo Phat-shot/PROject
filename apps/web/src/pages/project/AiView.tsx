@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { AiProposal } from '@projekttool/shared';
+import type { AgentRun, AiProposal } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useAiStatus } from '../../lib/useAi';
@@ -24,6 +24,7 @@ export function AiView() {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<{ answer: string; sources: { type: 'task' | 'page' | 'mail'; id: string; title: string }[] } | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const runs = useData<{ runs: AgentRun[] }>(`/projects/${pid}/agent-runs`);
   const { busy, error, run } = useAsync();
   const nav = useNavigate();
   if (ai && !ai.enabled) return <div className="content"><div className="card"><h2>KI</h2><p className="muted">KI ist für diesen Mandanten nicht aktiviert. Die Verwaltung hinterlegt Schlüssel und Modell unter „Verwaltung › KI“.</p></div></div>;
@@ -76,6 +77,19 @@ export function AiView() {
           <div style={{ whiteSpace: 'pre-wrap' }}>{answer.answer}</div>
           {answer.sources.length > 0 && <div className="small mt"><span className="muted">Quellen:</span> {answer.sources.map((s, i) => <span key={s.id}>[Q{i + 1}] {srcLink(s)} </span>)}</div>}
         </div>}
+      </div>
+      <div className="card mb">
+        <div className="row between"><h2 style={{ margin: 0 }}>Agenten-Läufe</h2><button className="btn sm" onClick={() => void runs.reload()}>Aktualisieren</button></div>
+        <p className="muted small">KI-Agenten sind Mitglieder mit Stellvertretung; sie handeln nur bei Arbeitspaketen, die ihnen die PL zugewiesen hat. Jeder Lauf zeigt Anlass, Begründung und ausgeführte Aktionen; Log-Einträge stehen am Arbeitspaket unter dem Namen des Agenten.</p>
+        {runs.data && runs.data.runs.length === 0 && <div className="empty">Noch keine Läufe. Einen Agenten unter Einstellungen › Mitglieder aufnehmen und ihm ein Arbeitspaket zuweisen.</div>}
+        {(runs.data?.runs ?? []).slice(0, 40).map((r) => (
+          <div key={r.id} className={`ai-proposal ${r.status === 'error' ? 'rejected' : ''}`}>
+            <div className="row between"><div><span className="badge">{r.agentName}</span> <button className="btn sm link" onClick={() => r.taskId && openTask(r.taskId)}>{r.taskNumber ? `${detail.project.key}-${r.taskNumber} ` : ''}{r.taskTitle ?? '–'}</button> <span className="muted small">· Anlass {r.trigger}</span></div><span className="muted small">{fmtDateTime(r.createdAt)} · {r.inputTokens + r.outputTokens} Token {r.status === 'error' && <span className="badge danger">Fehler</span>}</span></div>
+            {r.reasoning && <div className="small mt" style={{ whiteSpace: 'pre-wrap' }}>{r.reasoning}</div>}
+            {r.error && <div className="error small mt">{r.error}</div>}
+            {r.actions.length > 0 && <ul className="small mt" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{r.actions.map((a, i) => <li key={i}>{a.type === 'comment' ? `Log: ${a.text}` : a.type === 'set_status' ? `Status → ${a.column}` : a.type === 'check_item' ? 'Task abgehakt' : a.type === 'mail' ? `Mail an ${(a.to ?? []).join(', ')}: ${a.subject}${a.text?.startsWith('[Entwurf') ? ' (Entwurf zur Freigabe)' : ''}` : a.type === 'blocked' ? `Blockiert gemeldet: ${a.reason}` : a.type === 'escalate' ? `An PL: ${a.text}` : `nichts zu tun${a.reason ? `: ${a.reason}` : ''}`}</li>)}</ul>}
+          </div>
+        ))}
       </div>
       <div className="card">
         <h2>Statusbericht-Entwurf</h2>

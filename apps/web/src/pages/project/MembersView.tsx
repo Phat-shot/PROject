@@ -50,7 +50,7 @@ export function MembersView() {
               {detail.members.map((m) => (
                 <tr key={m.userId}>
                   <td>{m.name}<div className="muted small">{m.email}</div></td>
-                  <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span></td>
+                  <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
                   <td className="small muted">{m.role === 'pl' ? 'alle' : [m.canEditPlan && 'Projektplan ändern', m.canApprove && 'KI-Vorschläge freigeben', m.canFinalize && 'Final setzen / Versand', m.canUseAi && 'KI nutzen'].filter(Boolean).join(', ') || '–'}</td>
                   <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
                 </tr>
@@ -126,23 +126,27 @@ export function MembersView() {
     const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id));
     const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
     const { busy, error, run } = useAsync();
+    const picked = users.find((u) => u.id === f.userId);
+    const isAgent = (member?.kind ?? picked?.kind) === 'agent';
+    const [agentCanMail, setAgentCanMail] = useState(member?.agentCanMail ?? true);
     return (
       <Modal title={member ? `Rolle: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
         <div className="form">
-          {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select></label>}
-          <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
-          {f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
-          {f.role === 'member' && <>
+          {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
+          {isAgent && <div className="notice small">KI-Agent: wird Mitglied mit Stellvertretung, nie PL. Er handelt nur bei Arbeitspaketen, die ihm die PL zuweist, und schreibt Log-Einträge unter seinem Namen.<label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label></div>}
+          {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
+          {!isAgent && f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
+          {!isAgent && f.role === 'member' && <>
             <strong className="small">Zusätzliche Rechte</strong>
             <label className="check"><input type="checkbox" checked={f.canEditPlan} onChange={(e) => setF({ ...f, canEditPlan: e.target.checked })} /> Projektplan, Meilensteine ändern</label>
             <label className="check"><input type="checkbox" checked={f.canApprove} onChange={(e) => setF({ ...f, canApprove: e.target.checked })} /> KI-Vorschläge freigeben</label>
             <label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> Dokument final setzen, Versand auslösen</label>
             <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen</label>
           </>}
-          {f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
+          {!isAgent && f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
-            const body: Record<string, unknown> = { ...f };
+            const body: Record<string, unknown> = isAgent ? { role: 'member', agentCanMail } : { ...f };
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
             if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;

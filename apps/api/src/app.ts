@@ -24,6 +24,7 @@ import { oauthRoutes } from './routes/oauth.js';
 import { aiRoutes } from './routes/ai.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
+import { agentRoutes } from './routes/agents.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
@@ -111,6 +112,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(aiRoutes);
       await api.register(analyticsRoutes);
       await api.register(meetingRoutes);
+      await api.register(agentRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

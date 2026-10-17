@@ -8,6 +8,7 @@ import { runEscalations } from './tasks/escalation.js';
 import { runReports } from './docs/report.js';
 import { runNotificationMails } from './notifyMail.js';
 import { runReminders } from './tasks/reminders.js';
+import { runAgents } from './ai/agent.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -47,6 +48,7 @@ export async function runDailyRules(db: Db, today = new Date().toISOString().sli
  */
 export function startWorker(db: Db, mail: MailService, opts: { intervalMs: number }) {
   let running = false;
+  let lastAgents = 0;
   let lastDaily = '';
   const tick = async () => {
     if (running) return;
@@ -59,6 +61,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
+      if (Date.now() - lastAgents >= 3600_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);

@@ -88,7 +88,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, req.params.id);
     const p = await db.one(`select * from projects where id = $1`, [req.params.id]);
     const members = await db.query(
-      `select m.*, u.name, u.email from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by m.role desc, u.name`,
+      `select m.*, u.name, u.email, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by m.role desc, u.name`,
       [p.id]
     );
     const columns = await db.query(`select * from board_columns where project_id = $1 order by position`, [p.id]);
@@ -107,7 +107,7 @@ export async function projectRoutes(app: FastifyInstance) {
     return {
       project: { ...mapProject(p), myRole: m.role, myMembership: m },
       labels: labels.rows.map(mapLabel),
-      members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email })),
+      members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email, kind: r.kind === 'agent' ? 'agent' : 'person' })),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
       milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
@@ -184,15 +184,18 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // W2: Einladung / Rolle ändern
-  app.put<{ Params: { id: string; userId: string }; Body: { role: ProjectRole; isDeputy?: boolean; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean; transferTasks?: boolean } }>(
+  app.put<{ Params: { id: string; userId: string }; Body: { role: ProjectRole; isDeputy?: boolean; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean; transferTasks?: boolean; agentCanMail?: boolean } }>(
     '/projects/:id/members/:userId',
     async (req) => {
       const user = requireUser(req);
       await requireProject(db, user, req.params.id, 'pl');
       const b = req.body ?? ({} as any);
       if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
-      const target = await db.maybeOne(`select id from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
+      const target = await db.maybeOne(`select id, kind from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
+      // KI-Agent: nur Mitglied mit Stellvertretung, nie PL; Rechte wie ein Mitglied, Mailversand abschaltbar
+      const isAgent = target.kind === 'agent';
+      if (isAgent) { b.role = 'member'; b.canUseAi = true; }
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
       const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
@@ -213,12 +216,12 @@ export async function projectRoutes(app: FastifyInstance) {
         await db.query(`update project_members set is_deputy = false where project_id = $1 and user_id = $2`, [req.params.id, other.user_id]);
       }
       const row = await db.one(
-        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai)
-         values ($1,$2,$3,$4,$5,$6,$7,$8)
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
-           can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai
+           can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail
          returning *`,
-        [req.params.id, req.params.userId, b.role, isDeputy, Boolean(b.canEditPlan), Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi)]
+        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), isAgent ? false : Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
       );
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };

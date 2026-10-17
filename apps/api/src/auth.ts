@@ -30,7 +30,8 @@ export function mapUser(row: any): User {
     globalRole: row.global_role,
     active: row.active,
     settings: row.settings ?? {},
-    totpEnabled: Boolean(row.totp_enabled)
+    totpEnabled: Boolean(row.totp_enabled),
+    kind: row.kind === 'agent' ? 'agent' : 'person'
   };
 }
 

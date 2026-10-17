@@ -30,15 +30,18 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { enabled?: boolean; model?: string; apiKey?: string | null } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { enabled?: boolean; provider?: 'anthropic' | 'local'; baseUrl?: string | null; model?: string; apiKey?: string | null; agentDailyBudget?: number } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
-    if (b.model && !/^[a-z0-9.-]+$/i.test(b.model)) throw badRequest('Ungültiges Modell');
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { enabled: b.enabled !== false, model: b.model || undefined } })]);
+    if (b.model && !/^[\w.:\/-]+$/i.test(b.model)) throw badRequest('Ungültiges Modell');
+    const provider = b.provider === 'local' ? 'local' : 'anthropic';
+    if (provider === 'local' && b.baseUrl && !/^https?:\/\//.test(b.baseUrl)) throw badRequest('Adresse des lokalen LLM als http(s)://…/v1');
+    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, enabled: b.enabled !== false, provider, baseUrl: provider === 'local' ? (b.baseUrl?.trim().replace(/\/$/, '') || cur.baseUrl || null) : null, model: b.model?.trim() || (provider === 'local' ? cur.model || '' : undefined), agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget } })]);
     if (b.apiKey === null) await db.query(`update orgs set ai_api_key = null where id = $1`, [user.orgId]);
     else if (typeof b.apiKey === 'string' && b.apiKey.trim()) await db.query(`update orgs set ai_api_key = $2 where id = $1`, [user.orgId, seal(b.apiKey.trim())]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled !== false, model: b.model, keyChanged: b.apiKey !== undefined } });
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled !== false, provider, model: b.model, baseUrl: b.baseUrl, keyChanged: b.apiKey !== undefined } });
     return aiStatus(db, user.orgId);
   });
 

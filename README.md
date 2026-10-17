@@ -98,7 +98,8 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Anhänge an Seiten und Aufgaben
 
 **KI (letztes Modul, Regel vor KI)**
-- Anthropic-Anbindung je Mandant (Verwaltung › KI: an/aus, Schlüssel nur schreibend, Modell wählbar; alternativ `ANTHROPIC_API_KEY`); jede Anfrage im Audit mit Modell und Token
+- Anbieter je Mandant (Verwaltung › KI): lokales LLM mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio; Adresse, Modell, optional Schlüssel, JSON per json_schema) oder Anthropic über das offizielle SDK (Structured Outputs, Refusal-Fallback); Schlüssel nur schreibend und verschlüsselt, alternativ `ANTHROPIC_API_KEY`; jede Anfrage im Audit mit Modell und Token
+- KI-Agenten als Benutzer: vom Org-Admin angelegt und benannt, kein Login, nie PL oder Org-Admin; die PL nimmt sie als Mitglied mit Stellvertretung auf („darf Mails senden“ abschaltbar, sonst Entwürfe zur Freigabe) und weist ihnen Arbeitspakete zu (nur PL). Der Worker lässt den Agenten bei Zuweisung, Änderungen (Log, Mails, Status), naher Fälligkeit und periodisch laufen; er schreibt Log-Einträge unter seinem Namen, setzt Status, hakt Tasks ab, fragt per Mail nach, meldet Blockaden und eskaliert an die PL. Tagesbudget je Agent, Pause je Arbeitspaket, jeder Lauf unter Projekt › KI mit Begründung, Aktionen und Token
 - Rechte: „KI nutzen“ und „KI-Vorschläge freigeben“ in der Projektmitgliedschaft, „KI“ je Mail-Ansicht; PL darf alles
 - Zusammenfassen direkt (an der Mail gespeichert); Essenz → Arbeitspaket (Log-Eintrag, erkannter Status/Termin, offene Fragen) und Essenz → Seite (Abschnitt im Stil der Seite) nur als Vorschlag; Freigabe unter Projekt › KI mit Bearbeitung vor dem Anwenden, Log-Einträge tragen die Quelle „KI“
 - Frage ans Projekt (RAG-lite): Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe

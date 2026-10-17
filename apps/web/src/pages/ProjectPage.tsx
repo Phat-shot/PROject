@@ -20,7 +20,7 @@ import { AnalyticsView } from './project/AnalyticsView';
 import { MeetingsView } from './project/MeetingsView';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
-export interface MemberRow extends Membership { name: string; email: string }
+export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
 export interface ProjectDetail {
   project: Project & { myMembership: Membership };
   members: MemberRow[];

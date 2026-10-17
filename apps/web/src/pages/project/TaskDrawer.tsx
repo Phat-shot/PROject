@@ -48,7 +48,9 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const patch = async (body: Record<string, unknown>) => {
     await run(async () => { await api.patch(`/tasks/${t.id}`, body); await load(); await reloadTasks(); setSaved(true); setTimeout(() => setSaved(false), 1500); });
   };
-  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
+  const isPlHere = detail.project.myMembership.role === 'pl';
+  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
+  const respAgent = users.find((u) => u.id === t.responsibleUserId && u.kind === 'agent');
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
@@ -91,8 +93,9 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? 'extern' : '')} disabled={!canEdit} onChange={(e) => { if (e.target.value === 'extern') return; void patch({ responsibleUserId: e.target.value || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
             {t.responsibleEmail && <option value="extern">{t.responsibleEmail} (extern)</option>}
-            {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+            {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
           </select></label>
+        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}</span>{isPlHere && <><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span></div>}
         <TextField label="Extern (Mail-Adresse)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
         <label className="field"><span>Priorität</span>

@@ -3,6 +3,13 @@ import type { TaskPriority } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+
+/** Arbeitspakete, Tasks und Teilprojekte bekommen einen KI-Agenten nur von der PL. */
+async function assertAgentAssignment(db: any, m: { role: string }, userId: string | null | undefined) {
+  if (!userId) return;
+  const u = await db.maybeOne(`select kind from users where id = $1`, [userId]);
+  if (u?.kind === 'agent' && m.role !== 'pl') throw forbidden('KI-Agenten weist nur die Projektleitung zu');
+}
 import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
 import { createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
@@ -197,9 +204,10 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string }; Body: TaskBody }>('/projects/:id/tasks', async (req) => {
     const user = requireUser(req);
-    await requireProject(db, user, req.params.id, 'member');
+    const m = await requireProject(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
+    await assertAgentAssignment(db, m, b.responsibleUserId);
     let columnId = b.columnId;
     if (!columnId) {
       const c = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [req.params.id]);
@@ -262,6 +270,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, existing.project_id, 'member');
     if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
+    if ('responsibleUserId' in b) await assertAgentAssignment(db, m, b.responsibleUserId);
     if (b.priority && !PRIORITIES.includes(b.priority)) throw badRequest('Ungültige Priorität');
     if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     if (b.columnId) {

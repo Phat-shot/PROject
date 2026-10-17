@@ -12,7 +12,8 @@ export function mapMembership(row: any): Membership {
     canEditPlan: row.can_edit_plan,
     canApprove: row.can_approve,
     canFinalize: row.can_finalize,
-    canUseAi: row.can_use_ai
+    canUseAi: row.can_use_ai,
+    agentCanMail: row.agent_can_mail !== false
   };
 }
 

@@ -18,6 +18,8 @@ export interface User {
   settings?: UserSettings;
   /** Zweiter Faktor (TOTP) aktiv */
   totpEnabled?: boolean;
+  /** KI-Agent (kein Login, nur Mitglied mit Stellvertretung, Zuweisung nur durch PL) */
+  kind?: 'person' | 'agent';
 }
 
 export interface UserSettings {
@@ -36,6 +38,8 @@ export interface Membership {
   canApprove: boolean;
   canFinalize: boolean;
   canUseAi: boolean;
+  /** nur Agenten: darf Mails direkt senden (sonst Entwurf zur Freigabe) */
+  agentCanMail?: boolean;
 }
 
 export interface Project {
@@ -107,8 +111,8 @@ export interface OrgSettings {
   footerText?: string;
   /** Zeiterfassung mandantenweit aus: blendet Zeiten, Aufwand und Buchungen überall aus */
   timeTracking?: boolean;
-  /** KI-Modul: an/aus und Modell; der Schlüssel liegt getrennt und verlässt den Server nie */
-  ai?: { enabled?: boolean; model?: string };
+  /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie */
+  ai?: { enabled?: boolean; provider?: 'anthropic' | 'local'; baseUrl?: string | null; model?: string; agentDailyBudget?: number };
 }
 
 export type AiProposalKind = 'task_update' | 'page_append';
@@ -248,6 +252,8 @@ export interface Task {
   archivedAt: string | null;
   /** Im Papierkorb seit; zählt nirgends mehr mit, bis es wiederhergestellt wird */
   deletedAt: string | null;
+  /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
+  agentPaused?: boolean;
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;
@@ -603,3 +609,6 @@ export interface Meeting {
 }
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
+
+export interface AgentUser { id: string; name: string; email: string; active: boolean; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
+export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string }[]; inputTokens: number; outputTokens: number; error: string | null; createdAt: string }
