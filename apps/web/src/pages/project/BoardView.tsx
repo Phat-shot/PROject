@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { Task } from '@projekttool/shared';
-import { api, fmtDate, today } from '../../lib/api';
+import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
@@ -139,6 +139,7 @@ export function BoardView() {
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
+        <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '']))}>CSV</button>
         {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
       )}

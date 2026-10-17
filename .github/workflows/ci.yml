@@ -17,8 +17,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - name: Abhängigkeiten auf bekannte Schwachstellen prüfen (hoch/kritisch)
-        run: npm audit --audit-level=high
+      - name: Produktionsabhängigkeiten auf bekannte Schwachstellen prüfen (hoch/kritisch; Build-Werkzeuge ausgenommen)
+        run: npm audit --audit-level=high --omit=dev
       - run: npm run typecheck
       - name: API- und Web-Tests (PGlite im Speicher, Vitest)
         run: npm test

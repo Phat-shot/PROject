@@ -63,7 +63,7 @@ export function Layout({ children }: { children: ReactNode }) {
                   {sel && (
                     <div className="sub2">
                       <NavLink to={base} end data-tour="p-uebersicht">Übersicht</NavLink>
-                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'zeiten'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
+                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'zeiten', 'auswertung'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
                       <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
                       <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
                       <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>

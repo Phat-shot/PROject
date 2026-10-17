@@ -104,9 +104,14 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Frage ans Projekt (RAG-lite): Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe
 - Statusbericht-Entwurf aus Kennzahlen des Regelwerks, RAID, Ampel und Log als Entwurfsseite in „Berichte“
 
+**Auswertungen (W9)**
+- Je Projekt unter Arbeitspakete › Auswertung: Durchsatz je Woche (angelegt/erledigt), Durchlaufzeit (Median, Durchschnitt, längste), Verzug nach Alter, Eskalationen je Zeitraum und aktuell, je Teilprojekt; Zeitraum wählbar, alles als CSV
+- Board und Plan als CSV (Excel), Zeiten über alle Projekte im Portfolio je Projekt und Person
+
 **Identität und Sicherheit**
 - Single Sign-on per OIDC (Entra ID, Keycloak, Authentik …) mit Zuordnung per E-Mail, optionaler Auto-Anlage (`OIDC_*` in `.env.example`); Passwort-Login, Passwort-Reset und 2FA (TOTP) bleiben
-- Rate-Limit für Login und Reset, Sicherheits-Header, Sitzungen per httpOnly-Cookie
+- Rate-Limit für Login und Reset, Sicherheits-Header, Sitzungen per httpOnly-Cookie, CSRF-Prüfung über Origin/Referer
+- Gespeicherte Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel) verschlüsselt (AES-256-GCM, Schlüssel `SECRET_KEY` oder `DATA_DIR/secret.key`); Uploads ohne ausführbare Dateien, aktive Inhalte nur als Download; `npm audit` für Produktionsabhängigkeiten in der CI
 
 **Querschnitt**
 - Zentrale Rechteprüfung in der API; Org-Admins sehen Projektinhalte nur als Mitglied; keine externen Gäste

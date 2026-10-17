@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { api, fmtDate, today } from '../../lib/api';
+import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { MilestoneForm, MilestonesTable, SubprojectForm, SubprojectsTable } from './planForms';
@@ -133,6 +133,7 @@ export function PlanView() {
         <span className="muted small">Balken ziehen verschiebt Start und Deadline, rechte Kante ändert die Deadline, Meilensteine lassen sich ziehen. Linien = Vorgänger → Nachfolger, rot bei Konflikt. Nichts verschiebt sich automatisch.{save.busy && ' · speichert …'}</span>
         {save.error && <span className="error small">{save.error}</span>}
         <span className="row right" style={{ gap: 2 }}>{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
+        <button className="btn" title="Plan als CSV (Excel)" onClick={() => downloadCsv(`plan_${detail.project.key}.csv`, ['Art', 'Bezeichnung', 'Start', 'Ende', 'Zuständig', 'Erledigt', 'Konflikt'], rows.map((r) => [r.kind === 'sub' ? 'Teilprojekt' : r.kind === 'ms' ? 'Meilenstein' : 'Arbeitspaket', r.label, r.start, r.end, r.resp ?? '', r.done ? 'ja' : '', r.conflict ? 'ja' : '']))}>CSV</button>
         {canPlan && <><button className="btn" onClick={() => setNewSp(true)}>Teilprojekt</button><button className="btn" onClick={() => setNewMs(true)}>Meilenstein</button></>}
       </div>
       <div className={`card gantt ${drag ? 'dragging' : ''}`} style={{ padding: 0 }} ref={scrollRef}>

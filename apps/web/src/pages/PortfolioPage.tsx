@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { ProjectHealth } from '@projekttool/shared';
-import { api, fmtDate, fmtDateTime } from '../lib/api';
+import { api, downloadCsv, fmtDate, fmtDateTime } from '../lib/api';
+import { useAuth } from '../lib/auth';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { Modal, useAsync } from '../components/ui';
@@ -75,8 +76,38 @@ export function PortfolioPage() {
           )}
         </div>
       </div>
+      <TimeAcrossProjects />
       {edit && <HealthDialog row={edit} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); }} />}
     </>
+  );
+}
+
+interface PortfolioTime { from: string; to: string; projects: { projectId: string; key: string; name: string; minutes: number; people: { userId: string; name: string; minutes: number }[] }[]; people: { userId: string; name: string; minutes: number }[]; total: number }
+const hours = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h`;
+
+/** Zeiten über alle Projekte im Zeitraum: je Projekt und Person (PL sieht alle Personen seiner Projekte, sonst nur eigene Buchungen). */
+function TimeAcrossProjects() {
+  const { timeTracking } = useAuth();
+  const [range, setRange] = useState({ from: '', to: '' });
+  const q = new URLSearchParams(Object.entries(range).filter(([, v]) => v)).toString();
+  const d = useData<PortfolioTime>(timeTracking ? `/portfolio/time${q ? `?${q}` : ''}` : null, [q]);
+  if (!timeTracking || !d.data) return null;
+  const t = d.data;
+  return (
+    <div className="content" style={{ paddingTop: 0 }}>
+      <div className="card">
+        <h2>Zeiten über Projekte <span className="muted small" style={{ fontWeight: 400 }}>{fmtDate(t.from)} – {fmtDate(t.to)} · {hours(t.total)}</span></h2>
+        <div className="row small">
+          <span className="muted">Zeitraum</span><input type="date" style={{ width: 'auto' }} value={range.from || t.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input type="date" style={{ width: 'auto' }} value={range.to || t.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          <button className="btn sm" onClick={() => downloadCsv(`zeiten_projekte_${t.from}_${t.to}.csv`, ['Projekt', 'Person', 'Minuten'], t.projects.flatMap((p) => p.people.map((x) => [p.key, x.name, x.minutes])))}>CSV</button>
+        </div>
+        {t.projects.length === 0 && <div className="muted small mt">Keine Buchungen im Zeitraum.</div>}
+        {t.projects.length > 0 && <table className="table mt"><thead><tr><th>Projekt</th><th>Gebucht</th><th>Je Person</th></tr></thead><tbody>
+          {t.projects.map((p) => <tr key={p.projectId}><td><Link to={`/projekte/${p.projectId}/zeiten`}><span className="badge">{p.key}</span> {p.name}</Link></td><td className="nowrap">{hours(p.minutes)}</td><td className="small">{p.people.map((x) => <span key={x.userId} className="badge" style={{ marginRight: 4 }}>{x.name} {hours(x.minutes)}</span>)}</td></tr>)}
+        </tbody></table>}
+        {t.people.length > 1 && <p className="small mt"><span className="muted">Je Person:</span> {t.people.map((x) => <span key={x.userId} className="badge" style={{ marginRight: 4 }}>{x.name} {hours(x.minutes)}</span>)}</p>}
+      </div>
+    </div>
   );
 }
 

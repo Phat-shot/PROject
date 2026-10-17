@@ -9,6 +9,20 @@
 #
 # Update: IMAGE_TAG in deploy/.env ändern, dann `pull` und `up -d`. Migrationen laufen beim Start.
 services:
+  # Optional: automatische Updates, sobald ein neues Image mit dem gewählten Tag in der Registry liegt
+  #   docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile autoupdate up -d
+  # Prüft alle 5 Minuten; aktualisiert nur Container mit dem Label com.centurylinklabs.watchtower.enable=true (nur die App, nicht die Datenbank).
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: projekttool-watchtower
+    restart: unless-stopped
+    profiles: ["autoupdate"]
+    command: --interval 300 --cleanup --label-enable
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - internal
+
   db:
     image: postgres:16-alpine
     container_name: projekttool-db
@@ -51,6 +65,7 @@ services:
       - proxy
       - internal
     labels:
+      - "com.centurylinklabs.watchtower.enable=true"
       - "traefik.enable=true"
       - "traefik.http.routers.projekttool.entrypoints=http"
       - "traefik.http.routers.projekttool.rule=Host(`${DOMAIN}`)"
