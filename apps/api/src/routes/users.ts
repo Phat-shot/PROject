@@ -43,6 +43,7 @@ export async function userRoutes(app: FastifyInstance) {
     const settings = { ...(row.settings ?? {}), ...(b.settings ?? {}) };
     if (settings.theme && !['light', 'dark', 'system'].includes(String(settings.theme))) throw badRequest('Theme: light, dark oder system');
     if (settings.language && !['de', 'en'].includes(String(settings.language))) throw badRequest('Sprache: de oder en');
+    if (settings.mailNotifications && !['off', 'immediate', 'daily'].includes(String(settings.mailNotifications))) throw badRequest('Mail-Benachrichtigung: off, immediate oder daily');
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     return { user: mapUser(r) };

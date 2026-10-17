@@ -6,6 +6,7 @@ import { nextDueDate, shouldCreateOnDue, type Recurrence } from './tasks/recurre
 import { audit } from './audit.js';
 import { runEscalations } from './tasks/escalation.js';
 import { runReports } from './docs/report.js';
+import { runNotificationMails } from './notifyMail.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -40,8 +41,8 @@ export async function runDailyRules(db: Db, today = new Date().toISOString().sli
 }
 
 /**
- * Worker: regelbasierte Abläufe ohne KI. Alpha: Mail-Synchronisation aller Konten,
- * Aufräumen abgelaufener Sitzungen. Wiederholungen, Erinnerungen und Reports folgen.
+ * Worker: regelbasierte Abläufe ohne KI. Je Lauf: Mail-Synchronisation aller Konten, abgelaufene Sitzungen,
+ * Benachrichtigungen per Mail; einmal täglich Erinnerungen, Wiederholungen, Eskalationen und Reports.
  */
 export function startWorker(db: Db, mail: MailService, opts: { intervalMs: number }) {
   let running = false;
@@ -56,6 +57,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
         if (r.error) console.warn(`[worker] Sync ${a.id} fehlgeschlagen: ${r.error}`);
       }
       await db.query(`delete from sessions where expires_at < now()`);
+      await runNotificationMails(db, mail);
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await runDailyRules(db, today);

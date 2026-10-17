@@ -12,6 +12,7 @@ export function UserSettingsPage() {
   const [name, setName] = useState(user?.name ?? '');
   const [theme, setTheme] = useState<NonNullable<UserSettings['theme']>>(s.theme ?? 'system');
   const [language, setLanguage] = useState<NonNullable<UserSettings['language']>>(s.language ?? 'de');
+  const [mailNotifications, setMailNotifications] = useState<NonNullable<UserSettings['mailNotifications']>>(s.mailNotifications ?? 'daily');
   const [pw, setPw] = useState({ current: '', next: '', repeat: '' });
   const [msg, setMsg] = useState<string | null>(null);
   const { busy, error, run } = useAsync();
@@ -39,9 +40,14 @@ export function UserSettingsPage() {
                 <select value={language} onChange={(e) => setLanguage(e.target.value as NonNullable<UserSettings['language']>)}>
                   <option value="de">Deutsch</option><option value="en">English (Oberfläche folgt)</option>
                 </select></label>
+              <label className="field"><span>Meldungen per Mail</span>
+                <select value={mailNotifications} onChange={(e) => setMailNotifications(e.target.value as NonNullable<UserSettings['mailNotifications']>)}>
+                  <option value="daily">täglich als Digest (ab 7 Uhr)</option><option value="immediate">sofort, gesammelt pro Minute</option><option value="off">aus, nur in der App</option>
+                </select>
+                <span className="muted" style={{ fontWeight: 400 }}>Versand über das Org-Postfach; was in der App schon gelesen ist, wird nicht mehr verschickt.</span></label>
               {error && <div className="error">{error}</div>}
               {msg && <div className="muted small">{msg}</div>}
-              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language } }, 'Gespeichert.')}>Speichern</button></div>
+              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language, mailNotifications } }, 'Gespeichert.')}>Speichern</button></div>
             </div>
           </div>
           <div className="card">

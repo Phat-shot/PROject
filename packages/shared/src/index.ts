@@ -21,6 +21,8 @@ export interface User {
 export interface UserSettings {
   language?: 'de' | 'en';
   theme?: 'light' | 'dark' | 'system';
+  /** Meldungen per Mail über das Org-Postfach: aus, sofort (gesammelt je Worker-Lauf) oder täglich als Digest (Standard) */
+  mailNotifications?: 'off' | 'immediate' | 'daily';
 }
 
 export interface Membership {
