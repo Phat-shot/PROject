@@ -256,6 +256,9 @@ export interface Task {
   deletedAt: string | null;
   /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
   agentPaused?: boolean;
+  /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
+  agentWait?: { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean } | null;
+  agentNextCheckAt?: string | null;
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;

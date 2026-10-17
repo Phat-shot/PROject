@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { runAgents } from '../src/ai/agent.js';
+import { flushAgentRuns } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM (OpenAI-kompatibel wie vLLM): antwortet mit Aktionen je nach Prompt. */
 const calls: { url: string; body: any }[] = [];
@@ -87,6 +88,8 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   await t.db.query(`update tasks set column_id = (select id from board_columns where project_id = $2 order by position limit 1) where id = $1`, [taskId, pid]);
   const item = (await t.api(pl).post(`/tasks/${taskId}/checklist`, { title: 'Angebot prüfen' })).json();
   const itemId = (item.item ?? item.checklist?.[0] ?? item).id ?? (await t.db.one(`select id from checklist_items where task_id = $1 order by position desc limit 1`, [taskId])).id;
+  await flushAgentRuns();
+  const runsBefore = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
   nextActions = [
     { type: 'comment', text: 'Stand geprüft: Angebot liegt vor, Lizenzfrage offen.' },
     { type: 'set_status', column: 'In Arbeit' },
@@ -115,7 +118,7 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   const plNotif = await t.db.maybeOne(`select 1 from notifications where user_id = $1 and title like 'Nachfasser braucht eine Entscheidung%'`, [t.ids.users.pl]);
   assert.ok(plNotif, 'Eskalation erreicht die PL');
   const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
-  assert.equal(runs.length, 1);
+  assert.equal(runs.length, runsBefore + 1);
   assert.equal(runs[0].trigger, 'manual');
   assert.equal(runs[0].inputTokens, 500);
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'agent.run' and user_id = $1`, [a.id]));
@@ -148,4 +151,76 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   await t.api(admin).patch(`/agents/${a.id}`, { active: false });
   const after = await t.db.one(`select responsible_user_id from tasks where id = $1`, [taskId]);
   assert.equal(after.responsible_user_id, null);
+});
+
+test('Sofortlauf bei Zuweisung und Kommentar; Wartezustand mit Wiedervorlage, Nachfassen und Eskalation nach Frist', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
+  const agent = (await t.api(admin).post('/agents', { name: 'Prüfer' })).json().agent;
+  await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true });
+  // Agent wartet auf Rückmeldung: Nachfassen nach 2 h, Eskalation nach 5 h, Prüfung nach 1 h
+  nextActions = [{ type: 'mail', to: ['lieferant@example.com'], subject: 'Stand?', text: 'Bitte Rückmeldung. Prüfer (KI-Agent, Projekt WEB)' }, { type: 'wait', kind: 'reply', reason: 'Antwort des Lieferanten', checkAfterHours: 1, remindAfterHours: 2, escalateAfterHours: 5 }];
+  const n0 = calls.length;
+  const created = await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Lieferung klären', responsibleUserId: agent.id });
+  assert.equal(created.statusCode, 200, created.body);
+  const taskId = created.json().task.id;
+  await flushAgentRuns();
+  const runs1 = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
+  assert.equal(runs1.length, 1, 'sofortiger Lauf bei Zuweisung');
+  assert.equal(runs1[0].trigger, 'assigned');
+  assert.match(calls[calls.length - 1].body.messages[1].content, /gerade zugewiesen/);
+  assert.ok(calls.length > n0);
+  const t1 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(t1.agentWait.kind, 'reply');
+  assert.ok(t1.agentWait.remindAt && t1.agentWait.escalateAt && t1.agentNextCheckAt);
+  const since = new Date(t1.agentWait.since).getTime();
+  assert.ok(Math.abs(new Date(t1.agentWait.remindAt).getTime() - (since + 2 * 3600_000)) < 5000);
+  assert.ok(Math.abs(new Date(t1.agentWait.escalateAt).getTime() - (since + 5 * 3600_000)) < 5000);
+  assert.ok(Math.abs(new Date(t1.agentNextCheckAt).getTime() - (since + 1 * 3600_000)) < 5000, 'nächste Prüfung = frühester Termin');
+
+  // Nach 1 h: Wiedervorlage (check); Agent wartet weiter, Nachfass-/Eskalationsfristen bleiben
+  nextActions = [{ type: 'wait', kind: 'reply', reason: 'Antwort des Lieferanten', checkAfterHours: 1, remindAfterHours: 2, escalateAfterHours: 5 }];
+  const r1 = await runAgents(t.db, t.mail, fakeFetch, new Date(since + 61 * 60_000));
+  assert.equal(r1.filter((x) => x.taskId === taskId).length, 1);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Wiedervorlage/);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Du wartest seit/);
+  const t2 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(new Date(t2.agentWait.since).getTime(), since, 'Wartebeginn bleibt');
+  assert.equal(t2.agentWait.remindAt, t1.agentWait.remindAt);
+
+  // Nach 2 h: Nachfassen fällig
+  nextActions = [{ type: 'mail', to: ['lieferant@example.com'], subject: 'Erinnerung: Stand?', text: 'Erinnerung. Prüfer (KI-Agent, Projekt WEB)' }, { type: 'wait', kind: 'reply', reason: 'Antwort des Lieferanten', checkAfterHours: 2, remindAfterHours: 2, escalateAfterHours: 5 }];
+  const before = t.mail.dev.sent.length;
+  const r2 = await runAgents(t.db, t.mail, fakeFetch, new Date(since + 2 * 3600_000 + 60_000));
+  assert.equal(r2.filter((x) => x.taskId === taskId).length, 1);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Nachfassen fällig/);
+  assert.equal(t.mail.dev.sent.length, before + 1);
+  const t3 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(t3.agentWait.reminded, true);
+  assert.equal(t3.agentWait.escalateAt, t1.agentWait.escalateAt, 'Eskalationsfrist bleibt ab Wartebeginn');
+  const r2b = await runAgents(t.db, t.mail, fakeFetch, new Date(since + 2 * 3600_000 + 120_000));
+  assert.equal(r2b.filter((x) => x.taskId === taskId).length, 0, 'Nachfassen nur einmal');
+
+  // Nach 5 h: Eskalation fällig
+  nextActions = [{ type: 'escalate', text: 'Lieferant antwortet seit 5 h nicht.' }, { type: 'wait', kind: 'reply', reason: 'Entscheidung der PL', checkAfterHours: 24 }];
+  const r3 = await runAgents(t.db, t.mail, fakeFetch, new Date(since + 5 * 3600_000 + 60_000));
+  assert.equal(r3.filter((x) => x.taskId === taskId).length, 1);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Eskalation fällig/);
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and title like 'Prüfer braucht eine Entscheidung%'`, [t.ids.users.pl]));
+
+  // Rückmeldung als Kommentar: Sofortlauf, Agent beendet das Warten
+  nextActions = [{ type: 'comment', text: 'Lieferung bestätigt für KW 47.' }, { type: 'set_status', column: 'In Arbeit' }];
+  await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Lieferant hat angerufen: KW 47.' });
+  await flushAgentRuns();
+  const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
+  assert.equal(runs[0].trigger, 'comment');
+  const t4 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  assert.equal(t4.agentWait, null, 'kein Warten mehr');
+  assert.equal(t4.agentNextCheckAt, null);
+  // Eigener Kommentar des Agenten löst keinen Lauf aus
+  const countBefore = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
+  await flushAgentRuns();
+  assert.equal((await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length, countBefore);
 });

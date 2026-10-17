@@ -25,6 +25,8 @@ import { aiRoutes } from './routes/ai.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { agentRoutes } from './routes/agents.js';
+import { registerAgentRunner } from './ai/agentEvents.js';
+import { runForTask } from './ai/agent.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
@@ -54,6 +56,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.decorate('db', opts.db);
   app.decorate('mail', opts.mail);
   app.decorate('fetchFn', opts.fetchFn ?? fetch);
+  registerAgentRunner((taskId, trigger) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger));
   app.decorateRequest('user', null);
 
   registerRateLimit(app);

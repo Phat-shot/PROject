@@ -9,6 +9,7 @@ import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
 import { seal } from '../secrets.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { notifyMany } from '../notify.js';
@@ -492,6 +493,7 @@ export async function mailRoutes(app: FastifyInstance) {
     );
     const copy = Boolean(b.copy) && !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4)`, [mail.id, t.id, copy, user.id]);
+    queueAgentRun(t.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy } });
     return { task: await loadTask(db, t.id) };
   });
@@ -509,6 +511,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const body = (req.body?.note?.trim() ? req.body.note.trim() + '\n\n' : '') + mailToLogEntry(mail);
     const c = await db.one(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4) returning *`, [task.id, user.id, body, mail.id]);
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, task.id, user.id]);
+    queueAgentRun(task.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'mail.to_task_log', objectType: 'task', objectId: task.id, details: { mailId: mail.id, subject: mail.subject } });
     return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at } };
   });

@@ -3,6 +3,7 @@ import type { TaskPriority } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 
 /** Arbeitspakete, Tasks und Teilprojekte bekommen einen KI-Agenten nur von der PL. */
 async function assertAgentAssignment(db: any, m: { role: string }, userId: string | null | undefined) {
@@ -230,6 +231,7 @@ export async function taskRoutes(app: FastifyInstance) {
     );
     if (b.responsibleEmail) await rememberContact(req.params.id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(r.id, req.params.id, b.predecessorIds);
+    if (b.responsibleUserId) queueAgentRun(r.id, 'assigned');
     if (b.labelIds) await setLabels(r.id, req.params.id, b.labelIds);
     if (b.recurrence) await db.query(`update tasks set recurrence = $2 where id = $1`, [r.id, JSON.stringify(b.recurrence)]);
     if (b.estimateMinutes) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [r.id, Math.round(b.estimateMinutes)]);
@@ -344,6 +346,7 @@ export async function taskRoutes(app: FastifyInstance) {
       }
     }
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.update', objectType: 'task', objectId: req.params.id, details: changed });
+    if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id) queueAgentRun(req.params.id, 'assigned');
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -513,6 +516,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
     const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions) values ($1,$2,$3,$4) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions)]);
     await touchTask(db, req.params.id);
+    if (user.kind !== 'agent') queueAgentRun(req.params.id, 'comment');
     const task = (await loadTask(db, req.params.id))!;
     const link = `/projekte/${t.project_id}/board?task=${task.id}`;
     // Erwähnte zuerst (eigener Typ), danach Zuständige und bisherige Kommentatoren

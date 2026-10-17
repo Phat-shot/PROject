@@ -6,6 +6,7 @@ import { ImapMailProvider } from './imapProvider.js';
 import { GraphMailProvider } from './graphProvider.js';
 import { oauthProviders, refreshTokens } from '../oauth.js';
 import { seal, unseal } from '../secrets.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
 
@@ -127,6 +128,7 @@ export class MailService {
     if (taskId) {
       await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, checklist_item_id) values ($1,$2,false,$3) on conflict do nothing`, [mailId, taskId, itemId]);
       await audit(this.db, { orgId: account.org_id, projectId: account.project_id, action: 'mail.auto_linked', objectType: 'mail', objectId: mailId, details: { taskId, via: code ? 'plus-address' : 'in-reply-to' } });
+      queueAgentRun(taskId, 'reply');
     }
   }
 
