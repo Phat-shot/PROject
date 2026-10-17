@@ -23,7 +23,7 @@ export class ImapMailProvider implements MailProvider {
   private client(account: AccountRow) {
     return new ImapFlow({
       host: account.imap_host!, port: account.imap_port ?? 993, secure: account.imap_secure ?? true,
-      auth: { user: account.imap_user ?? account.address, pass: account.imap_password ?? '' }, logger: false
+      auth: imapAuth(account), logger: false
     });
   }
 
@@ -64,7 +64,7 @@ export class ImapMailProvider implements MailProvider {
       host: account.imap_host!,
       port: account.imap_port ?? 993,
       secure: account.imap_secure ?? true,
-      auth: { user: account.imap_user ?? account.address, pass: account.imap_password ?? '' },
+      auth: imapAuth(account),
       logger: false
     });
     const cursor: Record<string, unknown> = { ...(account.sync_cursor ?? {}) };
@@ -124,7 +124,7 @@ export class ImapMailProvider implements MailProvider {
     const result = { imap: { ok: false } as { ok: boolean; error?: string; folders?: string[] }, smtp: { ok: false } as { ok: boolean; error?: string } };
     const client = new ImapFlow({
       host: account.imap_host!, port: account.imap_port ?? 993, secure: account.imap_secure ?? true,
-      auth: { user: account.imap_user ?? account.address, pass: account.imap_password ?? '' }, logger: false, connectionTimeout: 15000, greetingTimeout: 15000
+      auth: imapAuth(account), logger: false, connectionTimeout: 15000, greetingTimeout: 15000
     });
     try {
       await client.connect();
@@ -176,9 +176,17 @@ function smtpOptions(account: AccountRow) {
   const secure = port === 465 ? true : port === 587 || port === 25 ? false : (account.smtp_secure ?? false);
   return {
     host: account.smtp_host!, port, secure, requireTLS: !secure && port === 587,
-    auth: account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined,
+    auth: account.oauth_refresh_token
+      ? { type: 'OAuth2' as const, user: account.smtp_user ?? account.imap_user ?? account.address, accessToken: account.oauth_access_token ?? '' }
+      : account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined,
     connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000
   };
+}
+
+/** Passwort oder, bei OAuth2-Konten, XOAUTH2 mit dem (vom MailService aufgefrischten) Zugriffstoken. */
+function imapAuth(account: AccountRow) {
+  const user = account.imap_user ?? account.address;
+  return account.oauth_refresh_token ? { user, accessToken: account.oauth_access_token ?? '' } : { user, pass: account.imap_password ?? '' };
 }
 
 export function friendlyError(e: any): string {

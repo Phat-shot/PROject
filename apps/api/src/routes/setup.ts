@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createSession, hashPassword, mapUser, setSessionCookie } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden } from '../errors.js';
+import { oidcConfig } from '../oauth.js';
 
 /**
  * Ersteinrichtung: Solange kein Benutzer existiert, legt diese Route Mandant und Org-Admin an.
@@ -11,7 +12,11 @@ export async function setupRoutes(app: FastifyInstance) {
   const needsSetup = async () => !(await app.db.maybeOne(`select 1 from users limit 1`));
 
   // demo: Demodaten vorhanden (Login-Seite zeigt dann die Demo-Zugänge)
-  app.get('/setup/status', async () => ({ needsSetup: await needsSetup(), demo: Boolean(await app.db.maybeOne(`select 1 from users where email = 'pl@demo.local' limit 1`)) }));
+  // oidc: Single Sign-on konfiguriert (Login-Seite zeigt den Knopf)
+  app.get('/setup/status', async () => {
+    const oidc = oidcConfig();
+    return { needsSetup: await needsSetup(), demo: Boolean(await app.db.maybeOne(`select 1 from users where email = 'pl@demo.local' limit 1`)), oidc: oidc ? { label: oidc.label } : null };
+  });
 
   app.post<{ Body: { orgName: string; name: string; email: string; password: string } }>('/setup', async (req, reply) => {
     if (!(await needsSetup())) throw forbidden('Ersteinrichtung ist abgeschlossen');

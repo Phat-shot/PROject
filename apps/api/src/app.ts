@@ -20,6 +20,7 @@ import { setupRoutes } from './routes/setup.js';
 import { icsRoutes } from './routes/ics.js';
 import { raidRoutes } from './routes/raid.js';
 import { portfolioRoutes } from './routes/portfolio.js';
+import { oauthRoutes } from './routes/oauth.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 
@@ -28,12 +29,15 @@ export interface AppOptions {
   mail: MailService;
   staticDir?: string;
   logger?: boolean;
+  /** HTTP-Client für OAuth2/OIDC (in Tests ersetzbar) */
+  fetchFn?: typeof fetch;
 }
 
 declare module 'fastify' {
   interface FastifyInstance {
     db: Db;
     mail: MailService;
+    fetchFn: typeof fetch;
   }
 }
 
@@ -41,6 +45,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 10 * 1024 * 1024 });
   app.decorate('db', opts.db);
   app.decorate('mail', opts.mail);
+  app.decorate('fetchFn', opts.fetchFn ?? fetch);
   app.decorateRequest('user', null);
 
   registerRateLimit(app);
@@ -82,6 +87,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(icsRoutes);
       await api.register(raidRoutes);
       await api.register(portfolioRoutes);
+      await api.register(oauthRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

@@ -3,6 +3,8 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { DevMailProvider } from './devProvider.js';
 import { ImapMailProvider } from './imapProvider.js';
+import { GraphMailProvider } from './graphProvider.js';
+import { oauthProviders, refreshTokens } from '../oauth.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
 
@@ -20,11 +22,34 @@ export interface SyncResult {
 export class MailService {
   readonly dev = new DevMailProvider();
   private imap = new ImapMailProvider();
+  private graph: GraphMailProvider;
 
-  constructor(private db: Db) {}
+  constructor(private db: Db, private fetchFn: typeof fetch = fetch) {
+    this.graph = new GraphMailProvider((a) => this.accessToken(a), fetchFn);
+  }
 
   provider(account: AccountRow): MailProvider {
-    return account.provider === 'dev' ? this.dev : this.imap;
+    if (account.provider === 'dev') return this.dev;
+    if (account.provider === 'graph') return this.graph;
+    // IMAP mit OAuth2: vor jedem Zugriff das Zugriffstoken auffrischen (XOAUTH2)
+    return account.oauth_refresh_token ? withFreshToken(this.imap, (a) => this.withToken(a)) : this.imap;
+  }
+
+  /** Gültiges Zugriffstoken; wird bei Ablauf (< 2 Minuten Rest) über den Refresh-Token erneuert und gespeichert. */
+  async accessToken(account: AccountRow): Promise<string> {
+    const fresh = await this.withToken(account);
+    return fresh.oauth_access_token ?? '';
+  }
+
+  async withToken(account: AccountRow): Promise<AccountRow> {
+    if (!account.oauth_refresh_token) return account;
+    const exp = account.oauth_expires_at ? new Date(account.oauth_expires_at).getTime() : 0;
+    if (account.oauth_access_token && exp - Date.now() > 120_000) return account;
+    const cfg = oauthProviders().find((p) => p.key === account.oauth_provider);
+    if (!cfg) throw new Error(`OAuth2-Anbieter ${account.oauth_provider} ist nicht konfiguriert`);
+    const t = await refreshTokens(cfg, account.oauth_refresh_token, this.fetchFn);
+    if (account.id) await this.db.query(`update mail_accounts set oauth_access_token = $2, oauth_refresh_token = $3, oauth_expires_at = $4 where id = $1`, [account.id, t.accessToken, t.refreshToken, t.expiresAt]);
+    return { ...account, oauth_access_token: t.accessToken, oauth_refresh_token: t.refreshToken, oauth_expires_at: t.expiresAt };
   }
 
   providerFor(account: AccountRow): MailProvider { return this.provider(account); }
@@ -146,4 +171,15 @@ export class MailService {
     await audit(this.db, { orgId: account.org_id, projectId: input.projectId ?? account.project_id, userId: input.userId, action: 'mail.send', objectType: 'mail', objectId: r.id, details: { to: input.to, subject: input.subject, account: account.address } });
     return { messageId, mailId: r.id };
   }
+}
+
+/** Hüllt einen Adapter so ein, dass jede Methode mit aufgefrischtem Token läuft. */
+function withFreshToken(inner: MailProvider, fresh: (a: AccountRow) => Promise<AccountRow>): MailProvider {
+  return {
+    fetchNew: async (a, ctx) => inner.fetchNew(await fresh(a), ctx),
+    send: async (a, m) => inner.send(await fresh(a), m),
+    listFolders: async (a) => inner.listFolders(await fresh(a)),
+    createFolder: async (a, p) => inner.createFolder(await fresh(a), p),
+    move: async (a, m, t) => inner.move(await fresh(a), m, t)
+  };
 }

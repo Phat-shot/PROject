@@ -15,7 +15,7 @@ function mapAccount(r: any): MailAccount {
   return {
     id: r.id, type: r.type, name: r.name, address: r.address, provider: r.provider, ownerUserId: r.owner_user_id, projectId: r.project_id,
     imapHost: r.imap_host, imapPort: r.imap_port, imapUser: r.imap_user, imapSecure: r.imap_secure, smtpHost: r.smtp_host, smtpPort: r.smtp_port, smtpUser: r.smtp_user, smtpSecure: r.smtp_secure,
-    hasImapPassword: Boolean(r.imap_password), hasSmtpPassword: Boolean(r.smtp_password), viewCount: r.view_count ?? 0,
+    hasImapPassword: Boolean(r.imap_password), hasSmtpPassword: Boolean(r.smtp_password), oauthProvider: r.oauth_provider ?? null, viewCount: r.view_count ?? 0,
     lastSyncAt: r.last_sync_at, syncError: r.sync_error
   };
 }
@@ -161,6 +161,15 @@ export async function mailRoutes(app: FastifyInstance) {
       cfg = { id: '', org_id: user.orgId, type: 'personal', owner_user_id: user.id, project_id: null, name: b.name ?? '', address: b.address ?? '', provider: 'imap', imap_host: b.imapHost, imap_port: b.imapPort ?? 993, imap_user: b.imapUser ?? b.address, imap_password: b.imapPassword ?? '', imap_secure: b.imapSecure ?? true, smtp_host: b.smtpHost, smtp_port: b.smtpPort ?? 587, smtp_user: b.smtpUser ?? null, smtp_password: b.smtpPassword ?? '', smtp_secure: b.smtpSecure ?? false, sync_cursor: {} };
     }
     if (cfg.provider === 'dev') return { imap: { ok: true, folders: ['INBOX', 'Sent'] }, smtp: { ok: true } };
+    if (cfg.provider === 'graph' || cfg.oauth_refresh_token) {
+      // OAuth2-Konto: Token auffrischen und Ordner lesen; der Versand nutzt dasselbe Token
+      try {
+        const folders = await app.mail.provider(cfg).listFolders(cfg);
+        return { imap: { ok: true, folders: folders.map((f) => f.name).slice(0, 30) }, smtp: { ok: true } };
+      } catch (e: any) {
+        return { imap: { ok: false, error: String(e?.message ?? e).slice(0, 300) }, smtp: { ok: false, error: 'OAuth2-Zugriff fehlgeschlagen, Konto neu verbinden' } };
+      }
+    }
     const { ImapMailProvider } = await import('../mail/imapProvider.js');
     const result = await new ImapMailProvider().test(cfg);
     return result;

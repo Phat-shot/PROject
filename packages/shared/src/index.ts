@@ -5,7 +5,7 @@ export type ProjectRole = 'pl' | 'member' | 'reader';
 export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
 export type DocStatus = 'draft' | 'review' | 'final';
 export type MailAccountType = 'personal' | 'project' | 'org';
-export type MailProviderKind = 'imap' | 'dev';
+export type MailProviderKind = 'imap' | 'dev' | 'graph';
 export type DraftStatus = 'draft' | 'pending_approval' | 'sent' | 'failed';
 
 export interface User {
@@ -316,6 +316,8 @@ export interface MailAccount {
   smtpSecure?: boolean | null;
   hasImapPassword?: boolean;
   hasSmtpPassword?: boolean;
+  /** OAuth2-Anbieter (Microsoft 365 oder Google), sonst null */
+  oauthProvider?: 'microsoft' | 'google' | null;
   viewCount?: number;
   lastSyncAt: string | null;
   syncError: string | null;

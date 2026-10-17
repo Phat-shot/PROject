@@ -37,7 +37,12 @@ export interface AccountRow {
   project_id: string | null;
   name: string;
   address: string;
-  provider: 'imap' | 'dev';
+  provider: 'imap' | 'dev' | 'graph';
+  /** OAuth2-Konto (Microsoft 365 oder Google): Zugriffstoken wird vor jedem Zugriff aufgefrischt */
+  oauth_provider?: 'microsoft' | 'google' | null;
+  oauth_refresh_token?: string | null;
+  oauth_access_token?: string | null;
+  oauth_expires_at?: Date | string | null;
   imap_host: string | null;
   imap_port: number | null;
   imap_user: string | null;

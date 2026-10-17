@@ -16,13 +16,18 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [demo, setDemo] = useState(false);
+  const [oidc, setOidc] = useState<{ label: string } | null>(null);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [forgot, setForgot] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
-  useEffect(() => { api.get<{ demo?: boolean }>('/setup/status').then((r) => { if (r.demo) { setDemo(true); setEmail('pl@demo.local'); setPassword('demo1234'); } }).catch(() => undefined); }, []);
+  useEffect(() => {
+    api.get<{ demo?: boolean; oidc?: { label: string } | null }>('/setup/status').then((r) => { if (r.demo) { setDemo(true); setEmail('pl@demo.local'); setPassword('demo1234'); } setOidc(r.oidc ?? null); }).catch(() => undefined);
+    const err = new URLSearchParams(window.location.search).get('oauthError');
+    if (err) setError(err);
+  }, []);
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -65,6 +70,7 @@ export function LoginPage() {
             <button className="btn primary" disabled={busy || !email || (!forgot && !password)}>{forgot ? 'Link anfordern' : 'Anmelden'}</button>
             <button type="button" className="btn link small right" onClick={() => { setForgot(!forgot); setSent(null); setError(null); }}>{forgot ? 'Zurück zur Anmeldung' : 'Passwort vergessen?'}</button>
           </div>
+          {oidc && !forgot && <div className="row" style={{ marginTop: 4 }}><a className="btn" style={{ width: '100%', textAlign: 'center' }} href="/api/auth/oidc/start">Anmelden mit {oidc.label}</a></div>}
         </div>
         )}
         {demo && (

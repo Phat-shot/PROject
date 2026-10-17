@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { MailAccount, Project } from '@projekttool/shared';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
@@ -8,6 +8,8 @@ import { TopBar } from '../components/Layout';
 import { Modal, useAsync, useDialog } from '../components/ui';
 
 interface TestResult { imap: { ok: boolean; error?: string; folders?: string[] }; smtp: { ok: boolean; error?: string } }
+interface OAuthProvider { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }
+const OAUTH_LABEL = { microsoft: 'Microsoft 365', google: 'Google' } as const;
 
 export function MailAccountsPage() {
   const accounts = useData<{ accounts: MailAccount[] }>('/mail/accounts');
@@ -17,6 +19,16 @@ export function MailAccountsPage() {
   const [msg, setMsg] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null);
   const { error, run, busy } = useAsync();
   const dialog = useDialog();
+  const oauth = useData<{ providers: OAuthProvider[] }>('/oauth/providers');
+  const [oauthStart, setOauthStart] = useState<OAuthProvider | null>(null);
+  const [params, setParams] = useSearchParams();
+  // Rückkehr von Microsoft/Google: Ergebnis einmal anzeigen, Parameter entfernen
+  useEffect(() => {
+    const ok = params.get('connected'); const err = params.get('oauthError');
+    if (ok) setMsg({ kind: 'ok', text: `${ok} verbunden. Jetzt im Projekt unter Mail eine Ansicht anlegen.` });
+    if (err) setMsg({ kind: 'err', text: `Verbindung fehlgeschlagen: ${err}` });
+    if (ok || err) { params.delete('connected'); params.delete('oauthError'); setParams(params, { replace: true }); }
+  }, []);
   const sync = (a: MailAccount) => run(async () => {
     const r = await api.post<{ result: { fetched: number; stored: number; error?: string }; viewCount: number; hint: string | null }>(`/mail/accounts/${a.id}/sync`);
     if (r.result.error) setMsg({ kind: 'err', text: `Sync fehlgeschlagen: ${r.result.error}` });
@@ -30,7 +42,10 @@ export function MailAccountsPage() {
   });
   return (
     <>
-      <TopBar title="Mail-Konten"><button className="btn primary" onClick={() => setCreate(true)}>Konto anbinden</button></TopBar>
+      <TopBar title="Mail-Konten">
+        {oauth.data?.providers.map((p) => <button key={p.key} className="btn" onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}
+        <button className="btn primary" onClick={() => setCreate(true)}>Konto anbinden</button>
+      </TopBar>
       <div className="content">
         <div className="card">
           <p className="muted small">Persönliche Konten gehören dir und werden nie als Ganzes geteilt, nur gefilterte Ansichten mit eigenen Rechten. Projektkonten bindet der PL an; ihre Adresse wird zur Projekt-Mailadresse. Gespeichert werden nur Treffer einer Ansicht.</p>
@@ -41,11 +56,12 @@ export function MailAccountsPage() {
               <tr key={a.id}>
                 <td>{a.name}<div className="muted small">{a.address}</div></td>
                 <td>{a.type === 'personal' ? 'persönlich' : a.type === 'org' ? 'Org-Postfach' : <>Projektkonto <span className="badge">{projects.data?.projects.find((p) => p.id === a.projectId)?.key}</span></>}</td>
-                <td className="small">{a.provider === 'dev' ? 'Dev-Postfach (im Speicher)' : <>IMAP {a.imapHost}:{a.imapPort ?? 993}{a.imapSecure === false ? '' : ' SSL'}<br />SMTP {a.smtpHost}:{a.smtpPort ?? 587}{a.smtpSecure ? ' SSL' : ' STARTTLS'}</>}</td>
+                <td className="small">{a.provider === 'dev' ? 'Dev-Postfach (im Speicher)' : a.provider === 'graph' ? <>Microsoft 365 (Graph, OAuth2)</> : a.oauthProvider ? <>{OAUTH_LABEL[a.oauthProvider]} (IMAP/SMTP, OAuth2)<br />{a.imapHost}</> : <>IMAP {a.imapHost}:{a.imapPort ?? 993}{a.imapSecure === false ? '' : ' SSL'}<br />SMTP {a.smtpHost}:{a.smtpPort ?? 587}{a.smtpSecure ? ' SSL' : ' STARTTLS'}</>}</td>
                 <td className="small">{a.viewCount ?? 0}{(a.viewCount ?? 0) === 0 && <div className="muted">noch keine</div>}</td>
                 <td className="small">{a.syncError ? <span className="badge warn" title={a.syncError}>Sync unterbrochen</span> : fmtDateTime(a.lastSyncAt) || '–'}{a.syncError && <div className="muted" style={{ maxWidth: 260 }}>{a.syncError}</div>}</td>
                 <td className="nowrap">
-                  {a.provider === 'imap' && <button className="btn sm" disabled={busy} onClick={() => void test(a)}>Verbindung testen</button>}{' '}
+                  {a.provider !== 'dev' && <button className="btn sm" disabled={busy} onClick={() => void test(a)}>Verbindung testen</button>}{' '}
+                  {a.oauthProvider && <a className="btn sm" href={`/api/oauth/start?provider=${a.oauthProvider}&type=${a.type}${a.projectId ? `&projectId=${a.projectId}` : ''}`} title="Zustimmung erneuern, wenn der Sync mit Token-Fehler steht">Neu verbinden</a>}{' '}
                   <button className="btn sm" disabled={busy} onClick={() => void sync(a)}>Jetzt synchronisieren</button>{' '}
                   <button className="btn sm" onClick={() => setEdit(a)}>Bearbeiten</button>{' '}
                   <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Konto trennen', text: `„${a.name}“ trennen? Alle Ansichten aus diesem Konto verschwinden aus den Projekten, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Trennen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}`); await accounts.reload(); }); })}>Trennen</button>
@@ -56,9 +72,32 @@ export function MailAccountsPage() {
           {accounts.data?.accounts.length === 0 && <div className="empty">Noch kein Konto.</div>}
         </div>
       </div>
+      {oauthStart && <OAuthStartDialog provider={oauthStart} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setOauthStart(null)} />}
       {create && <AccountForm projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setCreate(false)} onSaved={async () => { setCreate(false); await accounts.reload(); }} />}
       {edit && <AccountForm existing={edit} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await accounts.reload(); }} />}
     </>
+  );
+}
+
+/** OAuth2-Start: Typ und Projekt wählen, dann Weiterleitung zu Microsoft/Google; das Konto entsteht beim Rückruf. */
+export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: { provider: OAuthProvider; projects: Project[]; onClose: () => void; fixedProject?: Project }) {
+  const { user } = useAuth();
+  const [type, setType] = useState<MailAccount['type']>(fixedProject ? 'project' : 'personal');
+  const [projectId, setProjectId] = useState(fixedProject?.id ?? projects[0]?.id ?? '');
+  const [name, setName] = useState('');
+  const href = `/api/oauth/start?provider=${provider.key}&type=${type}${type === 'project' ? `&projectId=${projectId}` : ''}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+  return (
+    <Modal title={`Mit ${provider.label} verbinden`} onClose={onClose}>
+      <div className="form">
+        {fixedProject ? <div className="field"><span>Projektkonto für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name}</span></div> : (
+          <label className="field"><span>Typ</span><select value={type} onChange={(e) => setType(e.target.value as MailAccount['type'])}><option value="personal">Persönlich (nur ich teile Ansichten)</option><option value="project" disabled={!projects.length}>Projektkonto (als PL)</option>{user?.globalRole === 'org_admin' && <option value="org">Org-Postfach (Systemmails)</option>}</select></label>
+        )}
+        {!fixedProject && type === 'project' && <label className="field"><span>Projekt</span><select value={projectId} onChange={(e) => setProjectId(e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
+        <label className="field"><span>Anzeigename (leer = Name aus dem Konto)</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <p className="muted small">Du wirst zu {provider.label} weitergeleitet und meldest dich dort an. Die Adresse des angemeldeten Kontos wird übernommen{provider.mailProvider === 'graph' ? ', der Zugriff läuft über Microsoft Graph' : ', der Zugriff läuft über IMAP/SMTP mit OAuth2'}. Es wird kein Passwort gespeichert.</p>
+        <div className="row"><a className="btn primary" href={href}>Weiter zu {provider.label}</a><button className="btn" onClick={onClose}>Abbrechen</button></div>
+      </div>
+    </Modal>
   );
 }
 
@@ -83,8 +122,9 @@ export function AccountForm({ existing, projects, onClose, onSaved, fixedProject
         {!existing && !fixedProject && f.type === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename</span><input type="text" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
         <label className="field"><span>Adresse</span><input type="email" value={f.address} onChange={(e) => set('address', e.target.value)} /></label>
-        {!existing && <label className="field full"><span>Anbindung</span><select value={f.provider} onChange={(e) => set('provider', e.target.value)}><option value="imap">IMAP/SMTP (Passwort oder App-Passwort; OAuth2 für M365/Google folgt)</option><option value="dev">Dev-Postfach (zum Testen, im Speicher)</option></select></label>}
-        {f.provider === 'imap' && <>
+        {!existing && <label className="field full"><span>Anbindung</span><select value={f.provider} onChange={(e) => set('provider', e.target.value)}><option value="imap">IMAP/SMTP (Passwort oder App-Passwort)</option><option value="dev">Dev-Postfach (zum Testen, im Speicher)</option></select></label>}
+        {existing?.oauthProvider && <p className="muted small full">OAuth2-Konto ({OAUTH_LABEL[existing.oauthProvider]}): Zugangsdaten verwaltet der Anbieter. Zum Erneuern der Zustimmung „Neu verbinden“ in der Liste.</p>}
+        {f.provider === 'imap' && !existing?.oauthProvider && <>
           <label className="field"><span>IMAP-Host</span><input type="text" value={f.imapHost} onChange={(e) => set('imapHost', e.target.value)} placeholder="imap.one.com" /></label>
           <div className="row"><label className="field" style={{ flex: 1 }}><span>IMAP-Port</span><input type="number" value={f.imapPort} onChange={(e) => set('imapPort', Number(e.target.value))} /></label><label className="check" style={{ marginTop: 18 }}><input type="checkbox" checked={Boolean(f.imapSecure)} onChange={(e) => set('imapSecure', e.target.checked)} /> SSL/TLS (993)</label></div>
           <label className="field"><span>IMAP-Benutzer (leer = Adresse)</span><input type="text" value={f.imapUser} onChange={(e) => set('imapUser', e.target.value)} /></label>
@@ -100,7 +140,7 @@ export function AccountForm({ existing, projects, onClose, onSaved, fixedProject
         </div>}
         {error && <div className="error full">{error}</div>}
         <div className="full row">
-          {f.provider === 'imap' && <button className="btn" disabled={busy || !f.imapHost || !f.smtpHost} onClick={() => void run(async () => setTest(await api.post<TestResult>('/mail/accounts/test', { ...payload(), accountId: existing?.id })))}>Verbindung testen</button>}
+          {f.provider === 'imap' && !existing?.oauthProvider && <button className="btn" disabled={busy || !f.imapHost || !f.smtpHost} onClick={() => void run(async () => setTest(await api.post<TestResult>('/mail/accounts/test', { ...payload(), accountId: existing?.id })))}>Verbindung testen</button>}
           <button className="btn primary" disabled={busy || !f.name || !f.address} onClick={() => void run(async () => { if (existing) await api.patch(`/mail/accounts/${existing.id}`, payload()); else await api.post('/mail/accounts', payload()); await onSaved(); })}>{existing ? 'Speichern' : 'Anbinden'}</button>
         </div>
         <p className="muted small full">Nach dem Anbinden im Projekt unter Mail eine Ansicht anlegen (Filter nach Absender, Betreff, Ordner). Erst dann werden Mails geladen; gespeichert werden nur Treffer. Bei one.com: IMAP imap.one.com:993 SSL, SMTP send.one.com:587 STARTTLS, Benutzer = volle Adresse.</p>

@@ -3,15 +3,15 @@ import { createDb, runMigrations } from '../src/db.js';
 import { MailService } from '../src/mail/service.js';
 import { seed, seedDevMails, DEMO_PASSWORD } from '../src/seed.js';
 
-export async function testApp() {
+export async function testApp(opts: { fetchFn?: typeof fetch } = {}) {
   process.env.DATABASE_URL = 'memory';
   process.env.NODE_ENV = 'test';
   const db = await createDb();
   await runMigrations(db);
   const ids = await seed(db);
-  const mail = new MailService(db);
+  const mail = new MailService(db, opts.fetchFn);
   await seedDevMails(db, (id, m) => mail.dev.inject(id, m), (id) => mail.syncAccount(id));
-  const app = await buildApp({ db, mail });
+  const app = await buildApp({ db, mail, fetchFn: opts.fetchFn });
   await app.ready();
 
   async function login(email: string) {

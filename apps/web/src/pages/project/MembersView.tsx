@@ -4,7 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
-import { AccountForm } from '../MailAccountsPage';
+import { AccountForm, OAuthStartDialog } from '../MailAccountsPage';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
 import { HealthDialog } from '../PortfolioPage';
@@ -254,6 +254,8 @@ function EscalationForm() {
 function MailViewsCard() {
   const { detail, reload } = useProject();
   const [account, setAccount] = useState(false);
+  const oauth = useData<{ providers: { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }[] }>('/oauth/providers');
+  const [oauthStart, setOauthStart] = useState<{ key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' } | null>(null);
   const isPl = detail.project.myMembership.role === 'pl';
   const views = useData<{ views: ViewRow[] }>(`/projects/${detail.project.id}/mail/views`);
   const [newView, setNewView] = useState(false);
@@ -268,7 +270,8 @@ function MailViewsCard() {
         {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
-      {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button></>}</p>}
+      {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button>{oauth.data?.providers.map((p) => <button key={p.key} className="btn sm" style={{ marginLeft: 6 }} onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}</>}</p>}
+      {oauthStart && <OAuthStartDialog provider={oauthStart} projects={[detail.project]} fixedProject={detail.project} onClose={() => setOauthStart(null)} />}
       <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
       {account && <AccountForm projects={[detail.project]} fixedProject={detail.project} onClose={() => setAccount(false)} onSaved={async () => { setAccount(false); await reload(); await views.reload(); }} />}
       {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
