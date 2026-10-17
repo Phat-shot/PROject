@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import type { AuditEntry, DocTemplate, Group, Invitation, OrgSettings, User } from '@projekttool/shared';
+import type { AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
 import { api, downloadCsv, fmtDateTime } from '../lib/api';
@@ -30,6 +30,7 @@ export function AdminPage() {
         </div>
         <GroupsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
+        <ProjectTemplatesCard />
         <TemplatesCard />
         <div className="card">
           <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><span className="row">
@@ -138,6 +139,32 @@ function PdfStyleCard() {
       </div>
     </div>
   );
+}
+
+function ProjectTemplatesCard() {
+  const { data, reload } = useData<{ templates: ProjectTemplate[] }>('/project-templates');
+  const dialog = useDialog();
+  const { busy, error, run } = useAsync();
+  return (
+    <div className="card">
+      <h2>Projektvorlagen</h2>
+      <p className="muted small">Vorlagen entstehen aus bestehenden Projekten („Als Vorlage speichern“ in den Projekteinstellungen) und belegen neue Projekte mit Spalten, Labels, Teilprojekten, Meilensteinen, Doku-Ordnern und Regeln vor.</p>
+      {error && <div className="error mb">{error}</div>}
+      {data && data.templates.length === 0 && <div className="empty">Noch keine Vorlagen.</div>}
+      {data && data.templates.length > 0 && <table className="table"><thead><tr><th>Name</th><th>Inhalt</th><th /></tr></thead><tbody>
+        {data.templates.map((t) => <tr key={t.id}>
+          <td><InlineName value={t.name} onSave={(name) => run(async () => { await api.patch(`/project-templates/${t.id}`, { name }); await reload(); })} />{t.description && <div className="muted small">{t.description}</div>}</td>
+          <td className="small muted">{t.spec.columns?.length ?? 0} Spalten · {t.spec.subprojects?.length ?? 0} Teilprojekte · {t.spec.milestones?.length ?? 0} Meilensteine · {t.spec.labels?.length ?? 0} Labels · {t.spec.folders?.length ?? 0} Ordner</td>
+          <td className="nowrap"><button className="btn sm link" disabled={busy} onClick={() => void dialog.confirm({ title: 'Vorlage löschen', text: `„${t.name}“ löschen? Bestehende Projekte bleiben unverändert.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/project-templates/${t.id}`); await reload(); }); })}>✕</button></td>
+        </tr>)}
+      </tbody></table>}
+    </div>
+  );
+}
+
+function InlineName({ value, onSave }: { value: string; onSave: (v: string) => unknown }) {
+  const [v, setV] = useState(value);
+  return <input className="inline-text" type="text" value={v} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v.trim() && v.trim() !== value) onSave(v.trim()); else setV(value); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />;
 }
 
 function TemplatesCard() {

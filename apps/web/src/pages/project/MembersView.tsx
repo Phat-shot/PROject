@@ -7,6 +7,8 @@ import { InviteCard } from './InviteCard';
 import { AccountForm } from '../MailAccountsPage';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
+import { HealthDialog } from '../PortfolioPage';
+import { PromptModal } from '../../components/ui';
 import { InlineText } from './TaskDrawer';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -22,6 +24,9 @@ export function MembersView() {
   const [edit, setEdit] = useState<MemberRow | null>(null);
   const [invite, setInvite] = useState(false);
   const [columns, setColumns] = useState(false);
+  const [health, setHealth] = useState(false);
+  const [asTemplate, setAsTemplate] = useState(false);
+  const [tplMsg, setTplMsg] = useState<string | null>(null);
   const { error, run } = useAsync();
   const dialog = useDialog();
   const nav = useNavigate();
@@ -78,11 +83,14 @@ export function MembersView() {
               <dt>Kürzel</dt><dd>{detail.project.key}</dd>
               <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/konfiguration">Konto anbinden</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
+              <dt>Ampel</dt><dd><span className="row"><span className={`ampel small ${detail.project.health?.color ?? 'none'}`} />{detail.project.health?.color ? `${{ green: 'grün', yellow: 'gelb', red: 'rot' }[detail.project.health.color]}${detail.project.health.note ? ` · ${detail.project.health.note}` : ''}` : 'automatisch'}{isPl && <button className="btn sm link" onClick={() => setHealth(true)}>ändern</button>}</span></dd>
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
             </dl>
             {isPl && detail.project.status === 'active' && <div className="row mt">
+              <button className="btn sm" title="Spalten, Labels, Teilprojekte, Meilensteine, Ordner und Regeln als Vorlage für neue Projekte" onClick={() => setAsTemplate(true)}>Als Vorlage speichern</button>
+              {tplMsg && <span className="muted small">{tplMsg}</span>}
               <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Projekt archivieren', text: 'Das Projekt wird nur noch lesend angezeigt, Mail-Ansichten werden getrennt, Eskalation und Reporting stoppen.', confirmLabel: 'Archivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); })}>Archivieren</button>
             </div>}
           </div>
@@ -109,6 +117,8 @@ export function MembersView() {
       {edit && <RoleForm member={edit} onClose={() => setEdit(null)} />}
       {invite && <RoleForm onClose={() => setInvite(false)} />}
       {columns && <ColumnsForm onClose={() => setColumns(false)} />}
+      {health && <HealthDialog row={{ id: detail.project.id, name: detail.project.name, computed: 'green', health: detail.project.health ?? { color: null, note: null, updatedAt: null, updatedBy: null } }} onClose={() => setHealth(false)} onSaved={async () => { setHealth(false); await reload(); }} />}
+      {asTemplate && <PromptModal title="Als Projektvorlage speichern" label="Name der Vorlage" value={`${detail.project.name} (Vorlage)`} hint="Übernommen werden Spalten, Labels, Teilprojekte und Meilensteine (relativ zum frühesten Termin), Doku-Ordner, Eskalations- und Erinnerungsregeln." submitLabel="Speichern" onClose={() => setAsTemplate(false)} onSubmit={(name) => { if (name) void run(async () => { await api.post(`/project-templates/from-project/${detail.project.id}`, { name }); setTplMsg(`Vorlage „${name}“ gespeichert.`); }); }} />}
     </div>
   );
 

@@ -42,6 +42,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavLink to="/dashboard" data-tour="dashboard">Dashboard</NavLink>
         <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
+        <NavLink to="/portfolio" data-tour="portfolio">Portfolio</NavLink>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
           <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
           <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>

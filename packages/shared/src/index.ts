@@ -51,6 +51,7 @@ export interface Project {
   escalation?: EscalationPolicy;
   reporting?: ReportingPolicy;
   reminders?: ReminderPolicy;
+  health?: ProjectHealth;
   myRole?: ProjectRole;
   myMembership?: Membership;
   /** Kennzahlen für Projektkarten (nur in der Projektliste) */
@@ -473,6 +474,33 @@ export interface DocTemplate {
   name: string;
   contentMd: string;
   contentHtml: string;
+}
+
+/** Projektampel: manuell gesetzter Status der Projektleitung mit Begründung */
+export interface ProjectHealth {
+  color: 'green' | 'yellow' | 'red' | null;
+  note: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
+}
+
+/** Projektvorlage: Struktur, die ein neues Projekt vorbelegt; Termine relativ zum Projektstart */
+export interface ProjectTemplateSpec {
+  columns?: { name: string; kind: 'backlog' | 'active' | 'parked' | 'done'; wipLimit: number | null }[];
+  labels?: { name: string; color: string }[];
+  subprojects?: { name: string; startOffsetDays: number | null; endOffsetDays: number | null }[];
+  folders?: string[];
+  milestones?: { name: string; offsetDays: number }[];
+  escalation?: Partial<EscalationPolicy>;
+  reminders?: Partial<ReminderPolicy>;
+  timeTrackingEnabled?: boolean;
+}
+export interface ProjectTemplate {
+  id: string;
+  name: string;
+  description: string | null;
+  spec: ProjectTemplateSpec;
+  createdAt: string;
 }
 
 /** RAID: Risiken, Annahmen, Issues, Entscheidungen je Projekt */

@@ -299,3 +299,35 @@ test('RAID-Register und Kontakte: anlegen, bewerten, Übersicht, Rechte', async 
   assert.ok(list.some((x: any) => x.email === 'chef@kunde.de' && x.role === 'Auftraggeber'));
   assert.ok(list.some((x: any) => x.email === 'k.mueller@mueller-design.de'), 'automatisch gesammelte Adressen bleiben');
 });
+
+test('Portfolio: Ampel berechnet und manuell, Auslastung; Projektvorlage aus Projekt und Anwenden beim Anlegen', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const pf = await t.api(pl).get('/portfolio');
+  assert.equal(pf.statusCode, 200, pf.body);
+  const row = pf.json().projects.find((p: any) => p.key === 'WEB');
+  assert.ok(row && ['green', 'yellow', 'red'].includes(row.computed));
+  assert.equal(row.health.color, null);
+  assert.ok(pf.json().workload.length >= 1);
+  const h = await t.api(pl).put(`/projects/${web}/health`, { color: 'red', note: 'Agentur verzögert' });
+  assert.equal(h.statusCode, 200, h.body);
+  assert.equal((await t.api(pl).get('/portfolio')).json().projects.find((p: any) => p.key === 'WEB').health.color, 'red');
+  const reader = await t.login('leser@demo.local');
+  assert.equal((await t.api(reader).put(`/projects/${web}/health`, { color: 'green' })).statusCode, 403);
+
+  const tpl = await t.api(pl).post(`/project-templates/from-project/${web}`, { name: 'Website-Vorlage' });
+  assert.equal(tpl.statusCode, 200, tpl.body);
+  const spec = tpl.json().template.spec;
+  assert.ok(spec.columns.length >= 2 && spec.subprojects.length >= 3 && spec.milestones.length >= 1 && spec.labels.length >= 1);
+  const created = await t.api(pl).post('/projects', { key: 'NEU', name: 'Aus Vorlage', templateId: tpl.json().template.id, startDate: '2027-01-04' });
+  assert.equal(created.statusCode, 200, created.body);
+  const detail = (await t.api(pl).get(`/projects/${created.json().project.id}`)).json();
+  assert.equal(detail.columns.map((c: any) => c.name).join(','), spec.columns.map((c: any) => c.name).join(','));
+  assert.equal(detail.subprojects.length, spec.subprojects.length);
+  assert.equal(detail.milestones.length, spec.milestones.length);
+  assert.equal(detail.labels.length, spec.labels.length);
+  const firstDate = [...detail.subprojects.map((s: any) => s.startDate), ...detail.milestones.map((m: any) => m.date)].filter(Boolean).sort()[0];
+  assert.equal(firstDate, '2027-01-04', 'frühester Termin liegt auf dem Projektstart');
+  const admin = await t.login('admin@demo.local');
+  assert.equal((await t.api(admin).del(`/project-templates/${tpl.json().template.id}`)).statusCode, 200);
+});

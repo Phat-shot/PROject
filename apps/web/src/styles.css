@@ -338,6 +338,15 @@ table.table { width: 100%; border-collapse: collapse; }
 .section-nav a:hover { text-decoration: none; border-color: var(--primary); color: var(--primary); }
 .settings .card[id] { scroll-margin-top: 100px; }
 
+/* Ampel */
+.ampel { display: inline-block; width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.8); box-shadow: 0 0 0 1px var(--border); vertical-align: middle; padding: 0; cursor: pointer; }
+.ampel:disabled { cursor: default; }
+.ampel.small { width: 11px; height: 11px; border-width: 1px; margin-left: 4px; }
+.ampel.green { background: var(--ok); } .ampel.yellow { background: #e0a800; } .ampel.red { background: var(--danger); } .ampel.none { background: var(--border); }
+.notice.ok { background: var(--ok-soft); border-color: #bfe3c9; color: #14532d; }
+:root[data-theme='dark'] .notice.ok { background: #12301c; border-color: #1f4d2d; color: #b7e4c4; }
+table.portfolio td { vertical-align: middle; }
+
 /* RAID */
 .badge.raid-risk { background: #fdecea; color: var(--danger); border-color: #f5c2c0; }
 .badge.raid-issue { background: var(--warn-soft); color: var(--warn); border-color: #f2d9a6; }

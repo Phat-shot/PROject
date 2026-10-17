@@ -60,7 +60,10 @@ export function OverviewView() {
   const pct = total ? Math.round((o.counts.done / total) * 100) : 0;
   return (
     <div className="content">
-      {detail.project.description && <p className="muted mb">{detail.project.description}</p>}
+      <div className="row mb" style={{ alignItems: 'flex-start' }}>
+        {detail.project.health?.color && <span className={`notice ${detail.project.health.color === 'red' ? 'danger' : detail.project.health.color === 'green' ? 'ok' : ''}`} style={{ padding: '4px 10px' }}><span className={`ampel small ${detail.project.health.color}`} /> Status {{ green: 'grün', yellow: 'gelb', red: 'rot' }[detail.project.health.color]}{detail.project.health.note ? `: ${detail.project.health.note}` : ''}<span className="muted small"> · {detail.project.health.updatedBy}</span></span>}
+        {detail.project.description && <p className="muted" style={{ margin: 0 }}>{detail.project.description}</p>}
+      </div>
       <SetupChecklist taskCount={tasks.length} />
       <div className="kpis mb">
         <div className="kpi"><div className="v">{o.counts.open}</div><div className="l">offen</div></div>

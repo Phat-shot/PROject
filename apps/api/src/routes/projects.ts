@@ -6,6 +6,7 @@ import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
 import { dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { remindersOf } from '../tasks/reminders.js';
+import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
@@ -27,6 +28,7 @@ export function mapProject(r: any): Project {
     escalation: policyOf(r.escalation),
     reporting: reportingOf(r.reporting),
     reminders: remindersOf(r.reminders),
+    health: healthOf(r.health),
     visibility: r.visibility ?? 'members',
     myRole: r.my_role ?? undefined
   };
@@ -52,10 +54,13 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // W1: Projekt anlegen (Projektersteller oder Org-Admin wird PL)
-  app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string } }>('/projects', async (req) => {
+  app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string; templateId?: string | null; startDate?: string | null } }>('/projects', async (req) => {
     const user = requireUser(req);
     if (!['org_admin', 'project_creator'].includes(user.globalRole)) throw forbidden('Nur Projektersteller dürfen Projekte anlegen');
-    const { key, name, description, mailAddress } = req.body ?? ({} as any);
+    const { key, name, description, mailAddress, templateId, startDate } = req.body ?? ({} as any);
+    const template = templateId ? await db.maybeOne(`select * from project_templates where id = $1 and org_id = $2`, [templateId, user.orgId]) : null;
+    if (templateId && !template) throw badRequest('Vorlage nicht gefunden');
+    if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw badRequest('Projektstart als YYYY-MM-DD');
     if (!key || !name) throw badRequest('Kürzel und Name erforderlich');
     if (!/^[A-Z0-9-]{2,12}$/.test(key)) throw badRequest('Kürzel: 2–12 Zeichen, Großbuchstaben, Ziffern, Bindestrich');
     const exists = await db.maybeOne(`select id from projects where org_id = $1 and key = $2`, [user.orgId, key]);
@@ -73,7 +78,8 @@ export async function projectRoutes(app: FastifyInstance) {
       await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
     }
     await createDefaultFolders(db, p.id);
-    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name } });
+    if (template) await applyTemplate(db, p.id, template.spec ?? {}, startDate ?? new Date().toISOString().slice(0, 10));
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, template: template?.name ?? null } });
     return { project: { ...mapProject(p), myRole: 'pl' } };
   });
 

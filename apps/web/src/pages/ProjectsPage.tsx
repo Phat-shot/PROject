@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Project } from '@projekttool/shared';
+import type { Project, ProjectTemplate } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { api, fmtDate } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -48,6 +48,10 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
   const [key, setKey] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [templateId, setTemplateId] = useState('');
+  const [startDate, setStartDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const templates = useData<{ templates: ProjectTemplate[] }>('/project-templates');
+  const tpl = templates.data?.templates.find((t) => t.id === templateId);
   const { busy, error, run } = useAsync();
   return (
     <Modal title="Neues Projekt" onClose={onClose}>
@@ -55,8 +59,13 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
         <label className="field"><span>Kürzel</span><input type="text" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="z. B. CRM" /></label>
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
+        {templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
+          <label className="field"><span>Vorlage</span><select value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">– keine, Standardspalten –</option>{templates.data.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+          {tpl && <label className="field"><span>Projektstart (Termine der Vorlage sind relativ dazu)</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>}
+        </div>}
+        {tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description }); onCreated(); })}>Anlegen</button></div>
+        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, templateId: templateId || null, startDate: tpl ? startDate : null }); onCreated(); })}>Anlegen</button></div>
         <p className="muted small">Du wirst PL. Die Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto.</p>
       </div>
     </Modal>
