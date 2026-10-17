@@ -427,7 +427,9 @@ export async function projectRoutes(app: FastifyInstance) {
     const est = await db.one(`select coalesce(sum(estimate_minutes), 0)::int as est from tasks where project_id = $1 and archived_at is null`, [pid]);
     const proj = await db.one(`select time_tracking_enabled, budget_hours from projects where id = $1`, [pid]);
     const esc = await evaluateProject(db, pid, today);
+    const raid = await db.query(`select id, number, kind, title, probability, impact, status, due_date from raid_items where project_id = $1 and status <> 'closed' order by coalesce(probability * impact, 0) desc, number limit 5`, [pid]);
     return {
+      raid: raid.rows.map((r: any) => ({ id: r.id, number: r.number, kind: r.kind, title: r.title, score: r.probability && r.impact ? r.probability * r.impact : null, status: r.status, dueDate: dateStr(r.due_date) })),
       escalations: esc.filter((e) => e.targetLevel > 0 || e.level > 0).slice(0, 10),
       time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
       counts, perSubproject: perSub.rows,
@@ -448,12 +450,6 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Projektkontakte (Externe)
-  app.get<{ Params: { id: string } }>('/projects/:id/contacts', async (req) => {
-    const user = requireUser(req);
-    await requireProject(db, user, req.params.id);
-    const rows = await db.query(`select * from project_contacts where project_id = $1 order by email`, [req.params.id]);
-    return { contacts: rows.rows.map((r: any) => ({ id: r.id, email: r.email, name: r.name })) };
-  });
 
   async function loadSub(id: string) {
     return db.one(

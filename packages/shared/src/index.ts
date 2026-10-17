@@ -475,6 +475,43 @@ export interface DocTemplate {
   contentHtml: string;
 }
 
+/** RAID: Risiken, Annahmen, Issues, Entscheidungen je Projekt */
+export type RaidKind = 'risk' | 'assumption' | 'issue' | 'decision';
+export interface RaidItem {
+  id: string;
+  projectId: string;
+  number: number;
+  kind: RaidKind;
+  title: string;
+  description: string | null;
+  /** 1 (gering) bis 5 (hoch); Score = Wahrscheinlichkeit × Auswirkung */
+  probability: number | null;
+  impact: number | null;
+  score: number | null;
+  status: 'open' | 'mitigated' | 'closed';
+  ownerUserId: string | null;
+  ownerName: string | null;
+  dueDate: string | null;
+  /** Maßnahme bzw. Begründung der Entscheidung */
+  mitigation: string | null;
+  decidedOn: string | null;
+  taskId: string | null;
+  pageId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ProjectContact {
+  id: string;
+  projectId: string;
+  email: string;
+  name: string | null;
+  role: string | null;
+  organization: string | null;
+  phone: string | null;
+  notes: string | null;
+}
+
 export interface AuditEntry {
   id: string;
   projectId: string | null;

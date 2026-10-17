@@ -14,6 +14,7 @@ import { OverviewView } from './project/OverviewView';
 import { CalendarView } from './project/CalendarView';
 import { TimeView } from './project/TimeView';
 import { TaskDrawer } from './project/TaskDrawer';
+import { RaidView } from './project/RaidView';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string }
@@ -87,7 +88,7 @@ function ProjectBody() {
     : ['einstellungen', 'audit'].includes(sub)
       ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
       : undefined;
-  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : 'Einstellungen';
+  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'zeiten'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <>
@@ -103,6 +104,7 @@ function ProjectBody() {
         <Route path="einstellungen" element={<MembersView />} />
         <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen`} replace />} />
         <Route path="audit" element={<AuditView />} />
+        <Route path="raid" element={<RaidView />} />
         <Route path="*" element={<Navigate to={base} replace />} />
       </Routes>
       {taskId && <TaskDrawer taskId={taskId} onClose={() => openTask(null)} />}

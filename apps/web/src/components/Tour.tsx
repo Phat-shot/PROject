@@ -26,7 +26,8 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
       { title: 'Übersicht', text: 'Kennzahlen, Warnungen und Eskalationen des Projekts auf einen Blick.', target: '[data-tour="p-uebersicht"]', go: base },
       { title: 'Arbeitspakete', text: 'Board mit Spalten, Swimlanes je Teilprojekt, Labels und WIP-Limits. Darüber die Reiter Plan (Gantt), Kalender und Zeiten. Tastatur: n neues Arbeitspaket, f filtern, q nur meine.', target: '[data-tour="p-aufgaben"]', go: `${base}/board` },
       { title: 'Postfach des Projekts', text: 'Mail-Ansichten des Projektkontos und freigegebene persönliche Ansichten. Rechte hängen an der Ansicht.', target: '[data-tour="p-postfach"]', go: `${base}/mail` },
-      { title: 'Doku', text: 'Seiten mit Unterseiten wie in einem Wiki: Protokolle, Berichte, Konzepte. Oberseiten geben Vorlage und PDF-Layout vor. Seiten lassen sich per Link freigeben und als PDF versenden.', target: '[data-tour="p-doku"]', go: `${base}/doku` }
+      { title: 'Doku', text: 'Seiten mit Unterseiten wie in einem Wiki: Protokolle, Berichte, Konzepte. Oberseiten geben Vorlage und PDF-Layout vor. Seiten lassen sich per Link freigeben und als PDF versenden.', target: '[data-tour="p-doku"]', go: `${base}/doku` },
+      { title: 'Risiken', text: 'RAID-Register: Risiken mit Wahrscheinlichkeit und Auswirkung, Annahmen, Issues und Entscheidungen mit Verantwortlichen und Terminen.', target: '[data-tour="p-raid"]', go: `${base}/raid` }
     ] : []),
     { title: 'Suche und Benachrichtigungen', text: 'Die Suche findet Arbeitspakete, Seiten und Mails. Die Glocke sammelt Zuweisungen, Erwähnungen, Fristen und Eskalationen.', target: '.topbar .search-box' },
     { title: 'Benutzereinstellungen', text: 'Name, Theme (hell/dunkel), Sprache und Passwort.', target: '[data-tour="benutzer"]' },

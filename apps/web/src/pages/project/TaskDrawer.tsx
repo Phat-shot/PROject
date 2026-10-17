@@ -6,6 +6,7 @@ import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync, useDialog } 
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
+import { useData } from '../../lib/useData';
 import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
@@ -91,7 +92,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
             {t.responsibleEmail && <option value="extern">{t.responsibleEmail} (extern)</option>}
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select></label>
-        <TextField label="Extern (Mail-Adresse)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
+        <TextField label="Extern (Mail-Adresse)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
+        <ContactsDatalist projectId={detail.project.id} />
         <label className="field"><span>Priorität</span>
           <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
         <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
@@ -243,12 +245,18 @@ export function InlineText({ value, canEdit, onSave, className }: { value: strin
   return <input className={`inline-text ${className ?? ''}`} type="text" value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />;
 }
 
-function TextField({ label, value, canEdit, onSave, type = 'text', placeholder }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; type?: string; placeholder?: string }) {
+/** Kontakte des Projekts als Vorschlagsliste für externe Mail-Adressen. */
+function ContactsDatalist({ projectId }: { projectId: string }) {
+  const d = useData<{ contacts: { email: string; name: string | null; organization: string | null }[] }>(`/projects/${projectId}/contacts`);
+  return <datalist id="project-contacts">{d.data?.contacts.map((c) => <option key={c.email} value={c.email}>{[c.name, c.organization].filter(Boolean).join(' · ')}</option>)}</datalist>;
+}
+
+function TextField({ label, value, canEdit, onSave, type = 'text', placeholder, list }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; type?: string; placeholder?: string; list?: string }) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
   return (
     <label className="field"><span>{label}</span>
-      <input type={type} value={v} placeholder={placeholder} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== value) void onSave(v); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} /></label>
+      <input type={type} value={v} placeholder={placeholder} list={list} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v !== value) void onSave(v); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} /></label>
   );
 }
 

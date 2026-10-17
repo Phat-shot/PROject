@@ -338,6 +338,18 @@ table.table { width: 100%; border-collapse: collapse; }
 .section-nav a:hover { text-decoration: none; border-color: var(--primary); color: var(--primary); }
 .settings .card[id] { scroll-margin-top: 100px; }
 
+/* RAID */
+.badge.raid-risk { background: #fdecea; color: var(--danger); border-color: #f5c2c0; }
+.badge.raid-issue { background: var(--warn-soft); color: var(--warn); border-color: #f2d9a6; }
+.badge.raid-assumption { background: var(--primary-soft); color: var(--primary); border-color: #c7d6ff; }
+.badge.raid-decision { background: var(--ok-soft); color: var(--ok); border-color: #bfe3c9; }
+.raid-matrix { display: grid; grid-template-columns: auto repeat(5, 1fr); gap: 2px; font-size: 11px; max-width: 360px; }
+.raid-matrix .c { aspect-ratio: 1.6; display: grid; place-items: center; border-radius: 4px; background: var(--surface-2); color: var(--muted); }
+.raid-matrix .c.n { background: none; font-weight: 600; }
+.raid-matrix .c.low { background: var(--ok-soft); color: var(--ok); } .raid-matrix .c.mid { background: var(--warn-soft); color: var(--warn); } .raid-matrix .c.high { background: #fdecea; color: var(--danger); }
+.raid-matrix .c.has { font-weight: 700; outline: 2px solid currentColor; outline-offset: -2px; cursor: pointer; }
+.raid-table td textarea { min-height: 40px; }
+
 /* Mehrfachauswahl auf dem Board */
 .task-card .select-box { position: absolute; top: 8px; right: 8px; margin: 0; width: 16px; height: 16px; accent-color: var(--primary); pointer-events: none; }
 .task-card.selectable { cursor: pointer; }

@@ -270,3 +270,32 @@ test('Papierkorb: Arbeitspaket und Seite landen im Papierkorb, zählen nicht meh
   assert.equal((await t.api(pl).post(`/docs/pages/${page.id}/restore`)).statusCode, 200);
   assert.ok((await t.api(pl).get(`/projects/${web}/docs`)).json().pages.some((x: any) => x.id === page.id), 'wieder im Baum');
 });
+
+test('RAID-Register und Kontakte: anlegen, bewerten, Übersicht, Rechte', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const r1 = await t.api(pl).post(`/projects/${web}/raid`, { kind: 'risk', title: 'Agentur fällt aus', probability: 4, impact: 5 });
+  assert.equal(r1.statusCode, 200, r1.body);
+  assert.equal(r1.json().item.score, 20);
+  assert.equal(r1.json().item.number, 1);
+  const r2 = await t.api(pl).post(`/projects/${web}/raid`, { kind: 'decision', title: 'Headless CMS', decidedOn: '2026-11-10' });
+  assert.equal(r2.json().item.number, 2);
+  assert.equal((await t.api(pl).post(`/projects/${web}/raid`, { kind: 'risk', title: 'x', probability: 9 })).statusCode, 400);
+  const upd = await t.api(pl).patch(`/projects/${web}/raid/${r1.json().item.id}`, { status: 'mitigated', mitigation: 'Zweite Agentur anfragen' });
+  assert.equal(upd.json().item.status, 'mitigated');
+  const ov = (await t.api(pl).get(`/projects/${web}/overview`)).json();
+  assert.ok(ov.raid.some((x: any) => x.title === 'Agentur fällt aus' && x.score === 20));
+  const reader = await t.login('leser@demo.local');
+  assert.equal((await t.api(reader).get(`/projects/${web}/raid`)).statusCode, 200);
+  assert.equal((await t.api(reader).post(`/projects/${web}/raid`, { kind: 'risk', title: 'nein' })).statusCode, 403);
+  const member = await t.login('max@demo.local');
+  assert.equal((await t.api(member).del(`/projects/${web}/raid/${r2.json().item.id}`)).statusCode, 403, 'nur PL löscht');
+  assert.equal((await t.api(pl).del(`/projects/${web}/raid/${r2.json().item.id}`)).statusCode, 200);
+
+  const c = await t.api(pl).post(`/projects/${web}/contacts`, { email: 'Chef@Kunde.de', name: 'Karl Kunde', role: 'Auftraggeber', organization: 'Kunde GmbH' });
+  assert.equal(c.statusCode, 200, c.body);
+  assert.equal(c.json().contact.email, 'chef@kunde.de');
+  const list = (await t.api(pl).get(`/projects/${web}/contacts`)).json().contacts;
+  assert.ok(list.some((x: any) => x.email === 'chef@kunde.de' && x.role === 'Auftraggeber'));
+  assert.ok(list.some((x: any) => x.email === 'k.mueller@mueller-design.de'), 'automatisch gesammelte Adressen bleiben');
+});

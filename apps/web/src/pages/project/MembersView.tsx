@@ -6,6 +6,7 @@ import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
 import { AccountForm } from '../MailAccountsPage';
 import { TrashCard } from './TrashCard';
+import { ContactsCard } from './ContactsCard';
 import { InlineText } from './TaskDrawer';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -28,7 +29,7 @@ export function MembersView() {
   return (
     <div className="content settings">
       <nav className="section-nav">
-        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
         <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
       </nav>
       <div className="card mb" id="allgemein">
@@ -52,6 +53,10 @@ export function MembersView() {
             </tbody></table>
             {isPl && <InviteCard />}
           </div>
+          <div className="card" id="kontakte">
+            <h2>Kontakte und Stakeholder</h2>
+            <ContactsCard />
+          </div>
           <div className="card" id="planung">
             <h2>Teilprojekte</h2>
             <p className="muted small">Verantwortung wird vom PL geerbt, solange keine Person gesetzt ist. Sichtbarkeit und Zugriff über „Sichtbarkeit“.</p>
@@ -73,7 +78,6 @@ export function MembersView() {
               <dt>Kürzel</dt><dd>{detail.project.key}</dd>
               <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/konfiguration">Konto anbinden</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
-              <dt>Externe Kontakte</dt><dd><Contacts /></dd>
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
@@ -343,9 +347,3 @@ function BudgetInput() {
   return <span className="row"><input type="number" min={0} value={v} onChange={(e) => setV(e.target.value)} style={{ width: 100 }} /><button className="btn sm" onClick={() => void api.patch(`/projects/${detail.project.id}`, { budgetHours: v ? Number(v) : null }).then(reload)}>Speichern</button></span>;
 }
 
-function Contacts() {
-  const { detail } = useProject();
-  const [list, setList] = useState<{ email: string; name: string | null }[] | null>(null);
-  if (!list) { void api.get<{ contacts: any[] }>(`/projects/${detail.project.id}/contacts`).then((r) => setList(r.contacts)); return <span className="muted">…</span>; }
-  return <span className="small">{list.length ? list.map((c) => c.name ? `${c.name} <${c.email}>` : c.email).join(', ') : '–'}</span>;
-}

@@ -9,6 +9,7 @@ interface Overview {
   counts: { open: number; done: number; overdue: number; due_week: number; no_due: number };
   perSubproject: { id: string; name: string; total: number; done: number; overdue: number }[];
   milestones: { id: string; name: string; date: string; subprojectId: string | null }[];
+  raid: { id: string; number: number; kind: string; title: string; score: number | null; status: string; dueDate: string | null }[];
   pendingDrafts: number;
   pagesInReview: { id: string; title: string; updated_at: string }[];
   conflicts: { id: string; title: string; conflicts: string[] }[];
@@ -16,6 +17,8 @@ interface Overview {
   workload: { userId: string; name: string; open: number; overdue: number }[];
   activity: { action: string; objectType: string; objectId: string | null; details: any; createdAt: string; userName: string | null }[];
 }
+
+const RAID_LABEL: Record<string, string> = { risk: 'Risiko', assumption: 'Annahme', issue: 'Issue', decision: 'Entscheidung' };
 
 const ACTION_LABEL: Record<string, string> = {
   'task.create': 'Arbeitspaket angelegt', 'task.update': 'Arbeitspaket geändert', 'task.move': 'Arbeitspaket verschoben', 'task.archive': 'Arbeitspaket archiviert', 'task.create_from_mail': 'Arbeitspaket aus Mail',
@@ -101,6 +104,13 @@ export function OverviewView() {
             {o.overdue.length === 0 ? <p className="muted small">Nichts überfällig.</p> : (
               <table className="table"><tbody>{o.overdue.map((t) => <tr key={t.id} className="clickable" onClick={() => openTask(t.id)}><td>{t.title}</td><td className="nowrap" style={{ color: 'var(--danger)' }}>{fmtDate(t.dueDate)}</td><td className="muted small">{t.responsible}</td></tr>)}</tbody></table>
             )}
+          </div>
+          <div className="card">
+            <h2>Risiken und Entscheidungen</h2>
+            {o.raid.length === 0 ? <p className="muted small">Keine offenen Einträge.</p> : (
+              <table className="table"><tbody>{o.raid.map((r) => <tr key={r.id}><td className="nowrap"><span className={`badge raid-${r.kind}`}>{RAID_LABEL[r.kind] ?? r.kind}</span></td><td><Link to={`${base}/raid?nr=${r.number}`}>{r.title}</Link></td><td className="nowrap">{r.score != null && <span className={`badge ${r.score >= 15 ? 'danger' : r.score >= 8 ? 'warn' : ''}`}>{r.score}</span>}</td><td className="muted small nowrap">{fmtDate(r.dueDate)}</td></tr>)}</tbody></table>
+            )}
+            <Link to={`${base}/raid`} className="small">RAID-Register</Link>
           </div>
           <div className="card">
             <h2>Terminkonflikte</h2>
