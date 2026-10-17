@@ -5,6 +5,7 @@ import { DevMailProvider } from './devProvider.js';
 import { ImapMailProvider } from './imapProvider.js';
 import { GraphMailProvider } from './graphProvider.js';
 import { oauthProviders, refreshTokens } from '../oauth.js';
+import { seal, unseal } from '../secrets.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
 
@@ -44,11 +45,11 @@ export class MailService {
   async withToken(account: AccountRow): Promise<AccountRow> {
     if (!account.oauth_refresh_token) return account;
     const exp = account.oauth_expires_at ? new Date(account.oauth_expires_at).getTime() : 0;
-    if (account.oauth_access_token && exp - Date.now() > 120_000) return account;
+    if (account.oauth_access_token && exp - Date.now() > 120_000) return { ...account, oauth_access_token: unseal(account.oauth_access_token), oauth_refresh_token: unseal(account.oauth_refresh_token) };
     const cfg = oauthProviders().find((p) => p.key === account.oauth_provider);
     if (!cfg) throw new Error(`OAuth2-Anbieter ${account.oauth_provider} ist nicht konfiguriert`);
-    const t = await refreshTokens(cfg, account.oauth_refresh_token, this.fetchFn);
-    if (account.id) await this.db.query(`update mail_accounts set oauth_access_token = $2, oauth_refresh_token = $3, oauth_expires_at = $4 where id = $1`, [account.id, t.accessToken, t.refreshToken, t.expiresAt]);
+    const t = await refreshTokens(cfg, unseal(account.oauth_refresh_token)!, this.fetchFn);
+    if (account.id) await this.db.query(`update mail_accounts set oauth_access_token = $2, oauth_refresh_token = $3, oauth_expires_at = $4 where id = $1`, [account.id, seal(t.accessToken), seal(t.refreshToken), t.expiresAt]);
     return { ...account, oauth_access_token: t.accessToken, oauth_refresh_token: t.refreshToken, oauth_expires_at: t.expiresAt };
   }
 

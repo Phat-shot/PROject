@@ -20,6 +20,14 @@ const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final']
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
+/** Ausführbare Dateien und Skripte werden nicht angenommen; aktive Inhalte (HTML, SVG, XML) nur als Download ausgeliefert. */
+const BLOCKED_EXT = new Set(['.exe', '.bat', '.cmd', '.com', '.msi', '.scr', '.ps1', '.sh', '.vbs', '.js', '.mjs', '.jar', '.dll', '.hta', '.pif', '.cpl', '.reg', '.lnk']);
+const ACTIVE_MIME = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml)/i;
+export function dispositionFor(mime: string | null, filename: string): 'inline' | 'attachment' {
+  const ext = path.extname(filename).toLowerCase();
+  return ACTIVE_MIME.test(mime ?? '') || ['.html', '.htm', '.svg', '.xml', '.xhtml'].includes(ext) ? 'attachment' : 'inline';
+}
+
 export async function docRoutes(app: FastifyInstance) {
   const db = app.db;
   const layoutFor = (pageId: string) => L.layoutFor(db, pageId);
@@ -388,7 +396,7 @@ export async function docRoutes(app: FastifyInstance) {
     const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.aid]);
     if (!a || !a.page_id || !(await sharedPageIds(db, sh)).includes(a.page_id)) throw notFound('Anhang nicht gefunden');
     reply.header('content-type', a.mime);
-    reply.header('content-disposition', `inline; filename="${encodeURIComponent(a.filename)}"`);
+    reply.header('content-disposition', `${dispositionFor(a.mime, a.filename)}; filename="${encodeURIComponent(a.filename)}"`);
     return reply.send(createReadStream(a.storage_path));
   });
 
@@ -470,7 +478,11 @@ export async function docRoutes(app: FastifyInstance) {
     await requireProject(db, user, projectId, 'member');
     const file = await req.file();
     if (!file) throw badRequest('Keine Datei');
+    const ext = path.extname(file.filename).toLowerCase();
+    if (BLOCKED_EXT.has(ext)) throw badRequest(`Dateityp ${ext} ist nicht erlaubt (ausführbare Dateien und Skripte).`);
+    if (!file.filename.trim() || file.filename.length > 255) throw badRequest('Ungültiger Dateiname');
     const buf = await file.toBuffer();
+    if (buf.length === 0) throw badRequest('Leere Datei');
     await mkdir(uploadDir, { recursive: true });
     const storage = path.join(uploadDir, `${randomUUID()}${path.extname(file.filename)}`);
     await writeFile(storage, buf);
@@ -488,7 +500,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Anhang nicht gefunden');
     await requireProject(db, user, a.project_id);
     reply.header('content-type', a.mime);
-    reply.header('content-disposition', `inline; filename="${encodeURIComponent(a.filename)}"`);
+    reply.header('content-disposition', `${dispositionFor(a.mime, a.filename)}; filename="${encodeURIComponent(a.filename)}"`);
     return reply.send(createReadStream(a.storage_path));
   });
 

@@ -1,11 +1,12 @@
 import { ImapFlow } from 'imapflow';
 import { simpleParser } from 'mailparser';
 import nodemailer from 'nodemailer';
+import { unseal } from '../secrets.js';
 import type { MailFolder, AccountRow, IncomingMessage, MailProvider, MessageEnvelope, OutgoingMessage, SyncContext } from './types.js';
 
 /**
  * IMAP/SMTP-Adapter. Kopfdaten werden zuerst geholt (ENVELOPE), nur Treffer
- * werden vollständig geladen. OAuth2 (XOAUTH2) folgt; alpha: Passwort.
+ * werden vollständig geladen. Anmeldung per Passwort oder XOAUTH2 (OAuth2-Konten); Geheimnisse liegen verschlüsselt.
  */
 function specialOf(box: { path: string; specialUse?: string | null; name: string }): MailFolder['specialUse'] {
   const su = (box.specialUse ?? '').toLowerCase();
@@ -177,8 +178,8 @@ function smtpOptions(account: AccountRow) {
   return {
     host: account.smtp_host!, port, secure, requireTLS: !secure && port === 587,
     auth: account.oauth_refresh_token
-      ? { type: 'OAuth2' as const, user: account.smtp_user ?? account.imap_user ?? account.address, accessToken: account.oauth_access_token ?? '' }
-      : account.smtp_user ? { user: account.smtp_user, pass: account.smtp_password ?? '' } : undefined,
+      ? { type: 'OAuth2' as const, user: account.smtp_user ?? account.imap_user ?? account.address, accessToken: unseal(account.oauth_access_token) ?? '' }
+      : account.smtp_user ? { user: account.smtp_user, pass: unseal(account.smtp_password) ?? '' } : undefined,
     connectionTimeout: 15000, greetingTimeout: 15000, socketTimeout: 30000
   };
 }
@@ -186,7 +187,7 @@ function smtpOptions(account: AccountRow) {
 /** Passwort oder, bei OAuth2-Konten, XOAUTH2 mit dem (vom MailService aufgefrischten) Zugriffstoken. */
 function imapAuth(account: AccountRow) {
   const user = account.imap_user ?? account.address;
-  return account.oauth_refresh_token ? { user, accessToken: account.oauth_access_token ?? '' } : { user, pass: account.imap_password ?? '' };
+  return account.oauth_refresh_token ? { user, accessToken: unseal(account.oauth_access_token) ?? '' } : { user, pass: unseal(account.imap_password) ?? '' };
 }
 
 export function friendlyError(e: any): string {

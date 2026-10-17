@@ -8,6 +8,7 @@ import { loadTask, newMailCode } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
+import { seal } from '../secrets.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { notifyMany } from '../notify.js';
@@ -96,8 +97,8 @@ export async function mailRoutes(app: FastifyInstance) {
         `insert into mail_accounts (org_id, type, owner_user_id, project_id, name, address, provider, imap_host, imap_port, imap_user, imap_password, imap_secure, smtp_host, smtp_port, smtp_user, smtp_password, smtp_secure)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
         [user.orgId, b.type, b.type === 'personal' ? user.id : null, projectId, b.name, b.address.toLowerCase(), provider,
-          b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, b.imapPassword ?? null, b.imapSecure ?? true,
-          b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, b.smtpPassword ?? null, b.smtpSecure ?? false]
+          b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, seal(b.imapPassword), b.imapSecure ?? true,
+          b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, seal(b.smtpPassword), b.smtpSecure ?? false]
       );
       if (projectId) await db.query(`update projects set mail_address = coalesce(mail_address, $2) where id = $1`, [projectId, r.address]);
       await audit(db, { orgId: user.orgId, projectId, userId: user.id, action: 'mail_account.create', objectType: 'mail_account', objectId: r.id, details: { type: b.type, address: b.address, provider } });
@@ -118,8 +119,8 @@ export async function mailRoutes(app: FastifyInstance) {
          smtp_host = coalesce($9, smtp_host), smtp_port = coalesce($10, smtp_port), smtp_user = coalesce($11, smtp_user), smtp_password = coalesce(nullif($12, ''), smtp_password), smtp_secure = coalesce($13, smtp_secure),
          sync_error = null
        where id = $1 returning *`,
-      [a.id, b.name ?? null, b.address ? String(b.address).toLowerCase() : null, b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, b.imapPassword ?? null, b.imapSecure ?? null,
-        b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, b.smtpPassword ?? null, b.smtpSecure ?? null]
+      [a.id, b.name ?? null, b.address ? String(b.address).toLowerCase() : null, b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, seal(b.imapPassword) ?? '', b.imapSecure ?? null,
+        b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, seal(b.smtpPassword) ?? '', b.smtpSecure ?? null]
     );
     if (a.project_id && r.address !== a.address) await db.query(`update projects set mail_address = $2 where id = $1 and (mail_address = $3 or mail_address is null)`, [a.project_id, r.address, a.address]);
     await audit(db, { orgId: user.orgId, projectId: a.project_id, userId: user.id, action: 'mail_account.update', objectType: 'mail_account', objectId: a.id, details: Object.fromEntries(Object.entries(b).filter(([k]) => !/password/i.test(k))) });

@@ -6,6 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, publicRedirect, redirectUri } from '../oauth.js';
 import { requireProject } from '../rights.js';
 import { publicBase } from '../docs/share.js';
+import { seal } from '../secrets.js';
 
 interface MailPurpose { kind: 'mail'; provider: string; type: 'personal' | 'project' | 'org'; projectId: string | null; name: string | null }
 interface OidcPurpose { kind: 'oidc'; next: string }
@@ -70,13 +71,13 @@ export async function oauthRoutes(app: FastifyInstance) {
         [user.org_id, info.email, p.key, purpose.type, purpose.projectId ?? '', purpose.type === 'personal' ? user.id : '']);
       let accountId: string;
       if (existing) {
-        await db.query(`update mail_accounts set oauth_access_token = $2, oauth_refresh_token = $3, oauth_expires_at = $4, sync_error = null where id = $1`, [existing.id, tokens.accessToken, tokens.refreshToken, tokens.expiresAt]);
+        await db.query(`update mail_accounts set oauth_access_token = $2, oauth_refresh_token = $3, oauth_expires_at = $4, sync_error = null where id = $1`, [existing.id, seal(tokens.accessToken), seal(tokens.refreshToken), tokens.expiresAt]);
         accountId = existing.id;
       } else {
         const r = await db.one(
           `insert into mail_accounts (org_id, type, owner_user_id, project_id, name, address, provider, oauth_provider, oauth_access_token, oauth_refresh_token, oauth_expires_at, imap_host, imap_port, imap_user, imap_secure, smtp_host, smtp_port, smtp_user, smtp_secure)
            values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) returning id, address`,
-          [user.org_id, purpose.type, purpose.type === 'personal' ? user.id : null, purpose.projectId, purpose.name ?? info.name ?? info.email, info.email, p.mailProvider, p.key, tokens.accessToken, tokens.refreshToken, tokens.expiresAt,
+          [user.org_id, purpose.type, purpose.type === 'personal' ? user.id : null, purpose.projectId, purpose.name ?? info.name ?? info.email, info.email, p.mailProvider, p.key, seal(tokens.accessToken), seal(tokens.refreshToken), tokens.expiresAt,
             p.mailProvider === 'imap' ? p.imap!.host : null, p.mailProvider === 'imap' ? p.imap!.port : null, p.mailProvider === 'imap' ? info.email : null, true,
             p.mailProvider === 'imap' ? p.imap!.smtpHost : null, p.mailProvider === 'imap' ? p.imap!.smtpPort : null, p.mailProvider === 'imap' ? info.email : null, false]
         );

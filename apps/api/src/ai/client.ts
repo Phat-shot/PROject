@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
+import { unseal } from '../secrets.js';
 
 /**
  * Anbindung an die Anthropic Messages API. Der Schlüssel kommt aus der Umgebung (ANTHROPIC_API_KEY) oder aus den
@@ -23,7 +24,7 @@ export async function aiConfig(db: Db, orgId: string): Promise<AiConfig | null> 
   const o = await db.one(`select settings, ai_api_key from orgs where id = $1`, [orgId]);
   const ai = o.settings?.ai ?? {};
   if (ai.enabled === false) return null;
-  const apiKey = o.ai_api_key || process.env.ANTHROPIC_API_KEY;
+  const apiKey = unseal(o.ai_api_key) || process.env.ANTHROPIC_API_KEY;
   if (!apiKey) return null;
   return { apiKey, model: ai.model || DEFAULT_MODEL, source: o.ai_api_key ? 'org' : 'env' };
 }

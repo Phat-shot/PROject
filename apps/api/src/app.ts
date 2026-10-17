@@ -42,6 +42,9 @@ declare module 'fastify' {
   }
 }
 
+function safeOrigin(u: string): string | null { try { return new URL(u).origin; } catch { return null; } }
+function safeHost(u: string | null | undefined): string { try { return u ? new URL(u).host : ''; } catch { return ''; } }
+
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 10 * 1024 * 1024 });
   app.decorate('db', opts.db);
@@ -55,6 +58,18 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
 
   app.addHook('preHandler', async (req) => {
     req.user = await userFromToken(opts.db, req.cookies[SESSION_COOKIE]);
+  });
+
+  // CSRF: ändernde Anfragen mit Sitzungs-Cookie müssen von der eigenen Herkunft kommen (Origin bzw. Referer gegen Host und PUBLIC_URL)
+  app.addHook('onRequest', async (req, reply) => {
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !req.cookies?.[SESSION_COOKIE]) return;
+    const src = req.headers.origin ?? (req.headers.referer ? safeOrigin(req.headers.referer) : null);
+    if (!src) return; // kein Browser-Kontext (API-Client, Tests)
+    const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim();
+    const allowed = new Set([host, safeHost(process.env.PUBLIC_URL)].filter(Boolean));
+    if (!allowed.has(safeHost(src))) {
+      reply.status(403).send({ error: 'Anfrage von fremder Herkunft abgelehnt' });
+    }
   });
 
   app.setErrorHandler((err: any, req, reply) => {

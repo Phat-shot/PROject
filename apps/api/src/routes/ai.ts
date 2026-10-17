@@ -12,6 +12,7 @@ import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
 import { notify } from '../notify.js';
+import { seal } from '../secrets.js';
 
 function mapProposal(r: any): AiProposal {
   return { id: r.id, projectId: r.project_id, kind: r.kind, mailId: r.mail_id, taskId: r.task_id, pageId: r.page_id, payload: r.payload ?? {}, status: r.status, createdBy: r.created_by, createdByName: r.created_by_name ?? null, decidedBy: r.decided_by, decidedAt: r.decided_at, note: r.note, createdAt: r.created_at, taskTitle: r.task_title ?? null, pageTitle: r.page_title ?? null, mailSubject: r.mail_subject ?? null };
@@ -36,7 +37,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (b.model && !/^[a-z0-9.-]+$/i.test(b.model)) throw badRequest('Ungültiges Modell');
     await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { enabled: b.enabled !== false, model: b.model || undefined } })]);
     if (b.apiKey === null) await db.query(`update orgs set ai_api_key = null where id = $1`, [user.orgId]);
-    else if (typeof b.apiKey === 'string' && b.apiKey.trim()) await db.query(`update orgs set ai_api_key = $2 where id = $1`, [user.orgId, b.apiKey.trim()]);
+    else if (typeof b.apiKey === 'string' && b.apiKey.trim()) await db.query(`update orgs set ai_api_key = $2 where id = $1`, [user.orgId, seal(b.apiKey.trim())]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled !== false, model: b.model, keyChanged: b.apiKey !== undefined } });
     return aiStatus(db, user.orgId);
   });

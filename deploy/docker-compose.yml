@@ -43,6 +43,8 @@ services:
       COOKIE_SECURE: "true"
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       LOG: "true"
+      # Schlüssel für gespeicherte Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel); leer = Datei /data/secret.key
+      SECRET_KEY: ${SECRET_KEY:-}
     volumes:
       - appdata:/data
     networks:
