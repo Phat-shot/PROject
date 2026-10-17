@@ -2,7 +2,7 @@ import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
-import { notify } from '../notify.js';
+import { notify, notifyMany, usersWithRight } from '../notify.js';
 import { touchTask } from '../tasks/service.js';
 import { aiConfigForAgent, complete, orgAiSettings, parseJson, type AiConfig } from './client.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -32,11 +32,17 @@ export type AgentAction =
   | { type: 'update_item'; itemId: string; text: string }
   | { type: 'doc_create'; title: string; folder?: string | null; text: string }
   | { type: 'doc_append'; pageId: string; text: string }
-  | { type: 'doc_send_pdf'; pageId: string; to: string[]; subject: string; text: string }
+  | { type: 'read_page'; pageId: string }
+  | { type: 'doc_update'; pageId: string; title?: string | null; text: string }
+  | { type: 'doc_status'; pageId: string; status: 'draft' | 'review' | 'final' }
+  | { type: 'doc_move'; pageId: string; folder: string }
+  | { type: 'folder_create'; folder: string }
+  | { type: 'doc_send_pdf'; pageId: string; to: string[] | null; subject: string; text: string }
   | { type: 'none'; reason?: string };
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean }
 const H = 3600_000;
+const DOC_TRANSITIONS: Record<string, string[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 const clampH = (v: unknown, def: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(24 * 14, Math.max(0.1, n)) : def; };
 /** Termin aus until: ISO-Datum/-Zeit, YYYY-MM-DD oder HH:MM (heute, sonst morgen); Zeiten ohne Zone gelten als Europe/Berlin. */
 function parseUntil(v: unknown, now: Date): Date | null {
@@ -60,16 +66,17 @@ const SCHEMA = {
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'doc_create', 'doc_append', 'doc_send_pdf', 'blocked', 'escalate', 'wait', 'none'] },
-        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_append: Seiteninhalt in Markdown; sonst null' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'blocked', 'escalate', 'wait', 'none'] },
+        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); sonst null' },
         column: { type: ['string', 'null'], description: 'set_status: Zielstatus (exakt aus der Liste); sonst null' },
         itemId: { type: ['string', 'null'], description: 'check_item/update_item: itemId aus der Task-Liste; sonst null' },
-        pageId: { type: ['string', 'null'], description: 'doc_append/doc_send_pdf: pageId aus der Seitenliste; sonst null' },
-        title: { type: ['string', 'null'], description: 'doc_create: Seitentitel; sonst null' },
-        folder: { type: ['string', 'null'], description: 'doc_create: Ordnername aus der Ordnerliste (z. B. Protokolle); sonst null' },
-        to: { type: ['array', 'null'], items: { type: 'string' }, description: 'mail: Empfängeradressen; sonst null' },
+        pageId: { type: ['string', 'null'], description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst null' },
+        status: { type: ['string', 'null'], description: 'doc_status: draft, review oder final; sonst null' },
+        title: { type: ['string', 'null'], description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); sonst null' },
+        folder: { type: ['string', 'null'], description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst null' },
+        to: { type: ['array', 'null'], items: { type: 'string' }, description: 'mail: Empfängeradressen; doc_send_pdf: Empfänger oder null für den Verteiler des Ordners (nur finale Seiten); sonst null' },
         subject: { type: ['string', 'null'], description: 'mail: Betreff; sonst null' },
         reason: { type: ['string', 'null'], description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst null' },
         kind: { type: ['string', 'null'], description: 'wait: genau einer der Werte reply, date, task, info; sonst null' },
@@ -104,7 +111,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; doc_create braucht title und text (Markdown); doc_append und doc_send_pdf brauchen pageId; ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; Doku: read_page liest eine Seite (pageId); lies eine Seite immer, bevor du sie änderst oder ihren Inhalt brauchst, und gib erst danach die ändernden Aktionen an. doc_create braucht title und text (Markdown), doc_update pageId und text (ersetzt den Inhalt), doc_append pageId und text (hängt an), doc_status pageId und status (draft → review → final; final sperrt), doc_move pageId und folder, folder_create folder, doc_send_pdf pageId, subject, text und to (oder to null = Verteiler des Ordners bei finaler Seite). Ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
   const prompt = `Heute: ${today}
 Arbeitspaket ${task.project_key}-${task.number} „${task.title}“ · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -119,16 +126,38 @@ Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (neueste zuerst):
 ${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
 Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
-Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : ' (kein Projektkonto)'}; Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku-Seiten anlegen (doc_create mit title, folder, text in Markdown) und ergänzen (doc_append mit pageId, text); PDF einer Seite per Mail senden (doc_send_pdf mit pageId, to, subject, text); Log schreiben; Blockade melden; an PL eskalieren.
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : ' (kein Projektkonto)'}; Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer Seite per Mail senden (doc_send_pdf${m.can_finalize ? ', auch an den Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
 ${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
 Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
   try {
-    const r = await complete(c, fetchFn, { system, prompt, maxTokens: 1500, schema: SCHEMA });
-    const j = parseJson(r.text);
-    const actions: AgentAction[] = Array.isArray(j.actions) ? j.actions.slice(0, 5) : [];
-    const applied: AgentAction[] = [];
     const errors: string[] = [];
+    let extra = '';
+    let inputTokens = 0; let outputTokens = 0; let model = '';
+    let j: any = {};
+    let actions: AgentAction[] = [];
+    // Leserunden: read_page liefert Seiteninhalte, danach entscheidet das Modell erneut (max. zwei Leserunden)
+    for (let round = 0; round < 3; round++) {
+      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: 2500, schema: SCHEMA });
+      inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
+      j = parseJson(r.text);
+      actions = Array.isArray(j.actions) ? j.actions.slice(0, 8) : [];
+      const reads = actions.filter((a) => a.type === 'read_page');
+      if (!reads.length) break;
+      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page'); break; }
+      const texts: string[] = [];
+      for (const a of reads.slice(0, 4)) {
+        const pid = (a as any).pageId;
+        const page = await db.maybeOne(`select id, title, status, version, content_md, content_html from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
+        if (!page) { texts.push(`- pageId ${pid ?? '?'}: nicht gefunden`); continue; }
+        const md = page.content_html ? htmlToMd(page.content_html) : page.content_md ?? '';
+        texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
+      }
+      const others = actions.filter((a) => a.type !== 'read_page');
+      extra += `\n\nGelesene Seiten (Markdown):\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten.`;
+      actions = [];
+    }
+    const applied: AgentAction[] = [];
     let mailsSent = 0;
     let waited = false;
     for (const a of actions) {
@@ -163,6 +192,53 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           pages.rows.unshift({ id: page.id, title: page.title, status: 'draft', updated_at: new Date(), folder: a.folder ?? null });
           applied.push({ ...a, pageId: page.id } as any);
         }
+      } else if (a.type === 'read_page') errors.push('read_page ohne weitere Aktionen verworfen');
+      else if (a.type === 'doc_update') {
+        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        if (!page || !a.text?.trim()) errors.push(`Seitenänderung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
+        else if (page.status === 'final') errors.push(`Seite „${page.title}“ ist final und gesperrt (erst doc_status draft)`);
+        else {
+          const html = mdToHtml(a.text);
+          const title = a.title?.trim() ? a.title.trim().slice(0, 200) : page.title;
+          const u = await db.one(`update doc_pages set title = $2, content_html = $3, content_md = $4, version = version + 1, updated_by = $5, updated_at = now() where id = $1 returning *`, [page.id, title, html, htmlToMd(html), agent.id]);
+          await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, agent.id]);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite überarbeitet: „${u.title}“ (Version ${u.version}) ${publicBase()}/projekte/${task.project_id}/doku/${u.id}`]);
+          applied.push(a);
+        }
+      } else if (a.type === 'doc_status') {
+        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        const to = String(a.status ?? '');
+        if (!page) errors.push('Statuswechsel verworfen: pageId unbekannt');
+        else if (!DOC_TRANSITIONS[page.status]?.includes(to)) errors.push(`Übergang ${page.status} → ${to || '?'} bei „${page.title}“ nicht erlaubt`);
+        else if ((to === 'final' || page.status === 'final') && !m.can_finalize) errors.push(`„${page.title}“: Final setzen oder aufheben erfordert das Recht „Final setzen“`);
+        else {
+          const u = await db.one(`update doc_pages set status = $2, finalized_at = case when $2 = 'final' then now() else null end, updated_by = $3, updated_at = now() where id = $1 returning *`, [page.id, to, agent.id]);
+          await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
+          await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: `page.${to}`, objectType: 'doc_page', objectId: u.id, details: { from: page.status, version: u.version } });
+          if (to === 'review') await notifyMany(db, await usersWithRight(db, task.project_id, 'can_finalize'), { projectId: task.project_id, type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${agent.name} (KI-Agent)`, link: `/projekte/${task.project_id}/doku/${u.id}` }, agent.id);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite „${u.title}“ → ${{ draft: 'Entwurf', review: 'In Prüfung', final: 'Final' }[to]}`]);
+          applied.push(a);
+        }
+      } else if (a.type === 'doc_move') {
+        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        const folder = a.folder ? await db.maybeOne(`select id, name from doc_folders where project_id = $1 and lower(name) = lower($2)`, [task.project_id, a.folder]) : null;
+        if (!page || !folder) errors.push(`Verschieben verworfen: ${!page ? 'pageId unbekannt' : `Ordner „${a.folder ?? ''}“ gibt es nicht`}`);
+        else {
+          await db.query(`update doc_pages set folder_id = $2, updated_by = $3, updated_at = now() where id = $1`, [page.id, folder.id, agent.id]);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite „${page.title}“ nach „${folder.name}“ verschoben`]);
+          applied.push({ ...a, folder: folder.name });
+        }
+      } else if (a.type === 'folder_create') {
+        const name = String(a.folder ?? '').trim().slice(0, 100);
+        if (!name) errors.push('Ordner ohne Namen verworfen');
+        else if (await db.maybeOne(`select 1 from doc_folders where project_id = $1 and lower(name) = lower($2)`, [task.project_id, name])) errors.push(`Ordner „${name}“ gibt es schon`);
+        else {
+          const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from doc_folders where project_id = $1`, [task.project_id]);
+          const f = await db.one(`insert into doc_folders (project_id, parent_id, name, position, distribution_list) values ($1,null,$2,$3,'[]') returning *`, [task.project_id, name, pos.p]);
+          folders.rows.push({ id: f.id, name: f.name });
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Ordner „${f.name}“ angelegt`]);
+          applied.push({ type: 'folder_create', folder: f.name });
+        }
       } else if (a.type === 'doc_append') {
         const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
         if (!page || !a.text?.trim()) errors.push(`Seitenergänzung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
@@ -175,9 +251,14 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           applied.push(a);
         }
       } else if (a.type === 'doc_send_pdf') {
-        const to = (Array.isArray(a.to) ? a.to : []).map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
-        const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
+        const page = await db.maybeOne(`select p.*, f.distribution_list from doc_pages p left join doc_folders f on f.id = p.folder_id where p.id = $1 and p.project_id = $2 and p.deleted_at is null`, [a.pageId, task.project_id]);
+        const useList = page && (!Array.isArray(a.to) || !a.to.length);
+        const raw: string[] = useList ? (page.distribution_list?.length ? page.distribution_list : page.settings?.recipients ?? []) : Array.isArray(a.to) ? a.to : [];
+        const to = raw.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 10);
         if (!page) errors.push('PDF-Versand verworfen: pageId unbekannt');
+        else if (useList && page.status !== 'final') errors.push(`Versand an den Verteiler nur für finale Seiten („${page.title}“ ist ${page.status})`);
+        else if (useList && !m.can_finalize) errors.push('Versand an den Verteiler erfordert das Recht „Final setzen / Versand“');
+        else if (useList && !to.length) errors.push(`Kein Verteiler am Ordner oder an der Seite „${page.title}“`);
         else if (!to.length || !a.subject) errors.push('PDF-Versand verworfen: Empfänger oder Betreff fehlt');
         else if (!account) errors.push('PDF-Versand nicht möglich: kein Projektkonto');
         else if (!canMail) errors.push('PDF-Versand nicht erlaubt: Agent darf keine Mails senden');
@@ -256,8 +337,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
-    await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
+    await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model, inputTokens, outputTokens } });
     return { runId: run.id, taskId: task.id, status: errors.length ? 'error' : 'ok', actions: applied, error: errors.length ? errors.join(' | ') : undefined };
   } catch (e: any) {
     const msg = String(e?.message ?? e).slice(0, 300);

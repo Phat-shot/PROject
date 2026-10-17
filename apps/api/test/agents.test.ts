@@ -7,13 +7,15 @@ import { flushAgentRuns } from '../src/ai/agentEvents.js';
 /** Lokales LLM (OpenAI-kompatibel wie vLLM): antwortet mit Aktionen je nach Prompt. */
 const calls: { url: string; body: any }[] = [];
 let nextActions: any[] = [];
+/** Antworten für mehrere Modellaufrufe in einem Lauf (Leserunden); leer = nextActions */
+let queue: any[][] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const url = String(input);
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   calls.push({ url, body });
   if (url === 'http://llm.local:8000/v1/chat/completions') {
     if (body.model !== 'qwen3') return new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 404 });
-    const content = body.response_format ? JSON.stringify({ note: 'Stand unklar, Lieferant gefragt.', actions: nextActions }) : 'bereit';
+    const content = body.response_format ? JSON.stringify({ note: 'Stand unklar, Lieferant gefragt.', actions: queue.length ? queue.shift() : nextActions }) : 'bereit';
     return new Response(JSON.stringify({ model: 'qwen3', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 500, completion_tokens: 40 } }), { status: 200 });
   }
   return new Response('{}', { status: 404 });
@@ -305,4 +307,70 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   assert.equal((await t.db.one(`select version from doc_pages where id = $1`, [page.id])).version, 2);
   const note = await t.db.one(`select f.name as folder from doc_pages p join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.title = 'Notiz'`, [pid]);
   assert.equal(note.folder, 'Protokolle');
+});
+
+test('Doku wie ein Mitglied: Seite lesen (Leserunde), Inhalt ersetzen, Status mit Prüfbenachrichtigung, Final nur mit Recht, Verteiler-Versand, Ordner anlegen, verschieben', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  const agent = (await t.api(pl).get('/agents')).json().agents.find((a: any) => a.name === 'Schreiber');
+  const taskId = (await t.db.one(`select id from tasks where project_id = $1 and responsible_user_id = $2 order by created_at desc limit 1`, [pid, agent.id])).id;
+  const page = await t.db.one(`select id, title from doc_pages where project_id = $1 and title = 'JF 2026-10-17'`, [pid]);
+  await t.db.query(`update doc_pages set status = 'draft' where id = $1`, [page.id]);
+  await t.db.query(`delete from agent_runs where task_id = $1`, [taskId]);
+
+  // Runde 1: Modell liest die Seite (übrige Aktionen werden verworfen); Runde 2: ersetzt Inhalt und setzt In Prüfung
+  queue = [
+    [{ type: 'read_page', pageId: page.id }, { type: 'comment', text: 'darf nicht ausgeführt werden' }],
+    [{ type: 'doc_update', pageId: page.id, title: 'JF 17.10.2026', text: '# Jour fixe 17.10.\n\n- Thema A\n- Thema B\n\n## Beschlüsse\n\nAlles klar.' }, { type: 'doc_status', pageId: page.id, status: 'review' }, { type: 'doc_status', pageId: page.id, status: 'final' }]
+  ];
+  const n0 = calls.length;
+  const r = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(calls.length - n0, 2, 'zwei Modellaufrufe');
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Gelesene Seiten \(Markdown\):\n### „JF 2026-10-17“ \(pageId/);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /# Jour fixe[\s\S]*Beschlüsse/);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /wurden NICHT ausgeführt/);
+  assert.deepEqual(r.json().actions.map((x: any) => x.type), ['doc_update', 'doc_status']);
+  assert.match(String(r.json().error), /Recht „Final setzen“/);
+  assert.ok(!(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'darf nicht%'`, [taskId])), 'Aktionen der Leserunde nicht ausgeführt');
+  const p2 = await t.db.one(`select * from doc_pages where id = $1`, [page.id]);
+  assert.equal(p2.title, 'JF 17.10.2026');
+  assert.equal(p2.status, 'review');
+  assert.equal(p2.version, 3);
+  assert.match(p2.content_html, /<h1>Jour fixe 17\.10\.<\/h1>/);
+  assert.equal((await t.db.one(`select count(*)::int as n from doc_page_versions where page_id = $1`, [page.id])).n, 3);
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'page.review' and title = 'Zur Prüfung: JF 17.10.2026'`, [t.ids.users.pl]), 'PL wird zur Prüfung benachrichtigt');
+  const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
+  assert.equal(runs.length, 1, 'eine Leserunde ergibt einen Lauf');
+  assert.equal(runs[0].inputTokens, 1000, 'Token beider Aufrufe summiert');
+
+  // Mit Recht „Final setzen“: final, dann PDF an den Verteiler des Ordners Protokolle
+  const mem = await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true, canFinalize: true });
+  assert.equal(mem.json().membership.canFinalize, true);
+  queue = [];
+  nextActions = [{ type: 'doc_status', pageId: page.id, status: 'final' }, { type: 'doc_send_pdf', pageId: page.id, to: null, subject: 'Protokoll JF 17.10.', text: 'Anbei das finale Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
+  const before = t.mail.dev.sent.length;
+  const r2 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.equal(r2.statusCode, 200, r2.body);
+  assert.deepEqual(r2.json().actions.map((x: any) => x.type), ['doc_status', 'doc_send_pdf']);
+  assert.deepEqual(r2.json().actions[1].to, ['gf@demo.local', 'k.mueller@mueller-design.de'], 'Verteiler des Ordners');
+  assert.equal((await t.db.one(`select status from doc_pages where id = $1`, [page.id])).status, 'final');
+  assert.equal(t.mail.dev.sent.length, before + 1);
+  assert.deepEqual(t.mail.dev.sent[before].msg.to, ['gf@demo.local', 'k.mueller@mueller-design.de']);
+  assert.equal(t.mail.dev.sent[before].msg.attachments?.[0].filename, 'JF_17.10.2026_v3.pdf');
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'page.final' and user_id = $1`, [agent.id]));
+
+  // Ordner anlegen und Seite verschieben; finale Seite bleibt strukturell änderbar; Verteiler-Versand an nicht-finale Seite wird abgelehnt
+  nextActions = [{ type: 'folder_create', folder: 'JF-Protokolle' }, { type: 'doc_move', pageId: page.id, folder: 'jf-protokolle' }, { type: 'folder_create', folder: 'Protokolle' }];
+  const r3 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.deepEqual(r3.json().actions.map((x: any) => x.type), ['folder_create', 'doc_move']);
+  assert.match(String(r3.json().error), /gibt es schon/);
+  const moved = await t.db.one(`select f.name from doc_pages p join doc_folders f on f.id = p.folder_id where p.id = $1`, [page.id]);
+  assert.equal(moved.name, 'JF-Protokolle');
+  await t.db.query(`update doc_pages set status = 'draft' where id = $1`, [page.id]);
+  nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to: null, subject: 'x', text: 'y' }];
+  const r4 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.match(String(r4.json().error), /nur für finale Seiten/);
+  assert.equal(t.mail.dev.sent.length, before + 1);
 });

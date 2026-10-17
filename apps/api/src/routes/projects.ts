@@ -198,7 +198,7 @@ export async function projectRoutes(app: FastifyInstance) {
       if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
       const target = await db.maybeOne(`select id, kind from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
-      // KI-Agent: nur Mitglied mit Stellvertretung, nie PL; Rechte wie ein Mitglied, Mailversand abschaltbar
+      // KI-Agent: nur Mitglied mit Stellvertretung, nie PL; Rechte wie ein Mitglied (auch „Final setzen“ zuweisbar), Mailversand abschaltbar, keine KI-Freigabe
       const isAgent = target.kind === 'agent';
       if (isAgent) { b.role = 'member'; b.canUseAi = true; }
       // Stellvertreter = zweiter PL, vom PL bestimmt.
@@ -226,7 +226,7 @@ export async function projectRoutes(app: FastifyInstance) {
          on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
            can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail
          returning *`,
-        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), isAgent ? false : Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
+        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
       );
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };

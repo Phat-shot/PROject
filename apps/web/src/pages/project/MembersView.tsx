@@ -135,7 +135,7 @@ export function MembersView() {
       <Modal title={member ? `Rolle: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
         <div className="form">
           {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
-          {isAgent && <div className="notice small">KI-Agent: wird Mitglied mit Stellvertretung, nie PL. Er handelt nur bei Arbeitspaketen, die ihm die PL zuweist, und schreibt Log-Einträge unter seinem Namen.<label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label></div>}
+          {isAgent && <div className="notice small">KI-Agent: wird Mitglied mit Stellvertretung, nie PL. Er handelt nur bei Arbeitspaketen, die ihm die PL zuweist, und schreibt Log-Einträge unter seinem Namen.<label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
           {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
           {!isAgent && f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
           {!isAgent && f.role === 'member' && <>
@@ -148,7 +148,7 @@ export function MembersView() {
           {!isAgent && f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
-            const body: Record<string, unknown> = isAgent ? { role: 'member', agentCanMail } : { ...f };
+            const body: Record<string, unknown> = isAgent ? { role: 'member', agentCanMail, canFinalize: f.canFinalize } : { ...f };
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
             if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
