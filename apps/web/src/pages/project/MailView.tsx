@@ -3,7 +3,7 @@ import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, use
 import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, PromptModal, roleLabel, statusLabel, useAsync } from '../../components/ui';
+import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
@@ -155,6 +155,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
   const nav = useNavigate();
   const { error, run } = useAsync();
+  const dlg = useDialog();
   if (d.error) return <div className="mail-detail"><div className="error">{d.error}</div><p className="muted mt">Verknüpfte Mail, keine Berechtigung: Du darfst die Ansicht nicht lesen, aus der diese Mail stammt.</p></div>;
   if (!d.data) return <div className="mail-detail muted">Lade …</div>;
   const m = d.data.mail;
@@ -193,7 +194,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       {d.data.canModify && (
         <div className="mail-actions">
           <button className="btn sm" onClick={() => folderAction(() => api.post(`/mail/mails/${m.id}/archive`))}>Archivieren</button>
-          <button className="btn sm danger" onClick={() => { if (confirm('Mail in den Papierkorb verschieben?')) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); }}>Löschen</button>
+          <button className="btn sm danger" onClick={() => void dlg.confirm({ title: 'Mail löschen', text: 'In den Papierkorb des Kontos verschieben? Verknüpfungen mit Arbeitspaketen bleiben.', confirmLabel: 'In Papierkorb', danger: true }).then((ok) => { if (ok) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); })}>Löschen</button>
           <select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} style={{ width: 'auto' }}>
             <option value="">Verschieben nach …</option>
             {mailFolders.filter((f) => f.path.toLowerCase() !== m.folder.toLowerCase()).map((f) => <option key={f.path} value={f.path}>{f.specialUse ? FOLDER_LABEL[f.specialUse] : f.path}</option>)}
@@ -521,6 +522,7 @@ export function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onCl
   const { detail } = useProject();
   const [rows, setRows] = useState<RightRow[] | null>(null);
   const [addUser, setAddUser] = useState('');
+  const dialog = useDialog();
   const { busy, error, run } = useAsync();
   useEffect(() => { api.get<{ rights: RightRow[] }>(`/mail/views/${view.id}/rights`).then((r) => setRows(r.rights)); }, [view.id]);
   const flags: [keyof RightRow, string][] = [['canRead', 'Lesen'], ['canDraft', 'Entwurf'], ['canSend', 'Senden'], ['canCreateTask', 'Arbeitspaket'], ['canAi', 'KI']];
@@ -547,7 +549,7 @@ export function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onCl
       {error && <div className="error mt">{error}</div>}
       <div className="row mt">
         <button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/mail/views/${view.id}/rights`, { rights: rows }); onChanged(); onClose(); })}>Speichern</button>
-        <button className="btn danger right" onClick={() => { if (confirm('Ansicht entfernen? Mails verschwinden aus dem Projekt, Kopien in Arbeitspaketen bleiben.')) void run(async () => { await api.del(`/mail/views/${view.id}`); onChanged(); onClose(); }); }}>Ansicht entfernen</button>
+        <button className="btn danger right" onClick={() => void dialog.confirm({ title: 'Ansicht entfernen', text: 'Mails dieser Ansicht verschwinden aus dem Projekt, Kopien in Arbeitspaketen bleiben.', confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/views/${view.id}`); onChanged(); onClose(); }); })}>Ansicht entfernen</button>
       </div>
       {filterEdit && <FilterEditor view={view} onClose={() => setFilterEdit(false)} onSaved={() => { setFilterEdit(false); onChanged(); }} />}
     </Modal>

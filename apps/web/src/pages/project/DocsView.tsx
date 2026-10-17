@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, statusLabel, useAsync } from '../../components/ui';
+import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { useProject } from '../ProjectPage';
 
@@ -85,6 +85,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   const [share, setShare] = useState(false);
   const [settings, setSettings] = useState(false);
   const [showVersion, setShowVersion] = useState<DocPageVersion | null>(null);
+  const dialog = useDialog();
   const { busy, error, run, setError } = useAsync();
   const me = detail.project.myMembership;
   const base = `/projekte/${detail.project.id}/doku`;
@@ -119,10 +120,10 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         {p.status === 'review' && me.role !== 'reader' && <button className="btn sm" disabled={busy} onClick={() => void setStatus('draft')}>Zurück auf Entwurf</button>}
         {p.status !== 'final' && canFinal && <button className="btn sm" disabled={busy} onClick={() => void setStatus('final')}>Final setzen</button>}
         {p.status === 'final' && canFinal && <>
-          <button className="btn sm" disabled={busy} onClick={() => { if (confirm('Finale Seite wieder öffnen? Es entsteht eine neue Version.')) void setStatus('draft'); }}>Wieder öffnen</button>
-          <button className="btn sm primary" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); alert(`PDF „${r.filename}“ versendet an: ${r.to.join(', ')}`); })}>Als PDF an Verteiler senden</button>
+          <button className="btn sm" disabled={busy} onClick={() => void dialog.confirm({ title: 'Finale Seite wieder öffnen', text: 'Es entsteht eine neue Version; die Seite ist danach wieder Entwurf.', confirmLabel: 'Wieder öffnen' }).then((ok) => { if (ok) void setStatus('draft'); })}>Wieder öffnen</button>
+          <button className="btn sm primary" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); await dialog.notify({ title: 'PDF versendet', text: `„${r.filename}“ ging an: ${r.to.join(', ')}` }); })}>Als PDF an Verteiler senden</button>
         </>}
-        {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Seite löschen? Unterseiten rücken eine Ebene hoch.')) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); }}>Löschen</button>}
+        {me.role === 'pl' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
       </div>
       {p.status === 'final' && <div className="success mb small">Final seit {fmtDateTime(p.finalizedAt)}. Die Seite ist gesperrt und versioniert.</div>}
       {error && <div className="error mb">{error}</div>}

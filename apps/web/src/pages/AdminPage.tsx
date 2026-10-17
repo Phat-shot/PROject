@@ -5,7 +5,7 @@ import { RichEditor } from '../components/RichEditor';
 import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
-import { Modal, useAsync } from '../components/ui';
+import { Modal, useAsync, useDialog } from '../components/ui';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
@@ -14,6 +14,7 @@ export function AdminPage() {
   const [create, setCreate] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const { error, run, busy } = useAsync();
+  const dialog = useDialog();
   return (
     <>
       <TopBar title="Verwaltung"><button className="btn" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></TopBar>
@@ -24,7 +25,7 @@ export function AdminPage() {
           {error && <div className="error mb">{error}</div>}
           <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th /></tr></thead><tbody>
             {users.data?.users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><span className="badge">{globalLabel[u.globalRole]}</span></td>
-              <td><button className="btn sm danger" disabled={busy} onClick={() => { if (confirm(`${u.name} deaktivieren? Login endet, persönliche Konten werden getrennt, Zuständigkeiten fallen zurück.`)) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); }}>Deaktivieren</button></td></tr>)}
+              <td><button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Benutzer deaktivieren', text: `${u.name} deaktivieren? Der Login endet, persönliche Mail-Konten werden getrennt, Zuständigkeiten fallen auf die Vererbung zurück.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); })}>Deaktivieren</button></td></tr>)}
           </tbody></table>
         </div>
         <GroupsCard users={users.data?.users ?? []} />
@@ -86,6 +87,7 @@ function GroupsCard({ users }: { users: User[] }) {
   const [edit, setEdit] = useState<Group | null>(null);
   const [f, setF] = useState({ name: '', description: '', memberIds: [] as string[] });
   const { busy, error, run } = useAsync();
+  const dialog = useDialog();
   const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', memberIds: g?.memberIds ?? [] }); };
   return (
     <div className="card">
@@ -94,7 +96,7 @@ function GroupsCard({ users }: { users: User[] }) {
       {data && data.groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
       {data && data.groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th /></tr></thead><tbody>
         {data.groups.map((g) => <tr key={g.id}><td>{g.name}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{g.memberIds.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ') || <span className="muted">–</span>}</td>
-          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button><button className="btn sm link" onClick={() => { if (confirm(`Gruppe „${g.name}“ löschen? Freigaben über diese Gruppe enden.`)) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); }}>✕</button></td></tr>)}
+          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button><button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })}>✕</button></td></tr>)}
       </tbody></table>}
       {error && <div className="error mt">{error}</div>}
       {edit && (

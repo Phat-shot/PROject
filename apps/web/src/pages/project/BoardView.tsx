@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
-import { Initials, Modal, prioLabel, useAsync } from '../../components/ui';
+import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
 interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean; escalated: boolean }
@@ -12,6 +12,7 @@ export function BoardView() {
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const { user } = useAuth();
   const [lanes, setLanes] = useState(true);
+  const dialog = useDialog();
   const [f, setF] = useState<Filter>(EMPTY);
   const [archived, setArchived] = useState<Task[] | null>(null);
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -129,7 +130,7 @@ export function BoardView() {
                     <span>{c.name}{!isCollapsed && c.kind === 'backlog' && <span className="kind" title="Geplant: zählt nicht als Stillstand">geplant</span>}{!isCollapsed && c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
                     {!isCollapsed && <span className="tools">
                       <span>{inCol.length}</span>
-                      {canEdit && c.isDone && inCol.length > 0 && <button title="Alle erledigten archivieren" onClick={() => { if (confirm(`${total} erledigte Arbeitspakete archivieren?`)) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); }}>⌫</button>}
+                      {canEdit && c.isDone && inCol.length > 0 && <button className="btn sm link" title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => void dialog.confirm({ title: 'Erledigte archivieren', text: `${total} erledigte Arbeitspakete archivieren? Sie bleiben über den Filter „Archiv“ erreichbar.`, confirmLabel: 'Archivieren' }).then((ok) => { if (ok) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); })}>Archivieren</button>}
                       <button title="Einklappen" onClick={() => setCollapsed(new Set([...collapsed, c.id]))}>«</button>
                     </span>}
                     {isCollapsed && <button className="btn sm link" onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}

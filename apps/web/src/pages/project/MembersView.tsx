@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtDate } from '../../lib/api';
-import { Modal, roleLabel, useAsync } from '../../components/ui';
+import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
@@ -16,6 +16,7 @@ export function MembersView() {
   const [invite, setInvite] = useState(false);
   const [columns, setColumns] = useState(false);
   const { error, run } = useAsync();
+  const dialog = useDialog();
   const nav = useNavigate();
   const isPl = me.role === 'pl';
   return (
@@ -34,7 +35,7 @@ export function MembersView() {
                 <td>{m.name}<div className="muted small">{m.email}</div></td>
                 <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span></td>
                 <td className="small muted">{m.role === 'pl' ? 'alle' : [m.canEditPlan && 'Projektplan ändern', m.canApprove && 'KI-Vorschläge freigeben', m.canFinalize && 'Final setzen / Versand', m.canUseAi && 'KI nutzen'].filter(Boolean).join(', ') || '–'}</td>
-                <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => { if (confirm(`${m.name} entfernen? Zugriff endet sofort, Historie bleibt.`)) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); }}>Entfernen</button>}</>}</td>
+                <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
               </tr>
             ))}
           </tbody></table>
@@ -53,7 +54,7 @@ export function MembersView() {
             </dl>
             {isPl && <div className="row mt">
               <button className="btn sm" onClick={() => setColumns(true)}>Board-Spalten</button>
-              {detail.project.status === 'active' && <button className="btn sm danger" onClick={() => { if (confirm('Projekt archivieren? Nur lesend, Mail-Ansichten werden getrennt, Automatik stoppt.')) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); }}>Archivieren</button>}
+              {detail.project.status === 'active' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Projekt archivieren', text: 'Das Projekt wird nur noch lesend angezeigt, Mail-Ansichten werden getrennt, Eskalation und Reporting stoppen.', confirmLabel: 'Archivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); })}>Archivieren</button>}
             </div>}
           </div>
           <div className="card">
@@ -109,7 +110,7 @@ export function MembersView() {
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
             if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
-              if (direct > 0) body.transferTasks = confirm(`${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt zugewiesen. Auch an die neue Projektleitung übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+              if (direct > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt  zugewiesen. Auch an die neue Projektleitung übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
             }
             await api.put(`/projects/${detail.project.id}/members/${f.userId}`, body); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
         </div>

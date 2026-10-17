@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { api, fmtDate, today } from '../../lib/api';
-import { Modal, useAsync } from '../../components/ui';
+import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
 import { useData } from '../../lib/useData';
@@ -15,6 +15,7 @@ export function PlanView() {
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const [newSp, setNewSp] = useState(false);
   const [newMs, setNewMs] = useState(false);
+  const dialog = useDialog();
 
   const range = useMemo(() => {
     const dates: string[] = [today()];
@@ -117,7 +118,7 @@ export function PlanView() {
       if ('responsibleUserId' in body) {
         const direct = tasks.filter((x) => x.subprojectId === s.id && !x.done && x.responsibleUserId && x.responsibleUserId === s.responsible.userId);
         const newName = members.find((u) => u.id === body.responsibleUserId)?.name ?? 'den PL';
-        if (direct.length > 0) body.transferTasks = confirm(`${direct.length} Arbeitspaket(e) sind ${s.responsible.name ?? 'der bisherigen Verantwortung'} direkt zugewiesen. Auch an ${newName} übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+        if (direct.length > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct.length} Arbeitspaket(e) sind ${s.responsible.name ?? 'der bisherigen Verantwortung'} direkt  zugewiesen. Auch an ${newName} übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
       }
       await api.patch(`/projects/${detail.project.id}/subprojects/${s.id}`, body); await reload(); await reloadTasks();
     };
@@ -135,7 +136,7 @@ export function PlanView() {
         <td><span className="row" style={{ gap: 4 }}><InlineText value={s.name} canEdit onSave={(name) => void save({ name })} />{s.restricted && <span className="badge" title="Eingeschränkt sichtbar">🔒</span>}</span></td>
         <td><select className="inline-select" value={s.responsibleUserId ?? ''} onChange={(e) => void save({ responsibleUserId: e.target.value || null })}><option value="">{s.responsible.inherited ? `${s.responsible.name ?? 'PL'} (geerbt vom PL)` : '– geerbt vom PL –'}</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></td>
         <td className="nowrap"><input type="date" className="inline-date" value={s.startDate ?? ''} onChange={(e) => void save({ startDate: e.target.value || null })} /> – <input type="date" className="inline-date" value={s.endDate ?? ''} onChange={(e) => void save({ endDate: e.target.value || null })} /></td>
-        <td className="nowrap">{me.role === 'pl' && <button className="btn sm link" title="Sichtbarkeit, Zugriff" onClick={() => setEdit(true)}>Sichtbarkeit</button>}{me.role === 'pl' && <button className="btn sm link" onClick={() => { if (confirm('Teilprojekt löschen? Arbeitspakete bleiben erhalten.')) void api.del(`/projects/${detail.project.id}/subprojects/${s.id}`).then(async () => { await reload(); await reloadTasks(); }); }}>✕</button>}
+        <td className="nowrap">{me.role === 'pl' && <button className="btn sm link" title="Sichtbarkeit, Zugriff" onClick={() => setEdit(true)}>Sichtbarkeit</button>}{me.role === 'pl' && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Die Arbeitspakete bleiben erhalten und stehen danach unter „Ohne Teilprojekt“.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void api.del(`/projects/${detail.project.id}/subprojects/${s.id}`).then(async () => { await reload(); await reloadTasks(); }); })}>✕</button>}
           {edit && <SubprojectForm existing={s} onClose={() => setEdit(false)} />}</td>
       </tr>
     );
@@ -169,7 +170,7 @@ export function PlanView() {
               const oldEff = existing.responsible.userId;
               const newName = members.find((u) => u.id === f.responsibleUserId)?.name ?? 'den PL';
               const direct = tasks.filter((x) => x.subprojectId === existing.id && !x.done && x.responsibleUserId && x.responsibleUserId === oldEff);
-              if (direct.length > 0) body.transferTasks = confirm(`${direct.length} Arbeitspaket(e) in diesem Teilprojekt sind ${existing.responsible.name ?? 'der bisherigen Verantwortung'} direkt zugewiesen. Auch an ${newName} übertragen?\n\nOK = übertragen, Abbrechen = nur die geerbten Zuständigkeiten wechseln.`);
+              if (direct.length > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct.length} Arbeitspaket(e) in diesem Teilprojekt sind ${existing.responsible.name ?? 'der bisherigen Verantwortung'} direkt  zugewiesen. Auch an ${newName} übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
             }
             if (existing) await api.patch(`/projects/${detail.project.id}/subprojects/${existing.id}`, body); else await api.post(`/projects/${detail.project.id}/subprojects`, body);
             await reload(); await reloadTasks(); onClose();

@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { Task, TaskComment } from '@projekttool/shared';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
-import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync } from '../../components/ui';
+import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
@@ -34,6 +34,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
   const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId?: string }>(null);
   const { busy, error, run, setError } = useAsync();
+  const dialog = useDialog();
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
@@ -56,7 +57,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         {me.role !== 'reader' && (t.archivedAt
           ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
           : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>)}
-        {me.role === 'pl' && <button className="btn sm danger" onClick={() => { if (confirm('Arbeitspaket löschen?')) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); }}>Löschen</button>}
+        {me.role === 'pl' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Arbeitspaket löschen', text: `„${t.title}“ mit Tasks, Kommentaren, Zeiten und Mail-Verknüpfungen endgültig löschen? Zum Aufheben ohne Datenverlust besser archivieren.`, confirmLabel: 'Endgültig löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
       {(t.blocked || t.escalationLevel > 0) && (

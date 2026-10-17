@@ -5,7 +5,7 @@ import { api, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
-import { Modal, useAsync } from '../components/ui';
+import { Modal, useAsync, useDialog } from '../components/ui';
 
 interface TestResult { imap: { ok: boolean; error?: string; folders?: string[] }; smtp: { ok: boolean; error?: string } }
 
@@ -16,6 +16,7 @@ export function MailAccountsPage() {
   const [edit, setEdit] = useState<MailAccount | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'warn' | 'err'; text: string } | null>(null);
   const { error, run, busy } = useAsync();
+  const dialog = useDialog();
   const sync = (a: MailAccount) => run(async () => {
     const r = await api.post<{ result: { fetched: number; stored: number; error?: string }; viewCount: number; hint: string | null }>(`/mail/accounts/${a.id}/sync`);
     if (r.result.error) setMsg({ kind: 'err', text: `Sync fehlgeschlagen: ${r.result.error}` });
@@ -47,7 +48,7 @@ export function MailAccountsPage() {
                   {a.provider === 'imap' && <button className="btn sm" disabled={busy} onClick={() => void test(a)}>Verbindung testen</button>}{' '}
                   <button className="btn sm" disabled={busy} onClick={() => void sync(a)}>Jetzt synchronisieren</button>{' '}
                   <button className="btn sm" onClick={() => setEdit(a)}>Bearbeiten</button>{' '}
-                  <button className="btn sm danger" onClick={() => { if (confirm('Konto trennen? Alle Ansichten daraus verschwinden aus den Projekten.')) void run(async () => { await api.del(`/mail/accounts/${a.id}`); await accounts.reload(); }); }}>Trennen</button>
+                  <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Konto trennen', text: `„${a.name}“ trennen? Alle Ansichten aus diesem Konto verschwinden aus den Projekten, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Trennen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}`); await accounts.reload(); }); })}>Trennen</button>
                 </td>
               </tr>
             ))}
