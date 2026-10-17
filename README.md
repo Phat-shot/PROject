@@ -113,6 +113,7 @@ Microsoft-Graph-Adapter, Keycloak/SSO, Row-Level Security, Office-Bearbeitung, K
 ```
 apps/api        Fastify + TypeScript, SQL-Migrationen, Worker, Tests (node:test auf PGlite)
 apps/web        React + Vite + TypeScript, ohne UI-Framework
+apps/mobile     Android-Hülle (Capacitor) um die Server-Instanz, APK über .github/workflows/android.yml
 packages/shared gemeinsame Typen
 ```
 

@@ -1,0 +1,110 @@
+name: Android APK
+
+# Baut die Android-App (Capacitor-Hülle um die Server-Instanz) als Debug-APK, optional signiert als Release-APK.
+# Läuft manuell (Actions → Android APK → Run workflow, optional mit anderer Server-Adresse) und bei Git-Tags v*; dann hängen die APKs am Release.
+on:
+  workflow_dispatch:
+    inputs:
+      url:
+        description: Server-Adresse, die die App lädt
+        required: false
+        default: https://project.srz.one
+  push:
+    tags: ['v*.*.*']
+
+jobs:
+  apk:
+    name: APK bauen
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    env:
+      APP_URL: ${{ github.event.inputs.url || 'https://project.srz.one' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools platforms;android-34 build-tools;34.0.0
+
+      - name: Abhängigkeiten
+        run: npm ci --no-audit --no-fund
+
+      - name: Server-Adresse eintragen
+        working-directory: apps/mobile
+        run: |
+          jq --arg url "$APP_URL" '.server.url = $url' capacitor.config.json > cfg.tmp && mv cfg.tmp capacitor.config.json
+          cat capacitor.config.json
+
+      - name: Android-Projekt erzeugen und synchronisieren
+        working-directory: apps/mobile
+        run: |
+          [ -d android ] || npx cap add android
+          npx cap sync android
+
+      - name: Version aus Git setzen
+        working-directory: apps/mobile/android
+        run: |
+          CODE=$(git rev-list --count HEAD)
+          case "$GITHUB_REF" in refs/tags/v*) NAME="${GITHUB_REF_NAME#v}" ;; *) NAME="0.1.0-$(git rev-parse --short HEAD)" ;; esac
+          sed -i "s/versionCode [0-9]*/versionCode ${CODE}/; s/versionName \"[^\"]*\"/versionName \"${NAME}\"/" app/build.gradle
+          grep -E "versionCode|versionName" app/build.gradle
+
+      - name: Debug-APK bauen
+        working-directory: apps/mobile/android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon
+          cp app/build/outputs/apk/debug/app-debug.apk ../PROject-debug.apk
+
+      - name: Release-APK bauen (nur mit Keystore-Secrets)
+        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        working-directory: apps/mobile/android
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > release.jks
+          ./gradlew assembleRelease --no-daemon \
+            -Pandroid.injected.signing.store.file="$PWD/release.jks" \
+            -Pandroid.injected.signing.store.password="$ANDROID_KEYSTORE_PASSWORD" \
+            -Pandroid.injected.signing.key.alias="$ANDROID_KEY_ALIAS" \
+            -Pandroid.injected.signing.key.password="$ANDROID_KEY_PASSWORD"
+          cp app/build/outputs/apk/release/app-release.apk ../PROject-release.apk
+          rm -f release.jks
+
+      - name: Debug-APK als Artefakt
+        uses: actions/upload-artifact@v4
+        with:
+          name: PROject-debug-apk
+          path: apps/mobile/PROject-debug.apk
+          retention-days: 30
+
+      - name: Release-APK als Artefakt
+        if: ${{ hashFiles('apps/mobile/PROject-release.apk') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: PROject-release-apk
+          path: apps/mobile/PROject-release.apk
+          retention-days: 90
+
+      - name: APKs an das Release hängen
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/mobile/PROject-debug.apk
+            apps/mobile/PROject-release.apk

@@ -1,0 +1,13 @@
+{
+  "appId": "one.srz.project",
+  "appName": "PROject",
+  "webDir": "www",
+  "server": {
+    "url": "https://project.srz.one",
+    "cleartext": false
+  },
+  "android": {
+    "allowMixedContent": false,
+    "backgroundColor": "#15213a"
+  }
+}
