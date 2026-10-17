@@ -41,6 +41,17 @@ test('Suche nach Kennung, Kalender, Doku-Seite und Projekteinstellungen sind err
   await expect(page.locator('.section-nav')).toContainText('Papierkorb');
 });
 
+test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Feldern', async ({ page }) => {
+  await login(page);
+  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.getByRole('link', { name: 'Arbeitspakete', exact: true }).click();
+  await page.locator('.task-card').first().click();
+  await expect(page.locator('.drawer')).toContainText('Zuständig');
+  await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
+  await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();
+  await expect(page.locator('.drawer')).toHaveCount(0);
+});
+
 test('Leser darf nichts anlegen', async ({ page }) => {
   await login(page, 'leser@demo.local');
   await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();

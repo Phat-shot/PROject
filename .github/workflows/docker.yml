@@ -13,7 +13,28 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
+  test:
+    name: Typecheck, Tests, E2E (vor dem Image)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - name: App starten und E2E-Smoke
+        run: |
+          SEED=true DATABASE_URL=memory PORT=3000 node apps/api/dist/server.js &
+          for i in $(seq 1 30); do curl -sf localhost:3000/api/health && break; sleep 1; done
+          npm run e2e
   build:
+    needs: test
     name: Image bauen und pushen
     runs-on: ubuntu-latest
     timeout-minutes: 30
