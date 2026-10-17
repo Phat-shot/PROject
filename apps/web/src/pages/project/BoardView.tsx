@@ -6,24 +6,10 @@ import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
+import { EMPTY_FILTER, isFilterActive, readFilter, writeFilter, type BoardFilter } from '../../lib/boardFilter';
 
-interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean; escalated: boolean }
-const EMPTY: Filter = { q: '', member: '', label: '', mine: false, overdue: false, conflicts: false, prio: '', archived: false, escalated: false };
-const FLAGS: (keyof Filter)[] = ['mine', 'overdue', 'conflicts', 'archived', 'escalated'];
-
-/** Board-Filter leben in der URL (teilbar, Zurück-Taste); eingeklappte Spalten und Swimlanes je Projekt im Browser. */
-function readFilter(p: URLSearchParams): Filter {
-  const f: Filter = { ...EMPTY, q: p.get('q') ?? '', member: p.get('person') ?? '', label: p.get('label') ?? '', prio: p.get('prio') ?? '' };
-  for (const k of FLAGS) if (p.get(k) === '1') (f as any)[k] = true;
-  return f;
-}
-function writeFilter(p: URLSearchParams, f: Filter): URLSearchParams {
-  const n = new URLSearchParams(p);
-  const set = (k: string, v: string) => { if (v) n.set(k, v); else n.delete(k); };
-  set('q', f.q); set('person', f.member); set('label', f.label); set('prio', f.prio);
-  for (const k of FLAGS) set(k, f[k] ? '1' : '');
-  return n;
-}
+type Filter = BoardFilter;
+const EMPTY = EMPTY_FILTER;
 function readSet(key: string): Set<string> { try { return new Set(JSON.parse(localStorage.getItem(key) ?? '[]')); } catch { return new Set(); } }
 function writeSet(key: string, s: Set<string>) { try { localStorage.setItem(key, JSON.stringify([...s])); } catch { /* ignore */ } }
 
@@ -58,7 +44,7 @@ export function BoardView() {
   const canEdit = detail.project.myMembership.role !== 'reader';
   const t = today();
   const soon = new Date(Date.now() + 3 * 86400_000).toISOString().slice(0, 10);
-  const active = f.q || f.member || f.label || f.mine || f.overdue || f.conflicts || f.prio || f.escalated;
+  const active = isFilterActive(f);
 
   useEffect(() => {
     if (f.archived && !archived) api.get<{ tasks: Task[] }>(`/projects/${detail.project.id}/tasks?archived=1`).then((r) => setArchived(r.tasks));
