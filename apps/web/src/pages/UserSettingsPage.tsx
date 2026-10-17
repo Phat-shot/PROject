@@ -5,6 +5,8 @@ import { applyTheme, useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
 import { useAsync } from '../components/ui';
 import { useData } from '../lib/useData';
+import QRCode from 'qrcode';
+import { useEffect } from 'react';
 
 /** Benutzereinstellungen: Name, Sprache, Theme, Passwort. Gilt nur für die eigene Person. */
 export function UserSettingsPage() {
@@ -51,6 +53,7 @@ export function UserSettingsPage() {
               <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language, mailNotifications } }, 'Gespeichert.')}>Speichern</button></div>
             </div>
           </div>
+          <TotpCard />
           <IcsCard />
           <div className="card">
             <h2>Passwort ändern</h2>
@@ -87,6 +90,40 @@ function IcsCard() {
       ) : <button className="btn sm primary" disabled={busy || !d.data} onClick={() => void run(async () => { await api.post('/me/ics-token'); await d.reload(); })}>Abo-Adresse erzeugen</button>}
       {error && <div className="error mt">{error}</div>}
       {msg && <div className="muted small mt">{msg}</div>}
+    </div>
+  );
+}
+
+
+/** Zweiter Faktor: QR-Code für die Authenticator-App, Bestätigung mit Code, Abschalten mit Passwort. */
+function TotpCard() {
+  const { user, setUser } = useAuth();
+  const [setup, setSetup] = useState<{ secret: string; otpauth: string; qr: string } | null>(null);
+  const [code, setCode] = useState('');
+  const [pw, setPw] = useState('');
+  const { busy, error, run } = useAsync();
+  const enabled = Boolean(user?.totpEnabled);
+  useEffect(() => { setSetup(null); setCode(''); }, [enabled]);
+  return (
+    <div className="card">
+      <h2>Zweiter Faktor (Authenticator-App) {enabled && <span className="badge ok">aktiv</span>}</h2>
+      {!enabled && !setup && <>
+        <p className="muted small">Beim Anmelden wird zusätzlich ein 6-stelliger Code aus einer App wie Microsoft Authenticator, Google Authenticator oder 1Password verlangt.</p>
+        <button className="btn sm primary" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ secret: string; otpauth: string }>('/me/totp/setup'); setSetup({ ...r, qr: await QRCode.toDataURL(r.otpauth, { margin: 1, width: 180 }) }); })}>Einrichten</button>
+      </>}
+      {!enabled && setup && <div className="form">
+        <div className="row" style={{ alignItems: 'flex-start' }}>
+          <img src={setup.qr} alt="QR-Code für die Authenticator-App" width={180} height={180} style={{ borderRadius: 6, border: '1px solid var(--border)' }} />
+          <div className="small stack"><span>1. QR-Code in der App scannen oder Schlüssel eingeben:</span><code style={{ wordBreak: 'break-all' }}>{setup.secret}</code><span>2. Den angezeigten Code hier bestätigen.</span></div>
+        </div>
+        <label className="field"><span>Code aus der App</span><input type="text" inputMode="numeric" maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} style={{ width: 120 }} /></label>
+        <div className="row"><button className="btn sm primary" disabled={busy || code.length !== 6} onClick={() => void run(async () => { await api.post('/me/totp/enable', { code }); if (user) setUser({ ...user, totpEnabled: true }); })}>Aktivieren</button><button className="btn sm" onClick={() => setSetup(null)}>Abbrechen</button></div>
+      </div>}
+      {enabled && <div className="form">
+        <p className="muted small">Zum Abschalten dein Passwort eingeben. Bei verlorenem Gerät kann der Org-Admin den zweiten Faktor in der Verwaltung zurücksetzen.</p>
+        <div className="row"><input type="password" placeholder="Passwort" value={pw} autoComplete="current-password" onChange={(e) => setPw(e.target.value)} style={{ width: 200 }} /><button className="btn sm danger" disabled={busy || !pw} onClick={() => void run(async () => { await api.post('/me/totp/disable', { password: pw }); setPw(''); if (user) setUser({ ...user, totpEnabled: false }); })}>Abschalten</button></div>
+      </div>}
+      {error && <div className="error mt">{error}</div>}
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { createSession, hashPassword, mapUser, requireUser, SESSION_COOKIE, setS
 import { audit } from '../audit.js';
 import { badRequest, notFound, unauthorized } from '../errors.js';
 import { publicBase } from '../docs/share.js';
+import { verifyTotp } from '../totp.js';
 
 export async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { email: string; password: string } }>('/auth/login', async (req, reply) => {
@@ -11,9 +12,30 @@ export async function authRoutes(app: FastifyInstance) {
     if (!email || !password) throw badRequest('E-Mail und Passwort erforderlich');
     const row = await app.db.maybeOne(`select * from users where lower(email) = lower($1) and active`, [email]);
     if (!row || !verifyPassword(password, row.password_hash)) throw unauthorized('E-Mail oder Passwort falsch');
+    // Zweiter Faktor: Passwort stimmt, Code folgt in einem zweiten Schritt (Challenge 5 Minuten gültig)
+    if (row.totp_enabled && row.totp_secret) {
+      const challenge = randomBytes(24).toString('base64url');
+      await app.db.query(`delete from login_challenges where expires_at < now()`);
+      await app.db.query(`insert into login_challenges (token, user_id, expires_at) values ($1, $2, now() + interval '5 minutes')`, [challenge, row.id]);
+      return { mfaRequired: true, challenge };
+    }
     const token = await createSession(app.db, row.id);
     setSessionCookie(reply, token);
     await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id });
+    const org = await app.db.one(`select name, settings from orgs where id = $1`, [row.org_id]);
+    return { user: mapUser(row), orgName: org.name, orgSettings: org.settings ?? {} };
+  });
+
+  app.post<{ Body: { challenge: string; code: string } }>('/auth/login/totp', async (req, reply) => {
+    const { challenge, code } = req.body ?? ({} as any);
+    const c = challenge ? await app.db.maybeOne(`select c.*, u.totp_secret, u.org_id from login_challenges c join users u on u.id = c.user_id where c.token = $1 and c.expires_at > now() and u.active`, [challenge]) : null;
+    if (!c) throw unauthorized('Anmeldung abgelaufen, bitte neu anmelden');
+    if (!verifyTotp(c.totp_secret, String(code ?? ''))) throw unauthorized('Code falsch');
+    await app.db.query(`delete from login_challenges where token = $1`, [challenge]);
+    const row = await app.db.one(`select * from users where id = $1`, [c.user_id]);
+    const token = await createSession(app.db, row.id);
+    setSessionCookie(reply, token);
+    await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id, details: { mfa: true } });
     const org = await app.db.one(`select name, settings from orgs where id = $1`, [row.org_id]);
     return { user: mapUser(row), orgName: org.name, orgSettings: org.settings ?? {} };
   });

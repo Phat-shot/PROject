@@ -12,7 +12,9 @@ const DEMO = [
 
 /** Anmeldung; Demo-Zugänge nur, wenn Demodaten vorhanden sind. „Passwort vergessen“ schickt einen Link über das Org-Postfach. */
 export function LoginPage() {
-  const { login } = useAuth();
+  const { login, loginTotp } = useAuth();
+  const [challenge, setChallenge] = useState<string | null>(null);
+  const [code, setCode] = useState('');
   const [demo, setDemo] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -26,11 +28,14 @@ export function LoginPage() {
     setBusy(true);
     setError(null);
     try {
-      if (forgot) {
+      if (challenge) {
+        await loginTotp(challenge, code);
+      } else if (forgot) {
         const r = await api.post<{ sent: boolean; error?: string }>('/auth/forgot', { email });
         setSent(r.sent ? `Falls ein Konto für ${email} existiert, ist ein Link unterwegs (2 Stunden gültig).` : r.error ?? 'Nicht verschickt.');
       } else {
-        await login(email, password);
+        const r = await login(email, password);
+        if (r && r.mfaRequired && r.challenge) { setChallenge(r.challenge); setCode(''); }
       }
     } catch (err: any) {
       setError(err.message);
@@ -43,6 +48,14 @@ export function LoginPage() {
       <form className="card" onSubmit={submit}>
         <h1>PROject</h1>
         <p className="muted">Arbeitspakete, Mail und Doku auf einem Datenmodell</p>
+        {challenge ? (
+          <div className="form">
+            <p className="muted small">Zweiter Faktor: Code aus deiner Authenticator-App für {email}.</p>
+            <label className="field"><span>Code (6 Stellen)</span><input type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]*" maxLength={6} value={code} autoFocus onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></label>
+            {error && <div className="error">{error}</div>}
+            <div className="row"><button className="btn primary" disabled={busy || code.length !== 6}>Anmelden</button><button type="button" className="btn link small right" onClick={() => { setChallenge(null); setError(null); }}>Zurück</button></div>
+          </div>
+        ) : (
         <div className="form">
           <label className="field"><span>E-Mail</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username" /></label>
           {!forgot && <label className="field"><span>Passwort</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>}
@@ -53,6 +66,7 @@ export function LoginPage() {
             <button type="button" className="btn link small right" onClick={() => { setForgot(!forgot); setSent(null); setError(null); }}>{forgot ? 'Zurück zur Anmeldung' : 'Passwort vergessen?'}</button>
           </div>
         </div>
+        )}
         {demo && (
           <div className="demo">
             Demo-Zugänge (Passwort <code>demo1234</code>):

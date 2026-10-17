@@ -64,3 +64,43 @@ test('PL lädt per Mail direkt ins Projekt ein; Annahme macht die Person zum Mit
   assert.ok(m, 'Mitglied angelegt');
   assert.equal(m.role, 'reader');
 });
+
+test('Zweiter Faktor: einrichten, aktivieren, Anmeldung in zwei Schritten, abschalten', async () => {
+  const { totpCode } = await import('../src/totp.js');
+  const anna = await t.login('anna@demo.local');
+  const setup = await t.api(anna).post('/me/totp/setup');
+  assert.equal(setup.statusCode, 200, setup.body);
+  const secret = setup.json().secret;
+  assert.match(setup.json().otpauth, /^otpauth:\/\/totp\//);
+  assert.equal((await t.api(anna).post('/me/totp/enable', { code: '000000' })).statusCode, 400, 'falscher Code');
+  assert.equal((await t.api(anna).post('/me/totp/enable', { code: totpCode(secret) })).statusCode, 200);
+  const step1 = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'anna@demo.local', password: 'demo1234' } });
+  assert.equal(step1.statusCode, 200);
+  assert.equal(step1.json().mfaRequired, true);
+  assert.ok(!step1.cookies.find((c) => c.name === 'pt_session'), 'noch keine Sitzung');
+  const bad = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: '123456' } });
+  assert.equal(bad.statusCode, 401);
+  const step2 = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
+  assert.equal(step2.statusCode, 200, step2.body);
+  assert.ok(step2.cookies.find((c) => c.name === 'pt_session'), 'Sitzung nach zweitem Schritt');
+  assert.equal(step2.json().user.totpEnabled, true);
+  const again = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
+  assert.equal(again.statusCode, 401, 'Challenge nur einmal');
+  const sess = { pt_session: step2.cookies.find((c) => c.name === 'pt_session')!.value };
+  assert.equal((await t.api(sess).post('/me/totp/disable', { password: 'falsch' })).statusCode, 400);
+  assert.equal((await t.api(sess).post('/me/totp/disable', { password: 'demo1234' })).statusCode, 200);
+  const plain = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'anna@demo.local', password: 'demo1234' } });
+  assert.equal(plain.json().mfaRequired, undefined);
+});
+
+test('Rate-Limit: zu viele Anmeldeversuche liefern 429, Antworten tragen Schutz-Header', async () => {
+  let last = 0;
+  for (let i = 0; i < 12; i++) {
+    const r = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'niemand@demo.local', password: 'x' }, remoteAddress: '203.0.113.7' });
+    last = r.statusCode;
+    if (i < 10) assert.equal(r.statusCode, 401);
+  }
+  assert.equal(last, 429);
+  const h = await t.app.inject({ method: 'GET', url: '/api/health' });
+  assert.equal(h.headers['x-content-type-options'], 'nosniff');
+});

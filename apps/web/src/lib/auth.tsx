@@ -9,7 +9,9 @@ interface AuthState {
   /** Zeiterfassung mandantenweit aktiv */
   timeTracking: boolean;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
+  /** Löst mit { mfaRequired, challenge } auf, wenn ein zweiter Faktor nötig ist */
+  login: (email: string, password: string) => Promise<{ mfaRequired?: boolean; challenge?: string } | void>;
+  loginTotp: (challenge: string, code: string) => Promise<void>;
   logout: () => Promise<void>;
   setUser: (u: User) => void;
 }
@@ -27,7 +29,7 @@ function initialTheme(): 'light' | 'dark' | 'system' {
   return 'system';
 }
 
-const Ctx = createContext<AuthState>({ user: null, orgName: '', orgSettings: {}, timeTracking: true, loading: true, login: async () => {}, logout: async () => {}, setUser: () => {} });
+const Ctx = createContext<AuthState>({ user: null, orgName: '', orgSettings: {}, timeTracking: true, loading: true, login: async () => {}, loginTotp: async () => {}, logout: async () => {}, setUser: () => {} });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -38,18 +40,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     applyTheme(initialTheme());
     api.get<{ user: User; orgName: string; orgSettings?: OrgSettings }>('/auth/me').then((r) => { setUser(r.user); setOrgName(r.orgName); setOrgSettings(r.orgSettings ?? {}); applyTheme(r.user.settings?.theme); }).catch(() => setUser(null)).finally(() => setLoading(false));
   }, []);
+  const apply = (r: { user: User; orgName: string; orgSettings?: OrgSettings }) => { setUser(r.user); setOrgName(r.orgName); setOrgSettings(r.orgSettings ?? {}); applyTheme(r.user.settings?.theme); };
   const login = async (email: string, password: string) => {
-    const r = await api.post<{ user: User; orgName: string; orgSettings?: OrgSettings }>('/auth/login', { email, password });
-    setUser(r.user);
-    setOrgName(r.orgName);
-    setOrgSettings(r.orgSettings ?? {});
-    applyTheme(r.user.settings?.theme);
+    const r = await api.post<{ user?: User; orgName?: string; orgSettings?: OrgSettings; mfaRequired?: boolean; challenge?: string }>('/auth/login', { email, password });
+    if (r.mfaRequired) return { mfaRequired: true, challenge: r.challenge };
+    apply(r as { user: User; orgName: string; orgSettings?: OrgSettings });
+  };
+  const loginTotp = async (challenge: string, code: string) => {
+    apply(await api.post<{ user: User; orgName: string; orgSettings?: OrgSettings }>('/auth/login/totp', { challenge, code }));
   };
   const logout = async () => {
     await api.post('/auth/logout');
     setUser(null);
   };
-  return <Ctx.Provider value={{ user, orgName, orgSettings, timeTracking: orgSettings.timeTracking !== false, loading, login, logout, setUser }}>{children}</Ctx.Provider>;
+  return <Ctx.Provider value={{ user, orgName, orgSettings, timeTracking: orgSettings.timeTracking !== false, loading, login, loginTotp, logout, setUser }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

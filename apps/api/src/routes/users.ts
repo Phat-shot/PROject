@@ -7,6 +7,7 @@ import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
 import type { Group, Invitation } from '@projekttool/shared';
 import { requireProject } from '../rights.js';
+import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen).
@@ -48,6 +49,43 @@ export async function userRoutes(app: FastifyInstance) {
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     return { user: mapUser(r) };
+  });
+
+  // ---- Zweiter Faktor (TOTP): einrichten → Code bestätigen → aktiv; abschalten mit Passwort
+  app.post('/me/totp/setup', async (req) => {
+    const user = requireUser(req);
+    const row = await app.db.one(`select totp_enabled from users where id = $1`, [user.id]);
+    if (row.totp_enabled) throw badRequest('Zweiter Faktor ist bereits aktiv');
+    const secret = newSecret();
+    await app.db.query(`update users set totp_secret = $2 where id = $1`, [user.id, secret]);
+    return { secret, otpauth: otpauthUrl(secret, user.email) };
+  });
+  app.post<{ Body: { code: string } }>('/me/totp/enable', async (req) => {
+    const user = requireUser(req);
+    const row = await app.db.one(`select totp_secret, totp_enabled from users where id = $1`, [user.id]);
+    if (!row.totp_secret) throw badRequest('Erst einrichten');
+    if (!verifyTotp(row.totp_secret, String(req.body?.code ?? ''))) throw badRequest('Code falsch, bitte den aktuellen Code aus der App eingeben');
+    await app.db.query(`update users set totp_enabled = true where id = $1`, [user.id]);
+    await app.db.query(`delete from sessions where user_id = $1 and token <> $2`, [user.id, req.cookies.pt_session ?? '']);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.totp_enabled', objectType: 'user', objectId: user.id });
+    return { ok: true };
+  });
+  app.post<{ Body: { password: string } }>('/me/totp/disable', async (req) => {
+    const user = requireUser(req);
+    const row = await app.db.one(`select password_hash from users where id = $1`, [user.id]);
+    if (!verifyPassword(String(req.body?.password ?? ''), row.password_hash)) throw badRequest('Passwort stimmt nicht');
+    await app.db.query(`update users set totp_enabled = false, totp_secret = null where id = $1`, [user.id]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.totp_disabled', objectType: 'user', objectId: user.id });
+    return { ok: true };
+  });
+  // Org-Admin: zweiten Faktor zurücksetzen (Gerät verloren)
+  app.post<{ Params: { id: string } }>('/users/:id/totp/reset', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const r = await app.db.query(`update users set totp_enabled = false, totp_secret = null where id = $1 and org_id = $2 returning id`, [req.params.id, user.orgId]);
+    if (!r.rows.length) throw notFound('Benutzer nicht gefunden');
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.totp_reset', objectType: 'user', objectId: req.params.id });
+    return { ok: true };
   });
 
   // ---- Einladungen per Mail über das Org-Postfach; manuelles Anlegen (POST /users) bleibt als Fallback

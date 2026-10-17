@@ -16,6 +16,8 @@ export interface User {
   globalRole: GlobalRole;
   active: boolean;
   settings?: UserSettings;
+  /** Zweiter Faktor (TOTP) aktiv */
+  totpEnabled?: boolean;
 }
 
 export interface UserSettings {

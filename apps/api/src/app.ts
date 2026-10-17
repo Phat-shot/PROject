@@ -19,6 +19,7 @@ import { timeRoutes } from './routes/time.js';
 import { setupRoutes } from './routes/setup.js';
 import { icsRoutes } from './routes/ics.js';
 import { MailService } from './mail/service.js';
+import { registerRateLimit } from './rateLimit.js';
 
 export interface AppOptions {
   db: Db;
@@ -40,6 +41,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.decorate('mail', opts.mail);
   app.decorateRequest('user', null);
 
+  registerRateLimit(app);
   await app.register(cookie);
   await app.register(multipart, { limits: { fileSize: 25 * 1024 * 1024 } });
 
