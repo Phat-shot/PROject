@@ -109,6 +109,7 @@ test('Projekt-Übersicht liefert Kennzahlen', async () => {
   const j = o.json();
   assert.ok(j.counts.open > 0);
   assert.ok(j.milestones.length >= 1);
+  assert.match(j.milestones[0].date, /^\d{4}-\d{2}-\d{2}$/, 'Meilenstein-Datum als YYYY-MM-DD, sonst fehlt er im Gantt und Kalender');
   assert.ok(j.perSubproject.length === 4);
   assert.ok(j.conflicts.length >= 1);
   assert.ok(Array.isArray(j.workload) && j.workload.length >= 1);

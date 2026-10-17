@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
-import { mapSubproject, resolveProjectLead } from '../tasks/service.js';
+import { dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
@@ -96,7 +96,7 @@ export async function projectRoutes(app: FastifyInstance) {
       members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email })),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
-      milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: r.date }))
+      milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
     };
   });
 
@@ -335,7 +335,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (!b.name || !b.date) throw badRequest('Name und Datum erforderlich');
     const r = await db.one(`insert into milestones (project_id, subproject_id, name, date) values ($1,$2,$3,$4) returning *`, [req.params.id, b.subprojectId ?? null, b.name, b.date]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: b });
-    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: r.date } };
+    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) } };
   });
 
   app.delete<{ Params: { id: string; mid: string } }>('/projects/:id/milestones/:mid', async (req) => {
@@ -396,7 +396,7 @@ export async function projectRoutes(app: FastifyInstance) {
       escalations: esc.filter((e) => e.targetLevel > 0 || e.level > 0).slice(0, 10),
       time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
       counts, perSubproject: perSub.rows,
-      milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subproject_id })),
+      milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), subprojectId: r.subproject_id })),
       pendingDrafts: pending.c, pagesInReview: review.rows, conflicts, overdue,
       workload: [...load.entries()].map(([userId, v]) => ({ userId, ...v })).sort((a, b) => b.open - a.open),
       activity: activity.rows.map((a: any) => ({ action: a.action, objectType: a.object_type, objectId: a.object_id, details: a.details, createdAt: a.created_at, userName: a.user_name }))
