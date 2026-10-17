@@ -49,7 +49,7 @@ export function newMailCode(): string {
 
 const TASK_SELECT = `
   select t.*, c.is_done,
-    ru.name as responsible_name, ru.email as responsible_user_email,
+    ru.name as responsible_name, ru.email as responsible_user_email, pc.name as responsible_contact_name,
     s.responsible_user_id as sp_responsible_user_id, su.name as sp_responsible_name, su.email as sp_responsible_email,
     s.end_date as sp_end_date,
     coalesce((select json_agg(d.predecessor_id) from task_dependencies d where d.successor_id = t.id), '[]'::json) as predecessor_ids,
@@ -64,6 +64,7 @@ const TASK_SELECT = `
   from tasks t
   join board_columns c on c.id = t.column_id
   left join users ru on ru.id = t.responsible_user_id
+  left join project_contacts pc on pc.project_id = t.project_id and pc.email = t.responsible_email
   left join subprojects s on s.id = t.subproject_id
   left join users su on su.id = s.responsible_user_id`;
 
@@ -100,7 +101,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
   if (r.responsible_user_id) {
     responsible = { userId: r.responsible_user_id, email: r.responsible_user_email, name: r.responsible_name, inherited: false, inheritedFrom: null };
   } else if (r.responsible_email) {
-    responsible = { userId: null, email: r.responsible_email, name: null, inherited: false, inheritedFrom: null };
+    responsible = { userId: null, email: r.responsible_email, name: r.responsible_contact_name ?? null, inherited: false, inheritedFrom: null };
   } else if (r.sp_responsible_user_id) {
     responsible = { userId: r.sp_responsible_user_id, email: r.sp_responsible_email, name: r.sp_responsible_name, inherited: true, inheritedFrom: 'subproject' };
   } else {

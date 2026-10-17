@@ -12,6 +12,7 @@ import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
+import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 
 interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string }
@@ -40,6 +41,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const { busy, error, run, setError } = useAsync();
   const dialog = useDialog();
   const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
+  const { contacts } = useContacts(detail.project.id);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
@@ -96,13 +98,14 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <label className="field"><span>Teilprojekt</span>
           <select value={t.subprojectId ?? ''} disabled={!canEdit} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
         <label className="field"><span>Zuständig</span>
-          <select value={t.responsibleUserId ?? (t.responsibleEmail ? 'extern' : '')} disabled={!canEdit} onChange={(e) => { if (e.target.value === 'extern') return; void patch({ responsibleUserId: e.target.value || null, responsibleEmail: null }); }}>
+          <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
-            {t.responsibleEmail && <option value="extern">{t.responsibleEmail} (extern)</option>}
+            {t.responsibleEmail && !contacts.some((c) => c.email === t.responsibleEmail) && <option value="extern">{t.responsibleEmail} (extern)</option>}
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
+            {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
           </select></label>
         {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}</span>{isPlHere && <><button className="btn sm" onClick={() => void run(async () => { const r = await api.post<{ status: string; actions: { type: string }[]; error?: string }>(`/tasks/${t.id}/agent-run`); setAgentMsg(`${r.actions.length ? `Aktionen: ${r.actions.map((x) => x.type).join(', ')}` : 'keine Aktion'}${r.error ? ` · Fehler: ${r.error}` : ''}`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
-        <TextField label="Extern (Mail-Adresse)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
+        <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
         <label className="field"><span>Priorität</span>
           <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
@@ -135,10 +138,11 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
           <li key={i.id} className={i.done ? 'done' : ''}>
             <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await load(); await reloadTasks(); })} />
             <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
-            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? 'extern' : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
+            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? (contacts.some((c) => c.email === i.responsibleEmail) ? `ext:${i.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } if (v.startsWith('ext:')) { void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: v.slice(4) }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
               <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-              <option value="extern">{i.responsibleEmail ? `${i.responsibleEmail} (extern)` : 'extern (Mail-Adresse) …'}</option>
+              {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
+              <option value="extern">{i.responsibleEmail && !contacts.some((c) => c.email === i.responsibleEmail) ? `${i.responsibleEmail} (extern)` : 'extern (neue Mail-Adresse) …'}</option>
             </select>
             {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
             {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}

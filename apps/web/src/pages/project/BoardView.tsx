@@ -4,6 +4,7 @@ import type { Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
+import { contactLabel, useContacts } from '../../lib/useContacts';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { EMPTY_FILTER, isFilterActive, readFilter, writeFilter, type BoardFilter } from '../../lib/boardFilter';
@@ -244,7 +245,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.mailCount > 0 && <span title="Verknüpfte Mails">✉ {x.mailCount}</span>}
         {x.checklistTotal > 0 && <span title="Checkliste" className={x.checklistDone === x.checklistTotal ? 'ok' : ''}>☑ {x.checklistDone}/{x.checklistTotal}</span>}
         <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
-          {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
+          {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : x.responsible.name ? <span className="avatar-wrap external" title={`${x.responsible.name} (extern)`}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
         </span>
       </div>
       {x.checklistTotal > 0 && <div className={`progress ${x.checklistDone === x.checklistTotal ? 'complete' : ''}`}><div style={{ width: `${Math.round((x.checklistDone / x.checklistTotal) * 100)}%` }} /></div>}
@@ -284,6 +285,7 @@ function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; sub
   const { busy, error, run } = useAsync();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
+  const { contacts } = useContacts(detail.project.id);
   return (
     <Modal title="Neues Arbeitspaket" onClose={onClose}>
       <div className="form cols-2">
@@ -300,7 +302,9 @@ function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; sub
         <label className="field"><span>Deadline</span><input type="date" value={f.dueDate} onChange={(e) => set('dueDate', e.target.value)} /></label>
         <label className="field"><span>Zuständig (intern)</span>
           <select value={f.responsibleUserId} onChange={(e) => set('responsibleUserId', e.target.value)}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
-        <label className="field"><span>oder externe Mail-Adresse</span><input type="email" value={f.responsibleEmail} onChange={(e) => set('responsibleEmail', e.target.value)} placeholder="extern@firma.de" /></label>
+        <label className="field"><span>oder extern (Kontakt / Mail-Adresse)</span>
+          <input type="email" list="create-task-contacts" value={f.responsibleEmail} onChange={(e) => set('responsibleEmail', e.target.value)} placeholder="Kontakt wählen oder extern@firma.de" />
+          <datalist id="create-task-contacts">{contacts.map((c) => <option key={c.email} value={c.email}>{contactLabel(c)}</option>)}</datalist></label>
         {error && <div className="error full">{error}</div>}
         <div className="row full">
           <button className="btn primary" disabled={busy || !f.title.trim()} onClick={() => void run(async () => {
