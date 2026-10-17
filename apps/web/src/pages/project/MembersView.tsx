@@ -2,6 +2,9 @@ import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
+import { MilestonesTable, SubprojectsTable } from './planForms';
+import { InlineText } from './TaskDrawer';
+import { LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
@@ -20,63 +23,73 @@ export function MembersView() {
   const nav = useNavigate();
   const isPl = me.role === 'pl';
   return (
-    <div className="content">
-      <div className="card mb">
+    <div className="content settings">
+      <nav className="section-nav">
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
+      </nav>
+      <div className="card mb" id="allgemein">
         <h2>Allgemein</h2>
         <GeneralForm />
       </div>
       <div className="grid cols-2">
-        <div className="card">
-          <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <button className="btn primary sm" onClick={() => setInvite(true)}>Einladen</button>}</div>
-          {error && <div className="error mb">{error}</div>}
-          <table className="table"><thead><tr><th>Name</th><th>Projektrolle</th><th>Einzelrechte</th><th /></tr></thead><tbody>
-            {detail.members.map((m) => (
-              <tr key={m.userId}>
-                <td>{m.name}<div className="muted small">{m.email}</div></td>
-                <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span></td>
-                <td className="small muted">{m.role === 'pl' ? 'alle' : [m.canEditPlan && 'Projektplan ändern', m.canApprove && 'KI-Vorschläge freigeben', m.canFinalize && 'Final setzen / Versand', m.canUseAi && 'KI nutzen'].filter(Boolean).join(', ') || '–'}</td>
-                <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
-              </tr>
-            ))}
-          </tbody></table>
+        <div className="stack">
+          <div className="card" id="mitglieder">
+            <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <button className="btn primary sm" onClick={() => setInvite(true)}>Hinzufügen</button>}</div>
+            {error && <div className="error mb">{error}</div>}
+            <table className="table"><thead><tr><th>Name</th><th>Projektrolle</th><th>Einzelrechte</th><th /></tr></thead><tbody>
+              {detail.members.map((m) => (
+                <tr key={m.userId}>
+                  <td>{m.name}<div className="muted small">{m.email}</div></td>
+                  <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span></td>
+                  <td className="small muted">{m.role === 'pl' ? 'alle' : [m.canEditPlan && 'Projektplan ändern', m.canApprove && 'KI-Vorschläge freigeben', m.canFinalize && 'Final setzen / Versand', m.canUseAi && 'KI nutzen'].filter(Boolean).join(', ') || '–'}</td>
+                  <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
+                </tr>
+              ))}
+            </tbody></table>
+            {isPl && <p className="muted small mt" style={{ margin: 0 }}>Nur Benutzer des Mandanten. Neue Personen lädt der Org-Admin unter <Link to="/verwaltung">Verwaltung</Link> per Mail ein.</p>}
+          </div>
+          <div className="card" id="planung">
+            <h2>Teilprojekte</h2>
+            <p className="muted small">Verantwortung wird vom PL geerbt, solange keine Person gesetzt ist. Sichtbarkeit und Zugriff über „Sichtbarkeit“.</p>
+            <SubprojectsTable />
+            <h2 className="mt">Meilensteine</h2>
+            <MilestonesTable />
+          </div>
+          <div className="card" id="board">
+            <div className="row between mb"><h2 style={{ margin: 0 }}>Board</h2>{isPl && <button className="btn sm" onClick={() => setColumns(true)}>Spalten bearbeiten</button>}</div>
+            <div className="row mb" style={{ gap: 6 }}>{detail.columns.map((c) => <span key={c.id} className="badge" title={c.kind}>{c.name}{c.wipLimit != null ? ` · WIP ${c.wipLimit}` : ''}</span>)}</div>
+            <h3>Labels</h3>
+            <LabelsCard />
+          </div>
         </div>
         <div className="stack">
-          <div className="card">
+          <div className="card" id="projekt">
             <h2>Projekt</h2>
             <dl className="kv">
               <dt>Kürzel</dt><dd>{detail.project.key}</dd>
-              <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/mail-konten">Meine Mail-Konten</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
+              <dt>Projekt-Mailadresse</dt><dd>{detail.project.mailAddress ?? <span className="muted">kein Projektkonto angebunden{isPl && <> · <Link to="/einstellungen/konfiguration">Konto anbinden</Link></>}</span>}{detail.project.mailAddress && <span className="muted small"> (aus dem Projektkonto)</span>}</dd>
               <dt>Status</dt><dd>{detail.project.status === 'active' ? 'aktiv' : 'archiviert'}</dd>
               <dt>Externe Kontakte</dt><dd><Contacts /></dd>
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
             </dl>
-            {isPl && <div className="row mt">
-              <button className="btn sm" onClick={() => setColumns(true)}>Board-Spalten</button>
-              {detail.project.status === 'active' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Projekt archivieren', text: 'Das Projekt wird nur noch lesend angezeigt, Mail-Ansichten werden getrennt, Eskalation und Reporting stoppen.', confirmLabel: 'Archivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); })}>Archivieren</button>}
+            {isPl && detail.project.status === 'active' && <div className="row mt">
+              <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Projekt archivieren', text: 'Das Projekt wird nur noch lesend angezeigt, Mail-Ansichten werden getrennt, Eskalation und Reporting stoppen.', confirmLabel: 'Archivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/projects/${detail.project.id}/archive`); await reload(); nav('/projekte'); }); })}>Archivieren</button>
             </div>}
           </div>
-          <div className="card">
+          <div className="card" id="eskalation">
             <h2>Eskalationsregeln</h2>
             <EscalationForm />
           </div>
-          <div className="card">
+          <div className="card" id="reporting">
             <h2>Reporting</h2>
             <ReportingForm />
           </div>
           <div className="card" id="mail">
             <h2>Mail-Ansichten und Filter</h2>
             <MailViewsCard />
-          </div>
-          <div className="card">
-            <h2>Teilprojekte</h2>
-            <p className="muted small">Name, Verantwortung und Zeitraum werden im <Link to={`/projekte/${detail.project.id}/plan`}>Plan</Link> direkt in der Tabelle bearbeitet, dort auch Sichtbarkeit und Zugriff.</p>
-            <ul>{detail.subprojects.map((s) => <li key={s.id}>{s.name}{s.restricted && ' 🔒'} <span className="muted small">· {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}</span></li>)}</ul>
-          </div>
-          <div className="card">
-            <h2>Meilensteine</h2>
-            <ul>{detail.milestones.map((m) => <li key={m.id}>{fmtDate(m.date)} – {m.name}</li>)}</ul>
           </div>
         </div>
       </div>
@@ -258,6 +271,35 @@ function ReportingForm() {
         <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reporting: save() }); const r = await api.post<{ result: { pageId: string; title: string; sent: boolean; to: string[]; error?: string } }>(`/projects/${detail.project.id}/reporting/run`); await reload(); setLast(r.result.sent ? `„${r.result.title}“ versendet an ${r.result.to.join(', ')}.` : `„${r.result.title}“ angelegt${r.result.error ? `, nicht versendet: ${r.result.error}` : ' (Entwurf zur Prüfung)'}.`); })}>Jetzt erzeugen</button>
         {p.lastRunOn && <span className="muted small">Zuletzt {fmtDate(p.lastRunOn)}{p.lastPageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${p.lastPageId}`}>Bericht öffnen</Link></>}</span>}
       </div>
+    </div>
+  );
+}
+
+function LabelsCard() {
+  const { detail, reload } = useProject();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const dialog = useDialog();
+  const { error, run } = useAsync();
+  const [name, setName] = useState('');
+  const [color, setColor] = useState<string>('blue');
+  const pid = detail.project.id;
+  if (!isPl) return <div className="row" style={{ gap: 4 }}>{detail.labels.map((l) => <span key={l.id} className={`lbl full ${l.color}`}>{l.name}</span>)}{detail.labels.length === 0 && <span className="muted small">Keine Labels.</span>}</div>;
+  return (
+    <div className="stack">
+      {error && <div className="error">{error}</div>}
+      {detail.labels.map((l) => (
+        <div key={l.id} className="row">
+          <span className={`lbl full ${l.color}`} style={{ minWidth: 60, textAlign: 'center' }}>{l.name}</span>
+          <InlineText value={l.name} canEdit onSave={(v) => run(async () => { await api.patch(`/projects/${pid}/labels/${l.id}`, { name: v }); await reload(); })} />
+          <select className="inline-select" value={l.color} onChange={(e) => void run(async () => { await api.patch(`/projects/${pid}/labels/${l.id}`, { color: e.target.value }); await reload(); })}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          <button className="btn sm link" title="Label löschen" onClick={() => void dialog.confirm({ title: 'Label löschen', text: `„${l.name}“ wird von allen Arbeitspaketen entfernt.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/labels/${l.id}`); await reload(); }); })}>✕</button>
+        </div>
+      ))}
+      <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post(`/projects/${pid}/labels`, { name: name.trim(), color }); setName(''); await reload(); }); }}>
+        <input type="text" placeholder="Neues Label" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} />
+        <select value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 'auto' }}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <button className="btn sm" disabled={!name.trim()}>Anlegen</button>
+      </form>
     </div>
   );
 }

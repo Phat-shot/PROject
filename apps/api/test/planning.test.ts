@@ -102,6 +102,31 @@ test('Nachfolger verschieben benachrichtigt Betroffene; Kommentar benachrichtigt
   assert.ok(n.notifications.some((x: any) => x.type === 'task.comment' && x.title.includes('Designsystem')));
 });
 
+test('Meilenstein bearbeiten: Name, Datum, Teilprojekt', async () => {
+  const pl = await t.login('pl@demo.local');
+  const created = await t.api(pl).post(`/projects/${t.ids.projects.web}/milestones`, { name: 'Testlauf', date: '2027-03-01' });
+  assert.equal(created.statusCode, 200, created.body);
+  const id = created.json().milestone.id;
+  const upd = await t.api(pl).patch(`/projects/${t.ids.projects.web}/milestones/${id}`, { name: 'Testlauf 2', date: '2027-03-15' });
+  assert.equal(upd.statusCode, 200, upd.body);
+  assert.equal(upd.json().milestone.name, 'Testlauf 2');
+  assert.equal(upd.json().milestone.date, '2027-03-15');
+  const bad = await t.api(pl).patch(`/projects/${t.ids.projects.web}/milestones/${id}`, { date: '15.03.2027' });
+  assert.equal(bad.statusCode, 400);
+  const reader = await t.login('leser@demo.local');
+  const forbidden = await t.api(reader).patch(`/projects/${t.ids.projects.web}/milestones/${id}`, { name: 'x' });
+  assert.equal(forbidden.statusCode, 403);
+});
+
+test('Projektliste liefert Kennzahlen je Projekt', async () => {
+  const pl = await t.login('pl@demo.local');
+  const r = await t.api(pl).get('/projects');
+  assert.equal(r.statusCode, 200);
+  const web = r.json().projects.find((p: any) => p.key === 'WEB');
+  assert.ok(web.stats.open > 0);
+  assert.ok(web.stats.nextMilestone && /^\d{4}-\d{2}-\d{2}$/.test(web.stats.nextMilestone.date));
+});
+
 test('Projekt-Übersicht liefert Kennzahlen', async () => {
   const pl = await t.login('pl@demo.local');
   const o = await t.api(pl).get(`/projects/${t.ids.projects.web}/overview`);

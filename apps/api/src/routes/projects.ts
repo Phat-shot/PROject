@@ -344,6 +344,27 @@ export async function projectRoutes(app: FastifyInstance) {
     return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) } };
   });
 
+  app.patch<{ Params: { id: string; mid: string }; Body: { name?: string; date?: string; subprojectId?: string | null } }>('/projects/:id/milestones/:mid', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
+    const b = req.body ?? {};
+    if (b.name !== undefined && !b.name.trim()) throw badRequest('Name erforderlich');
+    if (b.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) throw badRequest('Datum als YYYY-MM-DD');
+    if (b.subprojectId) {
+      const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]);
+      if (!s) throw badRequest('Teilprojekt gehört nicht zum Projekt');
+    }
+    const r = await db.maybeOne(
+      `update milestones set name = coalesce($3, name), date = coalesce($4::date, date), subproject_id = case when $5 then $6::uuid else subproject_id end
+       where id = $1 and project_id = $2 returning *`,
+      [req.params.mid, req.params.id, b.name?.trim() ?? null, b.date ?? null, 'subprojectId' in b, b.subprojectId ?? null]
+    );
+    if (!r) throw notFound('Meilenstein nicht gefunden');
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.update', objectType: 'milestone', objectId: r.id, details: b });
+    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) } };
+  });
+
   app.delete<{ Params: { id: string; mid: string } }>('/projects/:id/milestones/:mid', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
