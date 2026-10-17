@@ -9,6 +9,7 @@ import { UserSettingsPage } from './pages/UserSettingsPage';
 import { InboxPage } from './pages/InboxPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { PortfolioPage } from './pages/PortfolioPage';
+import { ChatPage } from './pages/ChatPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
@@ -46,6 +47,7 @@ export default function App() {
         <Route path="/postfach/*" element={<InboxPage />} />
         <Route path="/kalender" element={<CalendarPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
+        <Route path="/chat/:cid?" element={<ChatPage />} />
         <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
         <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />

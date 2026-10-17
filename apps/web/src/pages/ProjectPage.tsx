@@ -18,6 +18,7 @@ import { RaidView } from './project/RaidView';
 import { AiView } from './project/AiView';
 import { AnalyticsView } from './project/AnalyticsView';
 import { MeetingsView } from './project/MeetingsView';
+import { ChatView } from './project/ChatView';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
@@ -93,7 +94,7 @@ function ProjectBody() {
     : ['einstellungen', 'audit'].includes(sub)
       ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
       : undefined;
-  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
+  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : sub === 'chat' ? 'Chat' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <>
@@ -113,6 +114,7 @@ function ProjectBody() {
         <Route path="audit" element={<AuditView />} />
         <Route path="raid" element={<RaidView />} />
         <Route path="ki" element={<AiView />} />
+        <Route path="chat" element={<ChatView />} />
         <Route path="*" element={<Navigate to={base} replace />} />
       </Routes>
       {taskId && <TaskDrawer taskId={taskId} onClose={() => openTask(null)} />}

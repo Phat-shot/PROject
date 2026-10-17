@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
 import { useAiStatus } from '../lib/useAi';
+import { useChatUnread } from '../lib/useChatUnread';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -24,6 +25,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [tour, setTour] = useState(false);
   const [version, setVersion] = useState('');
   const ai = useAiStatus();
+  const chat = useChatUnread();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -45,6 +47,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <NavLink to="/portfolio" data-tour="portfolio">Portfolio</NavLink>
+        <NavLink to="/chat" data-tour="chat">Chat{chat.dm > 0 && <span className="badge danger nav-count">{chat.dm}</span>}</NavLink>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
           <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
           <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
@@ -66,6 +69,7 @@ export function Layout({ children }: { children: ReactNode }) {
                       <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
                       <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
                       <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
+                      <NavLink to={`${base}/chat`} data-tour="p-chat">Chat{(chat.projects[p.id] ?? 0) > 0 && <span className="badge danger nav-count">{chat.projects[p.id]}</span>}</NavLink>
                       <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
                       {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
                       {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Project, Subproject, Task } from '@projekttool/shared';
 import { api } from '../../lib/api';
@@ -54,7 +54,8 @@ export function CopyMoveDialog({ kind, op, detail, task, subproject, tasks = [],
   const nav = useNavigate();
   const partList = kind === 'task' ? TASK_PARTS : SUB_PARTS;
   const allKeys = partList.map((p) => p.key).filter((k) => op === 'move' || k !== 'time');
-  useEffect(() => { setSubId(''); setColumnId(''); }, [targetId]);
+  const first = useRef(true);
+  useEffect(() => { if (first.current) { first.current = false; return; } setSubId(''); setColumnId(''); }, [targetId]);
   const parts = useMemo(() => mode === 'all' ? allKeys : mode === 'all_except' ? allKeys.filter((k) => !picked.has(k)) : allKeys.filter((k) => picked.has(k)), [mode, picked, allKeys]);
   const candidates = (projects.data?.projects ?? []).filter((p) => p.status === 'active' && (op === 'copy' || p.id !== source.id) && (p.id === source.id || p.myRole !== 'reader'));
   const toggle = (k: string) => setPicked((s) => { const n = new Set(s); if (n.has(k)) n.delete(k); else n.add(k); return n; });

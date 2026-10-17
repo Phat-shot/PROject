@@ -135,19 +135,23 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
 
   // Worker: nur bei Anlass; Pause stoppt; Budget deckelt
   nextActions = [{ type: 'none', reason: 'nichts Neues' }];
-  const r1 = await runAgents(t.db, t.mail, fakeFetch);
+  // Simulierte Zeiten bleiben am selben UTC-Tag (Tagesbudget): spät am Tag alles um 5 h zurückschieben
+  const shift = new Date().getUTCHours() >= 19 ? 5 * 3600_000 : 0;
+  if (shift) await t.db.query(`update agent_runs set created_at = created_at - interval '5 hours'`);
+  const T0 = Date.now() - shift;
+  const r1 = await runAgents(t.db, t.mail, fakeFetch, new Date(T0));
   assert.equal(r1.length, 0, 'kein Anlass direkt nach dem letzten Lauf');
   await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Bitte auch Hosting klären.' });
-  const r2 = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 3600_000));
+  const r2 = await runAgents(t.db, t.mail, fakeFetch, new Date(T0 + 3600_000));
   assert.equal(r2.length, 1);
   assert.equal(r2[0].trigger ?? 'changed', 'changed');
   await t.api(pl).post(`/tasks/${taskId}/agent-pause`, { paused: true });
   await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Noch etwas.' });
-  const r3 = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 2 * 3600_000));
+  const r3 = await runAgents(t.db, t.mail, fakeFetch, new Date(T0 + 2 * 3600_000));
   assert.equal(r3.length, 0, 'pausiert');
   await t.api(pl).post(`/tasks/${taskId}/agent-pause`, { paused: false });
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 3 });
-  const r4 = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 4 * 3600_000));
+  const r4 = await runAgents(t.db, t.mail, fakeFetch, new Date(T0 + 4 * 3600_000));
   assert.equal(r4.length, 0, 'Tagesbudget (3) durch die bisherigen Läufe aufgebraucht');
   // Deaktivieren nimmt die Zuweisung weg
   await t.api(admin).patch(`/agents/${a.id}`, { active: false });

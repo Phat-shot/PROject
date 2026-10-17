@@ -26,6 +26,7 @@ import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { agentRoutes } from './routes/agents.js';
 import { copyRoutes } from './routes/copy.js';
+import { chatRoutes } from './routes/chat.js';
 import { registerAgentRunner } from './ai/agentEvents.js';
 import { runForTask } from './ai/agent.js';
 import { MailService } from './mail/service.js';
@@ -118,6 +119,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(meetingRoutes);
       await api.register(agentRoutes);
       await api.register(copyRoutes);
+      await api.register(chatRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },
