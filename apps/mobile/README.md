@@ -4,7 +4,7 @@ Dünne App-Hülle mit [Capacitor](https://capacitorjs.com): Die App öffnet die 
 
 ## APK aus GitHub Actions
 
-Workflow `.github/workflows/android.yml` (manuell unter „Actions → Android APK → Run workflow“ und bei Git-Tags `v*`):
+Workflow `.github/workflows/android.yml` (manuell unter „Actions → Android APK → Run workflow“, bei Git-Tags `v*` und bei Änderungen unter `apps/mobile/`):
 
 - **Debug-APK** (immer): Artefakt `PROject-debug-apk`, mit dem Android-Debug-Schlüssel signiert, direkt installierbar („Unbekannte Quellen“ erlauben).
 - **Release-APK** (optional): wenn die Secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` gesetzt sind. Keystore einmalig erzeugen und als Base64 hinterlegen:

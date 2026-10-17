@@ -1,7 +1,8 @@
 name: Android APK
 
 # Baut die Android-App (Capacitor-Hülle um die Server-Instanz) als Debug-APK, optional signiert als Release-APK.
-# Läuft manuell (Actions → Android APK → Run workflow, optional mit anderer Server-Adresse) und bei Git-Tags v*; dann hängen die APKs am Release.
+# Läuft manuell (Actions → Android APK → Run workflow, optional mit anderer Server-Adresse), bei Git-Tags v* (APKs hängen am Release)
+# und bei Änderungen unter apps/mobile; der Pfadfilter gilt nicht für Tags.
 on:
   workflow_dispatch:
     inputs:
@@ -11,6 +12,8 @@ on:
         default: https://project.srz.one
   push:
     tags: ['v*.*.*']
+    branches: [main, master, 'claude/**']
+    paths: ['apps/mobile/**', '.github/workflows/android.yml']
 
 jobs:
   apk:
