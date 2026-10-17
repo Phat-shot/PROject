@@ -11,7 +11,7 @@ interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTempl
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
 interface PageData { page: DocPage; versions: DocPageVersion[]; attachments: { id: string; filename: string; size: number }[]; activeShares: number; children: ChildRow[]; inheritedTemplateKey: string | null }
 
-const KIND_LABEL: Record<string, string> = { series: 'Besprechungsreihe', subproject: 'Teilprojekt', report: 'Berichte', custom: 'Sammlung' };
+const KIND_LABEL: Record<string, string> = { series: 'Besprechungsreihe', subproject: 'Teilprojekt', report: 'Berichte', custom: 'Sammlung', folder: 'Ordner' };
 
 export function DocsView() {
   const { detail } = useProject();
@@ -50,15 +50,25 @@ export function DocsView() {
   );
   const tree = (pages: DocPage[], parent: string | null, depth: number): JSX.Element[] =>
     pages.filter((p) => (p.parentPageId ?? null) === parent).flatMap((p) => [row(p, depth), ...tree(pages, p.id, depth + 1)]);
-  const rootsIn = (folderId: string | null) => (byFolder.get(folderId) ?? []).filter((p) => !p.parentPageId || !all.some((x) => x.id === p.parentPageId));
+  const rootsIn = (folderId: string | null) => (byFolder.get(folderId) ?? []).filter((p) => !p.isFolderPage && (!p.parentPageId || !all.some((x) => x.id === p.parentPageId)));
+  /** Ordner öffnen: seine Seite (wird beim ersten Mal angelegt). */
+  const openFolder = async (f: DocFolder) => {
+    try { const r = await api.post<{ page: DocPage; created: boolean }>(`/projects/${detail.project.id}/docs/folders/${f.id}/page`); if (r.created) await docs.reload(); nav(`${base}/${r.page.id}`); }
+    catch { /* Leser ohne Ordnerseite: nichts zu öffnen */ }
+  };
   return (
     <div className="docs-layout">
       <div className="doc-tree">
         <div className="row between"><strong>Doku</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewPage({ folderId: docs.data?.folders[0]?.id ?? null, parentPageId: null })}>+ Seite</button>}</div>
         {docs.data?.folders.filter((f) => !f.parentId).map((f) => (
           <div key={f.id}>
-            <div className="folder"><span>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> ✉</span>}</span>
-              {me.role === 'pl' && <button className="btn sm link" onClick={() => setEditFolder(f)}>⋯</button>}</div>
+            <div className={`folder ${f.pageId && pageId === f.pageId ? 'active' : ''}`}>
+              <span className="t" title="Ordnerseite öffnen" onClick={() => void openFolder(f)}>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> ✉</span>}</span>
+              {canWrite && <span className="acts">
+                <button title="Seite in diesem Ordner anlegen" onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+</button>
+                {me.role === 'pl' && <button title="Ordner bearbeiten (Name, Verteiler)" onClick={() => setEditFolder(f)}>⋯</button>}
+              </span>}
+            </div>
             {rootsIn(f.id).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}
             {rootsIn(f.id).length === 0 && <div className="muted small" style={{ padding: '2px 8px' }}>leer</div>}
           </div>
@@ -66,7 +76,7 @@ export function DocsView() {
         {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}
         {me.role === 'pl' && <button className="btn sm link mt" onClick={() => setNewFolder(true)}>+ Ordner</button>}
       </div>
-      {pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} /> : (
+      {pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
         <div className="doc-view">
           <h1>Dokumentation</h1>
           <p className="muted">Seiten mit Unterseiten, WYSIWYG-Editor, Versionen, Status Entwurf → In Prüfung → Final. Eine Oberseite (z. B. „JF Auftraggeber“ oder ein Teilprojekt) trägt Zusammenfassung und Teilnehmer, legt die Vorlage für ihre Unterseiten fest und das PDF-Layout.</p>
@@ -85,7 +95,7 @@ export function DocsView() {
   );
 }
 
-function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; docs: DocsData | null; reloadTree: () => Promise<void>; onNewChild: (p: DocPage, inherited: string | null) => void }) {
+function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pageId: string; docs: DocsData | null; reloadTree: () => Promise<void>; onNewChild: (p: DocPage, inherited: string | null) => void; onNewInFolder: (folderId: string | null) => void }) {
   const { detail } = useProject();
   const nav = useNavigate();
   const [params, setParams] = useSearchParams();
@@ -96,6 +106,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   const [settings, setSettingsState] = useState(() => params.get('einstellungen') === '1');
   const setSettings = (v: boolean) => { setSettingsState(v); if (!v && params.get('einstellungen')) { const n = new URLSearchParams(params); n.delete('einstellungen'); setParams(n, { replace: true }); } };
   const [menu, setMenu] = useState(false);
+  const [editFolder, setEditFolder] = useState(false);
   const [showVersion, setShowVersion] = useState<DocPageVersion | null>(null);
   const dialog = useDialog();
   const { busy, error, run, setError } = useAsync();
@@ -106,6 +117,11 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   const p = d.data.page;
   const folder = docs?.folders.find((f) => f.id === p.folderId);
   const parent = docs?.pages.find((x) => x.id === p.parentPageId);
+  const isFolderPage = Boolean(folder && folder.pageId === p.id);
+  /** Seiten im Ordner (ohne die Ordnerseite selbst) als Unterseiten einer Ordnerseite */
+  const folderChildren: ChildRow[] = isFolderPage ? (docs?.pages ?? []).filter((x) => x.folderId === p.folderId && !x.parentPageId && x.id !== p.id).map((x) => ({ id: x.id, title: x.title, status: x.status, version: x.version, updatedAt: x.updatedAt, templateKey: x.templateKey })) : [];
+  const children = isFolderPage ? folderChildren : d.data.children;
+  const newChild = () => (isFolderPage ? onNewInFolder(p.folderId) : onNewChild(p, childTemplate ?? null));
   const canEdit = me.role !== 'reader' && p.status !== 'final';
   const canFinal = me.role === 'pl' || me.canFinalize;
   const setStatus = (status: string) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status }); await d.reload(); await reloadTree(); });
@@ -122,7 +138,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
   return (
     <div className="doc-view">
       <div className="row mb small muted">
-        <Link to={base}>Doku</Link><span>›</span>{folder && <span>{folder.name}</span>}{parent && <><span>›</span><Link to={`${base}/${parent.id}`}>{parent.title}</Link></>}<span>›</span><span>{p.title}</span>
+        <Link to={base}>Doku</Link><span>›</span>{folder && !isFolderPage && (folder.pageId ? <Link to={`${base}/${folder.pageId}`}>{folder.name}</Link> : <span>{folder.name}</span>)}{parent && <><span>›</span><Link to={`${base}/${parent.id}`}>{parent.title}</Link></>}{!isFolderPage && <span>›</span>}<span>{isFolderPage ? `Ordner ${p.title}` : p.title}</span>
       </div>
       <div className="row mb doc-actions">
         <span className="muted small">Version {p.version} · {p.updatedByName} · {fmtDateTime(p.updatedAt)}</span>
@@ -141,14 +157,15 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
         </> : <>
           {canEdit && <button className="btn sm primary" onClick={() => setEdit(true)}>Bearbeiten</button>}
           {p.status === 'final' && canFinal && <button className="btn sm" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); await dialog.notify({ title: 'PDF versendet', text: `„${r.filename}“ ging an: ${r.to.join(', ')}` }); })}>Als PDF an Verteiler senden</button>}
-          {me.role !== 'reader' && <button className="btn sm" onClick={() => onNewChild(p, childTemplate ?? null)} title={childTemplate ? `Vorlage: ${tplName(childTemplate)}` : undefined}>+ Unterseite</button>}
+          {me.role !== 'reader' && <button className="btn sm" onClick={newChild} title={isFolderPage ? 'Neue Seite in diesem Ordner' : childTemplate ? `Vorlage: ${tplName(childTemplate)}` : undefined}>{isFolderPage ? '+ Seite' : '+ Unterseite'}</button>}
           <span className="menu-wrap">
             <button className="btn sm" title="Weitere Aktionen" onClick={() => setMenu(!menu)}>⋯</button>
             {menu && <><div className="menu-backdrop" onClick={() => setMenu(false)} /><div className="menu" onClick={() => setMenu(false)}>
               {me.role !== 'reader' && <button onClick={() => setSettings(true)}>Seiteneinstellungen</button>}
+              {isFolderPage && me.role === 'pl' && <button onClick={() => setEditFolder(true)}>Ordner bearbeiten (Name, Verteiler)</button>}
               <a href={`/api/docs/pages/${p.id}/pdf`} target="_blank" rel="noreferrer">PDF öffnen</a>
               {canFinal && <button onClick={() => setShare(true)}>Teilen per Link{d.data.activeShares > 0 ? ` (${d.data.activeShares} aktiv)` : ''}</button>}
-              {me.role === 'pl' && <button className="danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
+              {me.role === 'pl' && !isFolderPage && <button className="danger" onClick={() => void dialog.confirm({ title: 'Seite löschen', text: `„${p.title}“ mit allen Versionen löschen? Unterseiten rücken eine Ebene hoch.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/docs/pages/${p.id}`); await reloadTree(); nav(base); }); })}>Löschen</button>}
             </div></>}
           </span>
         </>}
@@ -156,12 +173,12 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
       {p.status === 'final' && <div className="success mb small">Final seit {fmtDateTime(p.finalizedAt)}. Die Seite ist gesperrt und versioniert.</div>}
       {error && <div className="error mb">{error}</div>}
       {edit ? <Editor page={p} onApi={setEditor} onSaved={async () => { setEdit(false); setEditor(null); await d.reload(); await reloadTree(); }} /> : <HtmlView html={p.contentHtml} />}
-      {!edit && (isTop || s.showChildren) && (
+      {!edit && (isTop || s.showChildren || isFolderPage) && (
         <div className="children-index">
-          <h3>Unterseiten <span className="badge">{d.data.children.length}</span>{me.role !== 'reader' && <button className="btn sm link" onClick={() => onNewChild(p, childTemplate ?? null)}>+ neue Unterseite{childTemplate ? ` aus „${tplName(childTemplate)}“` : ''}</button>}</h3>
-          {d.data.children.length === 0 ? <p className="muted small">Noch keine Unterseiten.</p> : (
+          <h3>{isFolderPage ? 'Seiten in diesem Ordner' : 'Unterseiten'} <span className="badge">{children.length}</span>{me.role !== 'reader' && <button className="btn sm link" onClick={newChild}>{isFolderPage ? '+ neue Seite' : `+ neue Unterseite${childTemplate ? ` aus „${tplName(childTemplate)}“` : ''}`}</button>}</h3>
+          {children.length === 0 ? <p className="muted small">{isFolderPage ? 'Noch keine Seiten in diesem Ordner.' : 'Noch keine Unterseiten.'}</p> : (
             <table className="table"><thead><tr><th>Seite</th><th>Status</th><th>Version</th><th>Geändert</th></tr></thead><tbody>
-              {d.data.children.map((c) => <tr key={c.id} className="clickable" onClick={() => nav(`${base}/${c.id}`)}><td>{c.title}</td><td><span className={`badge ${c.status}`}>{statusLabel[c.status]}</span></td><td>{c.version}</td><td className="muted small">{fmtDateTime(c.updatedAt)}</td></tr>)}
+              {children.map((c) => <tr key={c.id} className="clickable" onClick={() => nav(`${base}/${c.id}`)}><td>{c.title}</td><td><span className={`badge ${c.status}`}>{statusLabel[c.status]}</span></td><td>{c.version}</td><td className="muted small">{fmtDateTime(c.updatedAt)}</td></tr>)}
             </tbody></table>
           )}
         </div>
@@ -181,6 +198,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild }: { pageId: string; do
       </div>
       {showVersion && <Modal title={`${showVersion.title} – Version ${showVersion.version}`} onClose={() => setShowVersion(null)}><HtmlView html={showVersion.contentHtml ?? ''} /></Modal>}
       {share && <ShareDialog page={p} onClose={() => { setShare(false); void d.reload(); }} />}
+      {editFolder && folder && <FolderForm existing={folder} onClose={() => setEditFolder(false)} onSaved={async () => { setEditFolder(false); await reloadTree(); await d.reload(); }} />}
       {settings && <SettingsDialog page={p} templates={docs?.templates ?? []} pages={docs?.pages ?? []} inherited={d.data.inheritedTemplateKey} onClose={() => setSettings(false)} onSaved={async () => { setSettings(false); await d.reload(); await reloadTree(); }} />}
     </div>
   );
@@ -258,6 +276,8 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
   const [name, setName] = useState(existing?.name ?? '');
   const [list, setList] = useState(existing?.distributionList.join(', ') ?? '');
   const { busy, error, run } = useAsync();
+  const dialog = useDialog();
+  const nav = useNavigate();
   return (
     <Modal title={existing ? 'Ordner bearbeiten' : 'Neuer Ordner'} onClose={onClose}>
       <div className="form">
@@ -270,7 +290,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
           if (existing) await api.patch(`/projects/${detail.project.id}/docs/folders/${existing.id}`, body); else await api.post(`/projects/${detail.project.id}/docs/folders`, body);
           await onSaved();
         })}>Speichern</button>
-          {existing && <button className="btn danger right" onClick={() => void run(async () => { await api.del(`/projects/${detail.project.id}/docs/folders/${existing.id}`); await onSaved(); })}>Löschen</button>}</div>
+          {existing && <button className="btn danger right" onClick={() => void dialog.confirm({ title: 'Ordner löschen', text: `„${existing.name}“ samt Ordnerseite löschen? Geht nur, wenn der Ordner keine weiteren Seiten enthält.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/docs/folders/${existing.id}`); await onSaved(); nav(`/projekte/${detail.project.id}/doku`); }); })}>Löschen</button>}</div>
       </div>
     </Modal>
   );

@@ -18,6 +18,8 @@ import * as L from '../docs/layout.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
+const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+
 export async function docRoutes(app: FastifyInstance) {
   const db = app.db;
   const layoutFor = (pageId: string) => L.layoutFor(db, pageId);
@@ -33,7 +35,8 @@ export async function docRoutes(app: FastifyInstance) {
     const folders = await db.query(`select * from doc_folders where project_id = $1 order by position, name`, [req.params.id]);
     const pages = await db.query(
       `select p.id, p.project_id, p.folder_id, p.parent_page_id, p.title, p.status, p.version, p.template_key, p.settings, p.created_by, p.updated_by, p.created_at, p.updated_at, p.finalized_at, '' as content_md, '' as content_html, u.name as updated_by_name,
-              (select count(*)::int from doc_pages c where c.parent_page_id = p.id) as child_count
+              (select count(*)::int from doc_pages c where c.parent_page_id = p.id) as child_count,
+              exists (select 1 from doc_folders f where f.page_id = p.id) as is_folder_page
        from doc_pages p left join users u on u.id = p.updated_by where p.project_id = $1 order by p.title`,
       [req.params.id]
     );
@@ -66,6 +69,8 @@ export async function docRoutes(app: FastifyInstance) {
       [req.params.fid, req.params.id, b.name ?? null, b.distributionList ? JSON.stringify(b.distributionList) : null, 'parentId' in b, b.parentId ?? null]
     );
     if (!r) throw notFound('Ordner nicht gefunden');
+    // Ordnerseite trägt den Ordnernamen als Titel
+    if (b.name && r.page_id) await db.query(`update doc_pages set title = $2 where id = $1 and status <> 'final'`, [r.page_id, r.name]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'folder.update', objectType: 'doc_folder', objectId: r.id, details: b });
     return { folder: mapFolder(r) };
   });
@@ -73,10 +78,36 @@ export async function docRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string; fid: string } }>('/projects/:id/docs/folders/:fid', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    const cnt = await db.one(`select count(*)::int as c from doc_pages where folder_id = $1`, [req.params.fid]);
+    const f = await db.maybeOne(`select * from doc_folders where id = $1 and project_id = $2`, [req.params.fid, req.params.id]);
+    if (!f) throw notFound('Ordner nicht gefunden');
+    const cnt = await db.one(`select count(*)::int as c from doc_pages where folder_id = $1 and id is distinct from $2`, [f.id, f.page_id]);
     if (cnt.c > 0) throw badRequest('Ordner enthält Seiten');
-    await db.query(`delete from doc_folders where id = $1 and project_id = $2`, [req.params.fid, req.params.id]);
+    await db.query(`delete from doc_folders where id = $1`, [f.id]);
+    if (f.page_id) await db.query(`delete from doc_pages where id = $1`, [f.page_id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'folder.delete', objectType: 'doc_folder', objectId: f.id, details: { name: f.name } });
     return { ok: true };
+  });
+
+  // Ordnerseite: Beschreibung des Ordners als normale Seite (Status, Versionen, PDF); beim ersten Öffnen angelegt
+  app.post<{ Params: { id: string; fid: string } }>('/projects/:id/docs/folders/:fid/page', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id);
+    const f = await db.maybeOne(`select * from doc_folders where id = $1 and project_id = $2`, [req.params.fid, req.params.id]);
+    if (!f) throw notFound('Ordner nicht gefunden');
+    if (f.page_id) {
+      const existing = await db.maybeOne(`select * from doc_pages where id = $1`, [f.page_id]);
+      if (existing) return { page: mapPage(existing), created: false };
+    }
+    if (m.role === 'reader') throw forbidden('Der Ordner hat noch keine Seite; ein Mitglied legt sie beim ersten Öffnen an');
+    const html = `<p>${esc(f.name)}: Zweck, Ablage und Regeln dieses Ordners.</p>`;
+    const r = await db.one(
+      `insert into doc_pages (project_id, folder_id, parent_page_id, title, content_md, content_html, template_key, settings, created_by, updated_by) values ($1,$2,null,$3,$4,$5,null,$6,$7,$7) returning *`,
+      [req.params.id, f.id, f.name, htmlToMd(html), html, JSON.stringify({ kind: 'folder', showChildren: true }), user.id]
+    );
+    await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,1,$2,$3,$4,'draft',$5)`, [r.id, r.title, r.content_md, r.content_html, user.id]);
+    await db.query(`update doc_folders set page_id = $2 where id = $1`, [f.id, r.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'page.create', objectType: 'doc_page', objectId: r.id, details: { title: f.name, folderPage: true } });
+    return { page: mapPage(r), created: true };
   });
 
   app.post<{ Params: { id: string }; Body: { title: string; folderId?: string | null; parentPageId?: string | null; templateKey?: string | null; contentMd?: string; contentHtml?: string; settings?: any } }>('/projects/:id/docs/pages', async (req) => {
@@ -214,6 +245,7 @@ export async function docRoutes(app: FastifyInstance) {
     const r = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id, 'pl');
+    if (await db.maybeOne(`select 1 from doc_folders where page_id = $1`, [r.id])) throw badRequest('Ordnerseite: den Ordner löschen, nicht die Seite');
     await db.query(`update doc_pages set parent_page_id = $2 where parent_page_id = $1`, [r.id, r.parent_page_id]);
     await db.query(`delete from doc_pages where id = $1`, [r.id]);
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.delete', objectType: 'doc_page', objectId: r.id, details: { title: r.title } });

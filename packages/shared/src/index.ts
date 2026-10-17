@@ -392,6 +392,8 @@ export interface DocFolder {
   name: string;
   position: number;
   distributionList: string[];
+  /** Seite des Ordners (Beschreibung); wird beim ersten Öffnen angelegt */
+  pageId: string | null;
 }
 
 export interface DocPage {
@@ -404,6 +406,8 @@ export interface DocPage {
   contentHtml: string;
   settings: DocPageSettings;
   childCount?: number;
+  /** Seite eines Ordners: erscheint nicht als Seite im Baum, sondern über den Ordnernamen */
+  isFolderPage?: boolean;
   status: DocStatus;
   version: number;
   templateKey: string | null;
@@ -419,7 +423,7 @@ export interface DocPageSettings {
   /** Vorlage für neue Unterseiten (vererbt an tiefere Ebenen) */
   childTemplateKey?: string | null;
   /** Art der Oberseite: Besprechungsreihe, Teilprojekt, Bericht, frei */
-  kind?: 'series' | 'subproject' | 'report' | 'custom' | null;
+  kind?: 'series' | 'subproject' | 'report' | 'custom' | 'folder' | null;
   /** Unterseiten-Index unter dem Inhalt anzeigen */
   showChildren?: boolean;
   /** Empfängerkreis für den PDF-Versand dieser Seite (Vorrang hat der Ordner-Verteiler) */

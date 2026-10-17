@@ -10,7 +10,7 @@ export async function createDefaultFolders(db: Db, projectId: string) {
 }
 
 export function mapFolder(r: any): DocFolder {
-  return { id: r.id, projectId: r.project_id, parentId: r.parent_id, name: r.name, position: r.position, distributionList: r.distribution_list ?? [] };
+  return { id: r.id, projectId: r.project_id, parentId: r.parent_id, name: r.name, position: r.position, distributionList: r.distribution_list ?? [], pageId: r.page_id ?? null };
 }
 
 export function mapPage(r: any): DocPage {
@@ -24,6 +24,7 @@ export function mapPage(r: any): DocPage {
     contentHtml: r.content_html ?? '',
     settings: r.settings ?? {},
     childCount: r.child_count ?? undefined,
+    isFolderPage: r.is_folder_page === undefined ? undefined : Boolean(r.is_folder_page),
     status: r.status,
     version: r.version,
     templateKey: r.template_key,

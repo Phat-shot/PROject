@@ -207,10 +207,15 @@ table.table { width: 100%; border-collapse: collapse; }
 .doc-tree .page:hover { background: var(--surface-2); }
 .doc-tree .page.active { background: var(--primary-soft); }
 .doc-tree .page .t { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.doc-tree .page .acts { display: none; gap: 2px; }
-.doc-tree .page:hover .acts, .doc-tree .page:focus-within .acts { display: inline-flex; }
+.doc-tree .folder .t { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin-left: -4px; }
+.doc-tree .folder .t:hover { color: var(--primary); }
+.doc-tree .folder.active .t { color: var(--primary); }
+.doc-tree .page .acts, .doc-tree .folder .acts { display: none; gap: 2px; }
+.doc-tree .page:hover .acts, .doc-tree .page:focus-within .acts, .doc-tree .folder:hover .acts, .doc-tree .folder:focus-within .acts { display: inline-flex; }
+.doc-tree .folder .acts button,
 .doc-tree .page .acts button { border: 1px solid var(--border); background: var(--surface); border-radius: 5px; padding: 0 6px; font-size: 12px; line-height: 18px; color: var(--muted); }
-.doc-tree .page .acts button:hover { color: var(--primary); border-color: var(--primary); }
+.doc-tree .page .acts button:hover, .doc-tree .folder .acts button:hover { color: var(--primary); border-color: var(--primary); }
+.doc-tree .folder .acts button { text-transform: none; letter-spacing: 0; font-weight: 400; }
 .doc-actions .status-select { width: auto; padding: 2px 24px 2px 8px; font-size: 11px; font-weight: 600; border-radius: 999px; }
 .doc-actions .status-select.review { background: var(--warn-soft); color: var(--warn); border-color: #f2d9a6; }
 .doc-actions .status-select.final { background: var(--ok-soft); color: var(--ok); border-color: #bfe3c9; }

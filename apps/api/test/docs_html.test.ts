@@ -93,3 +93,28 @@ test('PDF aus HTML mit Schriftgrößen, Tabelle, Bild und Freigabe-Bearbeitung i
   assert.ok(!edit.json().page.contentHtml.includes('<script'));
   assert.match(edit.json().page.contentMd, /## Extern/);
 });
+
+test('Ordner sind eine Seite: beim ersten Öffnen angelegt, Umbenennen folgt, Löschen nur ohne weitere Seiten', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const docs = (await t.api(pl).get(`/projects/${web}/docs`)).json();
+  const folder = docs.folders.find((f: any) => f.name === 'Allgemein');
+  assert.ok(folder && !folder.pageId);
+  const first = await t.api(pl).post(`/projects/${web}/docs/folders/${folder.id}/page`);
+  assert.equal(first.statusCode, 200, first.body);
+  assert.equal(first.json().created, true);
+  assert.equal(first.json().page.title, 'Allgemein');
+  const second = await t.api(pl).post(`/projects/${web}/docs/folders/${folder.id}/page`);
+  assert.equal(second.json().created, false);
+  assert.equal(second.json().page.id, first.json().page.id);
+  const listed = (await t.api(pl).get(`/projects/${web}/docs`)).json();
+  assert.equal(listed.folders.find((f: any) => f.id === folder.id).pageId, first.json().page.id);
+  assert.equal(listed.pages.find((p: any) => p.id === first.json().page.id).isFolderPage, true);
+  await t.api(pl).patch(`/projects/${web}/docs/folders/${folder.id}`, { name: 'Sonstiges' });
+  assert.equal((await t.api(pl).get(`/docs/pages/${first.json().page.id}`)).json().page.title, 'Sonstiges');
+  const delPage = await t.api(pl).del(`/docs/pages/${first.json().page.id}`);
+  assert.equal(delPage.statusCode, 400, 'Ordnerseite nicht direkt löschbar');
+  const delFolder = await t.api(pl).del(`/projects/${web}/docs/folders/${folder.id}`);
+  assert.equal(delFolder.statusCode, 200, delFolder.body);
+  assert.equal((await t.api(pl).get(`/docs/pages/${first.json().page.id}`)).statusCode, 404);
+});
