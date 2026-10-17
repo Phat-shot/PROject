@@ -56,7 +56,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
     const rows = await db.query(`select r.*, u.name as agent_name, t.title as task_title, t.number as task_number from agent_runs r join users u on u.id = r.agent_user_id left join tasks t on t.id = r.task_id where r.project_id = $1 and ($2::uuid is null or r.task_id = $2) order by r.created_at desc limit 100`, [req.params.id, req.query.taskId ?? null]);
-    return { runs: rows.rows.map((r: any) => ({ id: r.id, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], inputTokens: r.input_tokens, outputTokens: r.output_tokens, error: r.error, createdAt: r.created_at })) };
+    return { runs: rows.rows.map((r: any) => ({ id: r.id, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], proposed: r.proposed ?? null, inputTokens: r.input_tokens, outputTokens: r.output_tokens, error: r.error, createdAt: r.created_at })) };
   });
 
   // PL: Agent an einem Arbeitspaket pausieren/fortsetzen oder sofort laufen lassen

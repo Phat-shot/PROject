@@ -30,12 +30,23 @@ const clampH = (v: unknown, def: number) => { const n = Number(v); return Number
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['note', 'actions'],
   properties: {
-    note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was veranlasst wurde und warum' },
-    actions: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['type'], properties: {
-      type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'mail', 'blocked', 'escalate', 'wait', 'none'] },
-      text: { type: 'string' }, column: { type: 'string' }, itemId: { type: 'string' }, to: { type: 'array', items: { type: 'string' } }, subject: { type: 'string' }, reason: { type: 'string' },
-      kind: { type: 'string', enum: ['reply', 'date', 'task', 'info'] }, checkAfterHours: { type: 'number' }, until: { type: 'string' }, remindAfterHours: { type: 'number' }, escalateAfterHours: { type: 'number' }
-    } } }
+    note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
+    actions: { type: 'array', items: { type: 'object', additionalProperties: false,
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours'],
+      properties: {
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'mail', 'blocked', 'escalate', 'wait', 'none'] },
+        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail: Mailtext; escalate: Text an die PL; sonst null' },
+        column: { type: ['string', 'null'], description: 'set_status: Zielstatus (exakt aus der Liste); sonst null' },
+        itemId: { type: ['string', 'null'], description: 'check_item: itemId aus der Task-Liste; sonst null' },
+        to: { type: ['array', 'null'], items: { type: 'string' }, description: 'mail: Empfängeradressen; sonst null' },
+        subject: { type: ['string', 'null'], description: 'mail: Betreff; sonst null' },
+        reason: { type: ['string', 'null'], description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst null' },
+        kind: { type: ['string', 'null'], description: 'wait: genau einer der Werte reply, date, task, info; sonst null' },
+        checkAfterHours: { type: ['number', 'null'], description: 'wait: Stunden bis zur nächsten Prüfung; sonst null' },
+        until: { type: ['string', 'null'], description: 'wait mit kind date: Datum YYYY-MM-DD; sonst null' },
+        remindAfterHours: { type: ['number', 'null'], description: 'wait mit kind reply: Stunden bis zum Nachfassen; sonst null' },
+        escalateAfterHours: { type: ['number', 'null'], description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst null' }
+      } } }
   }
 };
 
@@ -60,7 +71,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; ein Task-Abhaken braucht itemId; ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
   const prompt = `Heute: ${today}
 Arbeitspaket ${task.project_key}-${task.number} „${task.title}“ · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -88,13 +99,18 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       if (a.type === 'comment' && a.text?.trim()) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, a.text.trim()]);
         applied.push(a);
-      } else if (a.type === 'set_status' && a.column) {
+      } else if (a.type === 'comment') errors.push('Log-Eintrag ohne Text verworfen');
+      else if (a.type === 'set_status' && a.column) {
         const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and lower(name) = lower($2)`, [task.project_id, a.column]);
+        if (!col) errors.push(`Status „${a.column}“ gibt es nicht`);
         if (col && col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
-      } else if (a.type === 'check_item' && a.itemId) {
+      } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
+        if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);
         if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
-      } else if (a.type === 'mail' && !mailed && Array.isArray(a.to) && a.to.length && a.subject && a.text) {
+      } else if (a.type === 'mail' && (!Array.isArray(a.to) || !a.to.length || !a.subject || !a.text)) errors.push('Mail verworfen: Empfänger, Betreff oder Text fehlt');
+      else if (a.type === 'mail' && mailed) errors.push('Zweite Mail im selben Lauf verworfen');
+      else if (a.type === 'mail') {
         const to = a.to.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
         if (!to.length) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
         else if (!account) errors.push('Mail nicht gesendet: kein Projektkonto angebunden');
@@ -124,11 +140,12 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `An die Projektleitung: ${a.text}`]);
         for (const pl of pls) await notify(db, { userId: (await db.one(`select id from users where email = $1`, [pl.email])).id, projectId: task.project_id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}` });
         applied.push(a);
-      } else if (a.type === 'wait' && a.kind) {
+      } else if (a.type === 'wait' && !a.kind) errors.push('wait ohne kind verworfen');
+      else if (a.type === 'wait') {
         const prev: AgentWait | null = task.agent_wait ?? null;
         const keepSince = prev && prev.kind === a.kind && trigger !== 'reply' && trigger !== 'comment' && trigger !== 'mail' ? prev.since : now.toISOString();
         const check = a.kind === 'date' && a.until && !isNaN(new Date(a.until).getTime()) ? new Date(a.until) : new Date(now.getTime() + clampH(a.checkAfterHours, a.kind === 'reply' ? 24 : 24) * H);
-        const w: AgentWait = { kind: a.kind, reason: String(a.reason ?? '').slice(0, 300), since: keepSince };
+        const w: AgentWait = { kind: a.kind, reason: (String(a.reason ?? '').trim() || 'keine Angabe').slice(0, 300), since: keepSince };
         if (a.kind === 'reply') {
           const base = new Date(keepSince).getTime();
           w.remindAt = prev?.kind === 'reply' && prev.reminded ? prev.remindAt : new Date(base + clampH(a.remindAfterHours, 48) * H).toISOString();
@@ -145,8 +162,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     if (!waited) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
-    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens, errors.length ? errors.join(' | ') : null]);
+    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     return { runId: run.id, taskId: task.id, status: errors.length ? 'error' : 'ok', actions: applied, error: errors.length ? errors.join(' | ') : undefined };
   } catch (e: any) {
