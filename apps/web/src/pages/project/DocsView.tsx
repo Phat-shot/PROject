@@ -6,6 +6,7 @@ import { useData } from '../../lib/useData';
 import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { useProject } from '../ProjectPage';
+import { useIsMobile } from '../../lib/useMedia';
 
 interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTemplate[] }
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
@@ -18,6 +19,9 @@ export function DocsView() {
   const { pageId } = useParams();
   const nav = useNavigate();
   const docs = useData<DocsData>(`/projects/${detail.project.id}/docs`);
+  const mobile = useIsMobile();
+  const [treeOpen, setTreeOpen] = useState(false);
+  const showTree = !mobile || !pageId || treeOpen;
   const [newPage, setNewPage] = useState<{ folderId: string | null; parentPageId: string | null; inherited?: string | null } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [editFolder, setEditFolder] = useState<DocFolder | null>(null);
@@ -58,7 +62,8 @@ export function DocsView() {
   };
   return (
     <div className="docs-layout">
-      <div className="doc-tree">
+      {mobile && pageId && <button className="btn sm tree-toggle" onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? '▾ Seitenbaum ausblenden' : '▸ Seitenbaum'}</button>}
+      {showTree && <div className="doc-tree" onClick={() => { if (mobile) setTreeOpen(false); }}>
         <div className="row between"><strong>Doku</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewPage({ folderId: docs.data?.folders[0]?.id ?? null, parentPageId: null })}>+ Seite</button>}</div>
         {docs.data?.folders.filter((f) => !f.parentId).map((f) => (
           <div key={f.id}>
@@ -74,8 +79,8 @@ export function DocsView() {
           </div>
         ))}
         {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}
-        {me.role === 'pl' && <button className="btn sm link mt" onClick={() => setNewFolder(true)}>+ Ordner</button>}
-      </div>
+        {me.role === 'pl' && <button className="btn sm link mt" onClick={(e) => { e.stopPropagation(); setNewFolder(true); }}>+ Ordner</button>}
+      </div>}
       {pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
         <div className="doc-view">
           <h1>Dokumentation</h1>

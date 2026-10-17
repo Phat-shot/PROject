@@ -22,6 +22,8 @@ export function CalendarView() {
     return m;
   }, [tasks, detail.milestones, t]);
   const label = cursor.toLocaleDateString('de-DE', { month: 'long', year: 'numeric' });
+  // Agenda (Telefon): nur Tage des Monats mit Einträgen
+  const agenda = days.filter((d) => d.getMonth() === cursor.getMonth() && (byDay.get(iso(d)) ?? []).length > 0);
   return (
     <div className="content">
       <div className="row mb">
@@ -30,6 +32,15 @@ export function CalendarView() {
         <button className="btn sm" onClick={() => setCursor(new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1))}>›</button>
         <button className="btn sm" onClick={() => { const d = new Date(); setCursor(new Date(d.getFullYear(), d.getMonth(), 1)); }}>Heute</button>
         <span className="muted small">Deadlines und Meilensteine. Kalender-Anbindung (M365, Google, CalDAV) folgt.</span>
+      </div>
+      <div className="cal-agenda">
+        {agenda.length === 0 && <div className="empty">Keine Termine in diesem Monat.</div>}
+        {agenda.map((d) => { const k = iso(d); return (
+          <div key={k} className={`day ${k === t ? 'today' : ''}`}>
+            <div className="d">{d.toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit' })}</div>
+            {(byDay.get(k) ?? []).map((e) => <span key={e.kind + e.id} className={`ev ${e.kind} ${e.done ? 'done' : ''} ${e.overdue ? 'overdue' : ''}`} onClick={() => e.kind === 'task' && openTask(e.id)}>{e.title}</span>)}
+          </div>
+        ); })}
       </div>
       <div className="cal">
         {['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d) => <div key={d} className="hd">{d}</div>)}

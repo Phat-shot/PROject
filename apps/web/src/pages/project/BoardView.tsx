@@ -5,6 +5,7 @@ import { api, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { useIsMobile } from '../../lib/useMedia';
 
 interface Filter { q: string; member: string; label: string; mine: boolean; overdue: boolean; conflicts: boolean; prio: string; archived: boolean; escalated: boolean }
 const EMPTY: Filter = { q: '', member: '', label: '', mine: false, overdue: false, conflicts: false, prio: '', archived: false, escalated: false };
@@ -30,6 +31,8 @@ export function BoardView() {
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const { user } = useAuth();
   const dialog = useDialog();
+  const mobile = useIsMobile();
+  const [showFilters, setShowFilters] = useState(false);
   const pid = detail.project.id;
   const [params, setParams] = useSearchParams();
   const f = useMemo(() => readFilter(params), [params]);
@@ -110,7 +113,15 @@ export function BoardView() {
 
   return (
     <div className="content">
+      {mobile && !showFilters ? (
+        <div className="filterbar compact">
+          <input ref={searchRef} type="text" placeholder="Filtern …" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
+          <button className={`chip ${active ? 'on' : ''}`} onClick={() => setShowFilters(true)}>Filter{active ? ' ·' : ''}</button>
+          {canEdit && <button className="btn sm primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>+ Neu</button>}
+        </div>
+      ) : (
       <div className="filterbar">
+        {mobile && <button className="chip" onClick={() => setShowFilters(false)}>▴ Filter einklappen</button>}
         <input ref={searchRef} type="text" placeholder="Filtern … (f)" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
         <select value={f.member} onChange={(e) => setF({ ...f, member: e.target.value })}>
           <option value="">Alle Personen</option>
@@ -135,6 +146,7 @@ export function BoardView() {
         <span className="muted small">{filtered.length}/{source.length}</span>
         {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
+      )}
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen über die Arbeitspaket.</div>}
       {groups.map((g) => (
         <div key={g.key} className={`swimlane ${laneClosed.has(g.key) ? 'collapsed' : ''}`}>

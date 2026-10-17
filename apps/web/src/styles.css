@@ -261,6 +261,15 @@ table.table { width: 100%; border-collapse: collapse; }
 .comment .who { font-size: 12px; color: var(--muted); }
 .avatar { width: 22px; height: 22px; border-radius: 50%; background: #c7d2fe; color: #1e3a8a; font-size: 10px; display: inline-grid; place-items: center; font-weight: 700; }
 
+.cal-agenda { display: none; }
+.cal-agenda .day { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.cal-agenda .day .d { font-weight: 600; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+.cal-agenda .day.today .d { color: var(--primary); }
+.cal-agenda .ev { display: block; border-radius: 4px; padding: 3px 8px; margin-top: 3px; background: var(--primary-soft); color: var(--primary); cursor: pointer; }
+.cal-agenda .ev.ms { background: #ede7ff; color: #5b21b6; }
+.cal-agenda .ev.overdue { background: #fdecea; color: var(--danger); }
+.cal-agenda .ev.done { background: var(--ok-soft); color: var(--ok); text-decoration: line-through; }
+
 .menu-btn { display: none; border: 0; background: none; font-size: 20px; padding: 2px 6px; color: var(--text); }
 .sidebar .close-menu { display: none; }
 @media (max-width: 900px) {
@@ -287,8 +296,27 @@ table.table { width: 100%; border-collapse: collapse; }
   .doc-view, .mail-detail { padding: 14px; }
   .column { min-width: 230px; width: 230px; }
   .filterbar input[type=text] { width: 100%; }
+  .filterbar.compact { flex-wrap: nowrap; }
+  .filterbar.compact input[type=text] { flex: 1; width: auto; }
   .notif-panel { width: min(380px, 92vw); }
+  .card { overflow-x: auto; }
+  .kpi .v { font-size: 22px; }
+  .gantt th.label, .gantt td.label { width: 170px; min-width: 170px; font-size: 11px; }
+  .content .cal { display: none; }
+  .cal-agenda { display: block; }
+  .mail-layout { display: block; height: auto; }
+  .mail-views, .doc-tree { max-height: none; border-bottom: 1px solid var(--border); }
+  .mail-list { border-right: 0; }
+  .mail-mobile-bar { display: flex; gap: 8px; align-items: center; padding: 8px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+  .docs-layout { display: block; height: auto; }
+  .tree-toggle { margin: 8px 12px 0; }
+  .doc-view { padding: 14px; }
+  .drawer header { flex-wrap: wrap; }
+  .drawer header .title-edit { font-size: 14px; }
+  .topbar .tabs a { padding: 4px 8px; font-size: 13px; }
+  .section-nav { top: 0; position: static; }
 }
+
 
 /* Projekteinstellungen: Sprungleiste */
 .section-nav { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 12px; position: sticky; top: 52px; z-index: 4; background: var(--bg); padding: 4px 0; }

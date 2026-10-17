@@ -5,6 +5,7 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
+import { useIsMobile } from '../../lib/useMedia';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
 
@@ -46,6 +47,8 @@ export function MailView({ global = false }: { global?: boolean }) {
   const [params, setParams] = useSearchParams();
   const folder = params.get('ordner') ?? 'INBOX';
   const viewId = params.get('ansicht') ?? '';
+  const mobile = useIsMobile();
+  const [navOpen, setNavOpen] = useState(false);
   const readable = (views.data?.views ?? []).filter((v) => v.myRights.canRead);
   const accountIds = Array.from(new Set(readable.map((v) => v.accountId)));
   const folders = useFolders(accountIds);
@@ -58,11 +61,17 @@ export function MailView({ global = false }: { global?: boolean }) {
     return v ? `/projekte/${v.projectId}/mail/neu?view=${v.id}` : base;
   };
   const inList = loc.pathname === base || loc.pathname.startsWith(`${base}/m/`);
-  const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); nav(`${base}?${n.toString()}`); };
+  const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setNavOpen(false); nav(`${base}?${n.toString()}`); };
+  const curFolder = folders.find((f) => f.path.toLowerCase() === folder.toLowerCase());
+  const curView = readable.find((v) => v.id === viewId);
   const label = (f: MailFolder) => (f.specialUse ? FOLDER_LABEL[f.specialUse] : f.name);
   return (
     <div className="mail-layout">
-      <div className="mail-views">
+      {mobile && <div className="mail-mobile-bar">
+        <button className="btn sm" onClick={() => setNavOpen(!navOpen)}>{navOpen ? '▾' : '▸'} {curFolder ? label(curFolder) : 'Posteingang'} · {curView ? curView.name : 'Alle Ansichten'}</button>
+        {canWrite && <button className="btn sm primary right" onClick={() => nav(writeTarget())}>Neue Mail</button>}
+      </div>}
+      {(!mobile || navOpen) && <div className="mail-views">
         {canWrite && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => nav(writeTarget())}>Neue Mail</button>}
         <div className="section">Ordner</div>
         {folders.map((f) => (
@@ -82,14 +91,14 @@ export function MailView({ global = false }: { global?: boolean }) {
         {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen#mail`}>Ansichten und Filter verwalten</Link>}
         {!global && <>
           <div className="section">Freigabe-Liste</div>
-          <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => nav(`${base}/freigaben`)}>
+          <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => { setNavOpen(false); nav(`${base}/freigaben`); }}>
             <span>Entwürfe und Freigaben {pending.length > 0 && <span className="badge warn">{pending.length}</span>}</span>
           </div>
         </>}
-      </div>
+      </div>}
       <Routes>
-        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
-        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} />} />
+        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
+        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
         {!global && <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />}
         {!global && <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />}
         <Route path="mail/:mailId" element={<LegacyMail base={base} />} />
@@ -108,7 +117,7 @@ function LegacyMail({ base }: { base: string }) {
   return <Navigate to={mailId ? `${base}/m/${mailId}${q}` : `${base}${q}`} replace />;
 }
 
-function InboxList({ base, projectId, folder, viewId, views, folders }: { base: string; projectId: string | null; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[] }) {
+function InboxList({ base, projectId, folder, viewId, views, folders, mobile = false }: { base: string; projectId: string | null; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[]; mobile?: boolean }) {
   const { mailId } = useParams();
   const nav = useNavigate();
   const [params] = useSearchParams();
@@ -119,9 +128,11 @@ function InboxList({ base, projectId, folder, viewId, views, folders }: { base: 
   const mails = (list.data?.mails ?? []).filter((m) => !needle || m.subject.toLowerCase().includes(needle) || m.fromAddr.toLowerCase().includes(needle) || (m.fromName ?? '').toLowerCase().includes(needle));
   const open = (id: string) => nav(`${base}/m/${id}?${params.toString()}`);
   const current = mails.find((m) => m.id === mailId);
+  const back = `${base}?${params.toString()}`;
   return (
     <>
-      <div className="mail-list">
+      {mobile && mailId && <div className="mail-mobile-bar"><button className="btn sm" onClick={() => nav(back)}>← Zur Liste</button></div>}
+      {(!mobile || !mailId) && <div className="mail-list">
         <div className="row" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
           <input type="text" placeholder="Betreff oder Absender …" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
           <span className="muted small nowrap">{mails.length}</span>
@@ -135,8 +146,8 @@ function InboxList({ base, projectId, folder, viewId, views, folders }: { base: 
           </div>
         ))}
         {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Der PL legt Ansichten in den Projekteinstellungen an.' : 'Keine Mails in diesem Ordner.'}</div>}
-      </div>
-      {mailId && current && !projectId
+      </div>}
+      {mobile && !mailId ? null : mailId && current && !projectId
         ? <ProjectScope projectId={current.projectId}><MailDetailPanel mailId={mailId} views={views} folders={folders} base={`/projekte/${current.projectId}/mail`} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current.viewId} /></ProjectScope>
         : mailId && (projectId || current)
           ? <MailDetailPanel mailId={mailId} views={views} folders={folders} base={base} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current?.viewId} />
