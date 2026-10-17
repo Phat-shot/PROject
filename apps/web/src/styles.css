@@ -179,6 +179,17 @@ table.table { width: 100%; border-collapse: collapse; }
 .gantt .dot.conflict { background: #e08b2b; }
 .gantt .milestone { position: absolute; top: 4px; width: 0; height: 0; border-left: 8px solid transparent; border-right: 8px solid transparent; border-bottom: 14px solid #7c3aed; }
 .gantt .today { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--danger); opacity: 0.6; }
+.gantt-wrap { position: relative; width: max-content; min-width: 100%; }
+.gantt-links { position: absolute; pointer-events: none; z-index: 2; overflow: visible; color: #4a5f8f; }
+.gantt-links path { fill: none; stroke: currentColor; stroke-width: 1.5; opacity: 0.8; }
+.gantt-links path.bad { stroke: var(--danger); stroke-width: 2; opacity: 1; }
+.gantt .bar.draggable, .gantt .dot.draggable, .gantt .milestone.draggable { cursor: grab; touch-action: none; }
+.gantt .bar.drag, .gantt .dot.drag, .gantt .milestone.drag { opacity: 0.85; box-shadow: 0 2px 8px rgba(15, 23, 42, 0.3); z-index: 3; }
+.gantt.dragging { user-select: none; cursor: grabbing; }
+.gantt .bar .handle { position: absolute; right: 0; top: 0; bottom: 0; width: 8px; cursor: ew-resize; border-right: 2px solid rgba(255,255,255,0.7); }
+.gantt .bar { z-index: 1; }
+.gantt .drag-hint { position: absolute; top: 6px; font-size: 11px; background: var(--text); color: var(--surface); padding: 1px 6px; border-radius: 4px; white-space: nowrap; z-index: 4; }
+:root[data-theme='dark'] .gantt-links { color: #8aa7ff; }
 
 /* Mail */
 .mail-layout { display: grid; grid-template-columns: 220px 360px 1fr; height: calc(100vh - 52px); }
