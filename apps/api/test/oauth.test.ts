@@ -30,7 +30,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
   if (url === 'https://idp.example/userinfo') return json(currentUserinfo);
   return json({ error: `unbekannt: ${url}` }, 404);
 };
-let currentUserinfo: Record<string, unknown> = { sub: 'sub-max', email: 'Max@demo.local', name: 'Max Keller' };
+let currentUserinfo: Record<string, unknown> = { sub: 'sub-max', email: 'Max@demo.local', name: 'Max Keller', groups: ['PM-Team', 'Alle'] };
 
 process.env.OAUTH_MS_CLIENT_ID = 'cid';
 process.env.OAUTH_MS_CLIENT_SECRET = 'secret';
@@ -146,6 +146,20 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.equal(me.json().user.email, 'max@demo.local');
   const row = await t.db.one(`select oidc_subject from users where email = 'max@demo.local'`);
   assert.equal(row.oidc_subject, 'sub-max');
+
+  // Gruppen aus dem Claim: nur Gruppen mit IdP-Zuordnung werden gesetzt bzw. entfernt
+  const admin = await t.login('admin@demo.local');
+  const g1 = (await t.api(admin).post('/groups', { name: 'Projektleitung', idpName: 'pm-team' })).json().group;
+  const g2 = (await t.api(admin).post('/groups', { name: 'Controlling', idpName: 'Controlling', memberIds: [t.ids.users.max] })).json().group;
+  const g3 = (await t.api(admin).post('/groups', { name: 'Manuell', memberIds: [t.ids.users.max] })).json().group;
+  assert.equal(g1.idpName, 'pm-team');
+  const s1b = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
+  await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${s1b}` });
+  const groups = (await t.api(admin).get('/groups')).json().groups;
+  assert.ok(groups.find((g: any) => g.id === g1.id).memberIds.includes(t.ids.users.max), 'aus Claim hinzugefügt (Groß-/Kleinschreibung egal)');
+  assert.ok(!groups.find((g: any) => g.id === g2.id).memberIds.includes(t.ids.users.max), 'nicht im Claim → entfernt');
+  assert.ok(groups.find((g: any) => g.id === g3.id).memberIds.includes(t.ids.users.max), 'Gruppe ohne IdP-Zuordnung bleibt manuell');
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'user.groups_synced' and object_id = $1`, [t.ids.users.max]));
 
   // Unbekannte Person ohne Auto-Anlage: Hinweis statt Konto
   currentUserinfo = { sub: 'sub-neu', email: 'neu@example.com', name: 'Neu Nutzer' };

@@ -129,6 +129,22 @@ export async function oauthRoutes(app: FastifyInstance) {
         await audit(db, { orgId: org.id, userId: row.id, action: 'user.create', objectType: 'user', objectId: row.id, details: { email, via: 'oidc' } });
       }
       if (!row) return reply.redirect(failTo('/login', `Kein Benutzer für ${email || u.sub}. Die Verwaltung muss das Konto zuerst anlegen.`));
+      // Provisionierung aus Claims: Name nachziehen, Gruppen mit IdP-Namen abgleichen (nur Gruppen, die eine Zuordnung tragen)
+      const claimName = String(u.name ?? '').trim();
+      if (claimName && claimName !== row.name) await db.query(`update users set name = $2 where id = $1`, [row.id, claimName]);
+      const rawGroups = u[cfg.groupsClaim];
+      if (Array.isArray(rawGroups)) {
+        const mine = new Set(rawGroups.map((g: unknown) => String(g).toLowerCase()));
+        const mapped = await db.query(`select id, idp_name from groups where org_id = $1 and idp_name is not null`, [row.org_id]);
+        const changes: { group: string; action: 'add' | 'remove' }[] = [];
+        for (const g of mapped.rows as any[]) {
+          const should = mine.has(String(g.idp_name).toLowerCase());
+          const is = await db.maybeOne(`select 1 from group_members where group_id = $1 and user_id = $2`, [g.id, row.id]);
+          if (should && !is) { await db.query(`insert into group_members (group_id, user_id) values ($1,$2) on conflict do nothing`, [g.id, row.id]); changes.push({ group: g.idp_name, action: 'add' }); }
+          if (!should && is) { await db.query(`delete from group_members where group_id = $1 and user_id = $2`, [g.id, row.id]); changes.push({ group: g.idp_name, action: 'remove' }); }
+        }
+        if (changes.length) await audit(db, { orgId: row.org_id, userId: row.id, action: 'user.groups_synced', objectType: 'user', objectId: row.id, details: { changes } });
+      }
       const token = await createSession(db, row.id);
       setSessionCookie(reply, token);
       await audit(db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id, details: { oidc: true } });

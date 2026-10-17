@@ -215,7 +215,7 @@ export async function userRoutes(app: FastifyInstance) {
       `select g.*, coalesce((select json_agg(m.user_id) from group_members m where m.group_id = g.id), '[]'::json) as member_ids from groups g where g.org_id = $1 ${id ? 'and g.id = $2' : ''} order by g.name`,
       id ? [orgId, id] : [orgId]
     );
-    return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, memberIds: (typeof g.member_ids === 'string' ? JSON.parse(g.member_ids) : g.member_ids) ?? [] }));
+    return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, idpName: g.idp_name ?? null, memberIds: (typeof g.member_ids === 'string' ? JSON.parse(g.member_ids) : g.member_ids) ?? [] }));
   };
   const setMembers = async (orgId: string, groupId: string, ids: string[]) => {
     await app.db.query(`delete from group_members where group_id = $1`, [groupId]);
@@ -230,24 +230,24 @@ export async function userRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     return { groups: await groupRows(user.orgId) };
   });
-  app.post<{ Body: { name: string; description?: string | null; memberIds?: string[] } }>('/groups', async (req) => {
+  app.post<{ Body: { name: string; description?: string | null; memberIds?: string[]; idpName?: string | null } }>('/groups', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? ({} as any);
     if (!b.name?.trim()) throw badRequest('Name erforderlich');
     if (await app.db.maybeOne(`select 1 from groups where org_id = $1 and lower(name) = lower($2)`, [user.orgId, b.name.trim()])) throw badRequest('Gruppe existiert bereits');
-    const g = await app.db.one(`insert into groups (org_id, name, description) values ($1,$2,$3) returning id`, [user.orgId, b.name.trim(), b.description ?? null]);
+    const g = await app.db.one(`insert into groups (org_id, name, description, idp_name) values ($1,$2,$3,$4) returning id`, [user.orgId, b.name.trim(), b.description ?? null, b.idpName?.trim() || null]);
     await setMembers(user.orgId, g.id, b.memberIds ?? []);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.create', objectType: 'group', objectId: g.id, details: { name: b.name, members: b.memberIds } });
     return { group: (await groupRows(user.orgId, g.id))[0] };
   });
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string | null; memberIds?: string[] } }>('/groups/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string | null; memberIds?: string[]; idpName?: string | null } }>('/groups/:id', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const g = await app.db.maybeOne(`select * from groups where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!g) throw notFound('Gruppe nicht gefunden');
     const b = req.body ?? {};
-    await app.db.query(`update groups set name = coalesce($2, name), description = case when $3 then $4 else description end where id = $1`, [g.id, b.name?.trim() || null, 'description' in b, b.description ?? null]);
+    await app.db.query(`update groups set name = coalesce($2, name), description = case when $3 then $4 else description end, idp_name = case when $5 then $6 else idp_name end where id = $1`, [g.id, b.name?.trim() || null, 'description' in b, b.description ?? null, 'idpName' in b, b.idpName?.trim() || null]);
     if (b.memberIds) await setMembers(user.orgId, g.id, b.memberIds);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.update', objectType: 'group', objectId: g.id, details: b });
     return { group: (await groupRows(user.orgId, g.id))[0] };

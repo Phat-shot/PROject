@@ -92,17 +92,17 @@ function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
 function GroupsCard({ users }: { users: User[] }) {
   const { data, reload } = useData<{ groups: Group[] }>('/groups');
   const [edit, setEdit] = useState<Group | null>(null);
-  const [f, setF] = useState({ name: '', description: '', memberIds: [] as string[] });
+  const [f, setF] = useState({ name: '', description: '', idpName: '', memberIds: [] as string[] });
   const { busy, error, run } = useAsync();
   const dialog = useDialog();
-  const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', memberIds: g?.memberIds ?? [] }); };
+  const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', idpName: g?.idpName ?? '', memberIds: g?.memberIds ?? [] }); };
   return (
     <div className="card">
       <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2><button className="btn sm" onClick={() => open(null)}>+ Gruppe</button></div>
       <p className="muted small">Gruppen bündeln Benutzer für Sichtbarkeit und Rechte: eingeschränkte Teilprojekte und Mail-Ansichten lassen sich an Gruppen freigeben.</p>
       {data && data.groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
       {data && data.groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th /></tr></thead><tbody>
-        {data.groups.map((g) => <tr key={g.id}><td>{g.name}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{g.memberIds.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ') || <span className="muted">–</span>}</td>
+        {data.groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge" style={{ marginLeft: 6 }} title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{g.memberIds.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ') || <span className="muted">–</span>}</td>
           <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button><button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })}>✕</button></td></tr>)}
       </tbody></table>}
       {error && <div className="error mt">{error}</div>}
@@ -111,6 +111,7 @@ function GroupsCard({ users }: { users: User[] }) {
           <div className="form">
             <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
             <label className="field"><span>Beschreibung</span><input type="text" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
+            <label className="field"><span>Gruppe beim Identitätsanbieter (SSO, optional)</span><input type="text" value={f.idpName} placeholder="z. B. PM-Team (Name aus dem Gruppen-Claim)" onChange={(e) => setF({ ...f, idpName: e.target.value })} /><span className="muted small">Bei jeder SSO-Anmeldung wird die Mitgliedschaft nach dieser Gruppe gesetzt oder entfernt.</span></label>
             <div className="field"><span>Mitglieder</span>
               <div className="grid cols-2" style={{ gap: 2 }}>{users.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: e.target.checked ? [...f.memberIds, u.id] : f.memberIds.filter((x) => x !== u.id) })} /> {u.name}</label>)}</div></div>
             <div><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { if (edit.id) await api.patch(`/groups/${edit.id}`, f); else await api.post('/groups', f); setEdit(null); await reload(); })}>Speichern</button></div>

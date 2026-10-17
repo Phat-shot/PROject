@@ -88,10 +88,10 @@ async function tokenRequest(p: OAuthProviderCfg, params: Record<string, string>,
 }
 
 /** OIDC-Anmeldung (Keycloak, Entra ID, Authentik …) über Discovery; Benutzer werden per E-Mail zugeordnet. */
-export interface OidcCfg { issuer: string; clientId: string; clientSecret: string; label: string; autoCreate: boolean; scopes: string[] }
+export interface OidcCfg { issuer: string; clientId: string; clientSecret: string; label: string; autoCreate: boolean; scopes: string[]; groupsClaim: string }
 export function oidcConfig(env = process.env): OidcCfg | null {
   if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET) return null;
-  return { issuer: env.OIDC_ISSUER.replace(/\/$/, ''), clientId: env.OIDC_CLIENT_ID, clientSecret: env.OIDC_CLIENT_SECRET, label: env.OIDC_LABEL || 'Single Sign-on', autoCreate: env.OIDC_AUTO_CREATE === 'true', scopes: (env.OIDC_SCOPES || 'openid email profile').split(/\s+/) };
+  return { issuer: env.OIDC_ISSUER.replace(/\/$/, ''), clientId: env.OIDC_CLIENT_ID, clientSecret: env.OIDC_CLIENT_SECRET, label: env.OIDC_LABEL || 'Single Sign-on', autoCreate: env.OIDC_AUTO_CREATE === 'true', scopes: (env.OIDC_SCOPES || 'openid email profile').split(/\s+/), groupsClaim: env.OIDC_GROUPS_CLAIM || 'groups' };
 }
 let discoveryCache: { issuer: string; doc: any; at: number } | null = null;
 export async function oidcDiscovery(cfg: OidcCfg, fetchFn: typeof fetch = fetch): Promise<{ authorization_endpoint: string; token_endpoint: string; userinfo_endpoint: string }> {

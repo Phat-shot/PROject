@@ -196,6 +196,8 @@ export interface Group {
   id: string;
   name: string;
   description: string | null;
+  /** Gruppenname beim Identitätsanbieter (SSO): Mitgliedschaft wird bei jeder Anmeldung abgeglichen */
+  idpName?: string | null;
   memberIds: string[];
 }
 
