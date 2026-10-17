@@ -4,8 +4,9 @@ import type { Task } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
-import { useProject } from '../ProjectPage';
-import { contactLabel, useContacts } from '../../lib/useContacts';
+import { useProject, useProjectOptional } from '../ProjectPage';
+import { contactLabel } from '../../lib/useContacts';
+import type { ProjectContact } from '@projekttool/shared';
 
 export type StepType = 'task' | 'timer' | 'wait' | 'mail';
 export interface WorkflowStep {
@@ -17,7 +18,7 @@ export interface WorkflowStep {
 }
 export interface WorkflowDef { id: string; projectId: string; name: string; description: string | null; steps: WorkflowStep[]; active: boolean; runCount: number; activeRuns: number }
 export interface StepState { key: string; status: 'pending' | 'active' | 'done' | 'skipped'; startedAt?: string | null; finishedAt?: string | null; taskId?: string | null; waitUntil?: string | null; approvedBy?: string | null; note?: string | null }
-export interface WorkflowRun { id: string; defId: string | null; name: string; defName: string; steps: WorkflowStep[]; state: StepState[]; vars: Record<string, string>; status: 'active' | 'done' | 'cancelled'; currentStep: number; standalone: boolean; columnId: string | null; subprojectId: string | null; startedByName: string | null; startedAt: string; finishedAt: string | null; lastError: string | null; doneSteps: number; totalSteps: number; waitingOn: string | null }
+export interface WorkflowRun { id: string; defId: string | null; projectId: string; projectKey: string | null; projectName: string | null; projectKind: 'project' | 'workflow'; name: string; defName: string; steps: WorkflowStep[]; state: StepState[]; vars: Record<string, string>; status: 'active' | 'done' | 'cancelled'; currentStep: number; standalone: boolean; columnId: string | null; subprojectId: string | null; startedByName: string | null; startedAt: string; finishedAt: string | null; lastError: string | null; doneSteps: number; totalSteps: number; waitingOn: string | null }
 
 export const STEP_LABEL: Record<StepType, string> = { task: 'Arbeitspaket', timer: 'Timer', wait: 'Warten auf Ereignis', mail: 'Mail senden' };
 const STEP_ICON: Record<StepType, string> = { task: '☐', timer: '⏱', wait: '⏳', mail: '✉' };
@@ -29,23 +30,20 @@ export function stepSummary(s: WorkflowStep): string {
   return `${s.subject ?? ''} → ${[...(s.to ?? []), s.toStarter && 'Starter', s.toPl && 'PL', s.toPrevious && 'Zuständige des vorigen AP'].filter(Boolean).join(', ')}`;
 }
 
-/** Bereich „Workflows“: Definitionen (Schrittfolgen) und Läufe; ein Lauf lässt sich hier eigenständig als Mini-Projekt starten. */
+/** Im Projekt: Vorlagen (mandantenweit, gebaut unter „Workflows“) starten und die Läufe dieses Projekts sehen. */
 export function WorkflowsView() {
   const { runId } = useParams<{ runId?: string }>();
-  if (runId) return <RunDetail runId={runId} />;
+  const { detail } = useProject();
+  if (runId) return <RunDetail runId={runId} backTo={`/projekte/${detail.project.id}/workflows`} />;
   return <WorkflowList />;
 }
 
 function WorkflowList() {
-  const { detail } = useProject();
+  const { detail, reloadTasks } = useProject();
   const pid = detail.project.id;
   const me = detail.project.myMembership;
-  const canPlan = me.role === 'pl' || me.canEditPlan;
   const d = useData<{ definitions: WorkflowDef[]; runs: WorkflowRun[] }>(`/projects/${pid}/workflows`, [pid]);
-  const [edit, setEdit] = useState<WorkflowDef | 'new' | null>(null);
   const [start, setStart] = useState<WorkflowDef | null>(null);
-  const dialog = useDialog();
-  const { error, run } = useAsync();
   const nav = useNavigate();
   if (d.error) return <div className="content"><div className="error">{d.error}</div></div>;
   if (!d.data) return <div className="content muted">Lade …</div>;
@@ -53,40 +51,33 @@ function WorkflowList() {
   const finished = d.data.runs.filter((r) => r.status !== 'active');
   return (
     <div className="content">
-      <p className="muted small" style={{ marginTop: 0 }}>Ein Workflow ist eine feste Route: Arbeitspaket → Timer → Arbeitspaket → Warten auf Ereignis → Abschlussmail. Der Start ist der definierte Punkt, danach löst jeder Schritt den nächsten aus (Arbeitspaket erledigt, Timer abgelaufen, Freigabe, Mail-Eingang). Starten im Board statt eines Arbeitspakets oder hier als eigenständiger Lauf.</p>
-      {error && <div className="error mb">{error}</div>}
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Definitionen</h2>{canPlan && <button className="btn primary" onClick={() => setEdit('new')}>+ Workflow</button>}</div>
-      {d.data.definitions.length === 0 && <div className="card muted small">Noch keine Workflows. {canPlan ? 'Lege den ersten mit „+ Workflow“ an.' : 'Die Projektleitung legt sie an.'}</div>}
+      <p className="muted small" style={{ marginTop: 0 }}>Läufe von Workflow-Vorlagen in diesem Projekt. Die Arbeitspakete eines Laufs landen im Board (Spalte und Teilprojekt beim Start wählbar). Vorlagen werden im Bereich <Link to="/workflows">Workflows</Link> gebaut; dort lassen sich Instanzen auch isoliert starten.</p>
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Vorlagen</h2></div>
+      {d.data.definitions.length === 0 && <div className="card muted small">Noch keine Vorlagen. Unter <Link to="/workflows">Workflows</Link> anlegen.</div>}
       {d.data.definitions.map((w) => (
-        <div key={w.id} className={`card ${w.active ? '' : 'muted'}`}>
+        <div key={w.id} className="card">
           <div className="row between">
-            <div><strong>{w.name}</strong>{!w.active && <span className="badge" style={{ marginLeft: 6 }}>inaktiv</span>}{w.description && <div className="muted small">{w.description}</div>}</div>
-            <div className="row" style={{ gap: 6 }}>
-              <span className="muted small">{w.runCount} Läufe{w.activeRuns > 0 ? `, ${w.activeRuns} aktiv` : ''}</span>
-              {me.role !== 'reader' && w.active && <button className="btn sm primary" onClick={() => setStart(w)}>Starten</button>}
-              {canPlan && <button className="btn sm" onClick={() => setEdit(w)}>Bearbeiten</button>}
-              {canPlan && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Workflow löschen', text: `„${w.name}“ löschen? Bisherige Läufe bleiben als Historie.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/workflows/${w.id}`); await d.reload(); }); })}>✕</button>}
-            </div>
+            <div><strong>{w.name}</strong>{w.description && <div className="muted small">{w.description}</div>}</div>
+            <div className="row" style={{ gap: 6 }}>{me.role !== 'reader' && <button className="btn sm primary" title="Im Projekt starten: Arbeitspakete landen im Board" onClick={() => setStart(w)}>Starten</button>}</div>
           </div>
-          <ol className="wf-steps small">{w.steps.map((s, i) => <li key={s.key}><span className="wf-icon" title={STEP_LABEL[s.type]}>{STEP_ICON[s.type]}</span> <strong>{i + 1}.</strong> {STEP_LABEL[s.type]}: {stepSummary(s)}</li>)}</ol>
+          <ol className="wf-steps small">{w.steps.map((s, i) => <li key={s.key}><strong>{i + 1}.</strong> {STEP_LABEL[s.type]}: {stepSummary(s)}</li>)}</ol>
         </div>
       ))}
       <h2 className="mt">Aktive Läufe {active.length > 0 && <span className="badge">{active.length}</span>}</h2>
-      {active.length === 0 && <div className="muted small">Keine aktiven Läufe.</div>}
+      {active.length === 0 && <div className="muted small">Keine aktiven Läufe in diesem Projekt.</div>}
       {active.map((r) => <RunRow key={r.id} r={r} onOpen={() => nav(`/projekte/${pid}/workflows/${r.id}`)} />)}
       {finished.length > 0 && <><h2 className="mt">Abgeschlossen</h2>{finished.slice(0, 30).map((r) => <RunRow key={r.id} r={r} onOpen={() => nav(`/projekte/${pid}/workflows/${r.id}`)} />)}</>}
-      {edit && <WorkflowEditor existing={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); }} />}
-      {start && <StartRunDialog def={start} standalone onClose={() => setStart(null)} onStarted={async (r) => { setStart(null); await d.reload(); nav(`/projekte/${pid}/workflows/${r.id}`); }} />}
+      {start && <StartRunDialog def={start} columnId={null} subprojectId={null} onClose={() => setStart(null)} onStarted={async (r) => { setStart(null); await d.reload(); await reloadTasks(); nav(`/projekte/${pid}/workflows/${r.id}`); }} />}
     </div>
   );
 }
 
-function RunRow({ r, onOpen }: { r: WorkflowRun; onOpen: () => void }) {
+export function RunRow({ r, onOpen, showProject }: { r: WorkflowRun; onOpen: () => void; showProject?: boolean }) {
   const pct = r.totalSteps ? Math.round((r.doneSteps / r.totalSteps) * 100) : 0;
   return (
     <div className="card wf-run" onClick={onOpen} style={{ cursor: 'pointer' }}>
       <div className="row between">
-        <div><strong>{r.name}</strong> <span className="muted small">{r.defName}{r.standalone ? ' · eigenständig' : ''} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}</span></div>
+        <div><strong>{r.name}</strong> <span className="muted small">{r.defName}{showProject ? (r.projectKind === 'workflow' ? ' · isoliert' : ` · Projekt ${r.projectKey}`) : r.standalone ? ' · isoliert' : ''} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}</span></div>
         <span className={`badge ${r.status === 'active' ? 'member' : r.status === 'done' ? 'ok' : ''}`}>{r.status === 'active' ? 'aktiv' : r.status === 'done' ? 'abgeschlossen' : 'abgebrochen'}</span>
       </div>
       <div className="progress mt"><div style={{ width: `${pct}%` }} /></div>
@@ -95,24 +86,23 @@ function RunRow({ r, onOpen }: { r: WorkflowRun; onOpen: () => void }) {
   );
 }
 
-function RunDetail({ runId }: { runId: string }) {
+export function RunDetail({ runId, backTo }: { runId: string; backTo: string }) {
   const { detail, openTask } = useProject();
-  const pid = detail.project.id;
   const me = detail.project.myMembership;
-  const d = useData<{ run: WorkflowRun; tasks: Task[] }>(`/projects/${pid}/workflow-runs/${runId}`, [runId]);
+  const d = useData<{ run: WorkflowRun; tasks: Task[] }>(`/workflow-runs/${runId}`, [runId]);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   useEffect(() => { const h = setInterval(() => void d.reload(), 30_000); return () => clearInterval(h); }, [runId]);
   if (d.error) return <div className="content"><div className="error">{d.error}</div></div>;
   if (!d.data) return <div className="content muted">Lade …</div>;
   const r = d.data.run;
-  const act = (path: string, body?: unknown) => run(async () => { await api.post(`/projects/${pid}/workflow-runs/${r.id}/${path}`, body); await d.reload(); });
+  const act = (path: string, body?: unknown) => run(async () => { await api.post(`/workflow-runs/${r.id}/${path}`, body); await d.reload(); });
   const cur = r.status === 'active' ? r.steps[r.currentStep] : null;
   const canApprove = me.role === 'pl' || me.canApprove;
   return (
     <div className="content">
       <div className="row between mb">
-        <div><Link to={`/projekte/${pid}/workflows`}>← Workflows</Link><h2 style={{ margin: '4px 0 0' }}>{r.name}</h2><div className="muted small">{r.defName}{r.standalone ? ' · eigenständiger Lauf' : ''} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}{r.finishedAt ? ` · beendet ${fmtDateTime(r.finishedAt)}` : ''}</div></div>
+        <div><Link to={backTo}>← Workflows</Link><h2 style={{ margin: '4px 0 0' }}>{r.name}</h2><div className="muted small">{r.defName}{r.projectKind === 'workflow' ? ` · isolierter Lauf (Mini-Projekt ${r.projectKey})` : ` · Projekt ${r.projectKey}`} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}{r.finishedAt ? ` · beendet ${fmtDateTime(r.finishedAt)}` : ''}</div></div>
         <div className="row" style={{ gap: 6 }}>
           <span className={`badge ${r.status === 'active' ? 'member' : r.status === 'done' ? 'ok' : ''}`}>{r.status === 'active' ? 'aktiv' : r.status === 'done' ? 'abgeschlossen' : 'abgebrochen'}</span>
           {r.status === 'active' && <button className="btn sm" disabled={busy} title="Timer, Mails und Arbeitspakete jetzt prüfen" onClick={() => void act('check')}>Jetzt prüfen</button>}
@@ -149,9 +139,9 @@ function RunDetail({ runId }: { runId: string }) {
 }
 
 /** Lauf starten: Name, Variablen; im Board zusätzlich Spalte und Teilprojekt (vom Aufrufer gesetzt). */
-export function StartRunDialog({ def, standalone, columnId, subprojectId, onClose, onStarted }: { def: WorkflowDef; standalone?: boolean; columnId?: string | null; subprojectId?: string | null; onClose: () => void; onStarted: (r: WorkflowRun) => unknown }) {
-  const { detail } = useProject();
-  const pid = detail.project.id;
+export function StartRunDialog({ def, standalone, columnId, subprojectId, onClose, onStarted, start }: { def: WorkflowDef; standalone?: boolean; columnId?: string | null; subprojectId?: string | null; onClose: () => void; onStarted: (r: WorkflowRun) => unknown; start?: (body: Record<string, unknown>) => Promise<WorkflowRun> }) {
+  const detail = useProjectOptional()?.detail ?? null;
+  const pid = detail?.project.id;
   const varNames = [...new Set(def.steps.flatMap((s) => [s.title, s.description, s.subject, s.text, ...(s.checklist ?? [])].flatMap((t) => [...String(t ?? '').matchAll(/\{\{\s*([\p{L}\p{N}_.-]+)\s*\}\}/gu)].map((m) => m[1]))).filter((v) => !['projekt', 'projektkuerzel', 'workflow', 'lauf', 'starter', 'datum'].includes(v.toLowerCase())))];
   const [name, setName] = useState('');
   const [vars, setVars] = useState<Record<string, string>>({});
@@ -163,13 +153,13 @@ export function StartRunDialog({ def, standalone, columnId, subprojectId, onClos
       <div className="form">
         <label className="field"><span>Name des Laufs</span><input type="text" value={name} autoFocus placeholder={`${def.name} ${new Date().toLocaleDateString('de-DE')}`} onChange={(e) => setName(e.target.value)} /></label>
         {varNames.map((v) => <label key={v} className="field"><span>{v}</span><input type="text" value={vars[v] ?? ''} onChange={(e) => setVars({ ...vars, [v]: e.target.value })} placeholder={`Wert für {{${v}}}`} /></label>)}
-        {!standalone && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        {!standalone && detail && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
           <label className="field"><span>Spalte für die Arbeitspakete</span><select value={col} onChange={(e) => setCol(e.target.value)}><option value="">erste Spalte</option>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
           <label className="field"><span>Teilprojekt</span><select value={sub} onChange={(e) => setSub(e.target.value)}><option value="">– keins –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         </div>}
         <ol className="wf-steps small">{def.steps.map((s) => <li key={s.key}>{STEP_LABEL[s.type]}: {stepSummary(s)}</li>)}</ol>
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ run: WorkflowRun }>(`/projects/${pid}/workflows/${def.id}/start`, { name: name || null, vars, standalone: Boolean(standalone), columnId: standalone ? null : col || null, subprojectId: standalone ? null : sub || null }); await onStarted(r.run); })}>Starten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { const body = { name: name || null, vars, columnId: standalone ? null : col || null, subprojectId: standalone ? null : sub || null }; const r = start ? await start(body) : (await api.post<{ run: WorkflowRun }>(`/projects/${pid}/workflows/${def.id}/start`, body)).run; await onStarted(r); })}>Starten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
     </Modal>
   );
@@ -178,11 +168,7 @@ export function StartRunDialog({ def, standalone, columnId, subprojectId, onClos
 const newStep = (type: StepType, n: number): WorkflowStep => ({ key: `s${n}`, type, title: type === 'task' ? '' : type === 'timer' ? 'Warten' : type === 'wait' ? 'Freigabe' : 'Abschlussmail', responsible: 'pl', waitForDone: true, hours: type === 'timer' ? 24 : null, days: null, waitKind: 'approval', to: [], toPl: type === 'mail', checklist: [] });
 
 /** Editor: Schrittliste mit Typ-spezifischen Feldern, verschiebbar. */
-function WorkflowEditor({ existing, onClose, onSaved }: { existing: WorkflowDef | null; onClose: () => void; onSaved: () => unknown }) {
-  const { detail, users } = useProject();
-  const pid = detail.project.id;
-  const { contacts } = useContacts(pid);
-  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && u.kind !== 'agent');
+export function WorkflowEditor({ existing, members, contacts, save: persist, onClose, onSaved }: { existing: WorkflowDef | null; members: { id: string; name: string }[]; contacts: ProjectContact[]; save: (body: Record<string, unknown>) => Promise<unknown>; onClose: () => void; onSaved: () => unknown }) {
   const [name, setName] = useState(existing?.name ?? '');
   const [desc, setDesc] = useState(existing?.description ?? '');
   const [active, setActive] = useState(existing?.active ?? true);
@@ -191,11 +177,7 @@ function WorkflowEditor({ existing, onClose, onSaved }: { existing: WorkflowDef 
   const upd = (i: number, patch: Partial<WorkflowStep>) => setSteps((xs) => xs.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const move = (i: number, dir: -1 | 1) => setSteps((xs) => { const n = [...xs]; const j = i + dir; if (j < 0 || j >= n.length) return xs; [n[i], n[j]] = [n[j], n[i]]; return n; });
   const nextKey = () => { let n = steps.length + 1; while (steps.some((s) => s.key === `s${n}`)) n++; return n; };
-  const save = () => run(async () => {
-    const body = { name, description: desc || null, steps, active };
-    if (existing) await api.patch(`/projects/${pid}/workflows/${existing.id}`, body); else await api.post(`/projects/${pid}/workflows`, body);
-    await onSaved();
-  });
+  const save = () => run(async () => { await persist({ name, description: desc || null, steps, active }); await onSaved(); });
   return (
     <Modal title={existing ? 'Workflow bearbeiten' : 'Neuer Workflow'} onClose={onClose}>
       <div className="form wf-editor">
@@ -224,7 +206,7 @@ function WorkflowEditor({ existing, onClose, onSaved }: { existing: WorkflowDef 
                 <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
                   <label className="field"><span>Zuständig</span>
                     <select value={s.responsible ?? 'pl'} onChange={(e) => upd(i, { responsible: e.target.value as WorkflowStep['responsible'] })}>
-                      <option value="pl">geerbt (Teilprojekt/PL)</option><option value="starter">wer den Lauf startet</option><option value="user">bestimmter Benutzer</option><option value="email">extern (Kontakt/Mail)</option><option value="previous">Zuständige des vorigen Arbeitspakets</option>
+                      <option value="pl">geerbt (Teilprojekt/PL)</option><option value="starter">wer den Lauf startet</option><option value="user">bestimmter Benutzer (muss im Zielprojekt Mitglied sein)</option><option value="email">extern (Kontakt/Mail)</option><option value="previous">Zuständige des vorigen Arbeitspakets</option>
                     </select></label>
                   {s.responsible === 'user' && <label className="field"><span>Benutzer</span><select value={s.responsibleUserId ?? ''} onChange={(e) => upd(i, { responsibleUserId: e.target.value || null })}><option value="">– wählen –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>}
                   {s.responsible === 'email' && <label className="field"><span>Mail-Adresse</span><input type="email" list={`wf-contacts-${i}`} value={s.responsibleEmail ?? ''} onChange={(e) => upd(i, { responsibleEmail: e.target.value })} /><datalist id={`wf-contacts-${i}`}>{contacts.map((c) => <option key={c.email} value={c.email}>{contactLabel(c)}</option>)}</datalist></label>}

@@ -10,6 +10,7 @@ import { InboxPage } from './pages/InboxPage';
 import { CalendarPage } from './pages/CalendarPage';
 import { PortfolioPage } from './pages/PortfolioPage';
 import { ChatPage } from './pages/ChatPage';
+import { WorkflowsPage, WorkflowRunPage } from './pages/WorkflowsPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
 import { AdminPage } from './pages/AdminPage';
@@ -48,6 +49,8 @@ export default function App() {
         <Route path="/kalender" element={<CalendarPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
         <Route path="/chat/:cid?" element={<ChatPage />} />
+        <Route path="/workflows" element={<WorkflowsPage />} />
+        <Route path="/workflows/laeufe/:rid" element={<WorkflowRunPage />} />
         <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
         <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />

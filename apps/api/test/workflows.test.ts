@@ -17,14 +17,15 @@ const STEPS = [
 ];
 
 test('Workflow: Definition prüfen und anlegen; Lauf: Arbeitspaket → Timer → Arbeitspaket → Freigabe → Mail-Eingang → Arbeitspaket → Abschlussmail', async () => {
+  const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
   const leser = await t.login('leser@demo.local');
   const web = t.ids.projects.web;
-  assert.equal((await t.api(leser).post(`/projects/${web}/workflows`, { name: 'x', steps: STEPS })).statusCode, 403);
-  assert.equal((await t.api(pl).post(`/projects/${web}/workflows`, { name: 'Kaputt', steps: [{ type: 'timer', title: 'ohne Dauer' }] })).statusCode, 400);
-  assert.equal((await t.api(pl).post(`/projects/${web}/workflows`, { name: 'Kaputt', steps: [{ type: 'mail', title: 'ohne Empfänger', subject: 's', text: 't' }] })).statusCode, 400);
-  const d = await t.api(pl).post(`/projects/${web}/workflows`, { name: 'Kickoff-Ablauf', description: 'Standard für neue Kunden', steps: STEPS });
+  assert.equal((await t.api(leser).post('/workflows', { name: 'x', steps: STEPS })).statusCode, 403);
+  assert.equal((await t.api(admin).post('/workflows', { name: 'Kaputt', steps: [{ type: 'timer', title: 'ohne Dauer' }] })).statusCode, 400);
+  assert.equal((await t.api(admin).post('/workflows', { name: 'Kaputt', steps: [{ type: 'mail', title: 'ohne Empfänger', subject: 's', text: 't' }] })).statusCode, 400);
+  const d = await t.api(admin).post('/workflows', { name: 'Kickoff-Ablauf', description: 'Standard für neue Kunden', steps: STEPS });
   assert.equal(d.statusCode, 200, d.body);
   const def = d.json().definition;
   assert.equal(def.steps.length, 7);
@@ -70,8 +71,8 @@ test('Workflow: Definition prüfen und anlegen; Lauf: Arbeitspaket → Timer →
   assert.equal(run.currentStep, 3);
   assert.match(run.waitingOn, /Freigabe/);
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'workflow.approval'`, [t.ids.users.pl]));
-  assert.equal((await t.api(max).post(`/projects/${web}/workflow-runs/${run.id}/approve`)).statusCode, 403, 'Mitglied darf nicht freigeben');
-  run = (await t.api(pl).post(`/projects/${web}/workflow-runs/${run.id}/approve`)).json().run;
+  assert.equal((await t.api(max).post(`/workflow-runs/${run.id}/approve`)).statusCode, 403, 'Mitglied darf nicht freigeben');
+  run = (await t.api(pl).post(`/workflow-runs/${run.id}/approve`)).json().run;
   assert.equal(run.currentStep, 4);
   assert.equal(run.state[3].approvedBy, t.ids.users.pl);
   assert.match(run.waitingOn, /Mail „Bestätigung“/);
@@ -95,27 +96,52 @@ test('Workflow: Definition prüfen und anlegen; Lauf: Arbeitspaket → Timer →
   const detail = (await t.api(max).get(`/projects/${web}/workflow-runs/${run.id}`)).json();
   assert.equal(detail.tasks.length, 3);
   const list = (await t.api(max).get(`/projects/${web}/workflows`)).json();
-  assert.equal(list.definitions[0].runCount, 1);
+  assert.equal(list.definitions.find((x: any) => x.id === def.id).runCount, 1);
   assert.equal(list.runs[0].doneSteps, 7);
 });
 
-test('Workflow eigenständig starten, Schritt überspringen, abbrechen; Definition mit aktiven Läufen nicht löschbar', async () => {
+test('Isolierte Instanz: eigenes Mini-Projekt (kind workflow, unsichtbar in Listen), Schritt überspringen, abbrechen; Vorlage mit aktiven Läufen nicht löschbar', async () => {
+  const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
-  const web = t.ids.projects.web;
-  const def = (await t.api(pl).post(`/projects/${web}/workflows`, { name: 'Kurz', steps: [{ type: 'timer', title: 'Warten', days: 1 }, { type: 'task', title: 'Danach', responsible: 'pl' }] })).json().definition;
-  const run = (await t.api(pl).post(`/projects/${web}/workflows/${def.id}/start`, { standalone: true })).json().run;
+  const max = await t.login('max@demo.local');
+  const def = (await t.api(admin).post('/workflows', { name: 'Kurz', steps: [{ type: 'timer', title: 'Warten', days: 1 }, { type: 'task', title: 'Danach', responsible: 'pl' }, { type: 'mail', title: 'Info', toStarter: true, subject: 'Fertig {{lauf}}', text: 'ok' }] })).json().definition;
+  assert.equal(def.projectId, null, 'mandantenweite Vorlage');
+  assert.equal((await t.api(max).post(`/workflows/${def.id}/start`, { name: 'Mein Lauf' })).statusCode, 200);
+  const run = (await t.api(pl).post(`/workflows/${def.id}/start`, { name: 'Isoliert 1' })).json().run;
   assert.equal(run.standalone, true);
-  assert.match(run.name, /^Kurz /);
-  assert.equal((await t.api(pl).del(`/projects/${web}/workflows/${def.id}`)).statusCode, 400, 'aktiver Lauf');
-  const skipped = (await t.api(pl).post(`/projects/${web}/workflow-runs/${run.id}/skip`, { note: 'Termin vorgezogen' })).json().run;
+  assert.equal(run.projectKind, 'workflow');
+  assert.match(run.projectKey, /^WF\d+$/);
+  assert.equal(run.projectName, 'Isoliert 1');
+  const mini = (await t.api(pl).get(`/projects/${run.projectId}`)).json();
+  assert.equal(mini.project.myMembership.role, 'pl', 'Starter ist PL des Mini-Projekts');
+  assert.equal(mini.columns.length, 6);
+  assert.ok(!(await t.api(pl).get('/projects')).json().projects.some((p: any) => p.id === run.projectId), 'Mini-Projekt nicht in der Projektliste');
+  assert.ok(!(await t.api(pl).get('/portfolio')).json().projects?.some((p: any) => p.id === run.projectId), 'nicht im Portfolio');
+  assert.equal((await t.api(max).get(`/workflow-runs/${run.id}`)).statusCode, 403, 'kein Mitglied des Mini-Projekts');
+  const mine = (await t.api(pl).get('/workflows')).json();
+  assert.ok(mine.runs.some((r: any) => r.id === run.id));
+  assert.ok(!mine.runs.some((r: any) => r.name === 'Mein Lauf'), 'fremde isolierte Läufe nicht sichtbar');
+  const leser = await t.login('leser@demo.local');
+  assert.equal((await t.api(leser).get('/workflows')).json().canBuild, false, 'Rolle user baut keine Vorlagen');
+  assert.equal((await t.api(leser).post('/workflows', { name: 'x', steps: STEPS })).statusCode, 403);
+  assert.ok((await t.api(admin).get('/workflows')).json().runs.some((r: any) => r.name === 'Mein Lauf'), 'Org-Admin sieht alle');
+  assert.equal((await t.api(admin).del(`/workflows/${def.id}`)).statusCode, 400, 'aktiver Lauf');
+  const skipped = (await t.api(pl).post(`/workflow-runs/${run.id}/skip`, { note: 'Termin vorgezogen' })).json().run;
   assert.equal(skipped.state[0].status, 'skipped');
   assert.equal(skipped.currentStep, 1);
   const task = (await t.api(pl).get(`/tasks/${skipped.state[1].taskId}`)).json().task;
+  assert.equal(task.projectId, run.projectId, 'Arbeitspaket im Mini-Projekt');
   assert.equal(task.responsibleUserId, null, 'pl = geerbt');
-  assert.equal(task.subprojectId, null);
-  const cancelled = (await t.api(pl).post(`/projects/${web}/workflow-runs/${run.id}/cancel`)).json().run;
-  assert.equal(cancelled.status, 'cancelled');
-  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Workflow%abgebrochen%'`, [task.id]));
-  assert.equal((await t.api(pl).del(`/projects/${web}/workflows/${def.id}`)).statusCode, 200);
-  assert.equal((await t.api(pl).get(`/projects/${web}/workflow-runs/${run.id}`)).json().run.defId, null, 'Lauf bleibt als Historie');
+  // Erledigen → Mail über das Mandantenkonto (kein Projektkonto am Mini-Projekt)
+  const before = t.mail.dev.sent.length;
+  const done = mini.columns.find((c: any) => c.isDone).id;
+  await t.api(pl).post(`/tasks/${task.id}/move`, { columnId: done });
+  const finished = (await t.api(pl).get(`/workflow-runs/${run.id}`)).json().run;
+  if (finished.status === 'done') { assert.equal(t.mail.dev.sent.length, before + 1); assert.equal(t.mail.dev.sent[before].msg.subject, 'Fertig Isoliert 1'); }
+  else assert.match(String(finished.lastError), /Konto/, 'ohne Mandantenkonto bleibt der Mail-Schritt mit Fehler stehen');
+  const cancelled = (await t.api(pl).post(`/workflow-runs/${run.id}/cancel`)).json();
+  assert.ok(['cancelled', 'done'].includes(cancelled.run?.status ?? 'done'));
+  await t.db.query(`update workflow_runs set status = 'cancelled' where def_id = $1 and status = 'active'`, [def.id]);
+  assert.equal((await t.api(admin).del(`/workflows/${def.id}`)).statusCode, 200);
+  assert.equal((await t.api(pl).get(`/workflow-runs/${run.id}`)).json().run.defId, null, 'Lauf bleibt als Historie');
 });

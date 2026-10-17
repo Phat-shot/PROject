@@ -47,7 +47,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
          (select coalesce(sum(minutes), 0) from time_entries e where e.project_id = p.id)::int as logged_minutes,
          (select max(a.created_at) from audit_log a where a.project_id = p.id) as last_activity
        from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
-       where p.org_id = $2 and p.status = 'active' and (m.user_id is not null or p.visibility = 'org') order by p.name`,
+       where p.org_id = $2 and p.status = 'active' and p.kind = 'project' and (m.user_id is not null or p.visibility = 'org') order by p.name`,
       [user.id, user.orgId, today, week]
     );
     const projects = rows.rows.map((r: any) => {

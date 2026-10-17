@@ -13,7 +13,7 @@ import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escal
 import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
 
-const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
+export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
 export function mapProject(r: any): Project {
   return {
@@ -31,6 +31,7 @@ export function mapProject(r: any): Project {
     reminders: remindersOf(r.reminders),
     health: healthOf(r.health),
     visibility: r.visibility ?? 'members',
+    kind: r.kind === 'workflow' ? 'workflow' : 'project',
     myRole: r.my_role ?? undefined
   };
 }
@@ -48,7 +49,7 @@ export async function projectRoutes(app: FastifyInstance) {
          (select ms.name from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_name,
          (select ms.date from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_date
        from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
-       where p.org_id = $2 and (m.user_id is not null or p.visibility = 'org') order by p.status, p.name`,
+       where p.org_id = $2 and p.kind = 'project' and (m.user_id is not null or p.visibility = 'org') order by p.status, p.name`,
       [user.id, user.orgId, new Date().toISOString().slice(0, 10)]
     );
     return { projects: rows.rows.map((r: any) => ({ ...mapProject(r), stats: { open: r.open_count, overdue: r.overdue_count, done: r.done_count, nextMilestone: r.next_ms_name ? { name: r.next_ms_name, date: dateStr(r.next_ms_date)! } : null } })) };

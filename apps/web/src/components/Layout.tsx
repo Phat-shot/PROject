@@ -47,6 +47,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <NavLink to="/portfolio" data-tour="portfolio">Portfolio</NavLink>
+        <NavLink to="/workflows" data-tour="workflows">Workflows</NavLink>
         <NavLink to="/chat" data-tour="chat">Chat{chat.dm > 0 && <span className="badge danger nav-count">{chat.dm}</span>}</NavLink>
         <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
           <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>

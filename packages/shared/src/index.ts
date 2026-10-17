@@ -50,6 +50,8 @@ export interface Project {
   status: 'active' | 'archived';
   mailAddress: string | null;
   visibility: 'members' | 'org';
+  /** workflow = Mini-Projekt eines isolierten Workflow-Laufs (nicht in Projektlisten) */
+  kind?: 'project' | 'workflow';
   timeTrackingEnabled: boolean;
   budgetHours: number | null;
   escalation?: EscalationPolicy;

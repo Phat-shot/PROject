@@ -180,7 +180,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.get('/my/work', async (req) => {
     const user = requireUser(req);
     const projects = await db.query(
-      `select p.id, p.key, p.name, m.role as my_role from projects p join project_members m on m.project_id = p.id and m.user_id = $1 where p.status = 'active' and p.org_id = $2 order by p.name`,
+      `select p.id, p.key, p.name, m.role as my_role from projects p join project_members m on m.project_id = p.id and m.user_id = $1 where p.status = 'active' and p.kind = 'project' and p.org_id = $2 order by p.name`,
       [user.id, user.orgId]
     );
     const out: any[] = [];
