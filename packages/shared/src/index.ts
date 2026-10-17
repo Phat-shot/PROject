@@ -599,3 +599,5 @@ export interface Meeting {
   tasks: { id: string; title: string; done: boolean; number?: number | null }[];
   createdAt: string;
 }
+
+export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }

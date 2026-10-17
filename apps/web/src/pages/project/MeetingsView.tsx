@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { DocPage, Meeting, MeetingAttendee } from '@projekttool/shared';
+import type { CalendarTarget, DocPage, Meeting, MeetingAttendee } from '@projekttool/shared';
 import { api, fmtDateTime, today } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
@@ -19,6 +19,8 @@ export function MeetingsView() {
   const base = `/projekte/${pid}`;
   const d = useData<{ meetings: Meeting[] }>(`/projects/${pid}/meetings`);
   const docs = useData<{ pages: DocPage[] }>(`/projects/${pid}/docs`);
+  const targets = useData<{ targets: CalendarTarget[] }>('/me/calendar-targets');
+  const [pushed, setPushed] = useState<string | null>(null);
   const [edit, setEdit] = useState<Meeting | 'new' | null>(null);
   const [open, setOpen] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
@@ -47,9 +49,11 @@ export function MeetingsView() {
           <div className="row mt">
             <button className="btn sm primary" disabled={busy} onClick={() => void protocol(m)}>{m.pageId ? 'Protokoll öffnen' : 'Protokoll anlegen'}</button>
             <button className="btn sm" disabled={busy || !m.attendees.length} onClick={() => invite(m)}>{m.inviteSentAt ? 'Einladung aktualisieren' : 'Einladung senden (ICS)'}</button>
-            <a className="btn sm" href={`/api/meetings/${m.id}/ics`}>In meinen Kalender (ICS)</a>
+            {(targets.data?.targets ?? []).map((tg) => <button key={tg.key} className="btn sm" disabled={busy} title={`Termin in ${tg.label} anlegen oder aktualisieren`} onClick={() => void run(async () => { const r = await api.post<{ updated: boolean }>(`/meetings/${m.id}/push`, { target: tg.key }); setPushed(`${tg.label}: ${r.updated ? 'aktualisiert' : 'eingetragen'}.`); })}>→ {tg.label}</button>)}
+            <a className="btn sm" href={`/api/meetings/${m.id}/ics`} title="ICS-Datei für jeden Kalender">ICS-Datei</a>
             {(isPl || m.createdBy === detail.project.myMembership.userId) && <><button className="btn sm" onClick={() => setEdit(m)}>Bearbeiten</button><button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Besprechung löschen', text: `„${m.title}“ löschen? Protokoll und Arbeitspakete bleiben.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/meetings/${m.id}`); setOpen(null); await refresh(); }); })}>Löschen</button></>}
           </div>
+          {pushed && <div className="success small mt">{pushed}</div>}
           <ActionItems m={m} onChanged={async () => { await refresh(); await reloadTasks(); }} />
         </div>
       )}

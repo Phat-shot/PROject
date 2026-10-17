@@ -30,7 +30,7 @@ export function oauthProviders(env = process.env): OAuthProviderCfg[] {
     out.push({
       key: 'microsoft', label: 'Microsoft 365', clientId: env.OAUTH_MS_CLIENT_ID, clientSecret: env.OAUTH_MS_CLIENT_SECRET,
       authorizeUrl: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/authorize`, tokenUrl: `https://login.microsoftonline.com/${tenant}/oauth2/v2.0/token`,
-      scopes: useImap ? ['offline_access', 'openid', 'email', 'https://outlook.office.com/IMAP.AccessAsUser.All', 'https://outlook.office.com/SMTP.Send'] : ['offline_access', 'openid', 'email', 'User.Read', 'Mail.ReadWrite', 'Mail.Send'],
+      scopes: useImap ? ['offline_access', 'openid', 'email', 'https://outlook.office.com/IMAP.AccessAsUser.All', 'https://outlook.office.com/SMTP.Send'] : ['offline_access', 'openid', 'email', 'User.Read', 'Mail.ReadWrite', 'Mail.Send', 'Calendars.ReadWrite'],
       userinfo: async (token, f) => {
         const r = await f('https://graph.microsoft.com/v1.0/me?$select=mail,userPrincipalName,displayName', { headers: { authorization: `Bearer ${token}` } });
         if (!r.ok) throw new Error(`Graph /me: ${r.status}`);
@@ -46,7 +46,7 @@ export function oauthProviders(env = process.env): OAuthProviderCfg[] {
     out.push({
       key: 'google', label: 'Google Workspace', clientId: env.OAUTH_GOOGLE_CLIENT_ID, clientSecret: env.OAUTH_GOOGLE_CLIENT_SECRET,
       authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth', tokenUrl: 'https://oauth2.googleapis.com/token',
-      scopes: ['openid', 'email', 'https://mail.google.com/'],
+      scopes: ['openid', 'email', 'https://mail.google.com/', 'https://www.googleapis.com/auth/calendar.events'],
       userinfo: async (token, f) => {
         const r = await f('https://openidconnect.googleapis.com/v1/userinfo', { headers: { authorization: `Bearer ${token}` } });
         if (!r.ok) throw new Error(`Google userinfo: ${r.status}`);

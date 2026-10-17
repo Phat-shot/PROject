@@ -55,6 +55,7 @@ export function UserSettingsPage() {
           </div>
           <TotpCard />
           <IcsCard />
+          <CaldavCard />
           <div className="card">
             <h2>Passwort ändern</h2>
             <div className="form">
@@ -94,6 +95,34 @@ function IcsCard() {
   );
 }
 
+
+/** CalDAV-Kalender (Nextcloud, iCloud, Fastmail …): Adresse des Kalenders, Benutzer, App-Passwort; Termine aus Besprechungen landen dort. */
+function CaldavCard() {
+  const d = useData<{ targets: { key: string; label: string }[]; caldav: { url: string; user: string } | null }>('/me/calendar-targets');
+  const [f, setF] = useState({ url: '', user: '', password: '' });
+  const [msg, setMsg] = useState<string | null>(null);
+  const { busy, error, run } = useAsync();
+  useEffect(() => { if (d.data?.caldav) setF((x) => ({ ...x, url: d.data!.caldav!.url, user: d.data!.caldav!.user })); }, [d.data]);
+  const oauth = (d.data?.targets ?? []).filter((t) => t.key !== 'caldav');
+  return (
+    <div className="card">
+      <h2>Kalender schreiben</h2>
+      <p className="muted small">Besprechungen lassen sich mit einem Klick in deinen Kalender eintragen. Microsoft 365 und Google gehen über dein persönliches Mail-Konto (Konfiguration › Mit Microsoft 365/Google verbinden, Kalender-Berechtigung muss enthalten sein). Für Nextcloud, iCloud, Fastmail und andere hier den CalDAV-Zugang eintragen: Adresse des einzelnen Kalenders, Benutzername und App-Passwort.</p>
+      {oauth.length > 0 && <p className="small">Verbunden: {oauth.map((t) => <span key={t.key} className="badge ok" style={{ marginRight: 4 }}>{t.label}</span>)}</p>}
+      <div className="form cols-2">
+        <label className="field full"><span>CalDAV-Kalenderadresse</span><input type="url" value={f.url} placeholder="https://cloud.example.de/remote.php/dav/calendars/petra/personal/" onChange={(e) => setF({ ...f, url: e.target.value })} /></label>
+        <label className="field"><span>Benutzername</span><input type="text" value={f.user} onChange={(e) => setF({ ...f, user: e.target.value })} /></label>
+        <label className="field"><span>App-Passwort{d.data?.caldav && <span className="muted"> (leer = unverändert)</span>}</span><input type="password" value={f.password} autoComplete="new-password" onChange={(e) => setF({ ...f, password: e.target.value })} /></label>
+        {error && <div className="error full">{error}</div>}
+        {msg && <div className="small full">{msg}</div>}
+        <div className="full row">
+          <button className="btn primary sm" disabled={busy || !f.url || !f.user || (!f.password && !d.data?.caldav)} onClick={() => void run(async () => { const r = await api.put<{ ok: boolean; test: { ok: boolean; displayName?: string | null; error?: string } }>('/me/caldav', f); setMsg(r.ok ? `Verbindung ok${r.test.displayName ? ` („${r.test.displayName}“)` : ''}.` : `Gespeichert, aber Prüfung fehlgeschlagen: ${r.test.error}`); setF({ ...f, password: '' }); await d.reload(); })}>Speichern und prüfen</button>
+          {d.data?.caldav && <button className="btn sm danger" disabled={busy} onClick={() => void run(async () => { await api.del('/me/caldav'); setF({ url: '', user: '', password: '' }); setMsg('CalDAV entfernt.'); await d.reload(); })}>Entfernen</button>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** Zweiter Faktor: QR-Code für die Authenticator-App, Bestätigung mit Code, Abschalten mit Passwort. */
 function TotpCard() {

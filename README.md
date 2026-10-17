@@ -108,6 +108,7 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Besprechung als Objekt unter Arbeitspakete › Besprechungen: Termin, Ort, Agenda, Teilnehmer aus Mitgliedern, Kontakten und freien Adressen, Zuordnung zu einer Besprechungsreihe
 - Protokollseite aus der Vorlage der Reihe (sonst „Protokoll“ im Ordner „Protokolle“) mit Termin und Teilnehmern vorbelegt; Aktionspunkte direkt als Arbeitspakete mit Zuständigem und Termin, bestehende Arbeitspakete verknüpfen; Arbeitspaket zeigt die Besprechung
 - Einladung mit Kalendereintrag (ICS, METHOD:REQUEST) über das Projektkonto an alle Teilnehmer, Aktualisierung mit Sequenz; ICS-Download für den eigenen Kalender; Besprechungen im Projekt- und Gesamtkalender und im ICS-Abo
+- Kalender schreiben: Termin mit einem Klick in Microsoft 365 (Graph, persönliches OAuth-Konto mit Calendars.ReadWrite), Google Kalender (calendar.events) oder per CalDAV (Nextcloud, iCloud, Fastmail; Zugang in den Benutzereinstellungen, Passwort verschlüsselt); erneutes Eintragen aktualisiert den Eintrag
 
 **Auswertungen (W9)**
 - Je Projekt unter Arbeitspakete › Auswertung: Durchsatz je Woche (angelegt/erledigt), Durchlaufzeit (Median, Durchschnitt, längste), Verzug nach Alter, Eskalationen je Zeitraum und aktuell, je Teilprojekt; Zeitraum wählbar, alles als CSV
@@ -126,7 +127,7 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 
 ## Noch nicht enthalten
 
-Kalender-Schreibzugriff per API (M365/Google/CalDAV; heute ICS-Abo, ICS-Einladungen und ICS-Download), Row-Level Security in der Datenbank
+Lesender Kalender-Abgleich (fremde Termine ins Tool), Row-Level Security in der Datenbank
 (Rechte liegen zentral in der API), Office-Bearbeitung im Browser (braucht einen externen Dienst wie Collabora/OnlyOffice).
 
 ## Struktur

@@ -10,6 +10,9 @@ import { mapPage } from '../docs/service.js';
 import { publicBase } from '../docs/share.js';
 import { newMailCode, loadTask } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
+import { seal, unseal } from '../secrets.js';
+import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent } from '../calendar/push.js';
+import type { CalendarTarget } from '@projekttool/shared';
 
 const fmtDe = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -197,6 +200,62 @@ export async function meetingRoutes(app: FastifyInstance) {
     reply.header('content-type', 'text/calendar; charset=utf-8');
     reply.header('content-disposition', `attachment; filename="besprechung.ics"`);
     return reply.send(meetingIcs(cur, { email: user.email, name: `${project.key} ${project.name}` }));
+  });
+
+  // Kalenderziele der Person: persönliche OAuth-Konten (Microsoft im Graph-Modus, Google) und CalDAV
+  const targetsOf = async (user: { id: string; orgId: string }): Promise<CalendarTarget[]> => {
+    const out: CalendarTarget[] = [];
+    const accs = await db.query(`select id, oauth_provider, provider from mail_accounts where owner_user_id = $1 and type = 'personal' and oauth_refresh_token is not null`, [user.id]);
+    for (const a of accs.rows as any[]) {
+      if (a.oauth_provider === 'microsoft' && a.provider === 'graph') out.push({ key: 'microsoft', label: 'Microsoft 365 Kalender', accountId: a.id });
+      if (a.oauth_provider === 'google') out.push({ key: 'google', label: 'Google Kalender', accountId: a.id });
+    }
+    const u = await db.one(`select caldav_url from users where id = $1`, [user.id]);
+    if (u.caldav_url) out.push({ key: 'caldav', label: 'CalDAV-Kalender', accountId: null });
+    return out;
+  };
+  app.get('/me/calendar-targets', async (req) => { const user = requireUser(req); const u = await db.one(`select caldav_url, caldav_user from users where id = $1`, [user.id]); return { targets: await targetsOf(user), caldav: u.caldav_url ? { url: u.caldav_url, user: u.caldav_user } : null }; });
+
+  app.put<{ Body: { url?: string; user?: string; password?: string } }>('/me/caldav', async (req) => {
+    const user = requireUser(req);
+    const b = req.body ?? {};
+    if (!b.url?.trim() || !/^https?:\/\//.test(b.url.trim())) throw badRequest('Kalender-Adresse (https://…) erforderlich');
+    if (!b.user?.trim()) throw badRequest('Benutzername erforderlich');
+    const cur = await db.one(`select caldav_password from users where id = $1`, [user.id]);
+    const pw = b.password?.trim() ? seal(b.password.trim()) : cur.caldav_password;
+    if (!pw) throw badRequest('Passwort (App-Passwort) erforderlich');
+    await db.query(`update users set caldav_url = $2, caldav_user = $3, caldav_password = $4 where id = $1`, [user.id, b.url.trim(), b.user.trim(), pw]);
+    const test = await testCaldav(app.fetchFn, { url: b.url.trim(), user: b.user.trim(), password: unseal(pw)! });
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'user.caldav', objectType: 'user', objectId: user.id, details: { url: b.url.trim(), ok: test.ok } });
+    return { ok: test.ok, test };
+  });
+  app.delete('/me/caldav', async (req) => { const user = requireUser(req); await db.query(`update users set caldav_url = null, caldav_user = null, caldav_password = null where id = $1`, [user.id]); return { ok: true }; });
+
+  // Termin in den eigenen Kalender schreiben (anlegen oder aktualisieren); Kennung je Person und Ziel in meetings.external
+  app.post<{ Params: { id: string }; Body: { target: 'microsoft' | 'google' | 'caldav' } }>('/meetings/:id/push', async (req) => {
+    const user = requireUser(req);
+    const cur = await db.maybeOne(`select * from meetings where id = $1`, [req.params.id]);
+    if (!cur) throw notFound('Besprechung nicht gefunden');
+    await requireProject(db, user, cur.project_id);
+    const target = req.body?.target;
+    const t = (await targetsOf(user)).find((x) => x.key === target);
+    if (!t) throw badRequest('Kalenderziel nicht eingerichtet (Benutzereinstellungen › Kalender bzw. Konfiguration › Mit Microsoft 365/Google verbinden)');
+    const project = await db.one(`select key from projects where id = $1`, [cur.project_id]);
+    const ev: PushEvent = { uid: `meeting-${cur.id}@project`, title: `${project.key} ${cur.title}`, startsAt: new Date(cur.starts_at), endsAt: new Date(cur.ends_at), location: cur.location, description: `${cur.description ?? ''}\n${publicBase()}/projekte/${cur.project_id}/besprechungen`.trim(), attendees: (cur.attendees as MeetingAttendee[]).map((a) => ({ email: a.email, name: a.name })) };
+    const external = cur.external ?? {};
+    const mine = external[user.id] ?? {};
+    let id: string;
+    if (target === 'caldav') {
+      const u = await db.one(`select caldav_url, caldav_user, caldav_password from users where id = $1`, [user.id]);
+      id = await pushCaldav(app.fetchFn, { url: u.caldav_url, user: u.caldav_user, password: unseal(u.caldav_password)! }, ev, Number(external.sequence ?? 0));
+    } else {
+      const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [t.accountId]);
+      const token = await app.mail.accessToken(account);
+      id = target === 'microsoft' ? await pushGraph(app.fetchFn, token, ev, mine.microsoft ?? null) : await pushGoogle(app.fetchFn, token, ev, mine.google ?? null);
+    }
+    await db.query(`update meetings set external = external || $2::jsonb where id = $1`, [cur.id, JSON.stringify({ [user.id]: { ...mine, [target]: id } })]);
+    await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.push', objectType: 'meeting', objectId: cur.id, details: { target, updated: Boolean(mine[target]) } });
+    return { ok: true, target, updated: Boolean(mine[target]) };
   });
 
   function esc(s: string) { return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!); }
