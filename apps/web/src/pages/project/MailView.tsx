@@ -6,6 +6,7 @@ import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
+import { useAiStatus } from '../../lib/useAi';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
 
@@ -158,11 +159,15 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
 
 function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; base: string; onChanged: () => void; onGone: () => void; viewHint?: string }) {
   const { detail, tasks, reloadTasks, openTask } = useProject();
+  const canUseAi = detail.project.myMembership.role === 'pl' || detail.project.myMembership.canUseAi;
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
   const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
-  const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask'>(null);
+  const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask' | 'aiEssence' | 'aiMerge'>(null);
+  const ai = useAiStatus();
+  const [summary, setSummary] = useState<string | null>(null);
+  const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
   const nav = useNavigate();
   const { error, run } = useAsync();
@@ -229,9 +234,18 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         <button className="btn sm" disabled={!enabled('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
       </div>
       <div className="row mb small">
-        <span className="muted">KI (letztes Modul):</span>
-        {actions.data?.ai.map((a) => <button key={a.key} className="btn sm" disabled title={a.reason}>{a.label}</button>)}
+        <span className="muted">KI:</span>
+        {ai?.enabled ? (
+          <>
+            <button className="btn sm" disabled={!r.canAi} title={r.canAi ? 'Kurzfassung der Mail (wird gespeichert)' : 'Kein KI-Recht in dieser Ansicht'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
+            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
+            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
+            <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
+          </>
+        ) : <span className="muted">{ai ? 'nicht aktiviert (Verwaltung › KI)' : '…'}</span>}
       </div>
+      {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
+      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Zur Freigabe</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
           {d.data.links.length > 0 && <>Arbeitspakete: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</>}
@@ -251,8 +265,11 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
           </tbody></table>
         </Modal>
       )}
-      {dialog === 'log' && <PickTaskDialog title="Ins Arbeitspaket-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an das Arbeitspaket gehängt und verknüpft. Essenz per KI folgt." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
+      {dialog === 'log' && <PickTaskDialog title="Ins Arbeitspaket-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an das Arbeitspaket gehängt und verknüpft. Für eine Essenz: „KI: Essenz → Arbeitspaket“." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
         onPick={async (taskId, note) => { await run(async () => { await api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note }); setDialog(null); await refresh(); openTask(taskId); }); }} />}
+      {dialog === 'aiEssence' && <PickTaskDialog title="Essenz → Arbeitspaket (KI-Vorschlag)" hint="Die KI schlägt einen Log-Eintrag vor und erkennt, ob die Mail einen neuen Status oder Termin belegt. Angewendet wird erst nach Freigabe durch PL oder Personen mit Freigaberecht." onClose={() => setDialog(null)}
+        onPick={async (taskId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/essence`, { taskId }); setDialog(null); setAiMsg('Vorschlag angelegt.'); }); }} />}
+      {dialog === 'aiMerge' && <AppendPageDialog ai onClose={() => setDialog(null)} onSubmit={async (pageId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/merge-page`, { pageId }); setDialog(null); setAiMsg('Vorschlag für die Seite angelegt.'); }); }} />}
       {dialog === 'adjust' && <AdjustTaskDialog mailId={m.id} onClose={() => setDialog(null)} onDone={async (taskId) => { setDialog(null); await refresh(); openTask(taskId); }} />}
       {dialog === 'toPage' && <ToPageDialog onClose={() => setDialog(null)} onSubmit={(folderId, title) => withConfirm(
         (confirmed) => api.post(`/mail/mails/${m.id}/to-page`, { projectId: detail.project.id, folderId, title, confirmed }),
@@ -303,7 +320,7 @@ function AdjustTaskDialog({ mailId, onClose, onDone }: { mailId: string; onClose
   return (
     <Modal title="Arbeitspaket anpassen – Mail als Beleg" onClose={onClose}>
       <div className="form">
-        <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Arbeitspaket-Log festgehalten. Per KI als Vorschlag folgt.</p>
+        <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Arbeitspaket-Log festgehalten.</p>
         <label className="field"><span>Arbeitspaket</span><select value={taskId} onChange={(e) => pick(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
         <label className="field"><span>Status</span><select value={columnId} onChange={(e) => setColumnId(e.target.value)}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label className="field"><span>Deadline</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
@@ -340,7 +357,7 @@ function ToPageDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (f
   );
 }
 
-function AppendPageDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit: (pageId: string, withBody: boolean) => Promise<void> }) {
+function AppendPageDialog({ onClose, onSubmit, ai = false }: { onClose: () => void; onSubmit: (pageId: string, withBody: boolean) => Promise<void>; ai?: boolean }) {
   const { detail } = useProject();
   const docs = useData<{ pages: DocPage[]; folders: DocFolder[] }>(`/projects/${detail.project.id}/docs`);
   const [pageId, setPageId] = useState('');
@@ -349,12 +366,12 @@ function AppendPageDialog({ onClose, onSubmit }: { onClose: () => void; onSubmit
   const open = (docs.data?.pages ?? []).filter((p) => p.status !== 'final');
   useEffect(() => { if (open.length && !pageId) setPageId(open[0].id); }, [docs.data]);
   return (
-    <Modal title="An Seite anhängen" onClose={onClose}>
+    <Modal title={ai ? 'Essenz → Seite (KI-Vorschlag)' : 'An Seite anhängen'} onClose={onClose}>
       <div className="form">
-        <p className="muted small">Die Mail wird als Abschnitt an das Ende einer Seite gehängt, z. B. unter ein Jour-fixe-Protokoll oder einen Report. Finale Seiten sind gesperrt. Einpflegen der Essenz per KI folgt.</p>
+        <p className="muted small">{ai ? 'Die KI formuliert aus der Mail einen Abschnitt im Stil der Seite (Entscheidungen, Zusagen, Termine, offene Punkte). Angehängt wird erst nach Freigabe.' : 'Die Mail wird als Abschnitt an das Ende einer Seite gehängt, z. B. unter ein Jour-fixe-Protokoll oder einen Report. Finale Seiten sind gesperrt.'}</p>
         <label className="field"><span>Seite</span><select value={pageId} onChange={(e) => setPageId(e.target.value)}>{open.map((p) => <option key={p.id} value={p.id}>{docs.data?.folders.find((f) => f.id === p.folderId)?.name ?? '–'} / {p.title} ({statusLabel[p.status]})</option>)}</select></label>
-        <label className="check"><input type="checkbox" checked={withBody} onChange={(e) => setWithBody(e.target.checked)} /> Mailtext als Zitat übernehmen (sonst nur Kopfdaten)</label>
-        <div><button className="btn primary" disabled={busy || !pageId} onClick={() => { setBusy(true); void onSubmit(pageId, withBody).finally(() => setBusy(false)); }}>Anhängen</button></div>
+        {!ai && <label className="check"><input type="checkbox" checked={withBody} onChange={(e) => setWithBody(e.target.checked)} /> Mailtext als Zitat übernehmen (sonst nur Kopfdaten)</label>}
+        <div><button className="btn primary" disabled={busy || !pageId} onClick={() => { setBusy(true); void onSubmit(pageId, withBody).finally(() => setBusy(false)); }}>{ai ? 'Vorschlag erzeugen' : 'Anhängen'}</button></div>
       </div>
     </Modal>
   );
@@ -374,7 +391,7 @@ function CreateTaskFromMail({ mail, onClose, onCreated }: { mail: MailDetail; on
         <label className="field"><span>Zuständig</span><select value={f.responsibleUserId} onChange={(e) => setF({ ...f, responsibleUserId: e.target.value })}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
         <label className="field"><span>oder extern</span><input type="email" value={f.responsibleEmail} onChange={(e) => setF({ ...f, responsibleEmail: e.target.value })} placeholder={mail.fromAddr} /></label>
         <label className="check full"><input type="checkbox" checked={f.copy} onChange={(e) => setF({ ...f, copy: e.target.checked })} /> Mail als Kopie in das Arbeitspaket übernehmen (dann gelten die Arbeitspaketrechte)</label>
-        <p className="muted small full">Beschreibung wird aus dem Mailtext vorbefüllt. KI-Vorbefüllung folgt als letztes Modul.</p>
+        <p className="muted small full">Beschreibung wird aus dem Mailtext vorbefüllt.</p>
         {error && <div className="error full">{error}</div>}
         <div className="row full"><button className="btn primary" disabled={busy} onClick={() => void run(async () => {
           const r = await api.post<{ task: { id: string } }>(`/mail/mails/${mail.id}/create-task`, { projectId: detail.project.id, title: f.title, subprojectId: f.subprojectId || null, dueDate: f.dueDate || null, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null, copy: f.copy });

@@ -21,6 +21,7 @@ import { icsRoutes } from './routes/ics.js';
 import { raidRoutes } from './routes/raid.js';
 import { portfolioRoutes } from './routes/portfolio.js';
 import { oauthRoutes } from './routes/oauth.js';
+import { aiRoutes } from './routes/ai.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 
@@ -70,6 +71,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       return;
     }
     req.log.error(err);
+    if (process.env.LOG_ERRORS) console.error(err);
     reply.status(500).send({ error: 'Interner Fehler' });
   });
 
@@ -88,6 +90,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(raidRoutes);
       await api.register(portfolioRoutes);
       await api.register(oauthRoutes);
+      await api.register(aiRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

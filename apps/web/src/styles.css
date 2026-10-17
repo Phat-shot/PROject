@@ -593,3 +593,9 @@ a.tkey { color: var(--primary); }
 .mail-thread li.in { border-left-color: var(--ok); }
 .mail-thread li.out { border-left-color: #c7d2fe; }
 .mail-thread .ell { flex-basis: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding-left: 2px; }
+
+/* KI-Vorschläge */
+.ai-proposal { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: var(--bg); }
+.ai-proposal.approved { opacity: 0.75; }
+.ai-proposal.rejected { opacity: 0.6; }
+.ai-proposal textarea { width: 100%; font: inherit; }

@@ -1,8 +1,8 @@
 # PROject
 
 Aufgaben, Projektplan, Mail und Dokumentation auf **einem Datenmodell** mit zentraler Rechteprüfung.
-Umsetzung der Produktbeschreibung „Projekttool (Konzept B)“, Version 1.1. KI ist bewusst noch nicht enthalten
-(letztes Modul); alle Abläufe laufen regelbasiert über API und Worker.
+Umsetzung der Produktbeschreibung „Projekttool (Konzept B)“, Version 1.1. Alle Abläufe laufen regelbasiert über
+API und Worker; KI ist das letzte Modul und greift nur als Vorschlag mit Freigabe ein (Regel vor KI).
 
 ## Schnellstart (ohne Postgres)
 
@@ -78,12 +78,12 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - „Meine Aufgaben“ über alle Projekte, Suche, Audit-Log je Projekt (Mitglieder sehen eigene Aktionen)
 
 **Mail**
-- Konten persönlich oder Projektkonto; Adapter: IMAP/SMTP (imapflow, nodemailer) und Dev-Postfach im Speicher
+- Konten persönlich oder Projektkonto; Adapter: IMAP/SMTP (imapflow, nodemailer), Microsoft Graph und Dev-Postfach im Speicher; OAuth2 für Microsoft 365 (Graph oder IMAP-XOAUTH2) und Google (IMAP/SMTP-XOAUTH2) mit Token-Refresh, Knöpfe „Mit Microsoft 365/Google verbinden“ in Konfiguration und Projekteinstellungen (Variablen `OAUTH_*` in `.env.example`)
 - Konto ≠ Ansicht: geteilt werden nur Ansichten (Filter: Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum)
 - Gespeichert werden **nur Treffer** einer Ansicht; Kopfdaten werden vor dem Laden des Bodys geprüft
 - Rechte je Ansicht pro Person oder Rolle: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen; aus persönlichen Konten sendet nur der Eigentümer
 - Mail → Aufgabe (W3, vorbefüllt), Aufgabe → Mail (W4), verknüpfen oder kopieren (Kopie mit Bestätigung und Audit)
-- Aktionen an einer Mail: verknüpfen/kopieren, ins Aufgaben-Log übernehmen, Aufgabe anpassen (Mail als Beleg), Aufgabe erstellen, in Doku ablegen (eigene Seite), an Seite anhängen (Abschnitt); KI-Varianten (Essenz einpflegen) als Platzhalter
+- Aktionen an einer Mail: verknüpfen/kopieren, ins Aufgaben-Log übernehmen, Aufgabe anpassen (Mail als Beleg), Aufgabe erstellen, in Doku ablegen (eigene Seite), an Seite anhängen (Abschnitt); KI: Zusammenfassen, Essenz → Arbeitspaket (Vorschlag), Essenz → Seite (Vorschlag)
 - Entwürfe ohne Senderecht gehen in die Freigabe-Liste; der Worker versendet
 - Antworten Externer werden per Plus-Adresse (`projekt-x+t<code>@…`) der Aufgabe zugeordnet, Fallback In-Reply-To
 
@@ -97,16 +97,27 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Freigabe per Link: Seite (wahlweise mit Unterseiten) an eine Mail-Adresse, lesend oder schreibend, mit Ablauf, widerrufbar, Versand über das Projektkonto; externe Änderungen werden mit der Adresse versioniert und gemeldet (`/s/<token>`)
 - Anhänge an Seiten und Aufgaben
 
+**KI (letztes Modul, Regel vor KI)**
+- Anthropic-Anbindung je Mandant (Verwaltung › KI: an/aus, Schlüssel nur schreibend, Modell wählbar; alternativ `ANTHROPIC_API_KEY`); jede Anfrage im Audit mit Modell und Token
+- Rechte: „KI nutzen“ und „KI-Vorschläge freigeben“ in der Projektmitgliedschaft, „KI“ je Mail-Ansicht; PL darf alles
+- Zusammenfassen direkt (an der Mail gespeichert); Essenz → Arbeitspaket (Log-Eintrag, erkannter Status/Termin, offene Fragen) und Essenz → Seite (Abschnitt im Stil der Seite) nur als Vorschlag; Freigabe unter Projekt › KI mit Bearbeitung vor dem Anwenden, Log-Einträge tragen die Quelle „KI“
+- Frage ans Projekt (RAG-lite): Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe
+- Statusbericht-Entwurf aus Kennzahlen des Regelwerks, RAID, Ampel und Log als Entwurfsseite in „Berichte“
+
+**Identität und Sicherheit**
+- Single Sign-on per OIDC (Entra ID, Keycloak, Authentik …) mit Zuordnung per E-Mail, optionaler Auto-Anlage (`OIDC_*` in `.env.example`); Passwort-Login, Passwort-Reset und 2FA (TOTP) bleiben
+- Rate-Limit für Login und Reset, Sicherheits-Header, Sitzungen per httpOnly-Cookie
+
 **Querschnitt**
 - Zentrale Rechteprüfung in der API; Org-Admins sehen Projektinhalte nur als Mitglied; keine externen Gäste
 - Audit-Log schreibt ausschließlich API/Worker; Org-Admin exportiert Metadaten über alle Projekte
 - W10 Benutzer deaktivieren, W11 Projekt archivieren
 - Mandanten-ID (`org_id`) von Anfang an im Datenmodell
 
-## Noch nicht enthalten (laut Modulreihenfolge)
+## Noch nicht enthalten
 
-Kalender-Anbindung (M365/Google/CalDAV), Erinnerungen an Externe, Reports (W9), OAuth2 für M365/Google,
-Microsoft-Graph-Adapter, Keycloak/SSO, Row-Level Security, Office-Bearbeitung, KI (Chat, Vorschläge, RAG).
+Kalender-Schreibzugriff (M365/Google/CalDAV, heute nur ICS-Abo), Row-Level Security in der Datenbank
+(Rechte liegen zentral in der API), Office-Bearbeitung im Browser (braucht einen externen Dienst wie Collabora/OnlyOffice).
 
 ## Struktur
 

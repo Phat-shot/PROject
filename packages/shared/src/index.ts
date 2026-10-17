@@ -107,6 +107,30 @@ export interface OrgSettings {
   footerText?: string;
   /** Zeiterfassung mandantenweit aus: blendet Zeiten, Aufwand und Buchungen überall aus */
   timeTracking?: boolean;
+  /** KI-Modul: an/aus und Modell; der Schlüssel liegt getrennt und verlässt den Server nie */
+  ai?: { enabled?: boolean; model?: string };
+}
+
+export type AiProposalKind = 'task_update' | 'page_append';
+export interface AiProposal {
+  id: string;
+  projectId: string;
+  kind: AiProposalKind;
+  mailId: string | null;
+  taskId: string | null;
+  pageId: string | null;
+  /** task_update: summary, logEntry, columnName, dueDate, questions; page_append: section (Markdown) */
+  payload: { summary?: string; logEntry?: string; columnName?: string | null; dueDate?: string | null; questions?: string[]; section?: string };
+  status: 'pending' | 'approved' | 'rejected';
+  createdBy: string | null;
+  createdByName: string | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  note: string | null;
+  createdAt: string;
+  taskTitle: string | null;
+  pageTitle: string | null;
+  mailSubject: string | null;
 }
 
 export interface TimeEntry {
@@ -283,7 +307,7 @@ export interface TaskComment {
   userId: string;
   userName: string;
   body: string;
-  source?: 'user' | 'mail' | 'system';
+  source?: 'user' | 'mail' | 'system' | 'ai';
   mailId?: string | null;
   mentions?: string[];
   createdAt: string;

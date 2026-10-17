@@ -4,6 +4,7 @@ import type { Notification, Project } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
+import { useAiStatus } from '../lib/useAi';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -22,6 +23,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [menu, setMenu] = useState(false);
   const [tour, setTour] = useState(false);
   const [version, setVersion] = useState('');
+  const ai = useAiStatus();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -65,6 +67,7 @@ export function Layout({ children }: { children: ReactNode }) {
                       <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
                       <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
                       <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
+                      {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
                       {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
                     </div>
                   )}

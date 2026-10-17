@@ -6,6 +6,7 @@ import { api, downloadCsv, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { Modal, useAsync, useDialog } from '../components/ui';
+import { invalidateAi, useAiStatus } from '../lib/useAi';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
@@ -30,6 +31,7 @@ export function AdminPage() {
         </div>
         <GroupsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
+        <AiCard />
         <ProjectTemplatesCard />
         <TemplatesCard />
         <div className="card">
@@ -209,5 +211,36 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
         <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/users', f); await onCreated(); })}>Anlegen</button></div>
       </div>
     </Modal>
+  );
+}
+
+/** KI-Modul: an/aus, Schlüssel (nur schreiben), Modell, Verbindungstest. */
+function AiCard() {
+  const st = useAiStatus();
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [model, setModel] = useState<string | null>(null);
+  const [key, setKey] = useState('');
+  const [msg, setMsg] = useState<string | null>(null);
+  const { busy, error, run } = useAsync();
+  if (!st) return null;
+  const en = enabled ?? st.enabled;
+  const mo = model ?? st.model;
+  return (
+    <div className="card">
+      <h2>KI</h2>
+      <p className="muted small">Regel vor KI: Zusammenfassen läuft direkt, alles andere (Essenz in Arbeitspaket oder Seite) nur als Vorschlag mit Freigabe; der Statusbericht entsteht als Entwurfsseite. Wer KI nutzen und Vorschläge freigeben darf, steht in der Projektmitgliedschaft; in Mail-Ansichten zusätzlich das Recht „KI“. Jede Anfrage steht im Audit mit Modell und Token.</p>
+      <div className="form cols-2">
+        <label className="check full"><input type="checkbox" checked={en} onChange={(e) => setEnabled(e.target.checked)} /> KI für diesen Mandanten aktiv</label>
+        <label className="field"><span>API-Schlüssel (Anthropic){st.hasKey && <span className="muted"> · gesetzt ({st.source === 'env' ? 'aus der Umgebung' : 'im Mandanten'}), leer = unverändert</span>}</span><input type="password" value={key} autoComplete="new-password" placeholder={st.hasKey ? '••••••••' : 'sk-ant-…'} onChange={(e) => setKey(e.target.value)} /></label>
+        <label className="field"><span>Modell</span><select value={mo} onChange={(e) => setModel(e.target.value)}>{(st.models.includes(mo) ? st.models : [mo, ...st.models]).map((m) => <option key={m} value={m}>{m}</option>)}</select></label>
+        {error && <div className="error full">{error}</div>}
+        {msg && <div className="success full small">{msg}</div>}
+        <div className="full row">
+          <button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: en, model: mo, apiKey: key || undefined }); setKey(''); setMsg('Gespeichert.'); await invalidateAi(); })}>Speichern</button>
+          <button className="btn sm" disabled={busy || !st.hasKey} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>('/ai/test'); setMsg(`Verbindung ok: ${r.model} antwortet „${r.reply}“.`); })}>Verbindung testen</button>
+          {st.source === 'org' && <button className="btn sm danger" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: en, model: mo, apiKey: null }); setMsg('Schlüssel entfernt.'); await invalidateAi(); })}>Schlüssel entfernen</button>}
+        </div>
+      </div>
+    </div>
   );
 }
