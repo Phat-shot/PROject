@@ -35,6 +35,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [more, setMore] = useState(false);
   const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
   const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId?: string }>(null);
+  const [agentMsg, setAgentMsg] = useState<string | null>(null);
   const { busy, error, run, setError } = useAsync();
   const dialog = useDialog();
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
@@ -51,7 +52,6 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const isPlHere = detail.project.myMembership.role === 'pl';
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
   const respAgent = users.find((u) => u.id === t.responsibleUserId && u.kind === 'agent');
-  const [agentMsg, setAgentMsg] = useState<string | null>(null);
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
