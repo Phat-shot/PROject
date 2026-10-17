@@ -75,7 +75,7 @@ export function DocsView() {
               </span>}
             </div>
             {rootsIn(f.id).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}
-            {rootsIn(f.id).length === 0 && <div className="muted small" style={{ padding: '2px 8px' }}>leer</div>}
+            {rootsIn(f.id).length === 0 && <div className="page empty-folder"><span className="t muted">leer</span>{canWrite && <button className="btn sm link" title="Seite in diesem Ordner anlegen" onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+ Seite</button>}</div>}
           </div>
         ))}
         {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}

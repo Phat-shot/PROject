@@ -210,7 +210,13 @@ table.table { width: 100%; border-collapse: collapse; }
 .doc-tree .folder .t { cursor: pointer; border-radius: 4px; padding: 1px 4px; margin-left: -4px; }
 .doc-tree .folder .t:hover { color: var(--primary); }
 .doc-tree .folder.active .t { color: var(--primary); }
+/* Beim Hovern ersetzen die Aktionen den Status-Badge, damit die Zeile nicht springt */
 .doc-tree .page .acts, .doc-tree .folder .acts { display: none; gap: 2px; }
+.doc-tree .page:hover .badge, .doc-tree .page:focus-within .badge { display: none; }
+.doc-tree .page.empty-folder { cursor: default; padding-left: 8px; }
+.doc-tree .page.empty-folder:hover { background: none; }
+.doc-tree .page.empty-folder .btn { display: none; padding: 0 4px; }
+.doc-tree .page.empty-folder:hover .btn { display: inline-flex; }
 .doc-tree .page:hover .acts, .doc-tree .page:focus-within .acts, .doc-tree .folder:hover .acts, .doc-tree .folder:focus-within .acts { display: inline-flex; }
 .doc-tree .folder .acts button,
 .doc-tree .page .acts button { border: 1px solid var(--border); background: var(--surface); border-radius: 5px; padding: 0 6px; font-size: 12px; line-height: 18px; color: var(--muted); }
