@@ -77,8 +77,8 @@ export async function agentRoutes(app: FastifyInstance) {
     const agent = t.responsible_user_id ? await db.maybeOne(`select id, name, org_id from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]) : null;
     if (!agent) throw badRequest('Dem Arbeitspaket ist kein Agent zugewiesen');
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
-    if (r.status === 'error') throw badRequest(r.error ?? 'Lauf fehlgeschlagen');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
+    if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');
     return r;
   });
 }

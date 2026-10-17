@@ -81,6 +81,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const j = parseJson(r.text);
     const actions: AgentAction[] = Array.isArray(j.actions) ? j.actions.slice(0, 5) : [];
     const applied: AgentAction[] = [];
+    const errors: string[] = [];
     let mailed = false;
     let waited = false;
     for (const a of actions) {
@@ -95,11 +96,19 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
       } else if (a.type === 'mail' && !mailed && Array.isArray(a.to) && a.to.length && a.subject && a.text) {
         const to = a.to.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
-        if (to.length && account) {
+        if (!to.length) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
+        else if (!account) errors.push('Mail nicht gesendet: kein Projektkonto angebunden');
+        else {
           mailed = true;
           if (canMail) {
-            await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text, taskId: task.id, userId: agent.id, projectId: task.project_id });
-            applied.push({ type: 'mail', to, subject: a.subject, text: a.text });
+            try {
+              await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text, taskId: task.id, userId: agent.id, projectId: task.project_id });
+              applied.push({ type: 'mail', to, subject: a.subject, text: a.text });
+            } catch (e: any) {
+              const msg = `Mail an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
+              errors.push(msg);
+              await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, msg]);
+            }
           } else {
             await db.query(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status) values ($1,$2,$3,$4,$5,'[]',$6,$7,'pending_approval')`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, a.text]);
             for (const pl of pls) await notify(db, { userId: pl.user_id ?? (await db.one(`select id from users where email = $1`, [pl.email])).id, projectId: task.project_id, type: 'draft.review', title: `Mail-Entwurf von ${agent.name} zur Freigabe`, body: a.subject, link: `/projekte/${task.project_id}/mail/freigabe` });
@@ -134,11 +143,12 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       } else if (a.type === 'none') applied.push(a);
     }
     if (!waited) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+    if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
-    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens) values ($1,$2,$3,$4,$5,'ok',$6,$7,$8,$9,$10) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens]);
+    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) returning id`,
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), r.inputTokens, r.outputTokens, errors.length ? errors.join(' | ') : null]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
-    return { runId: run.id, taskId: task.id, status: 'ok', actions: applied };
+    return { runId: run.id, taskId: task.id, status: errors.length ? 'error' : 'ok', actions: applied, error: errors.length ? errors.join(' | ') : undefined };
   } catch (e: any) {
     const msg = String(e?.message ?? e).slice(0, 300);
     const er = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, fingerprint) values ($1,$2,$3,$4,$5,'error',$6,$7) returning id`, [agent.org_id, agent.id, task.project_id, task.id, trigger, msg, await fingerprintOf(db, task.id)]);
