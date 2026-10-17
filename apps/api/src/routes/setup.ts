@@ -10,7 +10,8 @@ import { badRequest, forbidden } from '../errors.js';
 export async function setupRoutes(app: FastifyInstance) {
   const needsSetup = async () => !(await app.db.maybeOne(`select 1 from users limit 1`));
 
-  app.get('/setup/status', async () => ({ needsSetup: await needsSetup() }));
+  // demo: Demodaten vorhanden (Login-Seite zeigt dann die Demo-Zugänge)
+  app.get('/setup/status', async () => ({ needsSetup: await needsSetup(), demo: Boolean(await app.db.maybeOne(`select 1 from users where email = 'pl@demo.local' limit 1`)) }));
 
   app.post<{ Body: { orgName: string; name: string; email: string; password: string } }>('/setup', async (req, reply) => {
     if (!(await needsSetup())) throw forbidden('Ersteinrichtung ist abgeschlossen');

@@ -13,6 +13,7 @@ import { AdminPage } from './pages/AdminPage';
 import { SharePage } from './pages/SharePage';
 import { SetupPage } from './pages/SetupPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
+import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { useEffect, useState } from 'react';
 import { api } from './lib/api';
 
@@ -23,6 +24,9 @@ export default function App() {
   }
   if (window.location.pathname.startsWith('/einladung/')) {
     return <AcceptInvitePage token={window.location.pathname.split('/')[2] ?? ''} />;
+  }
+  if (window.location.pathname.startsWith('/passwort/')) {
+    return <ResetPasswordPage token={window.location.pathname.split('/')[2] ?? ''} />;
   }
   const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
   useEffect(() => {

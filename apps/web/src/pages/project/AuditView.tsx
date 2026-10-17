@@ -1,5 +1,5 @@
 import type { AuditEntry } from '@projekttool/shared';
-import { fmtDateTime } from '../../lib/api';
+import { downloadCsv, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useProject } from '../ProjectPage';
 
@@ -10,7 +10,7 @@ export function AuditView() {
   return (
     <div className="content">
       <div className="card">
-        <h2>Audit-Log</h2>
+        <div className="row between"><h2 style={{ margin: 0 }}>Audit-Log</h2>{data && <button className="btn sm" onClick={() => downloadCsv(`audit-${detail.project.key}-${new Date().toISOString().slice(0, 10)}.csv`, ['Zeit', 'Wer', 'Aktion', 'Objekttyp', 'Objekt', 'Details'], data.entries.map((x) => [x.createdAt, x.userName ?? 'Worker', x.action, x.objectType, x.objectId, JSON.stringify(x.details)]))}>CSV herunterladen</button>}</div>
         <p className="muted small">{me.role === 'pl' ? 'Alle Aktionen im Projekt.' : 'Nur eigene Aktionen (Mitglieder sehen ihr eigenes Protokoll).'} Geschrieben ausschließlich von API und Worker.</p>
         {error && <div className="error">{error}</div>}
         <table className="table"><thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Objekt</th><th>Details</th></tr></thead><tbody>

@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { AuditEntry, DocTemplate, Group, Invitation, OrgSettings, User } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
-import { api, fmtDateTime } from '../lib/api';
+import { api, downloadCsv, fmtDateTime } from '../lib/api';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { Modal, useAsync, useDialog } from '../components/ui';
@@ -32,7 +32,11 @@ export function AdminPage() {
         <PdfStyleCard />
         <TemplatesCard />
         <div className="card">
-          <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Export laden (nur Metadaten, wird protokolliert)</button></div>
+          <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><span className="row">
+            <button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Anzeigen (nur Metadaten, wird protokolliert)</button>
+            <button className="btn primary" disabled={busy} onClick={() => void run(async () => { const e = (await api.get<{ entries: AuditEntry[] }>('/audit')).entries; downloadCsv(`audit-${new Date().toISOString().slice(0, 10)}.csv`, ['Zeit', 'Wer', 'Aktion', 'Objekttyp', 'Objekt', 'Projekt', 'Details'], e.map((x) => [x.createdAt, x.userName ?? 'Worker', x.action, x.objectType, x.objectId, x.projectId, JSON.stringify(x.details)])); })}>CSV herunterladen</button>
+          </span></div>
+          {audit && <p className="muted small mt">{audit.length} Einträge, die ersten 300 angezeigt.</p>}
           {audit && <table className="table mt"><thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Objekt</th></tr></thead><tbody>
             {audit.slice(0, 300).map((e) => <tr key={e.id}><td className="nowrap small">{fmtDateTime(e.createdAt)}</td><td>{e.userName ?? 'Worker'}</td><td><code>{e.action}</code></td><td className="small muted">{e.objectType} {e.objectId?.slice(0, 8)}</td></tr>)}
           </tbody></table>}
