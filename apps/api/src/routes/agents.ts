@@ -5,7 +5,7 @@ import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
 import { orgAiSettings, projectProfiles } from '../ai/client.js';
-import { agentForTask, runAgentOnTask } from '../ai/agent.js';
+import { agentBudgetLeft, agentForTask, runAgentOnTask } from '../ai/agent.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
@@ -158,6 +158,9 @@ export async function agentRoutes(app: FastifyInstance) {
     await requireProject(db, user, t.project_id, 'pl');
     const agent = await agentForTask(db, t.id);
     if (!agent) throw badRequest('Für das Arbeitspaket ist kein Agent zuständig (direkt oder geerbt)');
+    // Auch der Lauf von Hand beachtet Pause und Tagesbudget
+    if (t.agent_paused) throw badRequest('Der Agent ist an diesem Arbeitspaket pausiert. Erst fortsetzen.');
+    if ((await agentBudgetLeft(db, agent)) <= 0) throw badRequest(`Tagesbudget von ${agent.name} ist aufgebraucht (Verwaltung › KI)`);
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
     if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');

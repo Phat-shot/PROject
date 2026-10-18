@@ -14,7 +14,7 @@ Vollständige Anleitung für alle Benutzer von PROject, einschließlich der Arbe
 
 **Zuständigkeit:** ausdrücklich gesetzt oder geerbt in der Reihenfolge Aufgabe → AP → Teilprojekt → Projektleitung. Geerbte Zuständigkeit ist überall als „geerbt“ markiert. Zuständig sein können Mitglieder, KI-Agenten (nur durch die PL) und externe Kontakte per Mail-Adresse.
 
-**Rollen im Projekt:** Projektleitung (PL, optional zweite PL als Stellvertretung), Mitglied, Leser. Einzelrechte: Projektplan ändern, Freigeben, Final setzen, KI nutzen, KI-Vorschläge freigeben. Mandantenweit gibt es Org-Admins und Projektersteller. Org-Admins sehen Projektinhalte nur, wenn sie Mitglied sind.
+**Rollen im Projekt:** Projektleitung (PL, optional zweite PL als Stellvertretung), Mitglied, Leser. Einzelrechte: Projektplan ändern, Freigeben, Final setzen, KI nutzen, KI-Vorschläge freigeben. Leser mit „KI nutzen“ dürfen nur Fragen ans Projekt stellen. Die verantwortliche PL übergibt ihre Rolle nur selbst; die Stellvertretung kann sich nicht selbst dazu machen und ändert die Mitgliedschaft der verantwortlichen PL nicht. Mandantenweit gibt es Org-Admins und Projektersteller. Org-Admins sehen Projektinhalte nur, wenn sie Mitglied sind.
 
 ## 2. Navigation
 
@@ -23,14 +23,14 @@ Vollständige Anleitung für alle Benutzer von PROject, einschließlich der Arbe
 - **Alle Projekte** klappt die übrigen Projekte aus; dort auch die Projektübersicht mit „Neues Projekt“ (Org-Admin, Projektersteller).
 - **Im Projekt:** Arbeitspakete (Board, Plan, Kalender, Besprechungen, Zeiten, Auswertung), Postfach, Doku, Risiken, KI, Einstellungen (nur PL).
 - **Global:** Postfach (alle Mail-Ansichten mit Leserecht), Kalender (alle Projekte), Workflows, Chat.
-- **Kopfzeile:** Suche über APs, Seiten und Mails (auch nach Kennung), Glocke mit Benachrichtigungen.
+- **Kopfzeile:** Suche über APs, Seiten und Mails (auch nach Kennung), Glocke mit Benachrichtigungen. Ein Klick auf eine Meldung öffnet das Ziel und markiert sie als gelesen. KI-Agenten und deaktivierte Benutzer bekommen keine Meldungen.
 - **Tutorial** und **Hilfe** unten links.
 
 ## 3. Dashboard
 
 Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern.
 
-- **Meine Arbeit:** offene, überfällige und bald fällige APs und Aufgaben, Blockaden und Eskalationen, Soll/Ist je Projekt, nächste Termine, was auf dich wartet (Mail-Entwürfe zur Freigabe, Seiten in Prüfung), Meldungen. Darunter die geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task mit allem, was dir zugewiesen oder vererbt ist. Tasks lassen sich dort direkt abhaken.
+- **Meine Arbeit:** offene, überfällige und bald fällige APs und Aufgaben, Blockaden und Eskalationen, Soll/Ist je Projekt, nächste Termine, was auf dich wartet (Mail-Entwürfe zur Freigabe, Seiten in Prüfung), Meldungen (ein Klick öffnet das Ziel und markiert sie als gelesen, wie in der Glocke). Darunter die geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task mit allem, was dir zugewiesen oder vererbt ist. Tasks lassen sich dort direkt abhaken.
 - **Projekte:** alle Projekte mit Ampel (von der PL gesetzt oder berechnet), Fortschritt, Verzug, Blockaden, roten Risiken, nächstem Meilenstein, Budget; Auslastung je Person und gebuchte Zeiten über Projekte (CSV).
 - **Alle Arbeitspakete:** Liste über alle Projekte mit Filtern (nur meine, überfällig, fällig in 7 Tagen, blockiert/eskaliert/Konflikt, ohne Termin).
 - **Mit Projektfilter** zeigt „Meine Arbeit“ das Projekt-Dashboard: Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, Risiken, offene Freigaben, Aktivität, danach die eigene Arbeit im Projekt.
@@ -71,14 +71,14 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 
 **Chat**
 - Desktop: Knopf unten rechts oder „Chat“ in der Leiste öffnet den Messenger. Oben die Suche über Gespräche und Nachrichten, links alle Gespräche nach letzter Aktivität, rechts der Verlauf. Mobil öffnet sich der Chat als Seite.
-- **Projektkanal** je Projekt für alle Mitglieder, Antworten als Thread, `@Name` benachrichtigt. Die PL kann Nachrichten löschen.
+- **Projektkanal** je Projekt, Antworten als Thread, `@Name` benachrichtigt. Schreiben dürfen eingetragene Mitglieder (auch Leser); ist ein Projekt für alle Benutzer des Mandanten sichtbar, lesen die übrigen nur mit. Die PL kann Nachrichten löschen.
 - **Direktnachrichten** mit jeder Person des Mandanten und mit KI-Agenten („+ Neu“).
 
 **Mail**
 - Konten: persönlich, Projektkonto oder Organisationskonto (Konfiguration). Geteilt werden nie ganze Konten, sondern **Ansichten** mit Filtern (Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum). Gespeichert werden nur Treffer.
 - Rechte je Ansicht: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen. Aus persönlichen Konten sendet nur der Eigentümer.
 - Aktionen an einer Mail: mit AP verknüpfen oder kopieren, ins Log übernehmen, AP anpassen (Mail als Beleg), AP erstellen, in Doku ablegen oder an eine Seite anhängen.
-- Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie. Entwürfe aus persönlichen Konten sieht und sendet nur der Eigentümer.
+- Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie. Entwürfe aus persönlichen Konten sieht und sendet nur der Eigentümer. Entwürfe eines KI-Agenten am Projektkonto ändert, sendet oder lehnt ab, wer das Konto verwaltet (PL). Eine Ablehnung steht im Log des AP, und der Agent läuft daraufhin erneut.
 - Postfach mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), synchron mit dem Mailserver.
 
 **Ursprungsmail**
@@ -127,15 +127,15 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 **Einrichtung (Org-Admin, Verwaltung › KI-Profile)**
 - Ein **KI-Profil** ist eine KI: lokales LLM mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio, llama.cpp) oder Anthropic.
 - **Denkmodus aus** (nur lokal): für Modelle mit Thinking wie Qwen. Schneller, weniger Token, keine abgeschnittenen Antworten.
-- **Tagesbudget** je Agent (Läufe pro Tag) und Standardprofil für neue Agenten.
+- **Tagesbudget** je Agent (Läufe pro Tag; 0 = keine Läufe) und Standardprofil für neue Agenten. Gezählt werden ausgeführte Läufe, auch fehlgeschlagene, nicht aber übersprungene.
 - **Freigabe je Profil:** für alle Projekte, für ausgewählte Projekte oder für keins (dann nur für Agenten des Org-Admins). Gilt für normale und persönliche Projekte.
-- **Eigenes LLM:** Der Org-Admin erlaubt es nicht, nur in persönlichen Projekten (Standard) oder in allen Projekten. Dann bindet die PL unter Einstellungen › Eigenes LLM ein eigenes LLM nur für ihr Projekt ein (Schlüssel verschlüsselt). Der Org-Admin sieht unter Verwaltung › Eigene LLMs der Projekte Name, Anbieter, Adresse und Verbrauch, nicht Schlüssel oder Inhalte, und kann sperren.
+- **Eigenes LLM:** Der Org-Admin erlaubt es nicht, nur in persönlichen Projekten (Standard) oder in allen Projekten. Dann bindet die PL unter Einstellungen › Eigenes LLM ein eigenes LLM nur für ihr Projekt ein (Schlüssel verschlüsselt). Ein eigenes Anthropic-LLM braucht einen eigenen Schlüssel; der Schlüssel des Servers gilt nur für Profile des Mandanten. Den Verbindungstest gibt es nur, solange der Mandant eigene LLMs erlaubt. Der Org-Admin sieht unter Verwaltung › Eigene LLMs der Projekte Name, Anbieter, Adresse und Verbrauch, nicht Schlüssel oder Inhalte, und kann sperren.
 - Die PL wählt die Projekt-KI aus den im Projekt verfügbaren LLMs (Projekteinstellungen); ohne Auswahl ist die KI dort aus. Wird eine Freigabe entzogen oder ein LLM gesperrt, ist die Projekt-KI aus, bis die PL ein anderes wählt.
 - Neue Projekte, auch persönliche, haben keinen Agenten. Die PL nimmt Agenten des Org-Admins auf oder legt eigene an; eigene Agenten laufen nur auf den im Projekt verfügbaren LLMs.
 
 **Projekt-KI (Projekt › KI und Postfach)**
 - Mail zusammenfassen, Essenz einer Mail als Vorschlag für ein AP oder eine Seite; Vorschläge gibt frei, wer „KI-Vorschläge freigeben“ hat.
-- Frage ans Projekt: Antwort aus APs, Seiten und lesbaren Mails mit Quellenangabe (Stichwortsuche).
+- Frage ans Projekt: Antwort aus APs, Seiten und lesbaren Mails mit Quellenangabe (Stichwortsuche). Fragen dürfen auch Leser mit „KI nutzen“.
 - Statusbericht-Entwurf aus Kennzahlen, Risiken und Log.
 
 ## 12. Mit KI-Agenten arbeiten
@@ -152,11 +152,11 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Liest das AP mit Beschreibung, Aufgaben, Tasks, Log, Mails, Doku-Seitenliste und Mitgliedern.
 - **Fragt per Chat:** Fragen an Projektbeteiligte stellt er immer als Direktnachricht (oder im Projektkanal), nie per Mail; Eskalationen an die PL kommen zusätzlich zur Benachrichtigung per Chat. Die Frage steht im Log („Per Chat an …“). Wer direkt darauf antwortet (im Thread zur Frage; in der Direktnachricht die erste Antwort und was binnen zwei Stunden folgt), dessen Antwort landet automatisch als „Rückmeldung per Chat“ im Log des AP (Kennzeichen „aus Chat“), und der Agent läuft sofort am AP weiter.
 - **Ansprechpartner:** für Rückfragen und Terminzusagen die Zuständigen des übergeordneten AP, sonst die Verantwortung des Teilprojekts, sonst die verantwortliche PL (immer eine Person). Deren Termine aus anderen Projekten sieht er nur als „belegt“, ohne Titel.
-- Handelt: Log schreiben, Status setzen, Tasks abhaken, ergänzen oder umformulieren, Mails schreiben (höchstens drei je Lauf), Doku-Seiten lesen, anlegen, ändern und als PDF senden, Blockade melden, an die PL eskalieren.
+- Handelt: Log schreiben, Status setzen, Tasks abhaken, ergänzen oder umformulieren, Mails schreiben (höchstens drei je Lauf), Doku-Seiten lesen, anlegen, ändern und als PDF senden, Blockade melden, an die PL eskalieren. Als PDF gehen nur finale Seiten hinaus: an Projektmitglieder, an Adressen aus dem Verteiler des Ordners oder an Adressen mit aktiver Freigabe der Seite; an den ganzen Verteiler nur mit „Final setzen“.
 - **Plant:** Aufgaben unter seinem AP (bzw. in seinen Teilprojekten) und APs in seinen Teilprojekten anlegen, mit Start, Termin, Zuständigkeit und Tasks; zuweisen (Agenten nur als stellv. PL); Start/Termin bei eigener oder noch terminloser Arbeit setzen; Termine mit Uhrzeit in den Projektkalender, aber nur **vorläufig** (siehe unten). Als **stellvertretende PL** oder mit „Projektplan ändern“ im ganzen Projekt, dazu Teilprojekte und Meilensteine. Höchstens 15 Anlagen je Lauf, jede steht im Log. Mitglieder, Rechte und Einstellungen nie.
 - **Ursprungsmail:** Ist sein AP aus einer Mail entstanden, beantwortet er sie zum Abschluss mit dem Ergebnis, aus dem Konto dieser Mail (Projektkonto direkt, wenn erlaubt; sonst Entwurf; persönliches Konto: nur der Eigentümer gibt frei). Ohne Projektkonto gehen seine Mails als Entwurf über das Konto einer Projektansicht.
-- **Wartet** auf Rückmeldung, Termin, Erledigung durch andere oder Information und setzt sich dafür eine Wiedervorlage. Bei Rückmeldungen fasst er nach Frist nach und eskaliert danach an die PL. Der Hintergrunddienst prüft das jede Minute.
-- Läuft erneut bei neuem Kommentar, neuer Mail, Änderungen durch Menschen, Wiedervorlage, naher Fälligkeit und spätestens alle drei Tage.
+- **Wartet** auf Rückmeldung, Termin, Erledigung durch andere oder Information und setzt sich dafür eine Wiedervorlage. Bei Rückmeldungen fasst er nach Frist nach (bei Projektmitgliedern per Chat, bei Externen per Mail) und eskaliert danach an die PL. Der Hintergrunddienst prüft das jede Minute.
+- Läuft erneut bei neuem Kommentar, neuer Mail, Änderungen durch Menschen, Wiedervorlage, naher Fälligkeit und spätestens alle drei Tage. Was während eines Laufs eintrifft (z. B. weitere Chat-Nachrichten), löst danach genau einen Folgelauf aus; nichts geht verloren.
 - **Termine sagt er nie selbst zu.** Schlägt ein Externer einen Termin vor, prüft er Projektkalender, Belegt-Zeiten, Wochenenden und Sperrzeiten, fragt den Ansprechpartner per Chat und wartet; erst nach dessen Bestätigung sagt er dem Externen zu. Seine Kalendereinträge sind **vorläufig** (Kennzeichen in Besprechungen und Kalender, im ICS als „tentative“): Ein Mitglied bestätigt sie unter Besprechungen › Termin › **Bestätigen**; erst dann sind Einladung und Übernahme in Microsoft 365/Google/CalDAV möglich. Die Bestätigung steht im Log des AP, der Agent läuft daraufhin weiter. Termine aus der Projekt-KI („KI Bearbeiten“) sind ebenso vorläufig; nimmt eine Person den Terminvorschlag eines Agenten an, gilt er als bestätigt.
 - **Versandstatus schreibt das System:** Ob eine Mail gesendet wurde, als Entwurf auf Freigabe wartet oder nicht gesendet werden konnte (z. B. kein Mailkonto), steht als eigener Log-Eintrag unter seinem Namen; der Agent selbst behauptet keinen Versand.
 - Ändert bestehende Termine anderer nur, wenn er planen darf; erfindet keine Fakten, pflegt keine Risiken, Zeiten oder Einstellungen. Inhalte aus persönlichen Konten sieht er nur, wenn sie freigegeben sind (Kopie) oder nur der Eigentümer im Projekt ist.
@@ -174,8 +174,8 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 **Kontrolle**
 - Projekt › KI › Agenten-Läufe: jeder Lauf mit Anlass, Begründung, Aktionen, Token und Fehlern.
-- Im AP: „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand mit nächster Prüfung, Nachfassen und Eskalation.
-- Freigaben: Mail-Entwürfe des Agenten ohne Senderecht.
+- Im AP: „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand mit nächster Prüfung, Nachfassen und Eskalation. Auch „Jetzt laufen lassen“ hält Pause und Tagesbudget ein.
+- Freigaben: Mail-Entwürfe des Agenten ohne Senderecht; Ablehnen steht im Log, der Agent läuft erneut.
 - Audit-Log und Tagesbudget begrenzen und belegen alles.
 
 **Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen vorläufig in den Kalender (die PL bestätigt) und klärt Fragen per Chat mit der PL.

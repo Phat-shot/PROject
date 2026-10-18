@@ -21,10 +21,10 @@ export interface AiConfig { profileId: string; name: string; provider: AiProvide
 export type OwnLlmMode = 'off' | 'personal' | 'all';
 export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; defaultProfileId: string | null; agentDailyBudget: number; plAgents: { enabled: boolean; maxBudget: number }; ownLlm: OwnLlmMode }
 
-/** Konfiguration aus einem Profil; Anthropic-Schlüssel darf aus ANTHROPIC_API_KEY kommen. */
+/** Konfiguration aus einem Profil; der Anthropic-Schlüssel darf nur bei Profilen des Mandanten aus ANTHROPIC_API_KEY kommen, eigene LLMs eines Projekts brauchen einen eigenen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
   if (!r || !r.active || r.admin_blocked) return null;
-  const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY ?? null : null);
+  const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' && !r.project_id ? process.env.ANTHROPIC_API_KEY ?? null : null);
   if (r.provider === 'local' ? !(r.base_url && r.model) : !apiKey) return null;
   return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined };
 }
@@ -34,7 +34,9 @@ export interface PlAgentPolicy { enabled: boolean; maxBudget: number }
 export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultProfileId: string | null; agentDailyBudget: number; plAgents: PlAgentPolicy; ownLlm: OwnLlmMode }> {
   const o = await db.one(`select settings from orgs where id = $1`, [orgId]);
   const ai = o.settings?.ai ?? {};
-  const agentDailyBudget = Number(ai.agentDailyBudget) || 50;
+  // 0 gilt (keine Läufe); nur ein fehlender oder unlesbarer Wert fällt auf 50 zurück
+  const budget = Number(ai.agentDailyBudget ?? 50);
+  const agentDailyBudget = Number.isFinite(budget) ? Math.max(0, budget) : 50;
   const pa = ai.plAgents ?? {};
   const ownLlm: OwnLlmMode = ai.ownLlm === 'off' || ai.ownLlm === 'all' ? ai.ownLlm : 'personal';
   return { defaultProfileId: ai.defaultProfileId ?? null, agentDailyBudget, plAgents: { enabled: Boolean(pa.enabled), maxBudget: Math.min(agentDailyBudget, Math.max(0, Number(pa.maxBudget ?? 20) || 0)) }, ownLlm };

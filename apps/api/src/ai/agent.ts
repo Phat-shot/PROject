@@ -100,7 +100,7 @@ const SCHEMA = {
         endsAt: { type: 'string', description: 'create_event: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         location: { type: 'string', description: 'create_event: Ort; sonst leer' },
         folder: { type: 'string', description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst leer' },
-        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf: Empfänger oder leer für den Verteiler des Ordners (nur finale Seiten); sonst leer' },
+        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
         subject: { type: 'string', description: 'mail: Betreff; sonst leer' },
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
         kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; sonst leer' },
@@ -209,7 +209,7 @@ Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im 
 ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
 ${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
-Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.type === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer Seite per Mail senden (doc_send_pdf${m.can_finalize ? ', auch an den Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.type === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite${m.can_finalize ? '; leer = Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 ${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
@@ -347,12 +347,16 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       } else if (a.type === 'doc_send_pdf') {
         const page = await db.maybeOne(`select p.*, f.distribution_list from doc_pages p left join doc_folders f on f.id = p.folder_id where p.id = $1 and p.project_id = $2 and p.deleted_at is null`, [a.pageId, task.project_id]);
         const useList = page && (!Array.isArray(a.to) || !a.to.length);
-        const raw: string[] = useList ? (page.distribution_list?.length ? page.distribution_list : page.settings?.recipients ?? []) : Array.isArray(a.to) ? a.to : [];
-        const to = raw.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 10);
+        const norm = (v: unknown[]) => v.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+        const list = page ? norm(page.distribution_list?.length ? page.distribution_list : page.settings?.recipients ?? []) : [];
+        const to = (useList ? list : norm(Array.isArray(a.to) ? a.to : [])).slice(0, 10);
+        // Genannte Empfänger: Projektmitglieder immer, alle anderen nur aus dem Verteiler oder mit aktiver Freigabe der Seite
+        const blocked = page && !useList ? await unreleasedRecipients(db, page, to, list) : [];
         if (!page) errors.push('PDF-Versand verworfen: pageId unbekannt');
-        else if (useList && page.status !== 'final') errors.push(`Versand an den Verteiler nur für finale Seiten („${page.title}“ ist ${page.status})`);
+        else if (page.status !== 'final') errors.push(`PDF-Versand nur für finale Seiten („${page.title}“ ist ${page.status})`);
         else if (useList && !m.can_finalize) errors.push('Versand an den Verteiler erfordert das Recht „Final setzen / Versand“');
         else if (useList && !to.length) errors.push(`Kein Verteiler am Ordner oder an der Seite „${page.title}“`);
+        else if (blocked.length) errors.push(`PDF von „${page.title}“ nicht gesendet: ${blocked.join(', ')} ist weder Projektmitglied noch im Verteiler, und die Seite ist für diese Adresse nicht freigegeben`);
         else if (!to.length || !a.subject) errors.push('PDF-Versand verworfen: Empfänger oder Betreff fehlt');
         else if (!account) errors.push('PDF-Versand nicht möglich: kein Projektkonto');
         else if (!canMail) errors.push('PDF-Versand nicht erlaubt: Agent darf keine Mails senden');
@@ -506,6 +510,27 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
   }
 }
 
+/**
+ * Adressen, an die das PDF einer Seite nicht gehen darf: weder aktive Person im Projekt noch im Verteiler (list) noch mit
+ * aktiver Freigabe der Seite (direkt oder über eine Oberseite mit „inkl. Unterseiten“, nicht widerrufen, nicht abgelaufen).
+ */
+async function unreleasedRecipients(db: Db, page: { id: string; project_id: string }, to: string[], list: string[]): Promise<string[]> {
+  if (!to.length) return [];
+  const ok = await db.query(
+    `with recursive anc as (
+       select id, parent_page_id, 0 as depth from doc_pages where id = $1
+       union all
+       select p.id, p.parent_page_id, a.depth + 1 from doc_pages p join anc a on p.id = a.parent_page_id
+     )
+     select lower(u.email) as email from project_members m join users u on u.id = m.user_id where m.project_id = $2 and u.active and u.kind = 'person' and lower(u.email) = any($3::text[])
+     union
+     select lower(s.email) from doc_shares s join anc a on a.id = s.page_id
+     where s.revoked_at is null and (s.expires_at is null or s.expires_at > now()) and (a.depth = 0 or s.include_children) and lower(s.email) = any($3::text[])`,
+    [page.id, page.project_id, to]);
+  const allowed = new Set([...list, ...ok.rows.map((r: any) => r.email)]);
+  return to.filter((x) => !allowed.has(x));
+}
+
 const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event'];
 const MAX_CREATE = 15;
 
@@ -638,10 +663,13 @@ function triggerText(trigger: string, task: any): string {
     case 'task_changed': return 'Eine Person hat das Arbeitspaket oder seine Tasks geändert (Text, Termin, Status). Lies die Änderung und handle entsprechend.';
     case 'mail': case 'reply': return 'Neue Mail zum Arbeitspaket (möglicherweise die erwartete Rückmeldung). Werte sie aus.';
     case 'check': return `Wiedervorlage: deine Wartefrist ist abgelaufen${w ? ` (gewartet auf ${KIND_DE[w.kind] ?? w.kind})` : ''}. Prüfe, ob das Erwartete eingetreten ist.`;
-    case 'reminder_due': return 'Nachfassen fällig: die Rückmeldung ist bisher nicht eingegangen. Fasse jetzt nach (Erinnerung per Mail oder Log) oder begründe, warum nicht; setze danach erneut wait.';
+    case 'reminder_due': return 'Nachfassen fällig: die Rückmeldung ist bisher nicht eingegangen. Fasse jetzt nach (bei Projektmitgliedern per Chat, nur bei Externen per Mail) oder begründe, warum nicht; setze danach erneut wait.';
     case 'escalation_due': return 'Eskalation fällig: trotz Nachfassen keine Rückmeldung. Eskaliere jetzt an die Projektleitung (escalate) oder begründe, warum du weiter wartest.';
     case 'due_soon': return 'Die Fälligkeit des Arbeitspakets ist nah.';
     case 'overdue': return 'Das Arbeitspaket ist überfällig.';
+    case 'changed': return 'Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert (Log, Mail, Status, Termin oder Tasks). Lies die Änderung und handle entsprechend.';
+    case 'periodic': return 'Regelmäßige Durchsicht: seit drei Tagen kein Lauf. Prüfe den Stand; ist nichts zu tun und nichts zu erwarten, tu nichts.';
+    case 'rejected': return 'Eine Person hat einen Vorschlag von dir abgelehnt (z. B. einen Mail-Entwurf; Details im Log). Wiederhole ihn nicht unverändert; kläre bei Bedarf per Chat, was anders sein soll.';
     case 'manual': return 'Die Projektleitung hat den Lauf manuell gestartet.';
     default: return trigger;
   }
@@ -654,12 +682,12 @@ export async function agentForTask(db: Db, taskId: string): Promise<{ id: string
      where t.id = $1 and u.kind = 'agent' and u.active and exists (select 1 from project_members m where m.project_id = t.project_id and m.user_id = u.id)`, [taskId]);
 }
 
-/** Läufe, die einem Agenten heute noch zustehen: Tagesbudget des Mandanten bzw. das kleinere eigene (Agenten der PL); Läufe an Arbeitspaketen, im Chat und an Mails zählen. */
+/** Läufe, die einem Agenten heute noch zustehen: Tagesbudget des Mandanten bzw. das kleinere eigene (Agenten der PL); Läufe an Arbeitspaketen, im Chat und an Mails zählen, übersprungene nicht. */
 export async function agentBudgetLeft(db: Db, agent: { id: string; org_id: string }, now = new Date()): Promise<number> {
   const settings = await orgAiSettings(db, agent.org_id);
   const own = (await db.maybeOne(`select agent_daily_budget from users where id = $1`, [agent.id]))?.agent_daily_budget;
   const limit = own == null ? settings.agentDailyBudget : Math.min(settings.agentDailyBudget, Number(own));
-  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
+  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and status in ('ok','error') and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
   return Math.max(0, limit - used.c);
 }
 

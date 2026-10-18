@@ -215,8 +215,11 @@ export async function projectRoutes(app: FastifyInstance) {
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
       const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
+      // Die verantwortliche PL übergibt ihre Rolle nur selbst: eine Stellvertretung macht weder sich noch andere zur verantwortlichen PL und ändert deren Mitgliedschaft nicht
+      const handover = b.role === 'pl' && !isDeputy && primary && primary.user_id !== req.params.userId;
+      if (primary && primary.user_id !== user.id && (handover || primary.user_id === req.params.userId)) throw forbidden('Die verantwortliche PL übergibt ihre Rolle nur selbst');
       let transferred = 0;
-      if (b.role === 'pl' && !isDeputy && primary && primary.user_id !== req.params.userId) {
+      if (handover) {
         await db.query(`update project_members set is_deputy = true where project_id = $1 and user_id = $2`, [req.params.id, primary.user_id]);
         // Geerbte Zuständigkeiten folgen automatisch; direkt zugewiesene nur auf Wunsch
         if (b.transferTasks) {
@@ -226,7 +229,7 @@ export async function projectRoutes(app: FastifyInstance) {
           transferred = t1.rows.length + t2.rows.length;
         }
       }
-      if (primary && primary.user_id === req.params.userId && b.role !== 'pl') {
+      if (primary && primary.user_id === req.params.userId && (b.role !== 'pl' || isDeputy)) {
         // Nachfolge nur durch eine Person (Agenten sind nie verantwortliche PL)
         const other = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.user_id <> $2 and u.kind <> 'agent' and u.active order by m.created_at limit 1`, [req.params.id, req.params.userId]);
         if (!other) throw badRequest('Das Projekt braucht einen PL. Erst einen zweiten PL bestimmen.');

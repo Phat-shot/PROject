@@ -228,3 +228,21 @@ test('Ereignisläufe halten das Tagesbudget ein', async () => {
   assert.equal((await t.db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= current_date`, [morton.id])).c, used, 'kein Lauf über dem Budget');
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
 });
+
+test('Anlass im Prompt: Änderung seit dem letzten Lauf und regelmäßige Durchsicht haben eigene Texte', async () => {
+  const ap = await t.db.one(`select id from tasks where title = 'Teilprojekt durchplanen'`);
+  next = [A({ type: 'none', reason: 'x' })];
+  const promptOf = (from: number) => String(calls.slice(from).find((c) => c.response_format && String(c.messages[1].content).includes('„Teilprojekt durchplanen“ · Status'))?.messages[1].content ?? '');
+  const lastTrigger = async () => (await t.db.one(`select trigger from agent_runs where task_id = $1 order by created_at desc limit 1`, [ap.id])).trigger;
+  // Kommentar ohne Sofortlauf (z. B. während einer Pause): der Worker erkennt die Änderung am Fingerabdruck
+  await t.db.query(`insert into task_comments (task_id, user_id, body) values ($1,$2,'Elektriker kommt am Dienstag.')`, [ap.id, t.ids.users.pl]);
+  let before = calls.length;
+  await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 3600_000));
+  assert.equal(await lastTrigger(), 'changed');
+  assert.match(promptOf(before), /Anlass dieses Laufs: Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert/);
+  // Drei Tage ohne Lauf und ohne Änderung: regelmäßige Durchsicht
+  before = calls.length;
+  await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 73 * 3600_000));
+  assert.equal(await lastTrigger(), 'periodic');
+  assert.match(promptOf(before), /Anlass dieses Laufs: Regelmäßige Durchsicht: seit drei Tagen kein Lauf/);
+});

@@ -6,6 +6,8 @@ import { flushAgentRuns } from '../src/ai/agentEvents.js';
 /** Lokales LLM: Chat-Läufe (erkennbar am System-Prompt) bekommen reply/notes, Arbeitspaket-Läufe keine Aktion. */
 const prompts: string[] = [];
 let nextNotes: { taskId: string; text: string }[] = [];
+/** Solange gesetzt, wartet ein Chat-Lauf nach dem Prompt auf die Freigabe (Lauf „läuft gerade“). */
+let gate: Promise<void> | null = null;
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
@@ -14,6 +16,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
   let content = 'bereit';
   if (body.response_format && system.includes('Man erreicht dich im Chat')) {
     prompts.push(user);
+    if (gate) await gate;
     content = JSON.stringify({ reply: 'Das Angebot liegt vor, ich kläre die Lizenzen.', notes: nextNotes });
     nextNotes = [];
   } else if (body.response_format) content = JSON.stringify({ note: 'nichts zu tun', actions: [{ type: 'none', reason: 'Test' }] });
@@ -100,4 +103,28 @@ test('Messenger: Gesprächsliste mit Projektkanälen und Direktnachrichten, Such
   assert.equal((await t.api(leser).get('/chat/search?q=Lizenzfrage')).json().messages.length, 0, 'fremde Direktnachrichten nicht');
   assert.equal((await t.api(leser).get('/chat/search?q=Allgemeine')).json().messages.length, 1, 'Projektkanal für Mitglieder');
   assert.equal((await t.api(max).get('/chat/search?q=%25')).json().messages.length, 0, 'Platzhalter werden maskiert');
+});
+
+test('Nachrichten während eines Chat-Laufs gehen nicht verloren: genau ein Folgelauf, der den Verlauf neu liest', async () => {
+  const max = await t.login('max@demo.local');
+  const agent = await t.db.one(`select id from users where name = 'Chatty' and kind = 'agent'`);
+  const cid = (await t.api(max).post('/chat/dm', { userId: agent.id })).json().channelId;
+  const replies = async () => (await t.api(max).get(`/chat/channels/${cid}/messages`)).json().messages.filter((m: any) => m.userId === agent.id).length;
+  const r0 = await replies();
+  let release!: () => void;
+  gate = new Promise<void>((r) => { release = r; });
+  const n0 = prompts.length;
+  await t.api(max).post(`/chat/channels/${cid}/messages`, { body: 'Erste Frage: Wann kommt das Angebot?' });
+  // Der Lauf hat begonnen und wartet auf das Modell; jetzt kommen zwei weitere Nachrichten
+  for (let i = 0; i < 400 && prompts.length === n0; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(prompts.length, n0 + 1, 'erster Lauf läuft');
+  await t.api(max).post(`/chat/channels/${cid}/messages`, { body: 'Zweite Frage: Wer prüft es?' });
+  await t.api(max).post(`/chat/channels/${cid}/messages`, { body: 'Dritte Frage: Bis wann?' });
+  gate = null;
+  release();
+  await flushAgentRuns();
+  assert.equal(prompts.length, n0 + 2, 'genau ein Folgelauf für beide Nachrichten');
+  assert.ok(!prompts[n0].includes('Zweite Frage'));
+  assert.match(prompts[n0 + 1], /Erste Frage[\s\S]*Zweite Frage[\s\S]*Dritte Frage/, 'Folgelauf liest den Verlauf neu');
+  assert.equal(await replies(), r0 + 2);
 });

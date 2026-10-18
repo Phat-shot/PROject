@@ -11,9 +11,11 @@ export interface NotifyInput {
   dedupeKey?: string | null;
 }
 
+/** Einziger Weg in die Meldungen; KI-Agenten und deaktivierte Benutzer bekommen keine. */
 export async function notify(db: Db, n: NotifyInput): Promise<void> {
   await db.query(
-    `insert into notifications (user_id, project_id, type, title, body, link, dedupe_key) values ($1,$2,$3,$4,$5,$6,$7)
+    `insert into notifications (user_id, project_id, type, title, body, link, dedupe_key)
+     select u.id, $2::uuid, $3::text, $4::text, $5::text, $6::text, $7::text from users u where u.id = $1::uuid and u.active and u.kind <> 'agent'
      on conflict (user_id, dedupe_key) where dedupe_key is not null do nothing`,
     [n.userId, n.projectId ?? null, n.type, n.title, n.body ?? null, n.link ?? null, n.dedupeKey ?? null]
   );

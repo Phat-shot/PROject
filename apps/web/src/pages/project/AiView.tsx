@@ -20,6 +20,8 @@ export function AiView() {
   const base = `/projekte/${pid}`;
   const isPl = detail.project.myMembership.role === 'pl';
   const canUse = isPl || detail.project.myMembership.canUseAi;
+  // Leser mit „KI nutzen“ stellen nur Fragen ans Projekt
+  const canAssist = canUse && detail.project.myMembership.role !== 'reader';
   const [status, setStatus] = useState<'pending' | 'all'>('pending');
   const props = useData<{ proposals: AiProposal[]; canApprove: boolean }>(`/projects/${pid}/ai/proposals?status=${status}`, [status]);
   const [question, setQuestion] = useState('');
@@ -106,7 +108,7 @@ export function AiView() {
       <div className="card">
         <h2>Statusbericht-Entwurf</h2>
         <p className="muted small">Aus den Kennzahlen des Regelwerks, dem RAID-Register, der Ampel und den Log-Einträgen der letzten zwei Wochen entsteht ein Entwurf (Management-Summary, Fortschritt, Risiken, Entscheidungsbedarf, nächste Schritte) als Seite im Ordner „Berichte“ mit Status Entwurf. Versand wie gewohnt über das Reporting.</p>
-        <button className="btn primary" disabled={busy || !canUse} onClick={() => void run(async () => { const r = await api.post<{ page: { id: string } }>(`/projects/${pid}/ai/status-report`); nav(`${base}/doku/${r.page.id}`); })}>Entwurf erzeugen</button>
+        <button className="btn primary" disabled={busy || !canAssist} title={canUse && !canAssist ? 'Leser stellen nur Fragen ans Projekt' : undefined} onClick={() => void run(async () => { const r = await api.post<{ page: { id: string } }>(`/projects/${pid}/ai/status-report`); nav(`${base}/doku/${r.page.id}`); })}>Entwurf erzeugen</button>
       </div>
     </div>
   );

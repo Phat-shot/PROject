@@ -33,6 +33,8 @@ export function MembersView() {
   const dialog = useDialog();
   const nav = useNavigate();
   const isPl = me.role === 'pl';
+  // Die verantwortliche PL übergibt ihre Rolle nur selbst; die Stellvertretung ändert deren Mitgliedschaft nicht
+  const isPrimary = isPl && !me.isDeputy;
   return (
     <div className="content settings">
       <nav className="section-nav">
@@ -54,7 +56,7 @@ export function MembersView() {
                   <td>{m.name}<div className="muted small">{m.email}</div></td>
                   <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
                   <td className="small muted">{m.role === 'pl' ? 'alle' : [m.canEditPlan && 'Projektplan ändern', m.canApprove && 'KI-Vorschläge freigeben', m.canFinalize && 'Final setzen / Versand', m.canUseAi && 'KI nutzen'].filter(Boolean).join(', ') || '–'}</td>
-                  <td className="nowrap">{isPl && <><button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
+                  <td className="nowrap">{isPl && <>{(isPrimary || !(m.role === 'pl' && !m.isDeputy)) && <button className="btn sm link" onClick={() => setEdit(m)}>Rolle</button>}{!(m.role === 'pl' && !m.isDeputy) && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Mitglied entfernen', text: `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${detail.project.id}/members/${m.userId}`); await reload(); }); })}>Entfernen</button>}</>}</td>
                 </tr>
               ))}
             </tbody></table>
@@ -142,7 +144,9 @@ export function MembersView() {
           {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
           {isAgent && <div className="notice small">KI-Agent: handelt bei Arbeitspaketen und Aufgaben, für die er zuständig ist (direkt oder geerbt, z. B. als Teilprojekt-Verantwortung), und schreibt Log-Einträge unter seinem Namen. Als stellvertretende PL plant er im ganzen Projekt (Teilprojekte, Arbeitspakete, Aufgaben, Zuweisungen, Termine), verwaltet aber keine Mitglieder, Rechte oder Einstellungen und legt keine Projekte an.<label className="field" style={{ marginTop: 6 }}><span>Rolle</span><select value={f.role === 'pl' ? 'pl' : 'member'} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL</option></select></label><label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
           {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
-          {!isAgent && f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
+          {!isAgent && f.role === 'pl' && (isPrimary
+            ? <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>
+            : <div className="muted small">Als Stellvertretung (zweiter PL). Die verantwortliche PL übergibt ihre Rolle nur selbst.</div>)}
           {!isAgent && f.role === 'member' && <>
             <strong className="small">Zusätzliche Rechte</strong>
             <label className="check"><input type="checkbox" checked={f.canEditPlan} onChange={(e) => setF({ ...f, canEditPlan: e.target.checked })} /> Projektplan, Meilensteine ändern</label>
@@ -153,9 +157,10 @@ export function MembersView() {
           {!isAgent && f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
-            const body: Record<string, unknown> = isAgent ? { role: f.role === 'pl' ? 'pl' : 'member', isDeputy: true, agentCanMail, canFinalize: f.canFinalize } : { ...f };
+            const isDeputy = isPrimary ? f.isDeputy : true;
+            const body: Record<string, unknown> = isAgent ? { role: f.role === 'pl' ? 'pl' : 'member', isDeputy: true, agentCanMail, canFinalize: f.canFinalize } : { ...f, isDeputy };
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
-            if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
+            if (f.role === 'pl' && !isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
               if (direct > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt  zugewiesen. Auch an die neue Projektleitung übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
             }

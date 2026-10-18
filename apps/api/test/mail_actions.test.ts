@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
+import { flushAgentRuns, registerAgentRunner } from '../src/ai/agentEvents.js';
+import { runForTask } from '../src/ai/agent.js';
 
 const t = await testApp();
 test.after(() => t.close());
@@ -89,4 +91,43 @@ test('Anpassen mit Beleg nur mit Leserecht; Aktionskatalog spiegelt Rechte; Zusa
 
   const h = await t.app.inject({ method: 'GET', url: '/api/health' });
   assert.match(String(h.headers['content-security-policy']), /script-src 'self'/);
+});
+
+test('Entwurf eines Agenten ohne Ansicht: ändern und ablehnen darf, wer das Konto verwaltet; Ablehnen steht im Log und startet einen Lauf', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const admin = await t.login('admin@demo.local');
+  const web = t.ids.projects.web;
+  const agent = (await t.api(admin).post('/agents', { name: 'Entwerfer' })).json().agent;
+  await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member', agentCanMail: false });
+  // So legt der Agent ohne Senderecht einen Entwurf am Projektkonto an (ohne Ansicht)
+  const draft = async (subject: string) => (await t.db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status) values ($1,$2,$3,$4,'["lieferant@example.com"]','[]',$5,'Bitte um Angebot.','pending_approval') returning id`, [t.ids.accounts.project, t.ids.tasks.t2, web, agent.id, subject])).id as string;
+  const d1 = await draft('Anfrage Angebot');
+  // Mitglied ohne Kontoverwaltung: weder ändern noch ablehnen
+  assert.equal((await t.api(max).patch(`/mail/drafts/${d1}`, { body: 'anders' })).statusCode, 403);
+  assert.equal((await t.api(max).del(`/mail/drafts/${d1}`)).statusCode, 403);
+  // PL (verwaltet das Projektkonto): ändern
+  const ed = await t.api(pl).patch(`/mail/drafts/${d1}`, { subject: 'Anfrage Angebot (überarbeitet)' });
+  assert.equal(ed.statusCode, 200, ed.body);
+  assert.equal(ed.json().draft.subject, 'Anfrage Angebot (überarbeitet)');
+  // Ablehnen: Log-Eintrag am Arbeitspaket und Lauf des Agenten mit Anlass „rejected“
+  const runs: [string, string][] = [];
+  registerAgentRunner(async (taskId, trigger) => { runs.push([taskId, trigger]); });
+  try {
+    assert.equal((await t.api(pl).del(`/mail/drafts/${d1}`)).statusCode, 200);
+    await flushAgentRuns();
+    assert.deepEqual(runs, [[t.ids.tasks.t2, 'rejected']]);
+    const log = await t.db.one(`select body, source, user_id from task_comments where task_id = $1 order by created_at desc limit 1`, [t.ids.tasks.t2]);
+    assert.match(log.body, /Mail-Entwurf von Entwerfer an lieferant@example\.com abgelehnt \(nicht gesendet\): „Anfrage Angebot \(überarbeitet\)“/);
+    assert.equal(log.source, 'system');
+    assert.equal(log.user_id, t.ids.users.pl);
+    assert.equal(await t.db.maybeOne(`select 1 from mail_drafts where id = $1`, [d1]), null);
+    // Eigene Entwürfe von Personen: Löschen ist kein Ablehnen (kein Log, kein Lauf)
+    const own = (await t.api(pl).post('/mail/drafts', { accountId: t.ids.accounts.project, projectId: web, taskId: t.ids.tasks.t2, to: ['x@example.com'], subject: 'Eigener Entwurf', body: 'Text' })).json().draft;
+    assert.equal((await t.api(pl).del(`/mail/drafts/${own.id}`)).statusCode, 200);
+    await flushAgentRuns();
+    assert.equal(runs.length, 1);
+  } finally {
+    registerAgentRunner((taskId, trigger) => runForTask(t.db, t.mail, fetch, taskId, trigger));
+  }
 });

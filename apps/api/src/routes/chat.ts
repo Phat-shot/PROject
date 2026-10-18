@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { canSeeSubproject, requireProject } from '../rights.js';
+import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
 import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
@@ -56,18 +56,22 @@ export async function chatRoutes(app: FastifyInstance) {
     return { channel: c, membership: m };
   }
 
-  /** Zugriff auf einen Kanal: Projektkanal über Projektmitgliedschaft, DM über Kanalmitgliedschaft. */
+  /**
+   * Zugriff auf einen Kanal: Projektkanal über Projektmitgliedschaft, DM über Kanalmitgliedschaft. Im Projektkanal schreiben
+   * nur ausdrücklich eingetragene Mitglieder (auch Leser); implizite Leser (Sichtbarkeit „alle Benutzer“) lesen nur mit.
+   */
   async function channelAccess(user: any, channelId: string) {
     const c = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, user.orgId]);
     if (!c) throw notFound('Kanal nicht gefunden');
     if (c.kind === 'project') {
       const m = await requireProject(db, user, c.project_id, 'reader');
-      return { channel: c, isPl: m.role === 'pl' };
+      return { channel: c, isPl: m.role === 'pl', canWrite: Boolean(await getMembership(db, c.project_id, user.id)) };
     }
     const cm = await db.maybeOne(`select 1 from chat_channel_members where channel_id = $1 and user_id = $2`, [c.id, user.id]);
     if (!cm) throw forbidden('Kein Teilnehmer dieses Chats');
-    return { channel: c, isPl: false };
+    return { channel: c, isPl: false, canWrite: true };
   }
+  const NO_WRITE = 'Im Projektkanal schreiben nur Mitglieder des Projekts';
 
   async function unreadCount(channelId: string, userId: string): Promise<number> {
     const r = await db.one(
@@ -99,22 +103,23 @@ export async function chatRoutes(app: FastifyInstance) {
     const page = await listMessages(channel.id, { threadId: req.query.thread ?? null, before: req.query.before ?? null });
     const unread = await unreadCount(channel.id, user.id);
     if (!req.query.before && !req.query.thread) await markRead(channel.id, user.id);
-    return { channel: { id: channel.id, kind: 'project', projectId: channel.project_id }, ...page, unread };
+    return { channel: { id: channel.id, kind: 'project', projectId: channel.project_id }, ...page, unread, canWrite: Boolean(await getMembership(db, req.params.id, user.id)) };
   });
 
   app.get<{ Params: { cid: string }; Querystring: { before?: string; thread?: string } }>('/chat/channels/:cid/messages', async (req) => {
     const user = requireUser(req);
-    const { channel } = await channelAccess(user, req.params.cid);
+    const { channel, canWrite } = await channelAccess(user, req.params.cid);
     const page = await listMessages(channel.id, { threadId: req.query.thread ?? null, before: req.query.before ?? null });
     if (!req.query.before && !req.query.thread) await markRead(channel.id, user.id);
-    return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page };
+    return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite };
   });
 
   // Nachricht senden (optional als Antwort in einem Thread)
   app.post<{ Params: { cid: string }; Body: { body: string; threadId?: string | null } }>('/chat/channels/:cid/messages', async (req) => {
     const user = requireUser(req);
     if (user.kind === 'agent') throw forbidden('KI-Agenten schreiben nicht im Chat');
-    const { channel } = await channelAccess(user, req.params.cid);
+    const { channel, canWrite } = await channelAccess(user, req.params.cid);
+    if (!canWrite) throw forbidden(NO_WRITE);
     const body = String(req.body?.body ?? '').trim();
     if (!body) throw badRequest('Nachricht leer');
     if (body.length > 8000) throw badRequest('Nachricht zu lang (max. 8000 Zeichen)');
@@ -172,8 +177,9 @@ export async function chatRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const m = await db.maybeOne(`select * from chat_messages where id = $1 and deleted_at is null`, [req.params.mid]);
     if (!m) throw notFound('Nachricht nicht gefunden');
-    await channelAccess(user, m.channel_id);
+    const { canWrite } = await channelAccess(user, m.channel_id);
     if (m.user_id !== user.id) throw forbidden('Nur eigene Nachrichten lassen sich bearbeiten');
+    if (!canWrite) throw forbidden(NO_WRITE);
     const body = String(req.body?.body ?? '').trim();
     if (!body) throw badRequest('Nachricht leer');
     const u = await db.one(`update chat_messages set body = $2, edited_at = now() where id = $1 returning *`, [m.id, body]);

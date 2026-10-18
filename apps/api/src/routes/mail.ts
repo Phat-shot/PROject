@@ -857,9 +857,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!d) throw notFound('Entwurf nicht gefunden');
     if (d.status === 'sent') throw badRequest('Bereits gesendet');
     const m = await requireProject(db, user, d.project_id, 'member');
-    let allowed = d.user_id === user.id;
-    if (!allowed && d.view_id) allowed = (await getViewRights(db, d.view_id, user, m)).canSend;
-    if (!allowed) throw forbidden();
+    if (!(await mayDecideDraft(d, user, m))) throw forbidden();
     const b = req.body ?? {};
     await db.query(
       `update mail_drafts set to_addrs = coalesce($2::jsonb, to_addrs), cc_addrs = coalesce($3::jsonb, cc_addrs), subject = coalesce($4, subject), body = coalesce($5, body), updated_at = now() where id = $1`,
@@ -895,13 +893,24 @@ export async function mailRoutes(app: FastifyInstance) {
     const d = await db.maybeOne(`select * from mail_drafts where id = $1`, [req.params.did]);
     if (!d) throw notFound('Entwurf nicht gefunden');
     const m = await requireProject(db, user, d.project_id, 'member');
-    let allowed = d.user_id === user.id;
-    if (!allowed && d.view_id) allowed = (await getViewRights(db, d.view_id, user, m)).canSend;
-    if (!allowed) throw forbidden();
+    if (!(await mayDecideDraft(d, user, m))) throw forbidden();
     await db.query(`delete from mail_drafts where id = $1`, [d.id]);
     await audit(db, { orgId: user.orgId, projectId: d.project_id, userId: user.id, action: 'mail.draft_rejected', objectType: 'mail_draft', objectId: d.id, details: { subject: d.subject, by: user.id === d.user_id ? 'author' : 'approver' } });
+    // Entwurf eines Agenten abgelehnt: steht im Log des Arbeitspakets, der Agent läuft daraufhin erneut
+    const author = d.user_id !== user.id && d.status !== 'sent' && d.task_id ? await db.maybeOne(`select name from users where id = $1 and kind = 'agent'`, [d.user_id]) : null;
+    if (author) {
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [d.task_id, user.id, `Mail-Entwurf von ${author.name} an ${(d.to_addrs ?? []).join(', ')} abgelehnt (nicht gesendet): „${d.subject}“`]);
+      queueAgentRun(d.task_id, 'rejected');
+    }
     return { ok: true };
   });
+
+  /** Entwurf ändern, senden oder ablehnen: die verfassende Person, an einer Ansicht wer dort senden darf, ohne Ansicht (Entwürfe von Agenten am Projektkonto) wer das Konto verwaltet. */
+  async function mayDecideDraft(d: any, user: User, m: Awaited<ReturnType<typeof requireProject>>): Promise<boolean> {
+    if (d.user_id === user.id) return true;
+    if (d.view_id) return (await getViewRights(db, d.view_id, user, m)).canSend;
+    return canManageAccount(user, await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [d.account_id]));
+  }
 
   /** Wer an der Ansicht senden darf, erfährt von wartenden Entwürfen. */
   async function notifyApprovers(viewId: string | null, projectId: string, author: User, subject: string) {

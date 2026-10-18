@@ -69,3 +69,28 @@ test('Direktnachrichten: Gespräch anlegen oder wiederfinden, nur Teilnehmer les
   assert.equal(msgs.messages[0].body, 'Kurze Frage zum Budget.');
   assert.equal((await t.api(max).get('/chat/unread')).json().dm, 0);
 });
+
+test('Projektkanal: schreiben nur ausdrücklich eingetragene Mitglieder; implizite Leser (Sichtbarkeit „alle Benutzer“) lesen nur mit', async () => {
+  const anna = await t.login('anna@demo.local');
+  const leser = await t.login('leser@demo.local');
+  const erp = t.ids.projects.erp;
+  assert.equal((await t.api(anna).patch(`/projects/${erp}`, { visibility: 'org' })).statusCode, 200);
+  const ch = await t.api(leser).get(`/projects/${erp}/chat`);
+  assert.equal(ch.statusCode, 200, 'implizit lesend');
+  assert.equal(ch.json().canWrite, false);
+  const cid = ch.json().channel.id;
+  assert.equal((await t.api(leser).get(`/chat/channels/${cid}/messages`)).json().canWrite, false);
+  const denied = await t.api(leser).post(`/chat/channels/${cid}/messages`, { body: 'Darf ich hier schreiben?' });
+  assert.equal(denied.statusCode, 403);
+  assert.match(denied.json().error, /nur Mitglieder des Projekts/);
+  // Mitglied schreibt; Antwort im Thread durch den impliziten Leser ebenfalls gesperrt
+  const m = await t.api(anna).post(`/chat/channels/${cid}/messages`, { body: 'Kickoff am Montag.' });
+  assert.equal(m.statusCode, 200, m.body);
+  assert.equal((await t.api(anna).get(`/chat/channels/${cid}/messages`)).json().canWrite, true);
+  assert.equal((await t.api(leser).post(`/chat/channels/${cid}/messages`, { body: 'Danke', threadId: m.json().message.id })).statusCode, 403);
+  // Ausdrücklich eingetragene Leser schreiben weiter (WEB: leser ist Leser)
+  const web = (await t.api(leser).get(`/projects/${t.ids.projects.web}/chat`)).json();
+  assert.equal(web.canWrite, true);
+  assert.equal((await t.api(leser).post(`/chat/channels/${web.channel.id}/messages`, { body: 'Lese mit und frage nach.' })).statusCode, 200);
+  await t.api(anna).patch(`/projects/${erp}`, { visibility: 'members' });
+});

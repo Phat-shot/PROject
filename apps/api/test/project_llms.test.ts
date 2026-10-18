@@ -94,3 +94,35 @@ test('Neues Projekt ohne Agent; Agenten der PL nur auf Projekt-LLMs, Agenten des
   assert.equal(await aiConfigForAgent(t.db, a.id), null, 'gesperrtes LLM: Agent läuft nicht');
   assert.equal((await t.api(admin).post('/agents', { name: 'Org', aiProfileId: lid })).statusCode, 400, 'Org-Agenten nur auf Mandantenprofilen');
 });
+
+test('Eigenes Anthropic-LLM eines Projekts nutzt nie ANTHROPIC_API_KEY; Verbindungstest nur, solange eigene LLMs erlaubt sind', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const pers = (await t.db.one(`select id from projects where key = 'PERS'`)).id;
+  process.env.ANTHROPIC_API_KEY = 'server-schluessel';
+  try {
+    // Profil des Mandanten ohne eigenen Schlüssel: Server-Schlüssel gilt
+    const org = (await t.api(admin).post('/ai/profiles', { name: 'Claude Mandant', provider: 'anthropic' })).json().profile;
+    assert.equal(org.hasKey, true);
+    // Eigenes LLM des Projekts ohne Schlüssel: kein Rückgriff auf den Server-Schlüssel
+    const own = await t.api(pl).post(`/projects/${pers}/llms`, { name: 'Claude eigen', provider: 'anthropic' });
+    assert.equal(own.statusCode, 200, own.body);
+    const lid = own.json().llm.id;
+    assert.equal(own.json().llm.hasKey, false);
+    const test1 = await t.api(pl).post(`/projects/${pers}/llms/${lid}/test`);
+    assert.equal(test1.statusCode, 400);
+    assert.match(test1.json().error, /unvollständig/);
+    assert.equal((await t.api(pl).patch(`/projects/${pers}`, { aiProfileId: lid })).statusCode, 200);
+    assert.equal(await aiConfigForProject(t.db, pers), null, 'Projekt-KI bleibt ohne eigenen Schlüssel aus');
+    // Mit eigenem Schlüssel nutzbar; schaltet der Mandant eigene LLMs ab, ist auch der Verbindungstest gesperrt
+    await t.api(pl).patch(`/projects/${pers}/llms/${lid}`, { apiKey: 'projekt-schluessel' });
+    assert.equal((await aiConfigForProject(t.db, pers))?.apiKey, 'projekt-schluessel');
+    await t.api(admin).put('/ai/settings', { ownLlm: 'off' });
+    const test2 = await t.api(pl).post(`/projects/${pers}/llms/${lid}/test`);
+    assert.equal(test2.statusCode, 403);
+    assert.match(test2.json().error, /nicht freigegeben/);
+    await t.api(admin).put('/ai/settings', { ownLlm: 'personal' });
+  } finally {
+    delete process.env.ANTHROPIC_API_KEY;
+  }
+});

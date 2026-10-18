@@ -601,3 +601,49 @@ test('Mails zu Tasks: Nachfrage wird dem Task zugeordnet, Antwort erbt die Zuord
   assert.ok(back && back.checklistItemId === item.id, 'Antwort erbt den Task-Bezug');
   assert.equal(back.snippet, 'Kommt morgen.');
 });
+
+test('Stellvertretung macht sich nicht selbst zur verantwortlichen PL; die verantwortliche PL übergibt nur selbst', async () => {
+  const pl = await t.login('pl@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const web = t.ids.projects.web;
+  const primaries = async () => (await t.db.query(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [web])).rows.map((r: any) => r.user_id);
+  // Stellvertretung: weder sich selbst noch andere zur verantwortlichen PL; die verantwortliche PL ändert sie nicht
+  for (const [uid, body] of [[t.ids.users.anna, { role: 'pl', isDeputy: false }], [t.ids.users.max, { role: 'pl', isDeputy: false }], [t.ids.users.pl, { role: 'member' }], [t.ids.users.pl, { role: 'pl', isDeputy: true }]] as const) {
+    const r = await t.api(anna).put(`/projects/${web}/members/${uid}`, body);
+    assert.equal(r.statusCode, 403, `${uid} ${JSON.stringify(body)}`);
+    assert.match(r.json().error, /übergibt ihre Rolle nur selbst/);
+  }
+  assert.deepEqual(await primaries(), [t.ids.users.pl]);
+  // Übrige Mitglieder pflegt die Stellvertretung weiter
+  assert.equal((await t.api(anna).put(`/projects/${web}/members/${t.ids.users.max}`, { role: 'member', canEditPlan: true, canUseAi: true })).statusCode, 200);
+  // Die verantwortliche PL übergibt selbst; danach ist sie Stellvertretung und kann die Rolle nicht zurücknehmen
+  assert.equal((await t.api(pl).put(`/projects/${web}/members/${t.ids.users.anna}`, { role: 'pl', isDeputy: false })).statusCode, 200);
+  assert.deepEqual(await primaries(), [t.ids.users.anna]);
+  assert.equal((await t.api(pl).put(`/projects/${web}/members/${t.ids.users.pl}`, { role: 'pl', isDeputy: false })).statusCode, 403);
+  // Wechselt die verantwortliche PL selbst in die Stellvertretung, folgt die andere PL nach (nie ein Projekt ohne verantwortliche PL)
+  assert.equal((await t.api(anna).put(`/projects/${web}/members/${t.ids.users.anna}`, { role: 'pl', isDeputy: true })).statusCode, 200);
+  assert.deepEqual(await primaries(), [t.ids.users.pl]);
+});
+
+test('Meldungen nur an aktive Personen: KI-Agenten und deaktivierte Benutzer bekommen keine', async () => {
+  const pl = await t.login('pl@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const admin = await t.login('admin@demo.local');
+  const web = t.ids.projects.web;
+  const agent = (await t.api(admin).post('/agents', { name: 'Leiser' })).json().agent;
+  await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' });
+  const count = async (uid: string) => (await t.db.one(`select count(*)::int as n from notifications where user_id = $1`, [uid])).n;
+  // Zuweisung an den Agenten und Kommentare an seinem AP (er hat dort selbst geschrieben): keine Meldung an ihn
+  const task = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Meldungstest', responsibleUserId: agent.id })).json().task;
+  await t.db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,'Stand geprüft','ai')`, [task.id, agent.id]);
+  await t.api(anna).post(`/tasks/${task.id}/comments`, { body: 'Ich schaue auch drauf.' });
+  const n0 = await count(t.ids.users.anna);
+  await t.api(pl).post(`/tasks/${task.id}/comments`, { body: 'Bitte bis Freitag.' });
+  assert.equal(await count(agent.id), 0, 'Agent bekommt keine Meldungen');
+  assert.equal(await count(t.ids.users.anna), n0 + 1, 'aktive Person schon');
+  // Deaktiviert: keine neuen Meldungen mehr
+  await t.db.query(`update users set active = false where id = $1`, [t.ids.users.anna]);
+  await t.api(pl).post(`/tasks/${task.id}/comments`, { body: 'Noch ein Hinweis.' });
+  assert.equal(await count(t.ids.users.anna), n0 + 1);
+  await t.db.query(`update users set active = true where id = $1`, [t.ids.users.anna]);
+});

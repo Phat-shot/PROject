@@ -3,13 +3,14 @@ import { Link, useLocation, useSearchParams } from 'react-router-dom';
 import type { Notification, Project, TimeEntry } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { useAuth } from '../lib/auth';
-import { fmtDate, fmtDateTime, today } from '../lib/api';
+import { fmtDate, today } from '../lib/api';
 import { TopBar } from '../components/Layout';
 import { buildWorkTree, useShowDone, WorkTree, type WorkItem, type WorkProject } from './WorkTree';
 import { PortfolioView } from './PortfolioPage';
 import { AllTasksView } from './AllTasksPage';
 import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
+import { NotificationRow } from '../components/Notifications';
 
 /**
  * Dashboard (nur global, filterbar nach Projekt über ?projekt=): Reiter Meine Arbeit, Projekte (Ampel, Fortschritt,
@@ -138,7 +139,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
           </div>
           <div className="card">
             <h2>Meldungen {notes.data && notes.data.unread > 0 && <span className="badge warn">{notes.data.unread} neu</span>}</h2>
-            {(notes.data?.notifications ?? []).slice(0, 6).map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} style={{ padding: '6px 0' }}><div className="t">{n.link ? <Link to={n.link}>{n.title}</Link> : n.title}</div><div className="b muted small">{fmtDateTime(n.createdAt)}</div></div>)}
+            {(notes.data?.notifications ?? []).slice(0, 6).map((n) => <NotificationRow key={n.id} n={n} onOpened={() => void notes.reload()} />)}
             {notes.data && notes.data.notifications.length === 0 && <div className="muted small">Keine Meldungen.</div>}
           </div>
         </div>

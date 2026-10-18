@@ -7,7 +7,8 @@ import { Tour, tourDone } from './Tour';
 import { useAiStatus } from '../lib/useAi';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useIsMobile } from '../lib/useMedia';
-import { Messenger, MessengerCtx, useOpenChat } from './Messenger';
+import { Messenger, MessengerCtx } from './Messenger';
+import { useOpenNotification } from './Notifications';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -167,18 +168,13 @@ export function TopBar({ title, children, tabs }: { title: ReactNode; children?:
 function Bell() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
-  const nav = useNavigate();
-  const openChat = useOpenChat();
+  const openNotification = useOpenNotification();
   const load = () => api.get<{ notifications: Notification[]; unread: number }>('/notifications').then(setData).catch(() => undefined);
   useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, []);
   const go = async (n: Notification) => {
-    await api.post('/notifications/read', { ids: [n.id] });
     setOpen(false);
+    await openNotification(n);
     await load();
-    // Chat-Links öffnen den Messenger (Desktop als Overlay), alte Projektchat-Links eingeschlossen
-    const m = n.link?.match(/^\/chat\/([0-9a-f-]{36})(?:\?thread=([0-9a-f-]{36}))?/);
-    if (m) { openChat(m[1], m[2] ?? null); return; }
-    if (n.link) nav(n.link);
   };
   return (
     <div className="bell" style={{ position: 'relative' }}>

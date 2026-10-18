@@ -5,7 +5,7 @@ import { MentionInput, MentionText } from './MentionInput';
 import { useDialog } from './ui';
 
 export interface ChatMessage { id: string; channelId: string; userId: string; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean }
-interface Page { messages: ChatMessage[]; hasMore: boolean }
+interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
 interface Member { userId: string; name: string }
 
 const dayLabel = (iso: string) => new Date(iso).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -13,7 +13,8 @@ const timeLabel = (iso: string) => new Date(iso).toLocaleTimeString('de-DE', { h
 
 /**
  * Kanalansicht: Nachrichten (nach Tag gruppiert), Thread rechts, Eingabe mit @Erwähnung.
- * Holt alle 5 s neue Nachrichten; „Ältere laden“ blättert zurück.
+ * Holt alle 5 s neue Nachrichten und die Antworten des gerade offenen Threads; „Ältere laden“ blättert zurück.
+ * Wer im Projektkanal nur mitliest (implizite Leser), sieht statt der Eingabe einen Hinweis.
  */
 export function ChatPane({ channelId, members, canModerate, placeholder, initialThread, onThreadChange, onSent, emptyText, threads = true }: {
   channelId: string; members: Member[]; canModerate?: boolean; placeholder?: string; initialThread?: string | null; onThreadChange?: (id: string | null) => void; onSent?: () => void; emptyText?: string; threads?: boolean;
@@ -23,6 +24,9 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const [msgs, setMsgs] = useState<ChatMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [thread, setThread] = useState<string | null>(initialThread ?? null);
+  // Das Intervall läuft je Kanal einmal; den aktuell offenen Thread liest es über die Referenz statt aus dem Closure
+  const threadRef = useRef<string | null>(thread);
+  const [canWrite, setCanWrite] = useState(true);
   const [replies, setReplies] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [reply, setReply] = useState('');
@@ -35,14 +39,14 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const load = async () => {
     try {
       const p = await api.get<Page>(base);
-      setMsgs(p.messages); setHasMore(p.hasMore); setError(null);
+      setMsgs(p.messages); setHasMore(p.hasMore); setCanWrite(p.canWrite !== false); setError(null);
     } catch (e) { setError((e as Error).message); }
   };
   const loadThread = async (id: string) => {
     try { setReplies((await api.get<Page>(`${base}?thread=${id}`)).messages); } catch (e) { setError((e as Error).message); }
   };
-  useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (thread) void loadThread(thread); }, 5000); return () => clearInterval(h); }, [channelId]);
-  useEffect(() => { if (thread) void loadThread(thread); else setReplies([]); onThreadChange?.(thread); }, [thread]);
+  useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (threadRef.current) void loadThread(threadRef.current); }, 5000); return () => clearInterval(h); }, [channelId]);
+  useEffect(() => { threadRef.current = thread; if (thread) void loadThread(thread); else setReplies([]); onThreadChange?.(thread); }, [thread]);
   // Thread von außen öffnen (z. B. Suchtreffer im Messenger), ohne den Kanal neu zu laden
   useEffect(() => { if (initialThread !== undefined && (initialThread ?? null) !== thread) setThread(initialThread ?? null); }, [initialThread]);
   useEffect(() => { const el = listRef.current; if (el && stickBottom.current) el.scrollTop = el.scrollHeight; }, [msgs.length]);
@@ -98,20 +102,20 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           {msgs.length === 0 && <div className="muted small center" style={{ padding: 24 }}>{emptyText ?? 'Noch keine Nachrichten.'}</div>}
           {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}<Msg m={m} inThread={false} /></div>; })}
         </div>
-        <div className="chat-compose">
+        {canWrite ? <div className="chat-compose">
           <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (@Name erwähnt, Strg+Enter sendet)'} onSubmit={() => void send(text, null)} />
           <button className="btn primary" disabled={!text.trim()} onClick={() => void send(text, null)}>Senden</button>
-        </div>
+        </div> : <div className="muted small chat-compose">Im Projektkanal schreiben nur Mitglieder des Projekts; du liest mit.</div>}
       </div>
       {thread && (
         <div className="chat-thread">
           <div className="row between mb"><strong>Thread</strong><button className="btn sm" onClick={() => setThread(null)}>✕</button></div>
           {root ? <Msg m={root} inThread /> : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
           <div className="chat-replies">{replies.map((m) => <Msg key={m.id} m={m} inThread />)}</div>
-          <div className="chat-compose">
+          {canWrite && <div className="chat-compose">
             <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten …" onSubmit={() => void send(reply, thread)} />
             <button className="btn primary" disabled={!reply.trim()} onClick={() => void send(reply, thread)}>Antworten</button>
-          </div>
+          </div>}
         </div>
       )}
     </div>

@@ -154,3 +154,27 @@ test('Statusbericht-Entwurf als Entwurfsseite in „Berichte“; Frage ans Proje
   const leser = await t.login('leser@demo.local');
   assert.equal((await t.api(leser).post(`/projects/${t.ids.projects.web}/ai/ask`, { question: 'Was läuft?' })).statusCode, 403);
 });
+
+test('Frage ans Projekt: Leser mit „KI nutzen“ dürfen fragen (sonst nichts), implizite Leser nicht; Tagesbudget 0 bleibt 0', async () => {
+  const pl = await t.login('pl@demo.local');
+  const leser = await t.login('leser@demo.local');
+  const admin = await t.login('admin@demo.local');
+  const web = t.ids.projects.web;
+  // Leser ohne „KI nutzen“: 403; mit: Frage ja, andere KI-Funktionen nein
+  assert.equal((await t.api(leser).post(`/projects/${web}/ai/ask`, { question: 'Von wem kam das Angebot?' })).statusCode, 403);
+  assert.equal((await t.api(pl).put(`/projects/${web}/members/${t.ids.users.leser}`, { role: 'reader', canUseAi: true })).statusCode, 200);
+  const ask = await t.api(leser).post(`/projects/${web}/ai/ask`, { question: 'Von wem kam das Angebot für das Design?' });
+  assert.equal(ask.statusCode, 200, ask.body);
+  assert.match(ask.json().answer, /Katrin Müller/);
+  assert.equal((await t.api(leser).post(`/projects/${web}/ai/status-report`)).statusCode, 403, 'Leser: nur Fragen');
+  // Implizite Leser (Sichtbarkeit „alle Benutzer des Mandanten“) lesen, haben aber keine KI
+  assert.equal((await t.api(pl).patch(`/projects/${web}`, { visibility: 'org' })).statusCode, 200);
+  assert.equal((await t.api(admin).get(`/projects/${web}`)).statusCode, 200, 'implizit lesend');
+  assert.equal((await t.api(admin).post(`/projects/${web}/ai/ask`, { question: 'Von wem kam das Angebot?' })).statusCode, 403);
+  await t.api(pl).patch(`/projects/${web}`, { visibility: 'members' });
+  await t.api(pl).put(`/projects/${web}/members/${t.ids.users.leser}`, { role: 'reader', canUseAi: false });
+  // Tagesbudget 0 heißt keine Agentenläufe (früher fiel 0 auf 50 zurück)
+  assert.equal((await t.api(admin).put('/ai/settings', { agentDailyBudget: 0 })).json().agentDailyBudget, 0);
+  assert.equal((await t.api(admin).get('/ai/status')).json().agentDailyBudget, 0);
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
+});

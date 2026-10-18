@@ -26,6 +26,8 @@ export async function aiRoutes(app: FastifyInstance) {
   const db = app.db;
   const cfgOrFail = async (projectId: string) => { const c = await aiConfigForProject(db, projectId); if (!c) throw badRequest('KI ist in diesem Projekt nicht aktiv. Die PL weist in den Projekteinstellungen ein KI-Profil zu (Profile verwaltet der Org-Admin).'); return c; };
   const canUse = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canUseAi) throw forbidden('Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)'); return m; };
+  /** Frage ans Projekt: auch Leser mit „KI nutzen“ (nur diese Funktion); implizite Leser (Sichtbarkeit „alle Benutzer“) haben keine KI. */
+  const canAsk = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'reader'); if (m.role !== 'pl' && !m.canUseAi) throw forbidden('Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)'); return m; };
   const canApprove = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe nur mit Recht „KI-Vorschläge freigeben“ oder als PL'); return m; };
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
@@ -129,6 +131,8 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string; lid: string } }>('/projects/:id/llms/:lid/test', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
+    // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt
+    if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)');
     const cfg = profileConfig(await ownOf(req.params.id, req.params.lid));
     if (!cfg) throw badRequest('LLM unvollständig, inaktiv oder vom Org-Admin gesperrt');
     const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
@@ -326,7 +330,7 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string }; Body: { question: string } }>('/projects/:id/ai/ask', async (req) => {
     const user = requireUser(req);
-    await canUse(user, req.params.id);
+    await canAsk(user, req.params.id);
     const q = req.body?.question?.trim();
     if (!q || q.length < 3) throw badRequest('Frage erforderlich');
     const cfg = await cfgOrFail(req.params.id);
