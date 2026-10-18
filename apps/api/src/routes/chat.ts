@@ -4,10 +4,12 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
 import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
+import { queueAgentChat } from '../ai/agentEvents.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
- * zwischen Personen des Mandanten. Ungelesen-Zähler über last_read_at je Kanal und Benutzer.
+ * zwischen Benutzern des Mandanten, auch mit KI-Agenten (sie antworten über queueAgentChat). Der reguläre Weg der
+ * Kommunikation zwischen Projektbeteiligten; Mail bleibt primär für Externe. Ungelesen-Zähler über last_read_at.
  */
 export interface ChatMessage { id: string; channelId: string; userId: string; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean }
 
@@ -104,29 +106,38 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     let mentions: string[] = [];
     const recipients = new Set<string>();
+    const agents = new Set<string>();
     if (channel.kind === 'project') {
-      const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'person'`, [channel.project_id]);
+      const members = await db.query(`select m.user_id, u.name, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active`, [channel.project_id]);
       mentions = extractMentions(body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
+      for (const r of members.rows) if (r.kind === 'agent' && mentions.includes(r.user_id)) agents.add(r.user_id);
+      // Antwort in einem Thread, in dem ein Agent schon geantwortet hat: der Agent bleibt im Gespräch
+      if (threadId) {
+        const inThread = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and u.kind = 'agent' and u.active and m.deleted_at is null`, [threadId]);
+        for (const a of inThread.rows) if (members.rows.some((x: any) => x.user_id === a.user_id)) agents.add(a.user_id);
+      }
     } else {
-      const others = await db.query(`select user_id from chat_channel_members where channel_id = $1 and user_id <> $2`, [channel.id, user.id]);
-      for (const o of others.rows) recipients.add(o.user_id);
+      const others = await db.query(`select m.user_id, u.kind, u.active from chat_channel_members m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id <> $2`, [channel.id, user.id]);
+      for (const o of others.rows) { if (o.kind === 'agent') { if (o.active) agents.add(o.user_id); } else recipients.add(o.user_id); }
     }
     const r = await db.one(`insert into chat_messages (channel_id, user_id, thread_id, body, mentions) values ($1,$2,$3,$4,$5) returning *`, [channel.id, user.id, threadId, body, JSON.stringify(mentions)]);
     await markRead(channel.id, user.id);
     const snippet = body.slice(0, 160);
+    const people = mentions.filter((m) => !agents.has(m));
     if (channel.kind === 'project') {
       const p = await db.one(`select key from projects where id = $1`, [channel.project_id]);
-      const link = `/projekte/${channel.project_id}/chat${threadId ? `?thread=${threadId}` : ''}`;
-      await notifyMany(db, mentions, { projectId: channel.project_id, type: 'chat.mention', title: `${user.name} hat dich im Chat ${p.key} erwähnt`, body: snippet, link }, user.id);
+      const link = `/chat/${channel.id}${threadId ? `?thread=${threadId}` : ''}`;
+      await notifyMany(db, people, { projectId: channel.project_id, type: 'chat.mention', title: `${user.name} hat dich im Chat ${p.key} erwähnt`, body: snippet, link }, user.id);
       if (threadId) {
-        // Thread-Beteiligte (Ersteller und Antwortende) ohne Erwähnte
-        const parts = await db.query(`select distinct user_id from chat_messages where (id = $1 or thread_id = $1) and user_id <> $2`, [threadId, user.id]);
+        // Thread-Beteiligte (Ersteller und Antwortende) ohne Erwähnte und ohne Agenten
+        const parts = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.user_id <> $2 and u.kind = 'person'`, [threadId, user.id]);
         const targets = parts.rows.map((x: any) => x.user_id as string).filter((u: string) => !mentions.includes(u));
         await notifyMany(db, targets, { projectId: channel.project_id, type: 'chat.reply', title: `Antwort im Chat ${p.key}`, body: `${user.name}: ${snippet}`, link, dedupeKey: null }, user.id);
       }
     } else {
       for (const to of recipients) await notify(db, { userId: to, projectId: null, type: 'chat.dm', title: `Nachricht von ${user.name}`, body: snippet, link: `/chat/${channel.id}` });
     }
+    for (const a of agents) queueAgentChat(a, channel.id, r.id);
     return { message: mapMessage({ ...r, user_name: user.name, reply_count: 0 }) };
   });
 
@@ -184,7 +195,6 @@ export async function chatRoutes(app: FastifyInstance) {
     if (user.kind === 'agent') throw forbidden('KI-Agenten chatten nicht');
     const other = await db.maybeOne(`select id, name, kind from users where id = $1 and org_id = $2 and active`, [req.body?.userId, user.orgId]);
     if (!other || other.id === user.id) throw badRequest('Gesprächspartner wählen');
-    if (other.kind === 'agent') throw badRequest('KI-Agenten erreichst du über ihre Arbeitspakete, nicht per Chat');
     const existing = await db.maybeOne(
       `select c.id from chat_channels c join chat_channel_members a on a.channel_id = c.id and a.user_id = $1 join chat_channel_members b on b.channel_id = c.id and b.user_id = $2 where c.kind = 'dm' and c.org_id = $3 limit 1`,
       [user.id, other.id, user.orgId]
@@ -212,11 +222,71 @@ export async function chatRoutes(app: FastifyInstance) {
     return { dm, projects, total: dm + Object.values(projects).reduce((a, b) => a + b, 0) };
   });
 
-  // Ist der Benutzer Mitglied? (für DM-Partnerwahl: alle aktiven Personen des Mandanten)
+  // Gesprächspartner für Direktnachrichten: alle aktiven Personen und KI-Agenten des Mandanten
   app.get('/chat/people', async (req) => {
     const user = requireUser(req);
-    const rows = await db.query(`select id, name, email from users where org_id = $1 and active and kind = 'person' and id <> $2 order by name`, [user.orgId, user.id]);
-    return { people: rows.rows.map((r: any) => ({ id: r.id, name: r.name, email: r.email })) };
+    const rows = await db.query(`select id, name, email, kind from users where org_id = $1 and active and id <> $2 order by kind desc, name`, [user.orgId, user.id]);
+    return { people: rows.rows.map((r: any) => ({ id: r.id, name: r.name, email: r.email, kind: r.kind })) };
+  });
+
+  // Messenger: alle Gespräche (Projektkanäle der aktiven Projekte, in denen ich Mitglied bin, und Direktnachrichten) nach letzter Aktivität
+  app.get('/chat/conversations', async (req) => {
+    const user = requireUser(req);
+    await db.query(
+      `insert into chat_channels (org_id, kind, project_id)
+       select p.org_id, 'project', p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1
+       where p.org_id = $2 and p.status = 'active' and p.kind = 'project' and not exists (select 1 from chat_channels c where c.project_id = p.id)
+       on conflict (project_id) where project_id is not null do nothing`,
+      [user.id, user.orgId]
+    );
+    const LAST = `(select json_build_object('body', m.body, 'at', m.created_at, 'user', u.name) from chat_messages m join users u on u.id = m.user_id where m.channel_id = c.id and m.deleted_at is null order by m.created_at desc limit 1)`;
+    const projects = await db.query(
+      `select c.id, p.id as project_id, p.key, p.name, ${LAST} as last
+       from chat_channels c join projects p on p.id = c.project_id join project_members pm on pm.project_id = p.id and pm.user_id = $1
+       where c.kind = 'project' and c.org_id = $2 and p.status = 'active' and p.kind = 'project'`,
+      [user.id, user.orgId]
+    );
+    const dms = await db.query(
+      `select c.id, u.id as partner_id, u.name as partner_name, u.email as partner_email, u.kind as partner_kind, u.active as partner_active, ${LAST} as last
+       from chat_channels c
+       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1
+       join chat_channel_members o on o.channel_id = c.id and o.user_id <> $1
+       join users u on u.id = o.user_id
+       where c.kind = 'dm' and c.org_id = $2`,
+      [user.id, user.orgId]
+    );
+    const lastOf = (r: any) => (typeof r.last === 'string' ? JSON.parse(r.last) : r.last) as { body: string; at: string; user: string } | null;
+    const out: any[] = [];
+    for (const r of projects.rows) {
+      const l = lastOf(r);
+      out.push({ channelId: r.id, kind: 'project', title: r.name, subtitle: r.key, projectId: r.project_id, projectKey: r.key, partner: null, lastBody: l ? String(l.body).slice(0, 120) : null, lastUser: l?.user ?? null, lastAt: l?.at ?? null, unread: await unreadCount(r.id, user.id) });
+    }
+    for (const r of dms.rows) {
+      const l = lastOf(r);
+      out.push({ channelId: r.id, kind: 'dm', title: r.partner_name, subtitle: r.partner_kind === 'agent' ? 'KI-Agent' : r.partner_email, projectId: null, projectKey: null, partner: { id: r.partner_id, name: r.partner_name, email: r.partner_email, kind: r.partner_kind, active: r.partner_active }, lastBody: l ? String(l.body).slice(0, 120) : null, lastUser: l?.user ?? null, lastAt: l?.at ?? null, unread: await unreadCount(r.id, user.id) });
+    }
+    const ts = (x: any) => (x.lastAt ? new Date(x.lastAt).getTime() : 0);
+    out.sort((a, b) => ts(b) - ts(a) || a.title.localeCompare(b.title, 'de'));
+    return { conversations: out };
+  });
+
+  // Suche über Nachrichten aller Gespräche, auf die ich Zugriff habe
+  app.get<{ Querystring: { q?: string } }>('/chat/search', async (req) => {
+    const user = requireUser(req);
+    const q = String(req.query.q ?? '').trim();
+    if (q.length < 2) return { messages: [] };
+    const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
+    const rows = await db.query(
+      `select m.id, m.channel_id, m.thread_id, m.body, m.created_at, u.name as user_name, c.kind, p.key as project_key, p.name as project_name,
+         (select ou.name from chat_channel_members om join users ou on ou.id = om.user_id where c.kind = 'dm' and om.channel_id = c.id and om.user_id <> $1 limit 1) as partner_name
+       from chat_messages m join users u on u.id = m.user_id join chat_channels c on c.id = m.channel_id left join projects p on p.id = c.project_id
+       where c.org_id = $2 and m.deleted_at is null and m.body ilike $3
+         and ((c.kind = 'dm' and exists (select 1 from chat_channel_members x where x.channel_id = c.id and x.user_id = $1))
+           or (c.kind = 'project' and p.status = 'active' and exists (select 1 from project_members pm where pm.project_id = c.project_id and pm.user_id = $1)))
+       order by m.created_at desc limit 30`,
+      [user.id, user.orgId, like]
+    );
+    return { messages: rows.rows.map((r: any) => ({ id: r.id, channelId: r.channel_id, threadId: r.thread_id, body: String(r.body).slice(0, 240), createdAt: r.created_at, userName: r.user_name, kind: r.kind, title: r.kind === 'project' ? r.project_name : r.partner_name, projectKey: r.project_key })) };
   });
 
 }

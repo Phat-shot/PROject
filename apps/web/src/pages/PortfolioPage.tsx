@@ -4,7 +4,6 @@ import type { ProjectHealth } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, fmtDateTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useData } from '../lib/useData';
-import { TopBar } from '../components/Layout';
 import { Modal, useAsync } from '../components/ui';
 
 interface Row {
@@ -19,16 +18,24 @@ interface Portfolio { projects: Row[]; workload: { userId: string; name: string;
 const COLOR_LABEL = { green: 'grün', yellow: 'gelb', red: 'rot' } as const;
 const rank = { red: 0, yellow: 1, green: 2 } as const;
 
-/** Portfolio: alle Projekte mit Ampel (manuell und berechnet), Fortschritt, Verzug, Meilenstein, Budget; Auslastung über Projekte. */
-export function PortfolioPage() {
+/**
+ * Dashboard › Projekte (früher Portfolio): alle Projekte mit Ampel (manuell und berechnet), Fortschritt, Verzug,
+ * Meilenstein, Budget; Auslastung und Zeiten über Projekte. Mit Projektfilter nur dieses Projekt.
+ */
+export function PortfolioView({ projectId }: { projectId: string | null }) {
   const d = useData<Portfolio>('/portfolio');
   const [edit, setEdit] = useState<Row | null>(null);
-  const rows = [...(d.data?.projects ?? [])].sort((a, b) => rank[a.health.color ?? a.computed] - rank[b.health.color ?? b.computed] || b.stats.overdue - a.stats.overdue);
+  const rows = [...(d.data?.projects ?? [])].filter((r) => !projectId || r.id === projectId).sort((a, b) => rank[a.health.color ?? a.computed] - rank[b.health.color ?? b.computed] || b.stats.overdue - a.stats.overdue);
   const effective = (r: Row) => r.health.color ?? r.computed;
+  const workload = (d.data?.workload ?? []).map((w) => {
+    if (!projectId) return w;
+    const key = rows[0]?.key;
+    const here = w.perProject.filter((p) => p.key === key);
+    return { ...w, open: here.reduce((a, p) => a + p.open, 0), perProject: here };
+  }).filter((w) => w.open > 0 || !projectId);
   return (
     <>
-      <TopBar title="Portfolio" />
-      <div className="content">
+      <div>
         {d.error && <div className="error mb">{d.error}</div>}
         <div className="kpis mb">
           {(['red', 'yellow', 'green'] as const).map((c) => <div key={c} className={`kpi ${c === 'red' ? 'bad' : c === 'yellow' ? 'warn' : 'ok'}`}><div className="v">{rows.filter((r) => effective(r) === c).length}</div><div className="l">Projekte {COLOR_LABEL[c]}</div></div>)}
@@ -68,15 +75,15 @@ export function PortfolioPage() {
         </div>
         <div className="card">
           <h2>Auslastung über alle Projekte <span className="muted small" style={{ fontWeight: 400 }}>offene Arbeitspakete je Person</span></h2>
-          {d.data && d.data.workload.length === 0 && <div className="muted small">Keine zugewiesenen Arbeitspakete.</div>}
-          {d.data && d.data.workload.length > 0 && (
+          {d.data && workload.length === 0 && <div className="muted small">Keine zugewiesenen Arbeitspakete.</div>}
+          {d.data && workload.length > 0 && (
             <table className="table"><thead><tr><th>Person</th><th>Offen</th><th>Überfällig</th><th>Je Projekt</th></tr></thead><tbody>
-              {d.data.workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td>{w.open}</td><td style={w.overdue ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{w.overdue}</td><td className="small">{w.perProject.map((p) => <span key={p.key} className="badge" style={{ marginRight: 4 }}>{p.key} {p.open}</span>)}</td></tr>)}
+              {workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td>{w.open}</td><td style={w.overdue && !projectId ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{projectId ? <span className="muted" title="Nur über alle Projekte ausgewertet">–</span> : w.overdue}</td><td className="small">{w.perProject.map((p) => <span key={p.key} className="badge" style={{ marginRight: 4 }}>{p.key} {p.open}</span>)}</td></tr>)}
             </tbody></table>
           )}
         </div>
       </div>
-      <TimeAcrossProjects />
+      <TimeAcrossProjects projectId={projectId} />
       {edit && <HealthDialog row={edit} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); }} />}
     </>
   );
@@ -86,15 +93,19 @@ interface PortfolioTime { from: string; to: string; projects: { projectId: strin
 const hours = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h`;
 
 /** Zeiten über alle Projekte im Zeitraum: je Projekt und Person (PL sieht alle Personen seiner Projekte, sonst nur eigene Buchungen). */
-function TimeAcrossProjects() {
+function TimeAcrossProjects({ projectId }: { projectId: string | null }) {
   const { timeTracking } = useAuth();
   const [range, setRange] = useState({ from: '', to: '' });
   const q = new URLSearchParams(Object.entries(range).filter(([, v]) => v)).toString();
   const d = useData<PortfolioTime>(timeTracking ? `/portfolio/time${q ? `?${q}` : ''}` : null, [q]);
   if (!timeTracking || !d.data) return null;
-  const t = d.data;
+  const t = projectId ? (() => {
+    const projects = d.data!.projects.filter((p) => p.projectId === projectId);
+    const people = projects.flatMap((p) => p.people);
+    return { ...d.data!, projects, people, total: projects.reduce((a, p) => a + p.minutes, 0) };
+  })() : d.data;
   return (
-    <div className="content" style={{ paddingTop: 0 }}>
+    <div className="mt">
       <div className="card">
         <h2>Zeiten über Projekte <span className="muted small" style={{ fontWeight: 400 }}>{fmtDate(t.from)} – {fmtDate(t.to)} · {hours(t.total)}</span></h2>
         <div className="row small">

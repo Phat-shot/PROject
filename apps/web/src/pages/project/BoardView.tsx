@@ -245,7 +245,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.priority !== 'normal' && <span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span>}
         {x.dueDate && <span className={`due ${dueClass}`} title={x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline'}>{x.done ? '✓ ' : '⏰ '}{fmtDate(x.dueDate)}</span>}
         {x.conflicts.length > 0 && <span className="conflict" title={x.conflicts.join('\n')}>⚠</span>}
-        {x.workflowRunId && <Link to={`/projekte/${x.projectId}/workflows/${x.workflowRunId}`} title="Aus einem Workflow-Lauf" onClick={(e) => e.stopPropagation()}>⟳</Link>}
+        {x.workflowRunId && <Link to={`/workflows/laeufe/${x.workflowRunId}`} title="Aus einem Workflow-Lauf" onClick={(e) => e.stopPropagation()}>⟳</Link>}
         {x.hasDescription && <span title="Beschreibung vorhanden">≡</span>}
         {x.commentCount > 0 && <span title="Kommentare">💬 {x.commentCount}</span>}
         {x.attachmentCount > 0 && <span title="Anhänge">📎 {x.attachmentCount}</span>}

@@ -28,8 +28,9 @@ import { agentRoutes } from './routes/agents.js';
 import { copyRoutes } from './routes/copy.js';
 import { chatRoutes } from './routes/chat.js';
 import { workflowRoutes } from './routes/workflows.js';
-import { registerAgentRunner } from './ai/agentEvents.js';
+import { registerAgentChatRunner, registerAgentRunner } from './ai/agentEvents.js';
 import { runForTask } from './ai/agent.js';
+import { runAgentChat } from './ai/agentChat.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
@@ -60,6 +61,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.decorate('mail', opts.mail);
   app.decorate('fetchFn', opts.fetchFn ?? fetch);
   registerAgentRunner((taskId, trigger) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger));
+  registerAgentChatRunner((agentId, channelId, messageId) => runAgentChat(opts.db, opts.fetchFn ?? fetch, agentId, channelId, messageId));
   app.decorateRequest('user', null);
 
   registerRateLimit(app);

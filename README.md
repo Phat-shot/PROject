@@ -53,21 +53,22 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 
 **Projekttool**
 - Projekte mit Kürzel, Rollen PL / Mitglied / Leser, zweiter PL als Stellvertretung, Einzelrechte („opt.“)
-- Teilprojekte, Aufgaben, Tasks (Checkliste); Verantwortung wird vererbt (Aufgabe → Teilprojekt → PL) und als „geerbt“ markiert
+- Teilprojekte, Arbeitspakete, Aufgaben, Tasks (Checkliste); Verantwortung wird vererbt (Aufgabe → Arbeitspaket → Teilprojekt → PL) und als „geerbt“ markiert
+- Aufgabe als Zwischenebene zwischen Arbeitspaket und Task (entspricht dem Vorgang nach DIN 69901 bzw. der Activity nach PMBOK, in Tools Sub-task): eine Ebene tief, mit eigener Zuständigkeit, Status, Terminen, Log, Mail-Antwortadresse, Anhängen und KI-Agent; Teilprojekt folgt dem Arbeitspaket; Archiv, Papierkorb, Kopieren und Verschieben nehmen die Aufgaben mit; Board, Fortschritt und Portfolio zählen nur Arbeitspakete, die Karte zeigt „Aufgaben erledigt / gesamt“, der Plan rückt Aufgaben unter ihrem Arbeitspaket ein
 - Zuweisung an Benutzer oder externe Mail-Adresse (Projektkontakte)
 - Kanban: Spalten pro Projekt mit WIP-Limit, Swimlanes je Teilprojekt, Drag & Drop inkl. Sortierung, Labels, Filterleiste (Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, Archiv), Tastaturkürzel f/q/n/x, Karten-Badges (Fälligkeit farbig, Beschreibung, Kommentare, Anhänge, Mails, Checklisten-Fortschritt), Schnellanlage, Spalten einklappen, Archivieren
 - Wiederkehrende Aufgaben (W6): täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit
-- Übersicht je Projekt (Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, offene Freigaben, Aktivität), Kalender (Deadlines, Meilensteine)
+- Projekt-Dashboard = Dashboard mit Projektfilter (Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, offene Freigaben, Aktivität), Kalender (Deadlines, Meilensteine)
 - In-App-Benachrichtigungen: Zuweisung, Kommentar, @-Erwähnung, bald fällig, überfällig, Termin verschoben, Freigabe wartet, Seite in Prüfung, externe Bearbeitung
 - @-Erwähnungen in Kommentaren mit Vervollständigung über Projektmitglieder
 - Eskalationsregelwerk je Projekt (Regel vor KI): Verzug, Stillstand („hängt“) und Blockaden eskalieren entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt (intern oder extern per Mail, als Entwurf zur Freigabe oder direkt); Kritikalität aus Priorität, Nachfolgern, nahem Meilenstein und Blockade halbiert die Fristen; jede Stufe mit Benachrichtigung und Log-Eintrag, automatische Rücksetzung; „Blockiert“-Meldung an der Aufgabe; Warnungen in der Übersicht; manuelle Eskalation
 - Reporting je Projekt (Regel vor KI): Vorlage (z. B. Statusbericht) im Rhythmus wöchentlich / zweiwöchentlich / monatlich; der Worker legt die Seite unter der gewählten Oberseite oder im Ordner „Berichte“ an, ergänzt Kennzahlen (Fortschritt, erledigt seit letztem Bericht, Verzug, Blockaden, Eskalationen, Meilensteine, gebuchte Zeit) und versendet sie als PDF über das Projektkonto an den Empfängerkreis; Modus „Prüfung“ (Entwurf, PL setzt final und versendet) oder „direkt“; manueller Lauf „Jetzt erzeugen“ in den Projekteinstellungen
-- Navigation: „Projekte“ mit Gesamtsicht aller Aufgaben und gemeinsamem Postfach über alle lesbaren Mail-Ansichten; je Projekt Übersicht, Aufgaben, Postfach, Doku, Einstellungen (PL); Projekt-Sichtbarkeit „nur Mitglieder“ oder „alle Benutzer des Mandanten (lesend)“
-- Hierarchie Projekt › Teilprojekt › Arbeitspaket › Task; „Meine Arbeit“ zeigt geklammert nur eigene und vererbte Zuständigkeit; Arbeitspakete, Tasks und Teilprojekte direkt editierbar; Wechsel der Verantwortung fragt, ob direkt zugewiesene Arbeitspakete mit übertragen werden
+- Navigation: „PROject“ oben öffnet das Dashboard; darunter bis zu fünf angeheftete Projekte (☆/★, Benutzereinstellung, ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen in der Leiste aus; je Projekt Arbeitspakete (oberster Punkt), Postfach, Doku, Risiken, KI, Einstellungen (PL). Danach global Postfach (alle lesbaren Mail-Ansichten), Kalender, Workflows (mit Projektfilter) und Chat. Dashboard, Workflows und Chat gibt es nur global. Projekt-Sichtbarkeit „nur Mitglieder“ oder „alle Benutzer des Mandanten (lesend)“
+- Hierarchie Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task; „Meine Arbeit“ zeigt geklammert nur eigene und vererbte Zuständigkeit; Arbeitspakete, Tasks und Teilprojekte direkt editierbar; Wechsel der Verantwortung fragt, ob direkt zugewiesene Arbeitspakete mit übertragen werden
 - Benutzer einladen per Mail über das Org-Postfach (Kontotyp „org“), Annahme mit Passwort unter /einladung/:token, manuelles Anlegen als Fallback
 - Berechtigungsgruppen des Mandanten; eingeschränkte Teilprojekte (nur PL, Verantwortliche, benannte Benutzer und Gruppen); Gruppen auch in Mail-Ansicht-Rechten
 - Interaktives, überspringbares Tutorial beim ersten Login, jederzeit neu startbar
-- Dashboard: Soll/Ist der eigenen Arbeit über alle Projekte (offen, überfällig, fällig, blockiert, im Plan), Termine, Meldungen, geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Task
+- Dashboard (nur global, nach Projekt filterbar): Reiter „Meine Arbeit“ (Soll/Ist der eigenen Arbeit: offen, überfällig, fällig, blockiert, im Plan; Termine, Meldungen, geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task), „Projekte“ (früher Portfolio: Ampel manuell oder berechnet, Fortschritt, Verzug, Meilenstein, Budget, Auslastung und Zeiten über Projekte) und „Alle Arbeitspakete“; mit Projektfilter zeigt „Meine Arbeit“ das Projekt-Dashboard und die eigene Arbeit im Projekt
 - Kanban-Spaltenarten Geplant / in Bearbeitung / Zurückgestellt / Erledigt; nur aktive Spalten zählen als Stillstand für die Eskalation
 - Projekt-Postfach als Posteingang aller Ansichten mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), Filter je Ansicht; Mails archivieren, löschen, verschieben, Unterordner anlegen (IMAP und Datenbank synchron); Ansichten und Filter in den Projekteinstellungen
 - Einstellungen: Benutzereinstellungen (Name, Theme hell/dunkel/System, Sprache, Passwort), Konfiguration (Mail-Konten persönlich, Projekt, Organisation; Org-Admin verwaltet Projekt- und Org-Konten, PL die Konten seiner Projekte), Verwaltung
@@ -105,6 +106,11 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Frage ans Projekt (RAG-lite): Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe
 - Statusbericht-Entwurf aus Kennzahlen des Regelwerks, RAID, Ampel und Log als Entwurfsseite in „Berichte“
 
+**Chat**
+- Regulärer Weg der Kommunikation zwischen Projektbeteiligten (Mail bleibt primär für Externe): Projektkanal je Projekt mit Threads und @Erwähnungen, Direktnachrichten mit Personen und KI-Agenten, Ungelesen-Zähler
+- Desktop: Knopf unten rechts öffnet den Messenger als Overlay (Suche oben über Gespräche und Nachrichten, links alle Gespräche nach letzter Aktivität, rechts der Verlauf); der Leisteneintrag „Chat“ öffnet ihn ebenso; mobil Vollbild unter /chat; Chat-Benachrichtigungen öffnen das Gespräch
+- KI-Agenten chatten: Antwort auf Direktnachrichten, auf @Name im Projektkanal (im Thread) und in Threads, in denen sie schon geantwortet haben; Auskunft nur über eigene Arbeitspakete aus Projekten und Teilprojekten, die die fragende Person sehen darf (im Projektkanal ohne eingeschränkte Teilprojekte); Informationen zu einem Arbeitspaket landen als Log-Eintrag dort und lösen einen Agentenlauf aus; jeder Chat-Lauf zählt gegen das Tagesbudget und steht im Audit, Läufe aus Projektkanälen zusätzlich unter Projekt › KI
+
 **Besprechungen**
 - Besprechung als Objekt unter Arbeitspakete › Besprechungen: Termin, Ort, Agenda, Teilnehmer aus Mitgliedern, Kontakten und freien Adressen, Zuordnung zu einer Besprechungsreihe
 - Protokollseite aus der Vorlage der Reihe (sonst „Protokoll“ im Ordner „Protokolle“) mit Termin und Teilnehmern vorbelegt; Aktionspunkte direkt als Arbeitspakete mit Zuständigem und Termin, bestehende Arbeitspakete verknüpfen; Arbeitspaket zeigt die Besprechung
@@ -113,7 +119,7 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 
 **Auswertungen (W9)**
 - Je Projekt unter Arbeitspakete › Auswertung: Durchsatz je Woche (angelegt/erledigt), Durchlaufzeit (Median, Durchschnitt, längste), Verzug nach Alter, Eskalationen je Zeitraum und aktuell, je Teilprojekt; Zeitraum wählbar, alles als CSV
-- Board und Plan als CSV (Excel), Zeiten über alle Projekte im Portfolio je Projekt und Person
+- Board und Plan als CSV (Excel), Zeiten über alle Projekte unter Dashboard › Projekte je Projekt und Person
 
 **Identität und Sicherheit**
 - Single Sign-on per OIDC (Entra ID, Keycloak, Authentik …) mit Zuordnung per E-Mail, optionaler Auto-Anlage, Name aus den Claims und Abgleich der Berechtigungsgruppen über den Gruppen-Claim (Gruppe trägt den Namen beim Identitätsanbieter; `OIDC_*` in `.env.example`); Passwort-Login, Passwort-Reset und 2FA (TOTP) bleiben

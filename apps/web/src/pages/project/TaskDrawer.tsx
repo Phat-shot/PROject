@@ -164,7 +164,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />
       )}
       {canEdit && <div className="row mt">
-        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
       </div>}
 

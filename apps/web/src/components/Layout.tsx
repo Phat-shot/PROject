@@ -6,26 +6,39 @@ import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
 import { useAiStatus } from '../lib/useAi';
 import { useChatUnread } from '../lib/useChatUnread';
+import { useIsMobile } from '../lib/useMedia';
+import { Messenger, MessengerCtx, useOpenChat } from './Messenger';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
 
+const MAX_PINNED = 5;
+const AREAS_AP = ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'];
+function readFlag(key: string): boolean { try { return localStorage.getItem(key) === '1'; } catch { return false; } }
+function writeFlag(key: string, v: boolean) { try { localStorage.setItem(key, v ? '1' : '0'); } catch { /* ignore */ } }
+
 /**
- * Seitenleiste: Dashboard, Postfach, „Projekte“ (standardmäßig ausgeklappt) mit Gesamtsicht aller Arbeitspakete
- * und allen aktiven Projekten. Das gewählte Projekt zeigt darunter seine Bereiche (Übersicht, Arbeitspakete,
- * Postfach, Doku, Einstellungen nur für PL). Darunter die Benutzer-Einstellungen und die Verwaltung.
+ * Seitenleiste: „PROject“ öffnet das Dashboard. Darunter bis zu fünf angeheftete Projekte (Benutzereinstellung,
+ * ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen untereinander aus. Das gewählte Projekt zeigt seine
+ * Bereiche (Arbeitspakete, Postfach, Doku, Risiken, KI, Einstellungen für PL). Danach die globalen Bereiche Postfach,
+ * Kalender, Workflows und Chat, dann Einstellungen und Verwaltung.
+ * Chat am Desktop: Knopf unten rechts und Leisteneintrag öffnen den Messenger als Overlay; mobil die Seite /chat.
  * Unter 900 px liegt die Leiste als Overlay über der Seite und öffnet sich über das Menü-Symbol in der Kopfzeile.
  */
 export function Layout({ children }: { children: ReactNode }) {
-  const { user, orgName, logout } = useAuth();
+  const { user, orgName, logout, setUser } = useAuth();
   const loc = useLocation();
+  const nav = useNavigate();
+  const mobile = useIsMobile();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [open, setOpen] = useState(true);
+  const [showAll, setShowAllState] = useState(() => readFlag('pt_all_projects'));
+  const setShowAll = (v: boolean) => { setShowAllState(v); writeFlag('pt_all_projects', v); };
   const [menu, setMenu] = useState(false);
   const [tour, setTour] = useState(false);
   const [version, setVersion] = useState('');
+  const [chat, setChat] = useState<{ open: boolean; channelId: string | null; threadId: string | null }>({ open: false, channelId: null, threadId: null });
   const ai = useAiStatus();
-  const chat = useChatUnread();
+  const unread = useChatUnread();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -36,53 +49,74 @@ export function Layout({ children }: { children: ReactNode }) {
     if (loc.pathname === '/projekte' || (currentId && !projects.some((p) => p.id === currentId))) void load();
     setMenu(false);
   }, [loc.pathname]);
-  useEffect(() => { if (currentId) setOpen(true); }, [currentId]);
-  const isActive = (p: string, end = false) => (end ? loc.pathname === p : loc.pathname === p || loc.pathname.startsWith(p + '/'));
+  useEffect(() => { if (loc.pathname.startsWith('/chat')) setChat((c) => ({ ...c, open: false })); }, [loc.pathname]);
+
+  const saved = user?.settings?.pinnedProjects;
+  const pinnedIds = (saved ?? projects.slice(0, MAX_PINNED).map((p) => p.id)).filter((id) => projects.some((p) => p.id === id)).slice(0, MAX_PINNED);
+  const pinned = pinnedIds.map((id) => projects.find((p) => p.id === id)!);
+  const others = projects.filter((p) => !pinnedIds.includes(p.id));
+  const current = currentId && !pinnedIds.includes(currentId) && !showAll ? projects.find((p) => p.id === currentId) ?? null : null;
+  const togglePin = async (id: string) => {
+    const next = pinnedIds.includes(id) ? pinnedIds.filter((x) => x !== id) : [...pinnedIds, id].slice(0, MAX_PINNED);
+    const r = await api.patch<{ user: NonNullable<typeof user> }>('/me', { settings: { pinnedProjects: next } });
+    setUser(r.user);
+  };
+  const openChat = (channelId?: string | null, threadId?: string | null) => {
+    if (mobile) { nav(`/chat${channelId ? `/${channelId}` : ''}${threadId ? `?thread=${threadId}` : ''}`); return; }
+    setMenu(false);
+    setChat((c) => ({ open: true, channelId: channelId === undefined ? c.channelId : channelId, threadId: threadId ?? null }));
+  };
+  const isActive = (p: string) => loc.pathname === p || loc.pathname.startsWith(p + '/');
+  const projectNav = (p: Project, pin: boolean, tourId?: string) => {
+    const base = `/projekte/${p.id}`;
+    const sel = currentId === p.id;
+    return (
+      <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
+        <div className="proj-row">
+          <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId}>
+            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
+          </NavLink>
+          <button className={`pin ${pin ? 'on' : ''}`} disabled={!pin && pinnedIds.length >= MAX_PINNED} title={pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften'} aria-label={pin ? 'Nicht mehr anheften' : 'Anheften'} onClick={() => void togglePin(p.id)}>{pin ? '★' : '☆'}</button>
+        </div>
+        {sel && (
+          <div className="sub2">
+            <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (AREAS_AP.some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
+            <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
+            <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
+            <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
+            {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
+            {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
+          </div>
+        )}
+      </div>
+    );
+  };
   return (
+    <MessengerCtx.Provider value={openChat}>
     <div className="app">
       {menu && <div className="sidebar-backdrop" onClick={() => setMenu(false)} />}
       <nav className={`sidebar ${menu ? 'open' : ''}`}>
-        <div className="brand">PROject<small>{orgName}</small><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
-        <NavLink to="/dashboard" data-tour="dashboard">Dashboard</NavLink>
+        <div className="brand"><NavLink to="/dashboard" className="brand-link" data-tour="dashboard" title="Dashboard">PROject<small>{orgName}</small></NavLink><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
+        <div className="sub projects-nav">
+          {pinned.map((p, i) => projectNav(p, true, i === 0 ? 'projekt' : undefined))}
+          {current && projectNav(current, false)}
+          {projects.length > 0 && pinned.length === 0 && !current && <div className="muted small" style={{ padding: '2px 10px 4px' }}>Projekte über ☆ anheften.</div>}
+          <div className="navrow">
+            <button className="nav-toggle" data-tour="projekte" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
+              <span className="caret-ico">{showAll ? '▾' : '▸'}</span> Alle Projekte <span className="muted small">{projects.length}</span>
+            </button>
+          </div>
+          {showAll && <>
+            {others.map((p) => projectNav(p, false, pinned.length === 0 && p.id === others[0]?.id ? 'projekt' : undefined))}
+            {projects.length === 0 && <div className="muted small" style={{ padding: '4px 22px' }}>Keine aktiven Projekte.</div>}
+            <NavLink to="/projekte" end className="proj-link more">Projektübersicht{user && ['org_admin', 'project_creator'].includes(user.globalRole) ? ' · neues Projekt' : ''}</NavLink>
+          </>}
+        </div>
+        <div className="nav-sep" />
         <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
-        <NavLink to="/portfolio" data-tour="portfolio">Portfolio</NavLink>
         <NavLink to="/workflows" data-tour="workflows">Workflows</NavLink>
-        <NavLink to="/chat" data-tour="chat">Chat{chat.dm > 0 && <span className="badge danger nav-count">{chat.dm}</span>}</NavLink>
-        <div className={`navrow ${isActive('/projekte', true) ? 'active' : ''}`}>
-          <NavLink to="/projekte" end data-tour="projekte">Projekte</NavLink>
-          <button className="caret" title={open ? 'Einklappen' : 'Ausklappen'} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'}</button>
-        </div>
-        {open && (
-          <div className="sub">
-            <NavLink to="/projekte/aufgaben" data-tour="alle-ap" className="proj-link">Alle Arbeitspakete</NavLink>
-            {projects.map((p) => {
-              const base = `/projekte/${p.id}`;
-              const sel = currentId === p.id;
-              return (
-                <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
-                  <NavLink to={base} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={p.id === projects[0]?.id ? 'projekt' : undefined}>
-                    <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
-                  </NavLink>
-                  {sel && (
-                    <div className="sub2">
-                      <NavLink to={base} end data-tour="p-uebersicht">Übersicht</NavLink>
-                      <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
-                      <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
-                      <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
-                      <NavLink to={`${base}/workflows`} data-tour="p-workflows">Workflows</NavLink>
-                      <NavLink to={`${base}/chat`} data-tour="p-chat">Chat{(chat.projects[p.id] ?? 0) > 0 && <span className="badge danger nav-count">{chat.projects[p.id]}</span>}</NavLink>
-                      <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
-                      {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
-                      {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-            {projects.length === 0 && <div className="muted small" style={{ padding: '4px 22px' }}>Keine aktiven Projekte.</div>}
-          </div>
-        )}
+        <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count">{unread.total}</span>}</NavLink>
         <div className="section">Einstellungen</div>
         <NavLink to="/einstellungen/benutzer" data-tour="benutzer">Benutzereinstellungen</NavLink>
         <NavLink to="/einstellungen/konfiguration" data-tour="mailkonten">Konfiguration</NavLink>
@@ -96,8 +130,15 @@ export function Layout({ children }: { children: ReactNode }) {
       <MenuCtx.Provider value={() => setMenu(true)}>
         <div className="main">{children}</div>
       </MenuCtx.Provider>
-      {tour && user && <Tour userId={user.id} isAdmin={user.globalRole === 'org_admin'} projects={projects} onDone={() => setTour(false)} />}
+      {!mobile && !loc.pathname.startsWith('/chat') && (chat.open
+        ? <div className="messenger-overlay" role="dialog" aria-label="Chat"><Messenger channelId={chat.channelId} threadId={chat.threadId} onSelect={(channelId, threadId) => setChat({ open: true, channelId, threadId: threadId ?? null })} onClose={() => setChat((c) => ({ ...c, open: false }))} onRead={unread.reload} /></div>
+        : <button className="chat-fab" title="Chat öffnen" aria-label="Chat öffnen" onClick={() => openChat()}>
+            <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" /></svg>
+            <span>Chat</span>{unread.total > 0 && <span className="badge danger">{unread.total}</span>}
+          </button>)}
+      {tour && user && <Tour userId={user.id} isAdmin={user.globalRole === 'org_admin'} projects={pinned.length ? pinned : projects} onDone={() => setTour(false)} />}
     </div>
+    </MessengerCtx.Provider>
   );
 }
 
@@ -127,12 +168,16 @@ function Bell() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
   const nav = useNavigate();
+  const openChat = useOpenChat();
   const load = () => api.get<{ notifications: Notification[]; unread: number }>('/notifications').then(setData).catch(() => undefined);
   useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, []);
   const go = async (n: Notification) => {
     await api.post('/notifications/read', { ids: [n.id] });
     setOpen(false);
     await load();
+    // Chat-Links öffnen den Messenger (Desktop als Overlay), alte Projektchat-Links eingeschlossen
+    const m = n.link?.match(/^\/chat\/([0-9a-f-]{36})(?:\?thread=([0-9a-f-]{36}))?/);
+    if (m) { openChat(m[1], m[2] ?? null); return; }
     if (n.link) nav(n.link);
   };
   return (

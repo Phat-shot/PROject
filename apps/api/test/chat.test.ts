@@ -18,7 +18,7 @@ test('Projektchat: Nachrichten, Thread-Antworten, @Erwähnung benachrichtigt, Un
   const m1 = await t.api(pl).post(`/chat/channels/${cid}/messages`, { body: 'Hallo @Max Keller, Stand zum Design?' });
   assert.equal(m1.statusCode, 200, m1.body);
   assert.deepEqual(m1.json().message.mentions, [t.ids.users.max]);
-  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'chat.mention' and link = $2`, [t.ids.users.max, `/projekte/${web}/chat`]));
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'chat.mention' and link = $2`, [t.ids.users.max, `/chat/${cid}`]));
   assert.equal((await t.api(max).get('/chat/unread')).json().projects[web], 1);
   assert.equal((await t.api(pl).get('/chat/unread')).json().total, 0, 'eigene Nachricht zählt nicht');
   // Antwort im Thread
@@ -68,8 +68,4 @@ test('Direktnachrichten: Gespräch anlegen oder wiederfinden, nur Teilnehmer les
   const msgs = (await t.api(max).get(`/chat/channels/${cid}/messages`)).json();
   assert.equal(msgs.messages[0].body, 'Kurze Frage zum Budget.');
   assert.equal((await t.api(max).get('/chat/unread')).json().dm, 0);
-  // Agenten chatten nicht
-  const admin = await t.login('admin@demo.local');
-  const agent = (await t.api(admin).post('/agents', { name: 'Chatbot' })).json().agent;
-  assert.equal((await t.api(pl).post('/chat/dm', { userId: agent.id })).statusCode, 400);
 });

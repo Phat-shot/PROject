@@ -1,4 +1,4 @@
-import { createContext, useContext, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import type { BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
@@ -10,7 +10,6 @@ import { MailView } from './project/MailView';
 import { DocsView } from './project/DocsView';
 import { MembersView } from './project/MembersView';
 import { AuditView } from './project/AuditView';
-import { OverviewView } from './project/OverviewView';
 import { CalendarView } from './project/CalendarView';
 import { TimeView } from './project/TimeView';
 import { TaskDrawer } from './project/TaskDrawer';
@@ -18,8 +17,8 @@ import { RaidView } from './project/RaidView';
 import { AiView } from './project/AiView';
 import { AnalyticsView } from './project/AnalyticsView';
 import { MeetingsView } from './project/MeetingsView';
-import { ChatView } from './project/ChatView';
-import { WorkflowsView } from './project/WorkflowsView';
+import { useOpenChat } from '../components/Messenger';
+import { api } from '../lib/api';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
@@ -95,13 +94,13 @@ function ProjectBody() {
     : ['einstellungen', 'audit'].includes(sub)
       ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
       : undefined;
-  const area = sub === '' ? 'Übersicht' : ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : sub === 'chat' ? 'Chat' : sub === 'workflows' ? 'Workflows' : 'Einstellungen';
+  const area = ['', 'board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
   const taskId = params.get('task');
   return (
     <>
-      <TopBar title={<><Link to={base} style={{ color: 'inherit' }} title="Zur Übersicht"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
+      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
       <Routes>
-        <Route index element={<OverviewView />} />
+        <Route index element={<Navigate to={`${base}/board`} replace />} />
         <Route path="board" element={<BoardView />} />
         <Route path="plan" element={<PlanView />} />
         <Route path="kalender" element={<CalendarView />} />
@@ -115,11 +114,35 @@ function ProjectBody() {
         <Route path="audit" element={<AuditView />} />
         <Route path="raid" element={<RaidView />} />
         <Route path="ki" element={<AiView />} />
-        <Route path="chat" element={<ChatView />} />
-        <Route path="workflows/:runId?" element={<WorkflowsView />} />
-        <Route path="*" element={<Navigate to={base} replace />} />
+        <Route path="chat" element={<ProjectChatRedirect />} />
+        <Route path="workflows" element={<Navigate to={`/workflows?projekt=${id}`} replace />} />
+        <Route path="workflows/:runId" element={<RunRedirect />} />
+        <Route path="*" element={<Navigate to={`${base}/board`} replace />} />
       </Routes>
       {taskId && <TaskDrawer taskId={taskId} onClose={() => openTask(null)} />}
     </>
   );
+}
+
+/** Chat und Workflows gibt es nur global: alte Projektlinks öffnen den Messenger mit dem Projektkanal bzw. den Lauf. */
+function ProjectChatRedirect() {
+  const { detail } = useProject();
+  const openChat = useOpenChat();
+  const nav = useNavigate();
+  const [params] = useSearchParams();
+  useEffect(() => {
+    let alive = true;
+    void api.get<{ channel: { id: string } }>(`/projects/${detail.project.id}/chat`).then((r) => {
+      if (!alive) return;
+      nav(`/projekte/${detail.project.id}/board`, { replace: true });
+      openChat(r.channel.id, params.get('thread'));
+    }).catch(() => nav(`/projekte/${detail.project.id}/board`, { replace: true }));
+    return () => { alive = false; };
+  }, []);
+  return <div className="content muted">Öffne Chat …</div>;
+}
+
+function RunRedirect() {
+  const { runId } = useParams<{ runId: string }>();
+  return <Navigate to={`/workflows/laeufe/${runId}`} replace />;
 }
