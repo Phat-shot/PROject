@@ -27,6 +27,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - set_status: column = Status exakt aus „Mögliche Status“
 - check_item: itemId aus der Task-Liste; update_item: itemId und neuer text; add_item: text = neuer Task
 - mail: to, subject, text; höchstens drei je Lauf
+- chat: to (E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal), text = Chat-Nachricht; Fragen und Abstimmung mit Projektbeteiligten per Chat, nicht per Mail; höchstens drei je Lauf. Antworten kommen im Chat an und stehen danach im Log
 - reply_origin: text = Antwort an den Absender der Ursprungsmail, geht aus deren Konto (ohne Senderecht als Entwurf zur Freigabe); einmal, wenn das Ergebnis vorliegt
 - read_page: pageId; liest eine Seite. Erst lesen, ändernde Aktionen danach angeben.
 - doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: pageId, subject, text, to (leer = Verteiler des Ordners, nur bei finaler Seite)
@@ -35,7 +36,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - create_subproject: title, responsible, startDate, dueDate (Ende); create_milestone: title, dueDate, subproject
 - create_event: title, startsAt, endsAt, location, text = Termin im Projektkalender
 - Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin), responsible = E-Mail aus „Projektmitglieder“; höchstens 15 Anlagen je Lauf, jede Anlage steht danach automatisch im Log
-- blocked: reason; escalate: text an die PL
+- blocked: reason; escalate: text an die PL (kommt als Benachrichtigung und per Chat an)
 - wait: kind und reason. kind reply = Rückmeldung einer Person (dazu remindAfterHours, z. B. 48, und escalateAfterHours, z. B. 120), date = Termin (until als Datum), task = Erledigung durch andere, info = Information; checkAfterHours = nächste Prüfung
 - none: reason, wenn nichts zu tun ist und nichts erwartet wird
 Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).`;

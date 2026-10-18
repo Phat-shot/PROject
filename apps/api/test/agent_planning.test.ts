@@ -142,6 +142,33 @@ test('Verantwortliche PL tritt zurück: Nachfolge nur durch Personen, nie durch 
   assert.equal(lead.user_id, t.ids.users.anna);
 });
 
+test('Fragen per Chat: Eskalation und chat-Aktion kommen als Direktnachricht an, Antworten stehen im nächsten Lauf', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id, number from tasks where title = 'Teilprojekt durchplanen'`);
+  next = [
+    A({ type: 'escalate', text: 'Welches Budget gilt?' }),
+    A({ type: 'chat', to: ['anna@demo.local', 'projekt'], text: 'Wer kennt einen Elektriker?' }),
+    A({ type: 'chat', to: ['niemand@extern.de'], text: 'x' })
+  ];
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  assert.equal(r.statusCode, 200, r.body);
+  const dmOf = async (userId: string) => (await t.db.query(`select m.body from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members a on a.channel_id = c.id and a.user_id = $1 join chat_channel_members b on b.channel_id = c.id and b.user_id = $2 where m.user_id = $1 order by m.created_at`, [morton.id, userId])).rows.map((x: any) => x.body);
+  assert.ok((await dmOf(t.ids.users.pl)).some((b: string) => /Welches Budget gilt\?/.test(b)), 'Eskalation per Chat an die PL');
+  assert.ok((await dmOf(t.ids.users.anna)).some((b: string) => /Elektriker/.test(b)));
+  assert.ok(await t.db.maybeOne(`select 1 from chat_messages m join chat_channels c on c.id = m.channel_id where c.project_id = $1 and m.user_id = $2 and m.body like '%Elektriker%'`, [web(), morton.id]), 'Projektkanal');
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'chat.dm' and title like '%Morton%'`, [t.ids.users.anna]));
+  assert.match((await t.db.one(`select error from agent_runs where task_id = $1 order by created_at desc limit 1`, [ap.id])).error, /niemand@extern.de ist kein Mitglied/);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Per Chat an Anna Berger, Projektkanal:%'`, [ap.id]));
+  // Antwort der PL im Chat: steht im Kontext des nächsten Laufs
+  const dm = (await t.api(pl).post('/chat/dm', { userId: morton.id })).json().channelId;
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Budget sind 4.000 €.' });
+  next = [A({ type: 'none', reason: 'x' })];
+  const before = calls.length;
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const prompt = calls.slice(before).find((c) => c.response_format && !String(c.messages[0].content).includes('Man erreicht dich im Chat'));
+  assert.match(prompt.messages[1].content, /Chat \(deine Direktnachrichten[\s\S]*Petra Lenz: Budget sind 4\.000 €/);
+});
+
 test('Ereignisläufe halten das Tagesbudget ein', async () => {
   const admin = await t.login('admin@demo.local');
   const ap = await t.db.one(`select id from tasks where title = 'Teilprojekt durchplanen'`);

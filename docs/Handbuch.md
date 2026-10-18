@@ -149,6 +149,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 **Was der Agent tut**
 - Liest das AP mit Beschreibung, Aufgaben, Tasks, Log, Mails, Doku-Seitenliste und Mitgliedern.
+- **Fragt per Chat:** Fragen an Projektbeteiligte stellt er als Direktnachricht (oder im Projektkanal), Eskalationen an die PL kommen zusätzlich zur Benachrichtigung per Chat. Antworten im Chat sieht er im nächsten Lauf und hält sie im Log fest.
 - Handelt: Log schreiben, Status setzen, Tasks abhaken, ergänzen oder umformulieren, Mails schreiben (höchstens drei je Lauf), Doku-Seiten lesen, anlegen, ändern und als PDF senden, Blockade melden, an die PL eskalieren.
 - **Plant:** Aufgaben unter seinem AP (bzw. in seinen Teilprojekten) und APs in seinen Teilprojekten anlegen, mit Start, Termin, Zuständigkeit und Tasks; zuweisen (Agenten nur als stellv. PL); Start/Termin bei eigener oder noch terminloser Arbeit setzen; Termine mit Uhrzeit in den Projektkalender. Als **stellvertretende PL** oder mit „Projektplan ändern“ im ganzen Projekt, dazu Teilprojekte und Meilensteine. Höchstens 15 Anlagen je Lauf, jede steht im Log. Mitglieder, Rechte und Einstellungen nie.
 - **Ursprungsmail:** Ist sein AP aus einer Mail entstanden, beantwortet er sie zum Abschluss mit dem Ergebnis, aus dem Konto dieser Mail (Projektkonto direkt, wenn erlaubt; sonst Entwurf; persönliches Konto: nur der Eigentümer gibt frei). Ohne Projektkonto gehen seine Mails als Entwurf über das Konto einer Projektansicht.

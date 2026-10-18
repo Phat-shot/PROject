@@ -15,7 +15,7 @@ import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
 import { originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
-import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -30,6 +30,7 @@ export type AgentAction =
   | { type: 'check_item'; itemId: string }
   | { type: 'mail'; to: string[]; subject: string; text: string }
   | { type: 'reply_origin'; text: string }
+  | { type: 'chat'; to: string[] | null; text: string }
   | { type: 'blocked'; reason: string }
   | { type: 'escalate'; text: string }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
@@ -82,8 +83,8 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'wait', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'wait', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; chat: Chat-Nachricht; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
@@ -99,7 +100,7 @@ const SCHEMA = {
         endsAt: { type: 'string', description: 'create_event: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         location: { type: 'string', description: 'create_event: Ort; sonst leer' },
         folder: { type: 'string', description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst leer' },
-        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen; doc_send_pdf: Empfänger oder leer für den Verteiler des Ordners (nur finale Seiten); sonst leer' },
+        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf: Empfänger oder leer für den Verteiler des Ordners (nur finale Seiten); sonst leer' },
         subject: { type: 'string', description: 'mail: Betreff; sonst leer' },
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
         kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; sonst leer' },
@@ -165,6 +166,13 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
      order by (t.subproject_id is not distinct from $4) desc, s.position nulls last, t.position limit 40`, [task.project_id, apScope, agent.id, task.subproject_id]);
   const milestones = canPlan || myTps.length ? await db.query(`select m.name, m.date, s.name as sp from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 order by m.date limit 20`, [task.project_id]) : { rows: [] as any[] };
   const events = await db.query(`select title, starts_at, location from meetings where project_id = $1 and starts_at >= $2 and starts_at < $3 order by starts_at limit 15`, [task.project_id, new Date(now.getTime() - 86400_000), new Date(now.getTime() + 45 * 86400_000)]);
+  // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
+  const dms = await db.query(
+    `select m.body, m.created_at, u.name, m.user_id = $1 as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
+       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 join users u on u.id = m.user_id
+     where m.deleted_at is null and m.created_at > now() - interval '7 days'
+       and exists (select 1 from chat_channel_members o join project_members pm on pm.user_id = o.user_id and pm.project_id = $2 where o.channel_id = c.id and o.user_id <> $1)
+     order by m.created_at desc limit 10`, [agent.id, task.project_id]);
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
@@ -177,7 +185,7 @@ ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${s
 ${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}
 Log (neueste zuerst):
 ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
-Mails zum Arbeitspaket:
+${dms.rows.length ? `Chat (deine Direktnachrichten mit Projektmitgliedern, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}\n` : ''}Mails zum Arbeitspaket:
 ${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
 Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (neueste zuerst):
@@ -188,7 +196,7 @@ Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlic
 Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
 ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
 ${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}`).join(', ') || '–'}
-Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.type === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer Seite per Mail senden (doc_send_pdf${m.can_finalize ? ', auch an den Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.type === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer Seite per Mail senden (doc_send_pdf${m.can_finalize ? ', auch an den Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 ${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
@@ -223,6 +231,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     }
     const applied: AgentAction[] = [];
     let mailsSent = 0;
+    let chats = 0;
     let waited = false;
     const plan = planner(db, { agent, m, task, canPlan, myTps, now });
     /** Entwurf wartet: persönliches Konto → Eigentümer, sonst die PL. */
@@ -410,8 +419,32 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         applied.push(a);
       } else if (a.type === 'escalate' && a.text) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `An die Projektleitung: ${a.text}`]);
-        for (const pl of pls) await notify(db, { userId: (await db.one(`select id from users where email = $1`, [pl.email])).id, projectId: task.project_id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}` });
+        // Eskalation kommt auch im Chat an (Direktnachricht an die verantwortliche PL); die Antwort dort landet im Log
+        for (const pl of pls) {
+          await notify(db, { userId: pl.user_id, projectId: task.project_id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}` });
+          await agentChatMessage(db, agent, { userId: pl.user_id }, `${task.project_key}-${task.number} „${task.title}“: ${a.text}`, task.project_id);
+        }
         applied.push(a);
+      } else if (a.type === 'chat') {
+        // An Projektmitglieder (Menschen) per Direktnachricht, leer = verantwortliche PL, „projekt“ = Projektkanal
+        const text = String(a.text ?? '').trim();
+        const raw = (Array.isArray(a.to) ? a.to : []).map((x) => String(x).trim().toLowerCase()).filter(Boolean);
+        const toProject = raw.some((x) => x === 'projekt' || x === '#projekt' || x === 'projektkanal');
+        const people = members.rows.filter((x: any) => x.kind !== 'agent' && raw.some((r) => r === String(x.email).toLowerCase() || r === String(x.name).toLowerCase()));
+        const unknown = raw.filter((r) => !['projekt', '#projekt', 'projektkanal'].includes(r) && !people.some((x: any) => r === String(x.email).toLowerCase() || r === String(x.name).toLowerCase()));
+        const targets = raw.length ? people : pls;
+        if (!text) errors.push('Chat ohne Text verworfen');
+        else if (chats >= 3) errors.push('Chat verworfen: mehr als drei Nachrichten im Lauf');
+        else if (unknown.length) errors.push(`Chat verworfen: ${unknown.join(', ')} ist kein Mitglied des Projekts`);
+        else {
+          chats++;
+          const msg = `${task.project_key}-${task.number} „${task.title}“: ${text}`;
+          for (const x of targets) await agentChatMessage(db, agent, { userId: x.user_id }, msg, task.project_id);
+          if (toProject) await agentChatMessage(db, agent, { projectId: task.project_id }, msg, task.project_id);
+          const names = [...targets.map((x: any) => x.name), ...(toProject ? ['Projektkanal'] : [])].join(', ');
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Per Chat an ${names}: ${cut(text, 1500)}`]);
+          applied.push({ type: 'chat', to: [...targets.map((x: any) => x.email), ...(toProject ? ['projekt'] : [])], text } as any);
+        }
       } else if (a.type === 'wait' && !a.kind) errors.push('wait ohne kind verworfen');
       else if (a.type === 'wait') {
         const prev: AgentWait | null = task.agent_wait ?? null;
