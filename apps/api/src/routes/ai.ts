@@ -105,6 +105,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
     const pid = access.viewIds.length ? (await db.maybeOne(`select project_id from mail_views where id = $1`, [access.viewIds[0]]))?.project_id ?? null : null;
     if (!pid) throw badRequest('Mail gehört zu keiner Projektansicht');
+    // Gleiche Regel wie bei den Vorschlägen: KI-Recht an der Ansicht und „KI nutzen“ im Projekt
+    await canUse(user, pid);
     const cfg = await cfgOrFail(pid);
     return { summary: await summarizeMail(db, cfg, app.fetchFn, user, mail, pid) };
   });

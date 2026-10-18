@@ -4,7 +4,7 @@ import { badRequest, notFound } from '../errors.js';
 
 /** Nur außerhalb der Produktion: Dev-Postfächer befüllen, Sync anstoßen. */
 export async function devRoutes(app: FastifyInstance) {
-  app.post<{ Body: { accountId: string; from: string; fromName?: string; to?: string[]; subject: string; text?: string; folder?: string; inReplyTo?: string } }>('/dev/mail/inject', async (req) => {
+  app.post<{ Body: { accountId: string; from: string; fromName?: string; to?: string[]; subject: string; text?: string; html?: string; folder?: string; inReplyTo?: string } }>('/dev/mail/inject', async (req) => {
     requireUser(req);
     const b = req.body ?? ({} as any);
     if (!b.accountId || !b.from || !b.subject) throw badRequest('accountId, from, subject erforderlich');
@@ -15,6 +15,7 @@ export async function devRoutes(app: FastifyInstance) {
       to: b.to ?? [a.address],
       subject: b.subject,
       text: b.text ?? '',
+      ...(b.html ? { html: b.html } : {}),
       folder: b.folder ?? 'INBOX',
       inReplyTo: b.inReplyTo ?? null
     });

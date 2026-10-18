@@ -1,6 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import type { ResponsibleInfo, Subproject, Task } from '@projekttool/shared';
 import type { Db } from '../db.js';
+import { badRequest, forbidden } from '../errors.js';
+
+/** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
+export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
+  if (!userId) return;
+  const r = await db.maybeOne(`select u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.user_id = $2 and u.active`, [projectId, userId]);
+  if (!r) throw badRequest('Zuständige Person ist kein aktives Mitglied des Projekts');
+  if (r.kind === 'agent' && membership.role !== 'pl') throw forbidden('KI-Agenten weist nur die Projektleitung zu');
+}
 
 export interface LeadInfo {
   userId: string | null;

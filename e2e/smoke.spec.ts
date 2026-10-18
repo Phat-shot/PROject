@@ -91,3 +91,21 @@ test('Messenger: Knopf unten rechts, Projektkanal öffnen, Nachricht senden, Suc
   await page.getByRole('button', { name: 'Chat schließen' }).click();
   await expect(page.locator('.messenger-overlay')).toHaveCount(0);
 });
+
+test('HTML-Mail läuft isoliert: kein Skript, externe Bilder erst auf Klick', async ({ page }) => {
+  await login(page);
+  const subject = `E2E HTML ${Date.now()}`;
+  await page.evaluate(async (s) => {
+    const { accounts } = await (await fetch('/api/mail/accounts')).json();
+    const acc = accounts.find((a: { type: string }) => a.type === 'project');
+    await fetch('/api/dev/mail/inject', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ accountId: acc.id, from: 'angreifer@example.com', subject: s, html: '<p>Hallo</p><img src="x" onerror="window.top.__xss=1"><img src="https://example.com/pixel.png">' }) });
+  }, subject);
+  await page.goto('/postfach');
+  await page.locator('.mail-item', { hasText: subject }).click();
+  await expect(page.locator('iframe.mail-html')).toHaveAttribute('sandbox', 'allow-popups allow-popups-to-escape-sandbox');
+  await expect(page.getByText('Externe Bilder sind blockiert')).toBeVisible();
+  await expect(page.frameLocator('iframe.mail-html').getByText('Hallo')).toBeVisible();
+  expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
+  await page.getByRole('button', { name: 'Bilder laden' }).click();
+  await expect(page.getByText('Externe Bilder sind blockiert')).toHaveCount(0);
+});

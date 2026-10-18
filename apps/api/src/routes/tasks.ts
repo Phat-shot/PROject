@@ -6,14 +6,9 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 
-/** Arbeitspakete, Tasks und Teilprojekte bekommen einen KI-Agenten nur von der PL. */
-async function assertAgentAssignment(db: any, m: { role: string }, userId: string | null | undefined) {
-  if (!userId) return;
-  const u = await db.maybeOne(`select kind from users where id = $1`, [userId]);
-  if (u?.kind === 'agent' && m.role !== 'pl') throw forbidden('KI-Agenten weist nur die Projektleitung zu');
-}
 import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
-import { createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { mailAccess } from '../mail/access.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { notify, notifyMany } from '../notify.js';
@@ -212,7 +207,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
-    await assertAgentAssignment(db, m, b.responsibleUserId);
+    await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     let columnId = b.columnId;
     if (!columnId) {
       const c = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [req.params.id]);
@@ -289,7 +284,9 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
     if (existing.parent_id) delete b.subprojectId;
-    if ('responsibleUserId' in b) await assertAgentAssignment(db, m, b.responsibleUserId);
+    if ('responsibleUserId' in b) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
+    // Mail als Beleg: nur eine Mail, die man selbst lesen darf
+    if (b.sourceMailId && !(await mailAccess(db, user, b.sourceMailId)).ok) throw forbidden('Kein Leserecht an dieser Mail');
     if (b.priority && !PRIORITIES.includes(b.priority)) throw badRequest('Ungültige Priorität');
     if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     if (b.columnId) {
