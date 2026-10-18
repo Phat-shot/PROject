@@ -437,7 +437,8 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const { detail, tasks } = useProject();
   const [params] = useSearchParams();
   const replyTo = params.get('reply');
-  const taskParam = params.get('task');
+  // Arbeitspaket als „ap“ (nicht „task“: das öffnet im Projekt den Drawer über dem Formular)
+  const taskParam = params.get('ap') ?? params.get('task');
   // Abschluss-Antwort auf die Ursprungsmail eines Arbeitspakets (aufbereitetes Ergebnis, optional mit KI)
   const final = params.get('final') === '1';
   const [finalInfo, setFinalInfo] = useState<string | null>(final ? 'Antwort wird vorbereitet …' : null);

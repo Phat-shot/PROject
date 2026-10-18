@@ -78,8 +78,17 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - Konten: persönlich, Projektkonto oder Organisationskonto (Konfiguration). Geteilt werden nie ganze Konten, sondern **Ansichten** mit Filtern (Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum). Gespeichert werden nur Treffer.
 - Rechte je Ansicht: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen. Aus persönlichen Konten sendet nur der Eigentümer.
 - Aktionen an einer Mail: mit AP verknüpfen oder kopieren, ins Log übernehmen, AP anpassen (Mail als Beleg), AP erstellen, in Doku ablegen oder an eine Seite anhängen.
-- Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie.
+- Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie. Entwürfe aus persönlichen Konten sieht und sendet nur der Eigentümer.
 - Postfach mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), synchron mit dem Mailserver.
+
+**Ursprungsmail**
+- Entsteht ein AP oder eine Aufgabe aus einer Mail, ist diese Mail als **Ursprung** markiert (im AP unter Mails umschaltbar). An der Mail stehen die daraus entstandenen APs und Aufgaben, auch aus anderen Projekten, soweit man sie sehen darf; ein Klick springt hin.
+- Oben im AP steht „Entstanden aus Mail von …“. Ist das AP erledigt und die Mail noch unbeantwortet, bietet es **„Ursprungsmail beantworten“** an: ein Entwurf mit dem aufbereiteten Ergebnis (erledigte Aufgaben und Tasks, Offenes), optional **„Mit KI formulieren“** (Projekt-KI fasst Ergebnis und Log für den Absender zusammen). Die Antwort geht aus dem Konto der Mail, im selben Mail-Verlauf, hängt danach als Mail am AP und wird kein Log-Eintrag.
+
+**Mail-KI**
+- **Ordner „KI Bearbeiten“** (Einstellungen › Mail-Ansichten › Ordner einrichten; Eigentümer eines persönlichen Kontos oder die PL für das Projektkonto, nur mit Projekt-KI): Jede Mail, die du dort ablegst (im Mailprogramm oder hier mit „KI bearbeiten“), bearbeitet die Projekt-KI sofort in deinem Auftrag und mit deinen Rechten: AP oder Aufgabe mit Ursprungsmail und Tasks, Zuweisung (auch an KI-Agenten, die dann sofort loslegen), Termin im Projektkalender (nur wenn nicht schon durch einen Termin des AP abgedeckt), Antwortentwurf, danach Ablage nach „Archiv“ oder „In Arbeit“. Der Inhalt wird als Kopie am AP für die Projektmitglieder sichtbar.
+- **Agent betreut eine Ansicht** (Einstellungen › Mail-Ansichten › KI): Für jede neue Mail der Ansicht schlägt der Agent dieselben Aktionen vor; Antworten auf eigene Nachfragen (Antwortadresse) gehen an ihm vorbei. Vorschläge stehen an der Mail und unter Projekt › KI › Mail-KI: einzeln oder alle annehmen oder verwerfen. Ausgeführt wird mit den Rechten der annehmenden Person.
+- Jede Mail wird je Projekt einmal bearbeitet; Läufe zählen gegen das Tagesbudget (Projekt-KI je Projekt, Agent je Agent) und stehen im Audit.
 
 ## 7. Doku
 
@@ -127,19 +136,22 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 ## 12. Mit KI-Agenten arbeiten
 
-**Was ein Agent ist:** ein Benutzer ohne Login, nie PL oder Org-Admin, im Projekt Mitglied mit Stellvertretung. Er arbeitet nur an APs und Aufgaben, die ihm die PL direkt zuweist, und nur im Rahmen seiner Rechte.
+**Was ein Agent ist:** ein Benutzer ohne Login, nie verantwortliche PL oder Org-Admin, im Projekt **Mitglied** oder **stellvertretende PL**. Er arbeitet an APs und Aufgaben, für die er zuständig ist: direkt zugewiesen oder geerbt (z. B. als Verantwortung eines Teilprojekts: dann alle APs darin ohne eigene Zuständigkeit, und Aufgaben eines seiner APs). Projekte legt er nie an.
 
 **Einrichten**
 1. Org-Admin: Verwaltung › KI-Agenten › Agent anlegen. KI-Profil wählen (sonst Standard), **Persona** als eine Zeile Schreibstil (z. B. „freundlich, knapp, duzt das Team, siezt Externe“), **Denkmodus** wie Profil, aus oder an.
-2. PL: Projekteinstellungen › Mitglieder › Agent aufnehmen; „darf Mails senden“ festlegen (sonst gehen Mails als Entwurf in die Freigabe), optional „Final setzen“.
-3. PL: AP oder Aufgabe dem Agenten zuweisen. Der erste Lauf startet sofort.
+   Oder die PL legt einen **eigenen Agenten** für ihr Projekt an (Einstellungen › Eigene KI-Agenten), wenn der Org-Admin das unter Verwaltung › KI freigegeben hat: nur freigegebene KI-Profile, Tagesbudget höchstens der Deckel, nur in diesem Projekt einsetzbar und per Chat nur für dessen Mitglieder erreichbar. Der Org-Admin sieht solche Agenten und kann sie deaktivieren, aber keine Inhalte.
+2. PL: Projekteinstellungen › Mitglieder › Agent aufnehmen, Rolle **Mitglied** oder **stellvertretende PL**; „darf Mails senden“ festlegen (sonst gehen Mails als Entwurf in die Freigabe), optional „Final setzen“. **Unterschrift** frei je Agent (Verwaltung bzw. eigene Agenten), leer = „Name (KI-Agent, Projekt KEY)“.
+3. PL: AP, Aufgabe oder Teilprojekt dem Agenten zuweisen. Der erste Lauf startet sofort bzw. beim nächsten Takt (geerbte Zuständigkeit).
 
 **Was der Agent tut**
 - Liest das AP mit Beschreibung, Aufgaben, Tasks, Log, Mails, Doku-Seitenliste und Mitgliedern.
 - Handelt: Log schreiben, Status setzen, Tasks abhaken, ergänzen oder umformulieren, Mails schreiben (höchstens drei je Lauf), Doku-Seiten lesen, anlegen, ändern und als PDF senden, Blockade melden, an die PL eskalieren.
+- **Plant:** Aufgaben unter seinem AP (bzw. in seinen Teilprojekten) und APs in seinen Teilprojekten anlegen, mit Start, Termin, Zuständigkeit und Tasks; zuweisen (Agenten nur als stellv. PL); Start/Termin bei eigener oder noch terminloser Arbeit setzen; Termine mit Uhrzeit in den Projektkalender. Als **stellvertretende PL** oder mit „Projektplan ändern“ im ganzen Projekt, dazu Teilprojekte und Meilensteine. Höchstens 15 Anlagen je Lauf, jede steht im Log. Mitglieder, Rechte und Einstellungen nie.
+- **Ursprungsmail:** Ist sein AP aus einer Mail entstanden, beantwortet er sie zum Abschluss mit dem Ergebnis, aus dem Konto dieser Mail (Projektkonto direkt, wenn erlaubt; sonst Entwurf; persönliches Konto: nur der Eigentümer gibt frei). Ohne Projektkonto gehen seine Mails als Entwurf über das Konto einer Projektansicht.
 - **Wartet** auf Rückmeldung, Termin, Erledigung durch andere oder Information und setzt sich dafür eine Wiedervorlage. Bei Rückmeldungen fasst er nach Frist nach und eskaliert danach an die PL. Der Hintergrunddienst prüft das jede Minute.
 - Läuft erneut bei neuem Kommentar, neuer Mail, Änderungen durch Menschen, Wiedervorlage, naher Fälligkeit und spätestens alle drei Tage.
-- Ändert nie Termine, erfindet keine Fakten, pflegt keine Risiken, Zeiten oder Einstellungen.
+- Ändert bestehende Termine anderer nur, wenn er planen darf; erfindet keine Fakten, pflegt keine Risiken, Zeiten oder Einstellungen. Inhalte aus persönlichen Konten sieht er nur, wenn sie freigegeben sind (Kopie) oder nur der Eigentümer im Projekt ist.
 
 **Mit dem Agenten sprechen**
 - Kommentar ins Log des AP: Der Agent liest ihn beim nächsten Lauf (sofort angestoßen).
@@ -158,9 +170,18 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Freigaben: Mail-Entwürfe des Agenten ohne Senderecht.
 - Audit-Log und Tagesbudget begrenzen und belegen alles.
 
+**Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen in den Kalender und sammelt Fragen in einer Eskalation an die PL.
+
 ## 13. Einstellungen und Verwaltung
 
 - **Benutzereinstellungen:** Name, Theme, Sprache, Mail-Benachrichtigungen (aus, sofort, täglich), Passwort, zweiter Faktor (Authenticator-App), Kalender-Abo und Kalender schreiben.
 - **Konfiguration:** Mail-Konten (persönlich, Projekt, Organisation; Microsoft 365 und Google per OAuth).
-- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Gruppen, PDF-Stil, Module (Zeiterfassung), KI-Profile, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export.
+- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Profile, eigene Agenten der PL (Freigabe, Profile, Budgetdeckel), KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export.
 - **Anmeldung:** Passwort mit optionalem zweiten Faktor oder Single Sign-on (OIDC), falls eingerichtet.
+
+## 14. Persönliches Projekt (Assistent)
+
+- Anlegen unter Projekte mit „Persönlich“: Projektersteller immer, alle anderen, wenn der Org-Admin es erlaubt (Verwaltung › Mandant). Startet leer (nur Spalten).
+- Nur der Ersteller (PL) und KI-Agenten; weitere Personen und Einladungen sind gesperrt, sichtbar nur für Mitglieder.
+- Der Org-Admin sieht im Audit-Export Aktion, Person und Zeit, aber keine Details, und verwaltet die Projektkonten dieses Projekts nicht.
+- Typischer Aufbau: eigenes Postfach als persönliches Konto, Ansicht ins Projekt, **Ordner „KI Bearbeiten“** einrichten, eigenen Agenten anlegen (oder aufnehmen) und als stellv. PL einsetzen. Mails in den Ordner legen: Die Projekt-KI macht daraus Aufgaben und Termine und gibt dem Agenten, was er selbst erledigen kann; zum Abschluss beantwortet er die Ursprungsmail als Entwurf, den du freigibst.

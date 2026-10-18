@@ -85,7 +85,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
           Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
           {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
-          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&task=${t.id}`}>Ursprungsmail beantworten</Link>{aiOn && <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&task=${t.id}`}>Mit KI formulieren</Link>}</div>}
+          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiOn && <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}`}>Mit KI formulieren</Link>}</div>}
         </div>;
       })()}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
@@ -177,7 +177,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
       )}
       {canEdit && <div className="row mt">
-        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?ap=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
       </div>}
 

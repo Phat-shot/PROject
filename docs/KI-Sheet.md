@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 783 Token, Regeln für Arbeitspaket-Läufe 411, Regeln für Chat 185.
+Umfang (Qwen3-Tokenizer): Sheet 1066 Token, Regeln für Arbeitspaket-Läufe 664, Regeln für Chat 185, Regeln für Mail-Läufe 543.
 
 ## Sheet
 
@@ -76,7 +76,7 @@ Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du ve
 ## Aufbau des Systemprompts
 
 1. Sheet (oben)
-2. Regeln für Arbeitspaket-Läufe oder Chat
+2. Regeln für Arbeitspaket-Läufe, Chat oder Mail-Läufe
 3. „# Du“: Name, Projekt, Unterschrift für Mails, Schreibstil aus der Persona (ohne Persona: sachlich, kurz, auf Deutsch)
 
 Danach folgt als Nutzertext der Kontext des Laufs: Arbeitspaket bzw. Aufgabe, Aufgaben, Tasks, Log, Mails, Doku-Ordner und -Seiten, Mitglieder, Rechte, Wartezustand und Anlass.
