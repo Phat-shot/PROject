@@ -299,11 +299,16 @@ function MailThread({ mails, projectId }: { mails: TaskMail[]; projectId: string
 function TitleEdit({ value, canEdit, done, onSave }: { value: string; canEdit: boolean; done: boolean; onSave: (v: string) => Promise<void> }) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
+  // Mehrzeilig in voller Länge: Höhe folgt dem Text
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; } };
+  useEffect(fit, [v]);
+  useEffect(() => { const el = ref.current; if (!el || typeof ResizeObserver === 'undefined') return; let w = el.clientWidth; const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } }); ro.observe(el); return () => ro.disconnect(); }, []);
   const commit = () => { if (v.trim() && v.trim() !== value) void onSave(v.trim()); else setV(value); };
   return (
-    <span className="row" style={{ gap: 8, flex: 1 }}>
-      <input className="title-edit" type="text" value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />
+    <span className="row" style={{ gap: 8, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+      <textarea ref={ref} className="title-edit" rows={1} value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value.replace(/\n/g, ' '))} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } if (e.key === 'Escape') { setV(value); (e.target as HTMLTextAreaElement).blur(); } }} />
       {done && <span className="badge ok">erledigt</span>}
     </span>
   );

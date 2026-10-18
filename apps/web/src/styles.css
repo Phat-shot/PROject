@@ -185,8 +185,14 @@ table.table { width: 100%; border-collapse: collapse; }
 /* Drawer */
 .drawer-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.35); z-index: 20; }
 .drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(720px, 95vw); background: var(--surface); box-shadow: -4px 0 24px rgba(0,0,0,0.15); z-index: 21; display: flex; flex-direction: column; }
-.drawer header { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
-.drawer header h2 { margin: 0; flex: 1; font-size: 15px; }
+.drawer header { display: flex; flex-direction: column; gap: 8px; padding: 12px 18px; border-bottom: 1px solid var(--border); }
+.drawer .drawer-title { display: flex; align-items: flex-start; gap: 10px; }
+.drawer header h2 { margin: 0; flex: 1; min-width: 0; font-size: 15px; display: flex; align-items: flex-start; gap: 8px; }
+.drawer header h2 .tkey-badge { margin-top: 6px; flex-shrink: 0; }
+.drawer .drawer-close { flex-shrink: 0; }
+.drawer .drawer-actions { display: flex; align-items: center; gap: 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+.drawer .drawer-actions::-webkit-scrollbar { display: none; }
+.drawer .drawer-actions > * { flex-shrink: 0; }
 .drawer .body { padding: 16px 18px; overflow: auto; flex: 1; }
 .modal { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(15, 23, 42, 0.35); z-index: 30; }
 .modal .card { width: min(560px, 95vw); max-height: 90vh; overflow: auto; }
@@ -365,8 +371,9 @@ table.table { width: 100%; border-collapse: collapse; }
   .docs-layout { display: block; height: auto; }
   .tree-toggle { margin: 8px 12px 0; }
   .doc-view { padding: 14px; }
-  .drawer header { flex-wrap: wrap; }
-  .drawer header .title-edit { font-size: 14px; }
+  .drawer header { padding: 10px 12px; }
+  .drawer header .title-edit { font-size: 15px; }
+  .drawer header .title-edit:not([readonly]):not(:focus) { border-bottom: 1px dashed var(--border); border-radius: 0; }
   .topbar .tabs a { padding: 4px 8px; font-size: 13px; }
   .section-nav { top: 0; position: static; }
 }
@@ -550,9 +557,13 @@ a.tkey { color: var(--primary); }
 .page-settings { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; }
 
 /* Aufgabe: direkt editierbar */
-.title-edit { font-size: 15px; font-weight: 600; border: 1px solid transparent; background: transparent; padding: 4px 6px; border-radius: 6px; width: 100%; }
+.title-edit { font-size: 15px; font-weight: 600; border: 1px solid transparent; background: transparent; padding: 4px 6px; border-radius: 6px; width: 100%; resize: none; overflow: hidden; line-height: 1.35; font-family: inherit; color: inherit; display: block; }
 .title-edit:hover:not([readonly]) { border-color: var(--border); }
 .title-edit:focus { border-color: var(--primary); background: var(--surface); outline: none; }
+textarea.title-edit { min-height: 0; }
+:root[data-theme='dark'] .title-edit { background: transparent; border-color: transparent; }
+:root[data-theme='dark'] .title-edit:hover:not([readonly]) { border-color: var(--border); }
+:root[data-theme='dark'] .title-edit:focus { border-color: var(--primary); background: var(--surface-2); }
 .task-fields select, .task-fields input { max-width: 100%; }
 .desc-view { padding: 8px 10px; border: 1px dashed transparent; border-radius: 6px; }
 .desc-view:hover { border-color: var(--border); background: var(--surface-2); cursor: text; }
