@@ -245,8 +245,10 @@ export async function mailRoutes(app: FastifyInstance) {
     const v = await loadView(req.params.vid);
     if (!v) throw notFound('Ansicht nicht gefunden');
     const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [v.account_id]);
-    if (!(await canManageAccount(user, a))) throw forbidden();
     const b = req.body ?? {};
+    // Nur Mail-KI: entscheidet setViewAi (Eigentümer bzw. PL des Projekts, auch bei Organisationskonten); sonst Kontoverwaltung
+    const aiOnly = Object.keys(b).length > 0 && Object.keys(b).every((k) => k === 'aiProcess' || k === 'agentUserId');
+    if (!aiOnly && !(await canManageAccount(user, a))) throw forbidden();
     if ('aiProcess' in b || 'agentUserId' in b) await setViewAi(user, v, a, b);
     await db.query(`update mail_views set name = coalesce($2, name), filter = coalesce($3::jsonb, filter) where id = $1`, [v.id, b.name ?? null, b.filter ? JSON.stringify(normalizeFilter(b.filter)) : null]);
     if (b.filter) {

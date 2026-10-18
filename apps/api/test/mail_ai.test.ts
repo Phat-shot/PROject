@@ -116,7 +116,9 @@ test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den 
   const run = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [mail.id]);
   assert.equal(run.mode, 'triage');
   assert.equal(await t.db.maybeOne(`select 1 from tasks where title = 'Rückruf Kunde'`), null, 'nichts direkt angelegt');
-  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where agent_user_id = $1 and trigger = 'mail_triage'`, [agent.id]), 'zählt gegen das Budget des Agenten');
+  const ar = await t.db.one(`select reasoning, actions from agent_runs where agent_user_id = $1 and trigger = 'mail_triage'`, [agent.id]);
+  assert.ok(ar, 'zählt gegen das Budget des Agenten');
+  assert.ok(!JSON.stringify(ar).includes('Rückruf'), 'kein Mailinhalt in den Agentenläufen (die alle Mitglieder sehen)');
   assert.equal((await t.api(leser).post(`/mail/ai-runs/${run.id}/decide`, { index: 0, approve: true })).statusCode, 403);
   const byMax = (await t.api(max).post(`/mail/ai-runs/${run.id}/decide`, { index: 0, approve: true })).json().runs[0];
   assert.equal(byMax.actions[0].status, 'error');

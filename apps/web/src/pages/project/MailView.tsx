@@ -247,7 +247,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
           </>
         ) : <span className="muted">{ai ? (ai.enabled ? 'im Projekt aus (Einstellungen › Projekt › Projekt-KI)' : 'kein KI-Profil (Verwaltung)') : '…'}</span>}
       </div>
-      <MailAiBox mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} />
+      <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} />
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
       {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Zur Freigabe</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (

@@ -122,6 +122,21 @@ test('Stellvertretende PL: Agent plant im ganzen Projekt, weist Agenten zu, änd
   assert.equal(due instanceof Date ? due.toISOString().slice(0, 10) : String(due).slice(0, 10), '2026-12-24');
   assert.ok(await t.db.maybeOne(`select 1 from tasks t join subprojects s on s.id = t.subproject_id where t.title = 'Wände streichen' and s.name = 'Maler'`));
   assert.equal(r.json().error, undefined, r.body);
+  // Unveränderte Agenten-Verantwortung blockiert andere Teilprojekt-Änderungen durch Planer ohne PL-Rolle nicht
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).patch(`/projects/${web()}/subprojects/${elektrik}`, { name: 'Elektrik EG', responsibleUserId: morton.id })).statusCode, 200);
+});
+
+test('Verantwortliche PL tritt zurück: Nachfolge nur durch Personen, nie durch einen Agenten', async () => {
+  const admin = await t.login('admin@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const erp = t.ids.projects.erp;
+  const bot = (await t.api(admin).post('/agents', { name: 'Bot' })).json().agent;
+  await t.api(anna).put(`/projects/${erp}/members/${bot.id}`, { role: 'pl' });
+  const r = await t.api(anna).put(`/projects/${erp}/members/${t.ids.users.anna}`, { role: 'member' });
+  assert.equal(r.statusCode, 400, 'nur ein Agent als weitere PL');
+  const lead = await t.db.one(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [erp]);
+  assert.equal(lead.user_id, t.ids.users.anna);
 });
 
 test('Ereignisläufe halten das Tagesbudget ein', async () => {

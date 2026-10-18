@@ -226,7 +226,8 @@ export async function projectRoutes(app: FastifyInstance) {
         }
       }
       if (primary && primary.user_id === req.params.userId && b.role !== 'pl') {
-        const other = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and user_id <> $2`, [req.params.id, req.params.userId]);
+        // Nachfolge nur durch eine Person (Agenten sind nie verantwortliche PL)
+        const other = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.user_id <> $2 and u.kind <> 'agent' and u.active order by m.created_at limit 1`, [req.params.id, req.params.userId]);
         if (!other) throw badRequest('Das Projekt braucht einen PL. Erst einen zweiten PL bestimmen.');
         await db.query(`update project_members set is_deputy = false where project_id = $1 and user_id = $2`, [req.params.id, other.user_id]);
       }
@@ -330,9 +331,10 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     if (!(await canSeeSubproject(db, user.id, req.params.sid))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
-    if ('responsibleUserId' in b) await assertResponsible(db, req.params.id, m, b.responsibleUserId);
-    await setAccess(user, req.params.id, req.params.sid, b, m);
     const before = await db.maybeOne(`select responsible_user_id from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
+    // Nur eine neue Verantwortung prüfen; unveränderte blockiert andere Änderungen nicht
+    if (b.responsibleUserId && b.responsibleUserId !== before?.responsible_user_id) await assertResponsible(db, req.params.id, m, b.responsibleUserId);
+    await setAccess(user, req.params.id, req.params.sid, b, m);
     const r = await db.maybeOne(
       `update subprojects set name = coalesce($3, name),
          responsible_user_id = case when $4 then $5::uuid else responsible_user_id end,

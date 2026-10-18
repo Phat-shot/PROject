@@ -152,8 +152,9 @@ Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.sp
       const owners = account.type === 'personal' && account.owner_user_id ? [account.owner_user_id] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent'`, [project.id])).rows.map((x: any) => x.user_id);
       const n = stored.filter((x) => x.type !== 'none').length;
       if (n) for (const u of owners) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${agent.name}: ${n} Vorschl${n === 1 ? 'ag' : 'äge'} zu „${cut(m.subject, 60)}“`, body: summary, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
+      // Für Budget und Übersicht der Agentenläufe: ohne Inhalt aus der Mail (die Läufe sehen alle Mitglieder, die Mail ggf. nicht)
       await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens) values ($1,$2,$3,null,'mail_triage','ok',$4,$5,$6,$7)`,
-        [project.org_id, agent.id, project.id, summary, JSON.stringify(stored.map((x) => ({ type: x.type, title: x.title ?? null }))), r.inputTokens, r.outputTokens]);
+        [project.org_id, agent.id, project.id, `Mail-Vorschläge: ${n}`, JSON.stringify(stored.map((x) => ({ type: x.type }))), r.inputTokens, r.outputTokens]);
     }
     const failed = stored.filter((x) => x.status === 'error');
     await finish(failed.length ? 'error' : 'ok', { summary, actions: stored, error: failed.length ? failed.map((x) => `${x.type}: ${x.result?.error}`).join(' | ') : null, inputTokens: r.inputTokens, outputTokens: r.outputTokens });

@@ -68,7 +68,7 @@ export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }:
   const { busy, error, run } = useAsync();
   const busyRun = d.data?.runs.some((r) => r.status === 'queued' || r.status === 'running');
   // Solange ein Lauf wartet oder läuft, kurz nachsehen
-  useEffect(() => { if (!busyRun) return; const h = setInterval(() => void d.reload(), 3000); return () => clearInterval(h); }, [busyRun]);
+  useEffect(() => { if (!busyRun) return; const h = setInterval(() => void d.reload(), 3000); return () => clearInterval(h); }, [busyRun, d.reload]);
   const kiView = views.find((v) => v.aiProcess && v.accountId === accountId && v.projectId === detail.project.id);
   const processed = d.data?.runs.some((r) => r.mode === 'process');
   const reload = async () => { await d.reload(); await reloadTasks(); };
