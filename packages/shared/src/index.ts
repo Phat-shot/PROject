@@ -627,6 +627,6 @@ export interface Meeting {
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
-export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean }
-export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
+export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean }
+export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
 export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; error: string | null; createdAt: string }

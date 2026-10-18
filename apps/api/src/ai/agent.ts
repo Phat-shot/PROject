@@ -88,12 +88,18 @@ const SCHEMA = {
   }
 };
 
+/** Schreibstil aus der Persona (Verwaltung › KI-Agenten); ohne Persona sachlich, kurz, auf Deutsch. Die Regeln oben gehen dem Stil vor. */
+export function styleText(persona: string | null | undefined): string {
+  const p = (persona ?? '').trim();
+  return p ? `Dein Schreibstil für Log, Mails, Doku und Chat: ${p}. Der Stil ändert nichts an den Regeln oben (keine erfundenen Fakten, nur Aktionen aus der Liste).` : 'Du schreibst sachlich, kurz und auf Deutsch.';
+}
+
 const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').trim(); return t.length > n ? t.slice(0, n) + ' …' : t; };
 
 export interface AgentRunResult { runId: string | null; taskId: string; status: 'ok' | 'error' | 'skipped'; actions: AgentAction[]; error?: string }
 
 /** Ein Lauf für ein Arbeitspaket. trigger beschreibt den Anlass (assigned, mail, comment, due, daily, manual). */
-export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string }, taskId: string, trigger: string, cfg?: AiConfig | null, now = new Date()): Promise<AgentRunResult> {
+export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, taskId: string, trigger: string, cfg?: AiConfig | null, now = new Date()): Promise<AgentRunResult> {
   const task = await db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
   if (!task) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Arbeitspaket nicht gefunden' };
   const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
@@ -112,7 +118,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; Doku: read_page liest eine Seite (pageId); lies eine Seite immer, bevor du sie änderst oder ihren Inhalt brauchst, und gib erst danach die ändernden Aktionen an. doc_create braucht title und text (Markdown), doc_update pageId und text (ersetzt den Inhalt), doc_append pageId und text (hängt an), doc_status pageId und status (draft → review → final; final sperrt), doc_move pageId und folder, folder_create folder, doc_send_pdf pageId, subject, text und to (oder to null = Verteiler des Ordners bei finaler Seite). Ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen ist sachlich, kurz, auf Deutsch, mit Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“.`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; Doku: read_page liest eine Seite (pageId); lies eine Seite immer, bevor du sie änderst oder ihren Inhalt brauchst, und gib erst danach die ändernden Aktionen an. doc_create braucht title und text (Markdown), doc_update pageId und text (ersetzt den Inhalt), doc_append pageId und text (hängt an), doc_status pageId und status (draft → review → final; final sperrt), doc_move pageId und folder, folder_create folder, doc_send_pdf pageId, subject, text und to (oder to null = Verteiler des Ordners bei finaler Seite). Ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen hat Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. ${styleText(agent.persona)}`;
   const prompt = `Heute: ${today}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -378,7 +384,7 @@ function triggerText(trigger: string, task: any): string {
 export async function runForTask(db: Db, mail: MailService, fetchFn: typeof fetch, taskId: string, trigger: string): Promise<AgentRunResult | null> {
   const t = await db.maybeOne(`select t.responsible_user_id, t.agent_paused, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
   if (!t || t.agent_paused || t.is_done || !t.responsible_user_id) return null;
-  const agent = await db.maybeOne(`select id, name, org_id from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]);
+  const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]);
   if (!agent) return null;
   return runAgentOnTask(db, mail, fetchFn, agent, taskId, trigger);
 }
@@ -398,7 +404,7 @@ export async function fingerprintOf(db: Db, taskId: string): Promise<string> {
 /** Worker: alle aktiven Agenten über ihre offenen, direkt zugewiesenen Arbeitspakete; Anlass aus Zustandsänderung, Fälligkeit oder Tagesrhythmus; Tagesbudget je Agent. */
 export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch, now = new Date()): Promise<AgentRunResult[]> {
   const out: AgentRunResult[] = [];
-  const agents = await db.query(`select id, name, org_id from users where kind = 'agent' and active`);
+  const agents = await db.query(`select id, name, org_id, persona from users where kind = 'agent' and active`);
   for (const agent of agents.rows as any[]) {
     const cfg = await aiConfigForAgent(db, agent.id);
     if (!cfg) continue;

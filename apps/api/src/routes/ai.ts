@@ -58,10 +58,10 @@ export async function aiRoutes(app: FastifyInstance) {
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b: any = req.body ?? {};
     const v = validProfile(b);
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key) values ($1,$2,$3,$4,$5,$6) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null]);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true]);
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl } });
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, thinkingOff: b.thinkingOff === true } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === r.id) };
   });
   app.patch<{ Params: { id: string }; Body: any }>('/ai/profiles/:id', async (req) => {
@@ -72,8 +72,9 @@ export async function aiRoutes(app: FastifyInstance) {
     const b: any = req.body ?? {};
     const v = validProfile(b, cur);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
-    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, keyChanged: b.apiKey !== undefined } });
+    const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
+    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, thinkingOff, keyChanged: b.apiKey !== undefined } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id) };
   });
   app.delete<{ Params: { id: string } }>('/ai/profiles/:id', async (req) => {

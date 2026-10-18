@@ -4,6 +4,7 @@ import { notify } from '../notify.js';
 import { visibleSubprojectSql } from '../rights.js';
 import { aiConfigForAgent, complete, orgAiSettings, parseJson } from './client.js';
 import { queueAgentRun } from './agentEvents.js';
+import { styleText } from './agent.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -14,7 +15,7 @@ import { queueAgentRun } from './agentEvents.js';
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['reply', 'notes'],
   properties: {
-    reply: { type: 'string', description: 'Antwort im Chat: kurz, sachlich, auf Deutsch, ohne Anrede-Floskeln und ohne Unterschrift' },
+    reply: { type: 'string', description: 'Antwort im Chat: kurz, im vorgegebenen Schreibstil, ohne Unterschrift' },
     notes: {
       type: 'array', description: 'Log-Einträge an deinen Arbeitspaketen (taskId aus der Liste), wenn die Nachricht eine Information dazu enthält; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['taskId', 'text'], properties: { taskId: { type: 'string' }, text: { type: 'string' } } }
@@ -28,7 +29,7 @@ const hhmm = (d: string | Date) => new Date(d).toLocaleString('de-DE', { day: '2
 export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; error?: string }
 
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
-  const agent = await db.maybeOne(`select id, name, org_id from users where id = $1 and kind = 'agent' and active`, [agentId]);
+  const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
   const channel = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, agent.org_id]);
   const msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.deleted_at is null`, [messageId, channelId]);
@@ -71,7 +72,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     [agent.id, project ? project.id : msg.user_id]
   );
   const known = new Map<string, any>(tasks.rows.map((t: any) => [t.id, t]));
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool. Man erreicht dich im Chat wie eine Kollegin oder einen Kollegen. Du antwortest kurz und sachlich auf Deutsch. Auskunft gibst du nur aus dem Kontext unten (deine Arbeitspakete, ihr Stand, ihr Log); du erfindest nichts und versprichst nichts im Namen anderer. Neue Arbeit übernimmst du nicht selbst: Zuweisungen macht die Projektleitung über ein Arbeitspaket. Enthält die Nachricht eine Information zu einem deiner Arbeitspakete (z. B. Freigabe erteilt, Termin bestätigt, Antwort eines Externen), halte sie mit notes als Log-Eintrag fest (taskId exakt aus der Liste); du prüfst das Arbeitspaket danach ohnehin neu. Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, notes = Log-Einträge (oder leer).`;
+  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool. Man erreicht dich im Chat wie eine Kollegin oder einen Kollegen. ${styleText(agent.persona)} Antworten im Chat sind kurz. Auskunft gibst du nur aus dem Kontext unten (deine Arbeitspakete, ihr Stand, ihr Log); du erfindest nichts und versprichst nichts im Namen anderer. Neue Arbeit übernimmst du nicht selbst: Zuweisungen macht die Projektleitung über ein Arbeitspaket. Enthält die Nachricht eine Information zu einem deiner Arbeitspakete (z. B. Freigabe erteilt, Termin bestätigt, Antwort eines Externen), halte sie mit notes als Log-Eintrag fest (taskId exakt aus der Liste); du prüfst das Arbeitspaket danach ohnehin neu. Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, notes = Log-Einträge (oder leer).`;
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Deine offenen Arbeitspakete${project ? ` in ${project.key}` : ''}:

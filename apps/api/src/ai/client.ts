@@ -12,16 +12,17 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 export type AiProvider = 'anthropic' | 'local';
 
-export interface AiProfileRow { id: string; org_id: string; name: string; provider: AiProvider; base_url: string | null; model: string; api_key: string | null; active: boolean }
-export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null }
-export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean }[]; defaultProfileId: string | null; agentDailyBudget: number }
+export interface AiProfileRow { id: string; org_id: string; name: string; provider: AiProvider; base_url: string | null; model: string; api_key: string | null; active: boolean; thinking_off?: boolean }
+/** thinkingOff: Denkmodus des lokalen Modells abschalten (chat_template_kwargs.enable_thinking = false, ausgewertet von vLLM und llama.cpp) */
+export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; thinkingOff?: boolean }
+export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean }[]; defaultProfileId: string | null; agentDailyBudget: number }
 
 /** Konfiguration aus einem Profil; Anthropic-Schlüssel darf aus ANTHROPIC_API_KEY kommen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
   if (!r || !r.active) return null;
   const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' ? process.env.ANTHROPIC_API_KEY ?? null : null);
   if (r.provider === 'local' ? !(r.base_url && r.model) : !apiKey) return null;
-  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null };
+  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, thinkingOff: r.provider === 'local' && Boolean(r.thinking_off) };
 }
 
 export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultProfileId: string | null; agentDailyBudget: number }> {
@@ -33,7 +34,7 @@ export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultPro
 export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const rows = await db.query(`select * from ai_profiles where org_id = $1 order by created_at`, [orgId]);
   const s = await orgAiSettings(db, orgId);
-  const profiles = (rows.rows as AiProfileRow[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active }));
+  const profiles = (rows.rows as AiProfileRow[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off) }));
   return { enabled: (rows.rows as AiProfileRow[]).some((r) => profileConfig(r)), profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget };
 }
 
@@ -86,7 +87,7 @@ async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: Complet
   try {
     r = await fetchFn(url, {
       method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
-      body: JSON.stringify({ model: cfg.model, max_tokens: opts.maxTokens ?? 4000, temperature: 0.2, messages: [{ role: 'system', content: opts.system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}) })
+      body: JSON.stringify({ model: cfg.model, max_tokens: opts.maxTokens ?? 4000, temperature: 0.2, messages: [{ role: 'system', content: opts.system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(cfg.thinkingOff ? { chat_template_kwargs: { enable_thinking: false } } : {}) })
     });
   } catch (e: any) {
     throw new HttpError(400, `Lokales LLM nicht erreichbar (${cfg.baseUrl}): ${String(e?.message ?? e).slice(0, 150)}`);
