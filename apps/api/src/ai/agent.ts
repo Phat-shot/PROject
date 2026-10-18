@@ -600,11 +600,13 @@ export async function agentForTask(db: Db, taskId: string): Promise<{ id: string
      where t.id = $1 and u.kind = 'agent' and u.active and exists (select 1 from project_members m where m.project_id = t.project_id and m.user_id = u.id)`, [taskId]);
 }
 
-/** Läufe, die einem Agenten heute noch zustehen (Tagesbudget des Mandanten; Läufe an Arbeitspaketen und im Chat zählen). */
+/** Läufe, die einem Agenten heute noch zustehen: Tagesbudget des Mandanten bzw. das kleinere eigene (Agenten der PL); Läufe an Arbeitspaketen, im Chat und an Mails zählen. */
 export async function agentBudgetLeft(db: Db, agent: { id: string; org_id: string }, now = new Date()): Promise<number> {
   const settings = await orgAiSettings(db, agent.org_id);
+  const own = (await db.maybeOne(`select agent_daily_budget from users where id = $1`, [agent.id]))?.agent_daily_budget;
+  const limit = own == null ? settings.agentDailyBudget : Math.min(settings.agentDailyBudget, Number(own));
   const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
-  return Math.max(0, settings.agentDailyBudget - used.c);
+  return Math.max(0, limit - used.c);
 }
 
 /** Ereignislauf: der zuständige Agent läuft sofort (von Routen über queueAgentRun ausgelöst), solange sein Tagesbudget reicht. */

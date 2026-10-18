@@ -98,7 +98,7 @@ function ProjectBody() {
   const taskId = params.get('task');
   return (
     <>
-      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
+      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.personal && <span className="badge" style={{ marginLeft: 8 }} title="Nur du und KI-Agenten">persönlich</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
       <Routes>
         <Route index element={<Navigate to={`${base}/board`} replace />} />
         <Route path="board" element={<BoardView />} />

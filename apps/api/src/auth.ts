@@ -31,7 +31,8 @@ export function mapUser(row: any): User {
     active: row.active,
     settings: row.settings ?? {},
     totpEnabled: Boolean(row.totp_enabled),
-    kind: row.kind === 'agent' ? 'agent' : 'person'
+    kind: row.kind === 'agent' ? 'agent' : 'person',
+    ...(row.kind === 'agent' && row.agent_project_id ? { agentProjectId: row.agent_project_id } : {})
   };
 }
 

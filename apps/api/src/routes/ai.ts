@@ -30,13 +30,20 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { defaultProfileId?: string | null; agentDailyBudget?: number } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { defaultProfileId?: string | null; agentDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number } } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget } })]);
+    // Eigene Agenten der PL: nur Profile des Mandanten, Budget je Agent höchstens das Mandantenbudget
+    let plAgents = cur.plAgents;
+    if (b.plAgents) {
+      const ids = (b.plAgents.profileIds ?? cur.plAgents?.profileIds ?? []).map(String);
+      for (const id of ids) if (!(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [id, user.orgId]))) throw badRequest('Profil nicht gefunden');
+      plAgents = { enabled: b.plAgents.enabled ?? Boolean(cur.plAgents?.enabled), profileIds: ids, maxBudget: Math.max(0, Math.min(1000, Number(b.plAgents.maxBudget ?? cur.plAgents?.maxBudget ?? 20) || 0)) };
+    }
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget, ...(plAgents ? { plAgents } : {}) } })]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: b });
     return aiStatus(db, user.orgId);
   });

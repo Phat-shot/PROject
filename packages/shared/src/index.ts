@@ -18,8 +18,10 @@ export interface User {
   settings?: UserSettings;
   /** Zweiter Faktor (TOTP) aktiv */
   totpEnabled?: boolean;
-  /** KI-Agent (kein Login, nur Mitglied mit Stellvertretung, Zuweisung nur durch PL) */
+  /** KI-Agent (kein Login, Mitglied oder stellvertretende PL, Zuweisung nur durch PL) */
   kind?: 'person' | 'agent';
+  /** Agent einer PL: nur in diesem Projekt einsetzbar */
+  agentProjectId?: string;
 }
 
 export interface UserSettings {
@@ -52,6 +54,8 @@ export interface Project {
   status: 'active' | 'archived';
   mailAddress: string | null;
   visibility: 'members' | 'org';
+  /** Persönliches Projekt: nur der Ersteller (PL) und KI-Agenten */
+  personal?: boolean;
   /** workflow = Mini-Projekt eines isolierten Workflow-Laufs (nicht in Projektlisten) */
   kind?: 'project' | 'workflow';
   timeTrackingEnabled: boolean;
@@ -117,8 +121,10 @@ export interface OrgSettings {
   footerText?: string;
   /** Zeiterfassung mandantenweit aus: blendet Zeiten, Aufwand und Buchungen überall aus */
   timeTracking?: boolean;
+  /** Alle Benutzer dürfen ein persönliches Projekt (Assistent) anlegen */
+  personalProjects?: boolean;
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie */
-  ai?: { defaultProfileId?: string | null; agentDailyBudget?: number };
+  ai?: { defaultProfileId?: string | null; agentDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number } };
 }
 
 export type AiProposalKind = 'task_update' | 'page_append';
@@ -649,5 +655,5 @@ export interface Meeting {
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
 export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean }
-export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
+export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** von der PL für ihr Projekt angelegt */ projectBound?: { id: string; label: string } | null; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
 export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; error: string | null; createdAt: string }

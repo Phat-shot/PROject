@@ -18,7 +18,7 @@ export interface AiProfileRow { id: string; org_id: string; name: string; provid
  * gesendet als chat_template_kwargs.enable_thinking (ausgewertet von vLLM und llama.cpp).
  */
 export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean }
-export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean }[]; defaultProfileId: string | null; agentDailyBudget: number }
+export interface AiStatus { enabled: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean }[]; defaultProfileId: string | null; agentDailyBudget: number; plAgents: { enabled: boolean; profileIds: string[]; maxBudget: number } }
 
 /** Konfiguration aus einem Profil; Anthropic-Schlüssel darf aus ANTHROPIC_API_KEY kommen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
@@ -28,17 +28,21 @@ export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | nu
   return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined };
 }
 
-export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultProfileId: string | null; agentDailyBudget: number }> {
+/** Eigene Agenten der PL: erlaubt?, freigegebene KI-Profile, höchstes Tagesbudget je Agent (nie über dem Mandantenwert). */
+export interface PlAgentPolicy { enabled: boolean; profileIds: string[]; maxBudget: number }
+export async function orgAiSettings(db: Db, orgId: string): Promise<{ defaultProfileId: string | null; agentDailyBudget: number; plAgents: PlAgentPolicy }> {
   const o = await db.one(`select settings from orgs where id = $1`, [orgId]);
   const ai = o.settings?.ai ?? {};
-  return { defaultProfileId: ai.defaultProfileId ?? null, agentDailyBudget: Number(ai.agentDailyBudget) || 50 };
+  const agentDailyBudget = Number(ai.agentDailyBudget) || 50;
+  const pa = ai.plAgents ?? {};
+  return { defaultProfileId: ai.defaultProfileId ?? null, agentDailyBudget, plAgents: { enabled: Boolean(pa.enabled), profileIds: Array.isArray(pa.profileIds) ? pa.profileIds.map(String) : [], maxBudget: Math.min(agentDailyBudget, Math.max(0, Number(pa.maxBudget ?? 20) || 0)) } };
 }
 
 export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const rows = await db.query(`select * from ai_profiles where org_id = $1 order by created_at`, [orgId]);
   const s = await orgAiSettings(db, orgId);
   const profiles = (rows.rows as AiProfileRow[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off) }));
-  return { enabled: (rows.rows as AiProfileRow[]).some((r) => profileConfig(r)), profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget };
+  return { enabled: (rows.rows as AiProfileRow[]).some((r) => profileConfig(r)), profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, plAgents: s.plAgents };
 }
 
 /** Projekt-KI: das dem Projekt zugewiesene Profil; ohne Zuweisung ist die KI im Projekt aus. */

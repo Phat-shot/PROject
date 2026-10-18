@@ -2,9 +2,9 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { visibleSubprojectSql } from '../rights.js';
-import { aiConfigForAgent, complete, orgAiSettings, parseJson } from './client.js';
+import { aiConfigForAgent, complete, parseJson } from './client.js';
 import { queueAgentRun } from './agentEvents.js';
-import { styleText } from './agent.js';
+import { agentBudgetLeft, styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 
@@ -53,9 +53,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
 
   const cfg = await aiConfigForAgent(db, agent.id);
   if (!cfg) { await post('Mir ist gerade kein aktives KI-Profil zugewiesen, ich kann nicht antworten. Bitte an die Verwaltung (KI-Agenten) wenden.'); return { status: 'skipped', error: 'kein KI-Profil' }; }
-  const settings = await orgAiSettings(db, agent.org_id);
-  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
-  if (used.c >= settings.agentDailyBudget) { await post('Mein Tagesbudget ist aufgebraucht. Ich melde mich morgen; Dringendes bitte an die Projektleitung.'); return { status: 'skipped', error: 'Tagesbudget' }; }
+  if ((await agentBudgetLeft(db, agent, now)) <= 0) { await post('Mein Tagesbudget ist aufgebraucht. Ich melde mich morgen; Dringendes bitte an die Projektleitung.'); return { status: 'skipped', error: 'Tagesbudget' }; }
 
   // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
   const history = threadId
