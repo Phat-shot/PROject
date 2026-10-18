@@ -16,6 +16,17 @@ export async function originMails(db: Db, taskId: string): Promise<any[]> {
   return r.rows;
 }
 
+/**
+ * Inhalt einer Mail am Arbeitspaket für KI-Kontexte (Agenten-Prompt, Neuformulierung nach außen): aus persönlichen Konten nur,
+ * wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt).
+ */
+export const mailBodyOk = (x: { account_type: string; copied?: boolean | null; owner_user_id: string | null }, humans: string[]) => x.account_type !== 'personal' || Boolean(x.copied) || humans.every((h) => h === x.owner_user_id);
+
+/** Menschen (keine Agenten) im Projekt, für mailBodyOk. */
+export async function projectHumans(db: Db, projectId: string): Promise<string[]> {
+  return (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind <> 'agent'`, [projectId])).rows.map((r: any) => r.user_id);
+}
+
 const dateDe = (d: any) => new Date(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'Europe/Berlin' });
 export const reSubject = (s: string | null | undefined) => { const x = (s ?? '').trim() || '(kein Betreff)'; return /^(re|aw):/i.test(x) ? x : `Re: ${x}`; };
 

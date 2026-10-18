@@ -226,7 +226,7 @@ function GeneralForm() {
  * Außenkommunikation (Informationsgrenze für Externe): externes Profil, das Externe über das Projekt erfahren dürfen (Name
  * nach außen, Adresse, Zufahrt, Ansprechpartner für Externe), und die Prüfstufe für Agenten-Mails an Nicht-Interne.
  */
-function ExternalCard() {
+export function ExternalCard() {
   const { detail, reload } = useProject();
   const ai = useAiStatus();
   const isPl = detail.project.myMembership.role === 'pl';

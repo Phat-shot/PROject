@@ -432,7 +432,8 @@ function CreateTaskFromMail({ mail, askConfirm, onClose, onCreated }: { mail: Ma
   );
 }
 
-function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
+/** Neue Mail, Antwort oder Abschluss-Antwort; an Externe vor dem Senden Hinweise der Außenprüfung (kein Block). */
+export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const { detail, tasks } = useProject();
   const [params] = useSearchParams();
   const replyTo = params.get('reply');
@@ -445,9 +446,12 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const [hints, setHints] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
   const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
+  // Eigene Mail an Externe: Fundstellen der Außenprüfung vor dem Senden als Hinweis, gesendet wird trotzdem auf Wunsch
+  const [check, setCheck] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
   const { busy, error, run } = useAsync();
   // Ansichten laden asynchron: erste schreibbare Ansicht nachziehen, sobald sie da ist
   useEffect(() => { if (!f.viewId && writable[0]) setF((x) => ({ ...x, viewId: writable[0].id })); }, [writable.length]);
+  useEffect(() => setCheck(null), [f.to, f.cc, f.subject, f.body, f.taskId]);
   useEffect(() => {
     if (final && taskParam) {
       api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean; outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? '?ai=1' : ''}`).then(async (r) => {
@@ -470,6 +474,12 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const view = views.find((v) => v.id === f.viewId);
   if (writable.length === 0) return <div className="mail-detail"><div className="empty">Du hast an keiner Ansicht ein Entwurfs- oder Senderecht.</div></div>;
   const split = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  const save = async (send: boolean) => { await api.post('/mail/drafts', { viewId: f.viewId, projectId: detail.project.id, taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, inReplyTo: f.inReplyTo, send }); onDone(); };
+  const trySend = () => run(async () => {
+    const r = await api.post<{ outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/projects/${detail.project.id}/outbound-hint`, { taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body });
+    if (r.outbound?.findings.length) { setCheck(r.outbound); return; }
+    await save(true);
+  });
   return (
     <div className="mail-detail">
       <h2>{final ? 'Antwort auf die Ursprungsmail' : replyTo ? 'Antwort' : 'Neue Mail'}</h2>
@@ -487,11 +497,21 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
         <label className="field"><span>Text</span><textarea style={{ minHeight: 240 }} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
         {view?.accountType === 'personal' && !view.myRights.canSend && <div className="notice small">Aus persönlichen Konten sendet nur der Eigentümer. Dein Entwurf geht an ihn zur Freigabe.</div>}
         {error && <div className="error">{error}</div>}
+        {check && (
+          <div className="notice small">
+            <strong>Hinweise der Außenprüfung</strong> ({AUDIENCE_LABEL[check.audience]}): Die Mail nennt Inhalte, die Externe nicht erfahren sollen. Du entscheidest selbst.
+            <Findings findings={check.findings} />
+            <div className="row mt">
+              <button className="btn sm primary" disabled={busy} onClick={() => void run(() => save(true))}>{view?.myRights.canSend ? 'Trotzdem senden' : 'Trotzdem einreichen'}</button>
+              <button className="btn sm" disabled={busy} onClick={() => setCheck(null)}>Bearbeiten</button>
+            </div>
+          </div>
+        )}
         <div className="row">
-          <button className="btn primary" disabled={busy || !f.to || !f.subject} onClick={() => void run(async () => { await api.post('/mail/drafts', { viewId: f.viewId, projectId: detail.project.id, taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, inReplyTo: f.inReplyTo, send: true }); onDone(); })}>
+          <button className="btn primary" disabled={busy || !f.to || !f.subject || Boolean(check)} onClick={() => void trySend()}>
             {view?.myRights.canSend ? 'Senden' : 'Zur Freigabe einreichen'}
           </button>
-          <button className="btn" disabled={busy || !f.to || !f.subject} onClick={() => void run(async () => { await api.post('/mail/drafts', { viewId: f.viewId, projectId: detail.project.id, taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, inReplyTo: f.inReplyTo, send: false }); onDone(); })}>Als Entwurf speichern</button>
+          <button className="btn" disabled={busy || !f.to || !f.subject} onClick={() => void run(() => save(false))}>Als Entwurf speichern</button>
         </div>
       </div>
     </div>

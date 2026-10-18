@@ -11,10 +11,10 @@ import * as L from '../docs/layout.js';
 import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
-import { originMails, reSubject } from '../mail/origin.js';
+import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
-import { audienceOf, audienceText, guardOutbound, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
+import { audienceOf, audienceText, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -156,7 +156,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const pls = members.rows.filter((x: any) => x.role === 'pl' && !x.is_deputy);
   // Inhalt aus persönlichen Konten nur, wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt)
   const humans = members.rows.filter((x: any) => x.kind !== 'agent').map((x: any) => x.user_id);
-  const bodyOk = (x: any) => x.account_type !== 'personal' || x.copied || humans.every((h: string) => h === x.owner_user_id);
+  const bodyOk = (x: any) => mailBodyOk(x, humans);
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
@@ -532,9 +532,15 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         const people = members.rows.filter((x: any) => x.kind !== 'agent' && raw.some((r) => r === String(x.email).toLowerCase() || r === String(x.name).toLowerCase()));
         const unknown = raw.filter((r) => !['projekt', '#projekt', 'projektkanal'].includes(r) && !people.some((x: any) => r === String(x.email).toLowerCase() || r === String(x.name).toLowerCase()));
         const targets = raw.length ? people : pls;
+        // Regel E: nur an Menschen, die das Teilprojekt sehen; den Projektkanal lesen alle Mitglieder, bei eingeschränkten Teilprojekten nie
+        const outside: string[] = [];
+        for (const x of targets) if (!(await isInternal(db, { projectId: task.project_id, subprojectId: task.subproject_id, userId: x.user_id }))) outside.push(x.name);
+        const restricted = toProject && task.subproject_id ? Boolean(await db.maybeOne(`select 1 from subprojects where id = $1 and restricted`, [task.subproject_id])) : false;
         if (!text) errors.push('Chat ohne Text verworfen');
         else if (chats >= 3) errors.push('Chat verworfen: mehr als drei Nachrichten im Lauf');
         else if (unknown.length) errors.push(`Chat verworfen: ${unknown.join(', ')} ist kein Mitglied des Projekts`);
+        else if (outside.length) errors.push(`Chat verworfen: ${outside.join(', ')} hat keinen Zugriff auf das Teilprojekt (nur über die Außengrenze: mail oder refer)`);
+        else if (restricted) errors.push('Chat verworfen: Projektkanal nicht bei eingeschränkten Teilprojekten (alle Mitglieder lesen mit)');
         else {
           chats++;
           const msg = `${task.project_key}-${task.number} „${task.title}“: ${text}`;

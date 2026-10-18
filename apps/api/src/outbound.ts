@@ -2,8 +2,9 @@ import type { AudienceClass, ExternalProfile, OutboundFinding } from '@projektto
 import type { Db } from './db.js';
 import { audit } from './audit.js';
 import { notify } from './notify.js';
-import { canSeeSubproject } from './rights.js';
+import { canSeeSubproject, visibleSubprojectSql } from './rights.js';
 import { contactChain } from './tasks/service.js';
+import { mailBodyOk, projectHumans } from './mail/origin.js';
 import { complete, orgAiSettings, parseJson, type AiConfig } from './ai/client.js';
 import { agentChatMessage } from './ai/plan.js';
 
@@ -123,14 +124,19 @@ const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).s
 const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').trim(); return t.length > n ? t.slice(0, n) + ' …' : t; };
 const statusWords = (x: { is_done: boolean; kind: string }) => (x.is_done ? 'erledigt' : x.kind === 'backlog' ? 'geplant' : x.kind === 'parked' ? 'zurückgestellt' : 'in Bearbeitung');
 
-export interface ExternalContext { text: string; scope: Scope }
+/**
+ * text geht an die Neuformulierung; trusted ist der Teil, den Menschen im Projekt für Externe bestimmt haben (alles außer
+ * den Mailtexten). Nur trusted nimmt checkOutbound von Fundstellen aus: was ein Externer selbst schreibt, schaltet die
+ * Prüfung nicht ab.
+ */
+export interface ExternalContext { text: string; trusted: string; scope: Scope }
 
 /**
  * Außenkontext einer Aufgabe für die externen Empfänger einer Nachricht (bei mehreren nur, was für alle gilt): Titel,
  * Termine und Status in Worten, ihre Tasks (bei eigener Zuständigkeit alle), Außenbeschreibung, Beschreibung nur bei
- * Zuweisung an diesen Externen, Mails mit ihnen am AP, Log-Einträge „für Externe sichtbar“, freigegebene Seiten, Termine
- * verknüpfter Besprechungen mit ihnen, externes Profil. Nie: andere APs, Teilprojekte, Mitglieder, Doku-Index, Meilensteine,
- * Belegt-Zeiten, andere Mails, Preise.
+ * Zuweisung an diesen Externen, Mails mit ihnen am AP (Inhalte aus persönlichen Konten nur, wenn freigegeben), Log-Einträge
+ * „für Externe sichtbar“, freigegebene Seiten, Termine verknüpfter Besprechungen mit ihnen, externes Profil. Nie: andere
+ * APs, Teilprojekte, Mitglieder, Doku-Index, Meilensteine, Belegt-Zeiten, andere Mails, Preise.
  */
 export async function externalContext(db: Db, taskId: string | null, aud: Audience, projectId?: string): Promise<ExternalContext> {
   const pid = projectId ?? (await db.one(`select project_id from tasks where id = $1`, [taskId])).project_id;
@@ -138,6 +144,8 @@ export async function externalContext(db: Db, taskId: string | null, aud: Audien
   const { project: p, task: t, externals } = sc;
   const all = (pred: (e: string) => boolean) => externals.length > 0 && externals.every(pred);
   const lines: string[] = [];
+  /** Mailtexte: gehen an die Neuformulierung, sind aber keine Ausnahme der Prüfung */
+  let mailLine = '';
   const pr = p.profile;
   lines.push(`Projekt nach außen: ${pr.name || '(kein Name nach außen hinterlegt; Projektnamen nicht nennen)'}`);
   if (pr.address) lines.push(`Adresse: ${pr.address}`);
@@ -156,9 +164,11 @@ export async function externalContext(db: Db, taskId: string | null, aud: Audien
     if (items.length) lines.push(`Tasks für die Empfänger:\n${items.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title}`).join('\n')}`);
     const log = await db.query(`select body, created_at from task_comments where task_id = $1 and visibility = 'external' order by created_at desc limit 10`, [t.id]);
     if (log.rows.length) lines.push(`Mitteilungen für Externe (aus dem Log):\n${log.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')}: ${cut(x.body, 600)}`).join('\n')}`);
-    const mails = (await db.query(`select m.subject, m.from_addr, m.to_json, m.cc_json, m.date, m.outgoing, coalesce(m.text_body, m.snippet) as body from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc limit 12`, [t.id])).rows
+    // Mailtexte aus persönlichen Konten nur, wenn sie freigegeben sind (wie im Agenten-Prompt); sie zählen nicht zu trusted
+    const mails = (await db.query(`select m.subject, m.from_addr, m.to_json, m.cc_json, m.date, m.outgoing, coalesce(m.text_body, m.snippet) as body, l.copied, a.type as account_type, a.owner_user_id from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id where l.task_id = $1 order by m.date desc limit 12`, [t.id])).rows
       .filter((m: any) => all((e) => [m.from_addr, ...(m.to_json ?? []), ...(m.cc_json ?? [])].map(normAddr).includes(e))).slice(0, 5);
-    if (mails.length) lines.push(`Mails mit den Empfängern zu dieser Aufgabe (neueste zuerst):\n${mails.map((m: any) => `- ${new Date(m.date).toLocaleDateString('de-DE')} ${m.outgoing ? 'an' : 'von'} ${m.outgoing ? (m.to_json ?? []).join(', ') : m.from_addr}: ${m.subject} – ${cut(m.body, 500)}`).join('\n')}`);
+    const humans = mails.length ? await projectHumans(db, p.id) : [];
+    if (mails.length) lines.push(mailLine = `Mails mit den Empfängern zu dieser Aufgabe (neueste zuerst):\n${mails.map((m: any) => `- ${new Date(m.date).toLocaleDateString('de-DE')} ${m.outgoing ? 'an' : 'von'} ${m.outgoing ? (m.to_json ?? []).join(', ') : m.from_addr}: ${m.subject} – ${mailBodyOk(m, humans) ? cut(m.body, 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n')}`);
     const meetings = (await db.query(`select mm.title, mm.starts_at, mm.location, mm.tentative, mm.attendees from meeting_tasks mt join meetings mm on mm.id = mt.meeting_id where mt.task_id = $1 order by mm.starts_at`, [t.id])).rows
       .filter((m: any) => all((e) => (m.attendees ?? []).some((a: any) => normAddr(a?.email) === e)));
     if (meetings.length) lines.push(`Termine mit den Empfängern: ${meetings.map((m: any) => `${m.title} ${new Date(m.starts_at).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}${m.location ? ` (${m.location})` : ''}${m.tentative ? ' [vorläufig]' : ''}`).join(', ')}`);
@@ -167,7 +177,7 @@ export async function externalContext(db: Db, taskId: string | null, aud: Audien
     const pages = await db.query(`select title, status from doc_pages where id = any($1::uuid[]) and deleted_at is null order by title`, [[...sc.released]]);
     lines.push(`Für die Empfänger freigegebene Seiten: ${pages.rows.map((x: any) => `„${x.title}“${x.status === 'final' ? '' : ' (Entwurf, geht nicht hinaus)'}`).join(', ')}`);
   }
-  return { text: lines.join('\n'), scope: sc };
+  return { text: lines.join('\n'), trusted: lines.filter((l) => l !== mailLine).join('\n'), scope: sc };
 }
 
 const COMPOSE_SCHEMA = {
@@ -204,35 +214,39 @@ export interface CheckResult { result: 'pass' | 'held' | 'blocked'; findings: Ou
 /**
  * Schicht 3, deterministisch: fremde Kennungen (alles außer AP, Über-AP und Aufgaben darunter), Titel anderer APs und
  * Teilprojekte, Titel nicht freigegebener Seiten, Adressen interner Personen außer den Kontakten aus dem externen Profil,
- * andere Projektkennungen und -namen, App-Links, Anhänge, die nicht final oder nicht freigegeben sind (blocked). Was schon
- * im Außenkontext steht (z. B. vom Externen selbst geschrieben oder von der PL für Externe freigegeben), ist kein Fund.
+ * andere Projektkennungen und -namen, App-Links, Anhänge, die nicht final oder nicht freigegeben sind (blocked). Was Menschen
+ * im Projekt für Externe bestimmt haben (Außenbeschreibung, Log „für Externe sichtbar“, Profil, freigegebene Seiten), ist kein
+ * Fund; was der Externe selbst geschrieben hat, schon. viewerId (Hinweise für eine Person): Fundstellen zu Teilprojekten, die
+ * sie nicht sieht, entfallen, damit die Prüfung nichts über eingeschränkte Teilprojekte verrät.
  */
-export async function checkOutbound(db: Db, q: { projectId: string; taskId: string | null; aud: Audience; subject: string; text: string; pageIds?: string[]; context?: ExternalContext }): Promise<CheckResult> {
+export async function checkOutbound(db: Db, q: { projectId: string; taskId: string | null; aud: Audience; subject: string; text: string; pageIds?: string[]; context?: ExternalContext; viewerId?: string }): Promise<CheckResult> {
   if (q.aud.audience === 'internal') return { result: 'pass', findings: [] };
   const ctx = q.context ?? (await externalContext(db, q.taskId, q.aud, q.projectId));
   const sc = ctx.scope;
   const hay = `${q.subject}\n${q.text}`;
-  const known = ctx.text;
+  const known = ctx.trusted;
   const findings: OutboundFinding[] = [];
   const add = (f: OutboundFinding) => { if (!findings.some((x) => x.kind === f.kind && x.match.toLowerCase() === f.match.toLowerCase())) findings.push(f); };
   const p = sc.project;
   const own = new Set(sc.family.map((x) => x.number));
   const famIds = new Set(sc.family.map((x) => x.id));
   const famTitles = new Set(sc.family.map((x) => x.title.toLowerCase()));
-  // Kennungen: eigenes Projekt nur AP-Familie, andere Projektkennungen des Mandanten nie
+  // Kennungen: eigenes Projekt nur AP-Familie, andere Projektkennungen des Mandanten nie. Das Muster entsteht aus den
+  // tatsächlichen Kürzeln (auch mit Bindestrich oder Ziffer am Anfang, z. B. BAU-HH-12, 24HH-3), längere zuerst
   const keys = new Map<string, string>((await db.query(`select key, name from projects where org_id = $1 and id <> $2 and kind = 'project'`, [p.org_id, p.id])).rows.map((r: any) => [String(r.key).toUpperCase(), r.name]));
-  for (const m of hay.matchAll(/(?<![\p{L}\p{N}])([A-Za-z][A-Za-z0-9]{1,11})-(\d+)(?![\p{N}])/gu)) {
+  const alt = [...new Set([p.key.toUpperCase(), ...keys.keys()])].filter(Boolean).sort((a, b) => b.length - a.length).map(esc).join('|');
+  for (const m of hay.matchAll(new RegExp(`(?<![\\p{L}\\p{N}-])(${alt})-(\\d+)(?![\\p{N}])`, 'giu'))) {
     const key = m[1].toUpperCase();
     if (has(known, m[0])) continue;
     if (key === p.key.toUpperCase() && !own.has(Number(m[2]))) add({ kind: 'ref', match: m[0], text: `fremde Kennung ${m[0]}` });
     else if (keys.has(key)) add({ kind: 'project', match: m[0], text: `Kennung aus einem anderen Projekt (${m[0]})` });
   }
   for (const [, name] of keys) if (name && name.length >= 5 && has(hay, name) && !has(known, name)) add({ kind: 'project', match: name, text: `Name eines anderen Projekts „${name}“` });
-  // Titel anderer APs und Aufgaben sowie aller Teilprojekte
-  const tasks = await db.query(`select id, number, title from tasks where project_id = $1 and deleted_at is null and length(title) >= 6`, [p.id]);
+  // Titel anderer APs und Aufgaben sowie aller Teilprojekte (für eine Person nur, soweit sie das Teilprojekt sieht)
+  const tasks = await db.query(`select t.id, t.number, t.title from tasks t where t.project_id = $1 and t.deleted_at is null and length(t.title) >= 6${q.viewerId ? ` and ${visibleSubprojectSql(2)}` : ''}`, q.viewerId ? [p.id, q.viewerId] : [p.id]);
   for (const t of tasks.rows as any[]) if (!famIds.has(t.id) && !famTitles.has(String(t.title).toLowerCase()) && has(hay, t.title) && !has(known, t.title)) add({ kind: 'task', match: t.title, text: `Titel eines anderen Arbeitspakets (${p.key}-${t.number} „${t.title}“)` });
-  const sps = await db.query(`select name from subprojects where project_id = $1 and length(name) >= 4`, [p.id]);
-  for (const s of sps.rows as any[]) if (has(hay, s.name) && !has(known, s.name)) add({ kind: 'subproject', match: s.name, text: `Name eines Teilprojekts „${s.name}“` });
+  const sps = await db.query(`select id, name from subprojects where project_id = $1 and length(name) >= 4`, [p.id]);
+  for (const s of sps.rows as any[]) if (has(hay, s.name) && !has(known, s.name) && (!q.viewerId || (await canSeeSubproject(db, q.viewerId, s.id)))) add({ kind: 'subproject', match: s.name, text: `Name eines Teilprojekts „${s.name}“` });
   // Seiten, die für die Empfänger nicht freigegeben sind
   const pages = await db.query(`select id, title from doc_pages where project_id = $1 and deleted_at is null and length(title) >= 6`, [p.id]);
   for (const pg of pages.rows as any[]) if (!sc.released.has(pg.id) && has(hay, pg.title) && !has(known, pg.title)) add({ kind: 'page', match: pg.title, text: `Titel einer nicht freigegebenen Seite „${pg.title}“`, pageId: pg.id });
@@ -287,18 +301,33 @@ export async function recordCheck(db: Db, r: { orgId: string; projectId: string;
   return row.id;
 }
 
-/** Prüfung als Hinweis (KI-Entwürfe, Abschluss-Antwort mit KI): blockiert nie, wird nur protokolliert und angezeigt. */
-export async function checkHint(db: Db, q: { orgId: string; projectId: string; taskId: string | null; recipients: string[]; subject: string; text: string; mailDraftId?: string | null; userId: string }): Promise<{ audience: AudienceClass; result: CheckResult['result']; findings: OutboundFinding[] } | null> {
+/**
+ * Prüfung als Hinweis für eine Person (KI-Entwürfe, Abschluss-Antwort mit KI, Mails, die sie selbst sendet): blockiert nie,
+ * wird protokolliert (Kanal draft) und angezeigt; record: false nur für die Vorschau vor dem Senden.
+ */
+export async function checkHint(db: Db, q: { orgId: string; projectId: string; taskId: string | null; recipients: string[]; subject: string; text: string; mailDraftId?: string | null; userId: string; record?: boolean }): Promise<{ audience: AudienceClass; result: CheckResult['result']; findings: OutboundFinding[] } | null> {
   const aud = await audienceOf(db, { projectId: q.projectId, taskId: q.taskId, recipients: q.recipients });
   if (aud.audience === 'internal' || !aud.recipients.length) return null;
-  const c = await checkOutbound(db, { projectId: q.projectId, taskId: q.taskId, aud, subject: q.subject, text: q.text });
-  await recordCheck(db, { orgId: q.orgId, projectId: q.projectId, taskId: q.taskId, channel: 'draft', aud, result: c.result, findings: c.findings, mailDraftId: q.mailDraftId ?? null, userId: q.userId });
+  const c = await checkOutbound(db, { projectId: q.projectId, taskId: q.taskId, aud, subject: q.subject, text: q.text, viewerId: q.userId });
+  if (q.record !== false) await recordCheck(db, { orgId: q.orgId, projectId: q.projectId, taskId: q.taskId, channel: 'draft', aud, result: c.result, findings: c.findings, mailDraftId: q.mailDraftId ?? null, userId: q.userId });
   return { audience: aud.audience, ...c };
 }
 
-/** Kennzeichen der Chat-Nachricht an die Kette; eine Antwort mit „darf weitergegeben werden“ wird Teil des Außenkontexts (routes/chat.ts). */
+/** Kennzeichen der Chat-Nachricht an die Kette; eine Antwort mit dem Freigabesatz wird Teil des Außenkontexts (routes/chat.ts). */
 export const REFER_MARK = 'Rückfrage von extern';
-export const RELEASE_PHRASE = /\s*[,.;:–-]?\s*darf weitergegeben werden[.!]?/i;
+const RELEASE_END = /(^|[.!;:,\n–-])\s*(?:(?:das|dies|es|alles|das alles|diese antwort)\s+)?darf weitergegeben werden\s*[.!]?\s*$/i;
+
+/**
+ * Freigabe einer Antwort auf refer: nur, wenn die Nachricht mit dem eigenen Satz „Darf weitergegeben werden.“ endet (auch
+ * „…, das darf weitergegeben werden.“). Verneinungen, Fragen und Einschränkungen („Nichts davon darf …“, „Kein Wort darf …“,
+ * „Was davon darf …, kläre ich noch“) geben nichts frei. Liefert den freigegebenen Text ohne den Satz, sonst null. Ab P5
+ * wird daraus eine Antwortoption der Frage external_referral.
+ */
+export function releasedText(body: string): string | null {
+  const m = body.match(RELEASE_END);
+  if (!m) return null;
+  return body.slice(0, m.index! + m[1].length).replace(/[\s,;:–-]+$/, '').trim() || null;
+}
 
 /**
  * Aktion refer: Frage eines Externen außerhalb seiner Aufgabe an den nächsten Menschen der Kette (Zuständige des Über-AP,
@@ -314,7 +343,7 @@ export async function referToChain(db: Db, q: { task: any; agent: { id: string; 
   const code = `${t.project_key}-${t.number}`;
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [t.id, q.agent.id, `${REFER_MARK}${q.from ? ` (${q.from})` : ''} außerhalb der Aufgabe an ${contact.name} weitergegeben (${contact.why}): ${cut(q.question, 1500)}`]);
   await notify(db, { userId: contact.id, projectId: t.project_id, type: 'external.referral', title: `${REFER_MARK}: ${t.title}`, body: cut(q.question, 300), link: `/projekte/${t.project_id}/board?task=${t.id}`, dedupeKey: null });
-  await agentChatMessage(db, q.agent, { userId: contact.id }, `${code} „${t.title}“: ${REFER_MARK}${q.from ? ` (${q.from})` : ''}, gehört nicht zu dieser Aufgabe: ${cut(q.question, 1500)}\nAntworte hier; schreibst du „darf weitergegeben werden“, wird deine Antwort für Externe sichtbar und ich gebe sie weiter.`, t.project_id);
+  await agentChatMessage(db, q.agent, { userId: contact.id }, `${code} „${t.title}“: ${REFER_MARK}${q.from ? ` (${q.from})` : ''}, gehört nicht zu dieser Aufgabe: ${cut(q.question, 1500)}\nAntworte hier; endet deine Antwort mit dem Satz „Darf weitergegeben werden.“, wird sie für Externe sichtbar und ich gebe sie weiter.`, t.project_id);
   const p = await db.one(`select external_profile, mail_address from projects where id = $1`, [t.project_id]);
   const c = profileOf(p.external_profile).contacts?.[0];
   const referral = c ? `${c.name}${c.role ? ` (${c.role})` : ''}${c.email ? `, ${c.email}` : ''}` : `die Projektleitung${p.mail_address ? ` (erreichbar über ${p.mail_address})` : ''}`;

@@ -834,6 +834,19 @@ export async function mailRoutes(app: FastifyInstance) {
     return { mailId: mail.id, viewId, to: [mail.from_addr], subject: reSubject(mail.subject), inReplyTo: mail.message_id ?? null, body, answered: Boolean(mail.answered), draftOpen: Boolean(mail.draft_open), outbound };
   });
 
+  // Vorschau der Außenprüfung vor dem Senden (Neue Mail, Antwort): nur Hinweise, nichts wird protokolliert oder blockiert
+  app.post<{ Params: { id: string }; Body: { taskId?: string | null; to?: string[]; cc?: string[]; subject?: string; body?: string } }>('/projects/:id/outbound-hint', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'member');
+    const b = req.body ?? {};
+    const task = b.taskId ? await db.maybeOne(`select id, project_id, subproject_id from tasks where id = $1 and deleted_at is null`, [b.taskId]) : null;
+    if (b.taskId && (!task || task.project_id !== req.params.id)) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
+    if (task && !(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const recipients = [...(Array.isArray(b.to) ? b.to : []), ...(Array.isArray(b.cc) ? b.cc : [])].map(String).slice(0, 50);
+    const hint = await checkHint(db, { orgId: user.orgId, projectId: req.params.id, taskId: task?.id ?? null, recipients, subject: String(b.subject ?? ''), text: String(b.body ?? ''), userId: user.id, record: false });
+    return { outbound: hint };
+  });
+
   app.get<{ Params: { id: string } }>('/projects/:id/mail/drafts', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
@@ -880,6 +893,7 @@ export async function mailRoutes(app: FastifyInstance) {
       [account!.id, b.viewId ?? null, b.taskId ?? null, b.projectId, user.id, JSON.stringify(b.to), JSON.stringify(b.cc ?? []), b.subject, b.body ?? '', b.inReplyTo ?? null, b.checklistItemId ?? null]
     );
     if (b.send) {
+      await hintOnSend(d.id, user);
       if (rights.canSend) {
         await doSend(d.id, user, account!, b.references ?? null);
       } else {
@@ -916,6 +930,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, d.project_id, 'member');
     const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [d.account_id]);
     const rights = d.view_id ? await getViewRights(db, d.view_id, user, m) : (await canManageAccount(user, account)) ? ALL_RIGHTS : null;
+    if (rights?.canSend || (d.user_id === user.id && rights?.canDraft)) await hintOnSend(d.id, user);
     if (!rights?.canSend) {
       if (d.user_id === user.id && rights?.canDraft) {
         await db.query(`update mail_drafts set status = 'pending_approval', updated_at = now() where id = $1`, [d.id]);
@@ -948,6 +963,7 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   // Außenprüfung (Informationsgrenze): angehaltene Agenten-Mails mit Fundstellen; sehen und entscheiden darf, wer den Entwurf senden darf
+  // (Senderecht der Ansicht bzw. Konto verwalten, auch für die verfassende Person); Hinweise zu Entwürfen von Menschen (Kanal draft) gehören nicht dazu
   app.get<{ Params: { id: string }; Querystring: { result?: string } }>('/projects/:id/outbound-checks', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
@@ -957,12 +973,13 @@ export async function mailRoutes(app: FastifyInstance) {
          du.name as draft_user_name, pg.title as page_title, dby.name as decided_by_name
        from outbound_checks c join projects p on p.id = c.project_id left join tasks t on t.id = c.task_id left join mail_drafts d on d.id = c.mail_draft_id
          left join users du on du.id = d.user_id left join doc_pages pg on pg.id = d.page_id left join users dby on dby.id = c.decided_by
-       where c.project_id = $1 and ($2::text is null or c.result = $2) and ($2::text is distinct from 'held' or (c.decided_at is null and d.status in ('pending_approval','failed')))
+       where c.project_id = $1 and ($2::text is null or c.result = $2) and ($2::text is distinct from 'held' or (c.decided_at is null and c.channel in ('mail','reply_origin','pdf') and d.status in ('pending_approval','failed')))
        order by c.created_at desc limit 100`, [req.params.id, result]);
     const out: OutboundCheck[] = [];
     for (const r of rows.rows as any[]) {
       if (r.subproject_id && !(await canSeeSubproject(db, user.id, r.subproject_id))) continue;
-      if (r.mail_draft_id ? !(await mayDecideDraft({ user_id: r.draft_user_id, view_id: r.view_id, account_id: r.account_id }, user, m)) : m.role !== 'pl') continue;
+      const draft = { user_id: r.draft_user_id, view_id: r.view_id, account_id: r.account_id };
+      if (r.mail_draft_id ? !(await (result === 'held' ? maySendDraft(draft, user, m) : mayDecideDraft(draft, user, m))) : m.role !== 'pl') continue;
       out.push(mapCheck(r));
     }
     return { checks: out };
@@ -981,8 +998,10 @@ export async function mailRoutes(app: FastifyInstance) {
     const t = c.task_id ? await db.maybeOne(`select t.id, t.number, t.subproject_id, p.key from tasks t join projects p on p.id = t.project_id where t.id = $1`, [c.task_id]) : null;
     if (t && !(await canSeeSubproject(db, user.id, t.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const d = c.mail_draft_id ? await db.maybeOne(`select * from mail_drafts where id = $1`, [c.mail_draft_id]) : null;
-    if (!d || c.decided_at || d.status === 'sent') throw badRequest('Bereits entschieden oder ohne Entwurf');
-    if (!(await mayDecideDraft(d, user, m))) throw forbidden('Freigeben darf, wer den Entwurf senden darf (Senderecht der Ansicht bzw. PL)');
+    if (!d || c.decided_at || !['pending_approval', 'failed'].includes(d.status)) throw badRequest('Bereits entschieden oder ohne wartenden Entwurf');
+    // Echtes Senderecht, auch für die verfassende Person (sonst ginge ein Entwurf ohne Senderecht an der Freigabe vorbei)
+    if (!(await maySendDraft(d, user, m))) throw forbidden('Freigeben darf, wer den Entwurf senden darf (Senderecht der Ansicht bzw. PL)');
+    if (!['mail', 'reply_origin', 'pdf'].includes(c.channel)) throw badRequest('Nur Agenten-Mails werden hier entschieden; Hinweise zu eigenen Entwürfen gelten beim normalen Senden');
     const b = req.body ?? ({} as any);
     if (!['release', 'edit', 'block'].includes(b.action)) throw badRequest('action: release, edit oder block');
     const author = await db.maybeOne(`select name, kind from users where id = $1`, [d.user_id]);
@@ -996,14 +1015,16 @@ export async function mailRoutes(app: FastifyInstance) {
       if (author?.kind === 'agent' && d.task_id) queueAgentRun(d.task_id, 'rejected');
       return { ok: true };
     }
+    // Vor jeder Änderung prüfen: Seitenfreigabe nur PL oder „Final setzen / Versand“, angehaltenes PDF nur, solange die Seite final ist
+    const share = (Array.isArray(b.sharePageIds) ? b.sharePageIds : []).filter((pid: string) => (c.findings ?? []).some((f: any) => f.pageId === pid));
+    if (share.length && m.role !== 'pl' && !m.canFinalize) throw forbidden('Seiten gibt die PL frei oder wer „Final setzen / Versand“ darf');
+    if (d.page_id && (await db.maybeOne(`select status from doc_pages where id = $1 and deleted_at is null`, [d.page_id]))?.status !== 'final') throw badRequest('Die Seite des PDF-Anhangs ist nicht mehr final: Seite final setzen oder Entwurf ablehnen');
     if (b.action === 'edit') {
       if (!String(b.subject ?? d.subject).trim()) throw badRequest('Betreff erforderlich');
       await db.query(`update mail_drafts set subject = coalesce($2, subject), body = coalesce($3, body), updated_at = now() where id = $1`, [d.id, b.subject?.trim() || null, b.body ?? null]);
     }
     // Seite in der Außenprüfung freigeben: Lesefreigabe für die externen Empfänger, danach Teil ihres Außenkontexts
-    const share = (Array.isArray(b.sharePageIds) ? b.sharePageIds : []).filter((pid: string) => (c.findings ?? []).some((f: any) => f.pageId === pid));
     if (share.length) {
-      if (m.role !== 'pl' && !m.canFinalize) throw forbidden('Seiten gibt die PL frei oder wer „Final setzen / Versand“ darf');
       const externals: string[] = (c.recipients ?? []).filter((r: any) => r.audience !== 'internal').map((r: any) => r.email);
       for (const pid of share) {
         const page = await db.maybeOne(`select id, title from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, c.project_id]);
@@ -1024,11 +1045,22 @@ export async function mailRoutes(app: FastifyInstance) {
     return { ok: true, draft: mapDraft(row) };
   });
 
-  /** Entwurf ändern, senden oder ablehnen: die verfassende Person, an einer Ansicht wer dort senden darf, ohne Ansicht (Entwürfe von Agenten am Projektkonto) wer das Konto verwaltet. */
+  /** Entwurf ändern oder ablehnen: die verfassende Person, sonst wer ihn senden darf. */
   async function mayDecideDraft(d: { user_id: string; view_id: string | null; account_id: string }, user: User, m: Awaited<ReturnType<typeof requireProject>>): Promise<boolean> {
-    if (d.user_id === user.id) return true;
+    return d.user_id === user.id || maySendDraft(d, user, m);
+  }
+
+  /** Senderecht an einem Entwurf: an einer Ansicht wer dort senden darf, ohne Ansicht (Entwürfe von Agenten am Projektkonto) wer das Konto verwaltet. */
+  async function maySendDraft(d: { view_id: string | null; account_id: string }, user: User, m: Awaited<ReturnType<typeof requireProject>>): Promise<boolean> {
     if (d.view_id) return (await getViewRights(db, d.view_id, user, m)).canSend;
     return canManageAccount(user, await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [d.account_id]));
+  }
+
+  /** Mail, die eine Person selbst sendet oder zur Freigabe einreicht: Außenprüfung als Hinweis (protokolliert, blockiert nie). */
+  async function hintOnSend(draftId: string, user: User) {
+    const d = await db.one(`select d.*, u.kind as author_kind from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [draftId]);
+    if (d.author_kind === 'agent') return;
+    await checkHint(db, { orgId: user.orgId, projectId: d.project_id, taskId: d.task_id, recipients: [...(d.to_addrs ?? []), ...(d.cc_addrs ?? [])], subject: d.subject, text: d.body ?? '', mailDraftId: d.id, userId: user.id });
   }
 
   /** Wer an der Ansicht senden darf, erfährt von wartenden Entwürfen. */

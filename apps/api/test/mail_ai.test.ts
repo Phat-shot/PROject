@@ -85,6 +85,23 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   assert.ok(view[0].actions.every((a: any) => a.status === 'done'));
 });
 
+test('Antwortentwurf der Mail-KI an Externe mit Projektinternem: Hinweis am Entwurf und im Ergebnis, kein Block', async () => {
+  const pl = await t.login('pl@demo.local');
+  mailNext = [
+    M({ type: 'create_ap', title: 'Angebot Trockenbau einholen', responsible: agent.email }),
+    M({ type: 'reply_draft', text: 'Guten Tag,\n\ndanke, wir melden uns, sobald die Wireframes Startseite und Produktseiten fertig sind.\n\nViele Grüße' })
+  ];
+  await inject({ subject: 'Angebot Trockenbau', text: 'Wir können ein Angebot schicken.', folder: 'KI Bearbeiten' });
+  const mail = await t.db.one(`select * from mails where subject = 'Angebot Trockenbau'`);
+  const run = (await t.api(pl).get(`/mail/mails/${mail.id}/ai`)).json().runs[0];
+  const reply = run.actions.find((a: any) => a.type === 'reply_draft');
+  assert.equal(reply.status, 'done');
+  assert.equal(reply.result.hints, 1);
+  const check = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [reply.result.draftId]);
+  assert.deepEqual([check.channel, check.result, check.findings[0].kind], ['draft', 'held', 'task']);
+  assert.equal((await t.db.one(`select status from mail_drafts where id = $1`, [reply.result.draftId])).status, 'draft', 'Entwurf bleibt bei der Person');
+});
+
 test('„KI bearbeiten“ an einer Mail, Tagesbudget hält Läufe zurück', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');

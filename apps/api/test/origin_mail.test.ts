@@ -5,12 +5,14 @@ import { flushAgentRuns } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM: Arbeitspaket-Läufe liefern `next`, freie Texte (finale Antwort) einen festen Text. */
 const calls: any[] = [];
+/** Prompts der Neuformulierung nach außen */
+const composes: string[] = [];
 let next: any[] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
   const echo = composeEcho(body);
-  if (echo) return echo;
+  if (echo) { composes.push(String(body.messages.at(-1).content)); return echo; }
   calls.push(body);
   const content = body.response_format ? JSON.stringify({ note: 'Abschluss', actions: next }) : 'Guten Tag,\n\ndas Angebot ist geprüft und freigegeben.\n\nViele Grüße\nPetra Lenz';
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
@@ -93,11 +95,12 @@ test('Agent: Antwort auf die Ursprungsmail aus deren Konto (Projektkonto direkt,
   await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${agent.id}`, { role: 'member', agentCanMail: true });
 
   // Projektkonto: neue Mail → Arbeitspaket, Agent antwortet direkt im Thread
-  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'kunde@extern.de', name: 'Kunde' }, to: ['projekt-web@demo.local'], subject: 'Frage zum Zeitplan', text: 'Wann ist der Go-Live?', folder: 'INBOX' } as any);
+  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'kunde@extern.de', name: 'Kunde' }, to: ['projekt-web@demo.local'], subject: 'Frage zum Zeitplan', text: 'Wann geht die neue Website online?', folder: 'INBOX' } as any);
   await t.mail.syncAccount(t.ids.accounts.project);
   const m1 = (await mailsOf(pl, t.ids.views.project)).find((m) => m.subject === 'Frage zum Zeitplan');
   const t1 = (await t.api(pl).post(`/mail/mails/${m1.id}/create-task`, { projectId: t.ids.projects.web })).json().task;
-  next = [A({ type: 'reply_origin', text: 'Guten Tag,\n\nder Go-Live ist im März.\n\nViele Grüße\nMorton' })];
+  // (ohne den Teilprojektnamen „Go-Live“: den prüft die Außengrenze auch, wenn der Externe ihn selbst nennt)
+  next = [A({ type: 'reply_origin', text: 'Guten Tag,\n\ndie neue Website geht im März online.\n\nViele Grüße\nMorton' })];
   await t.api(pl).patch(`/tasks/${t1.id}`, { responsibleUserId: agent.id });
   await flushAgentRuns();
   assert.match(calls.at(-1).messages[0].content, /enden genau mit dieser Unterschrift:\nViele Grüße\nMorton\nAssistenz Website-Projekt/);
@@ -117,6 +120,10 @@ test('Agent: Antwort auf die Ursprungsmail aus deren Konto (Projektkonto direkt,
   await t.api(pl).patch(`/tasks/${t2.id}`, { responsibleUserId: agent.id });
   await flushAgentRuns();
   assert.match(calls.at(-1).messages[1].content, /Inhalt aus einem persönlichen Konto, nicht freigegeben/);
+  // Auch die Neuformulierung nach außen bekommt den Inhalt nicht (gleiche Regel wie im Agenten-Prompt)
+  const composePrompt = composes.at(-1)!;
+  assert.match(composePrompt, /von it@hosting-partner\.de: Vertragsverlängerung Hosting 2027 – \(Inhalt aus einem persönlichen Konto, nicht freigegeben\)/);
+  assert.ok(!composePrompt.includes('Ihr Hostingvertrag'));
   const draft = await t.db.one(`select * from mail_drafts where task_id = $1`, [t2.id]);
   assert.equal(draft.status, 'pending_approval');
   assert.equal(draft.account_id, t.ids.accounts.personal);

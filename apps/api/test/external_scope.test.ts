@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
-import { audienceOf, checkOutbound, externalContext } from '../src/outbound.js';
+import { audienceOf, checkOutbound, externalContext, releasedText } from '../src/outbound.js';
+import { contactChain } from '../src/tasks/service.js';
+import { newShareToken } from '../src/docs/share.js';
 
 /**
  * Informationsgrenze für Externe (Anforderung 8): Regel E, Außenkontext, Neuformulierung (strict), deterministische Prüfung,
@@ -10,6 +12,8 @@ import { audienceOf, checkOutbound, externalContext } from '../src/outbound.js';
  */
 const calls: any[] = [];
 const composes: string[] = [];
+/** Anfragen der Neuformulierung (Schema) */
+const composeBodies: any[] = [];
 let next: any[] = [];
 /** Antwort der Neuformulierung; Standard: Absicht unverändert */
 let compose: (prompt: string) => string = (p) => { const i = p.slice(p.lastIndexOf('Absicht des Agenten')); return JSON.stringify({ subject: i.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: i.split(/^Text:\n/m)[1] ?? '', withheld: [] }); };
@@ -18,7 +22,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
   const isCompose = Boolean(body.response_format?.json_schema?.schema?.properties?.withheld);
-  if (isCompose) composes.push(String(body.messages[1].content)); else calls.push(body);
+  if (isCompose) { composes.push(String(body.messages[1].content)); composeBodies.push(body); } else calls.push(body);
   const content = isCompose ? compose(String(body.messages[1].content)) : body.response_format ? JSON.stringify({ note: 'erledigt', actions: next }) : free;
   return new Response(JSON.stringify({ model: 'lokal-llm', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
 };
@@ -30,6 +34,8 @@ const A = (x: Record<string, unknown>) => ({ type: 'none', text: '', column: '',
 const web = () => t.ids.projects.web;
 const aud = (taskId: string | null, recipients: string[]) => audienceOf(t.db, { projectId: web(), taskId, recipients });
 const logOf = async (taskId: string) => (await t.db.query(`select body, visibility, source from task_comments where task_id = $1 order by created_at`, [taskId])).rows as any[];
+/** Anthropic Structured Outputs begrenzt Union-Typen (Typ-Listen, anyOf) */
+const unions = (o: any): number => !o || typeof o !== 'object' ? 0 : (Array.isArray(o.type) || o.anyOf ? 1 : 0) + Object.values(o).reduce((n: number, v) => n + unions(v), 0);
 let agent: any;
 let ap = { id: '', number: 0 };
 let other = { id: '', number: 0 };
@@ -54,6 +60,18 @@ test('Regel E: intern, Org-Benutzer ohne Zugriff, Extern mit Aufgabenbezug, unbe
   assert.equal(m.statusCode, 200, m.body);
   await t.db.query(`insert into meeting_tasks (meeting_id, task_id) values ($1,$2)`, [m.json().meeting.id, t2]);
   assert.equal((await aud(t2, ['gast@extern.example'])).audience, 'task_external');
+  // AP-Familie: Zuständigkeit an einer Aufgabe darunter zählt für das AP, am Über-AP für die Aufgabe; Geschwister-Aufgaben nicht
+  const cms = await t.db.one(`select id from tasks where title = 'CMS-Auswahl: Headless vs. klassisch'`);
+  const demos = await t.db.one(`select id from tasks where title = 'Demos von drei Anbietern'`);
+  const fach = await t.db.one(`select id from tasks where title = 'Anforderungen der Fachbereiche sammeln'`);
+  await t.db.query(`update tasks set responsible_email = 'vertrieb@anbieter.example' where id = $1`, [demos.id]);
+  assert.equal((await aud(cms.id, ['vertrieb@anbieter.example'])).audience, 'task_external', 'Aufgabe darunter');
+  assert.equal((await aud(demos.id, ['vertrieb@anbieter.example'])).audience, 'task_external');
+  assert.equal((await aud(fach.id, ['vertrieb@anbieter.example'])).audience, 'unknown_external', 'Geschwister-Aufgabe ist kein Bezug');
+  const top = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Gerüst stellen', responsibleEmail: 'geruest@extern.example' })).json().task;
+  const sub = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Gerüst abnehmen lassen', parentId: top.id })).json().task;
+  assert.equal((await aud(sub.id, ['geruest@extern.example'])).audience, 'task_external', 'Zuständigkeit am Über-AP');
+  assert.equal((await aud(t2, ['geruest@extern.example'])).audience, 'unknown_external');
 });
 
 test('Außenkontext: Außenbeschreibung, freigegebene Log-Einträge, eigene Tasks, externes Profil; nichts aus anderen APs; Rechte der Routen', async () => {
@@ -99,6 +117,42 @@ test('Außenkontext: Außenbeschreibung, freigegebene Log-Einträge, eigene Task
   assert.match(ctx.text, /freigegebene Seiten: .*„Protokoll JF Auftraggeber 02\.10\.2026“/);
 });
 
+test('Außenkontext bei mehreren Empfängern: nur, was für alle gilt (Tasks, Besprechungen, Freigaben inkl. Unterseiten)', async () => {
+  const pl = await t.login('pl@demo.local');
+  const a = 'trockenbau@extern.example';
+  const b = 'maler@extern.example';
+  const flur = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Trockenbau Flur abstimmen' })).json().task;
+  await t.api(pl).post(`/tasks/${flur.id}/checklist`, { title: 'Ständerwerk stellen', responsibleEmail: a });
+  await t.api(pl).post(`/tasks/${flur.id}/checklist`, { title: 'Wände streichen', responsibleEmail: b });
+  const both = await aud(flur.id, [a, b]);
+  assert.equal(both.audience, 'task_external');
+  // Besprechungen: mit beiden bzw. nur mit einem
+  const meet = async (title: string, attendees: string[]) => {
+    const m = await t.api(pl).post(`/projects/${web()}/meetings`, { title, startsAt: '2026-11-10T09:00:00Z', endsAt: '2026-11-10T10:00:00Z', attendees: attendees.map((email) => ({ email, name: email })) });
+    assert.equal(m.statusCode, 200, m.body);
+    await t.db.query(`insert into meeting_tasks (meeting_id, task_id) values ($1,$2)`, [m.json().meeting.id, flur.id]);
+  };
+  await meet('Baubesprechung Flur', [a, b]);
+  await meet('Aufmaß Trockenbau', [a]);
+  // Freigabe an der Oberseite mit „inkl. Unterseiten“ für beide; eine zweite Seite nur für einen
+  const auftrag = await t.db.one(`select id from doc_pages where title = 'Projektauftrag Website-Relaunch'`);
+  const report = await t.db.one(`select id from doc_pages where title = 'Statusbericht KW 41'`);
+  for (const [page, email, children] of [[auftrag.id, a, true], [auftrag.id, b, true], [report.id, a, false]] as const) {
+    await t.db.query(`insert into doc_shares (page_id, project_id, token, email, mode, include_children, created_by) values ($1,$2,$3,$4,'read',$5,$6)`, [page, web(), newShareToken(), email, children, t.ids.users.pl]);
+  }
+  const ctx = await externalContext(t.db, flur.id, both);
+  for (const no of ['Ständerwerk', 'Wände streichen', 'Aufmaß Trockenbau', 'Statusbericht KW 41']) assert.ok(!ctx.text.includes(no), `Außenkontext für beide enthält „${no}“`);
+  assert.match(ctx.text, /Termine mit den Empfängern: Baubesprechung Flur/);
+  assert.match(ctx.text, /freigegebene Seiten: .*„Anforderungen Barrierefreiheit“ \(Entwurf, geht nicht hinaus\)/, 'Unterseite über include_children');
+  assert.match(ctx.text, /„Projektauftrag Website-Relaunch“/);
+  // Nur einer: seine Tasks, seine Besprechung, seine Seite
+  const one = await externalContext(t.db, flur.id, await aud(flur.id, [a]));
+  assert.match(one.text, /- \[ \] Ständerwerk stellen/);
+  assert.ok(!one.text.includes('Wände streichen'));
+  assert.match(one.text, /Aufmaß Trockenbau/);
+  assert.match(one.text, /„Statusbericht KW 41“/);
+});
+
 test('checkOutbound: fremde Kennungen, Titel, Teilprojekte, interne Adressen, App-Links, andere Projekte, Seiten; Anhänge nicht final → blocked', async () => {
   const t4 = t.ids.tasks.t4;
   const a = await aud(t4, ['k.mueller@mueller-design.de']);
@@ -115,8 +169,30 @@ test('checkOutbound: fremde Kennungen, Titel, Teilprojekte, interne Adressen, Ap
   const page = await check('Anbei ein Auszug aus dem Statusbericht KW 41.');
   assert.equal(page.findings[0].kind, 'page');
   assert.ok(page.findings[0].pageId);
-  // Was im Außenkontext steht (Außenbeschreibung, Mails des Externen), ist kein Fund
+  // Was Menschen für Externe bestimmt haben (Außenbeschreibung), ist kein Fund
   assert.equal((await check('Zum Angebot für Design und Umsetzung melden wir uns bis 25.10.')).result, 'pass');
+  // Was der Externe selbst schreibt, schaltet die Prüfung nicht ab: seine Mail geht an die Neuformulierung, ist aber keine Ausnahme
+  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'k.mueller@mueller-design.de', name: 'Katrin Müller' }, to: [`projekt-web+t${t.ids.tasks.t4Code}@demo.local`], subject: 'Stand?', text: `Wie steht es um WEB-${t2n}, Agenturvertrag verhandeln, Wireframes Startseite und Produktseiten und den Statusbericht KW 41? Und Umsetzung CMS?`, folder: 'INBOX' } as any);
+  await t.mail.syncAccount(t.ids.accounts.project);
+  const ctx = await externalContext(t.db, t4, a);
+  assert.match(ctx.text, /Wie steht es um WEB-\d+, Agenturvertrag verhandeln/);
+  assert.ok(!ctx.trusted.includes('Agenturvertrag') && ctx.trusted.includes('Angebot für Design und Umsetzung'));
+  const echo = await check(`Zu WEB-${t2n}: verschoben. Agenturvertrag verhandeln stockt. Wireframes Startseite und Produktseiten fast fertig, Statusbericht KW 41 ist rot, Umsetzung CMS hängt.`);
+  assert.equal(echo.result, 'held');
+  assert.deepEqual(echo.findings.map((f) => f.kind).sort(), ['page', 'ref', 'subproject', 'task', 'task']);
+  // Kennungen aus den tatsächlichen Kürzeln, auch mit Bindestrich oder Ziffer am Anfang
+  await t.db.query(`update projects set key = 'BAU-HH' where id = $1`, [web()]);
+  await t.db.query(`update projects set key = '24HH' where id = $1`, [t.ids.projects.erp]);
+  try {
+    const own = await check(`Siehe BAU-HH-${t2n}.`);
+    assert.deepEqual(own.findings.map((f) => [f.kind, f.match]), [['ref', `BAU-HH-${t2n}`]]);
+    assert.deepEqual((await check('Siehe 24HH-2 und 24hh-3.')).findings.map((f) => [f.kind, f.match]), [['project', '24HH-2'], ['project', '24hh-3']]);
+    const t4n = (await t.db.one(`select number from tasks where id = $1`, [t4])).number;
+    assert.equal((await check(`Zu BAU-HH-${t4n} melden wir uns.`)).result, 'pass', 'eigene Kennung');
+  } finally {
+    await t.db.query(`update projects set key = 'WEB' where id = $1`, [web()]);
+    await t.db.query(`update projects set key = 'ERP' where id = $1`, [t.ids.projects.erp]);
+  }
   // Anhänge: Entwurf blockiert, finale und freigegebene Seite geht
   const draft = await t.db.one(`select id from doc_pages where title = 'Protokoll JF Auftraggeber 16.10.2026'`);
   const final = await t.db.one(`select id from doc_pages where title = 'Protokoll JF Auftraggeber 02.10.2026'`);
@@ -151,6 +227,7 @@ test('Agenten-Mail an Externe (strict): Neuformulierung kennt nur den Außenkont
   assert.match(context, /Fliesen liefern lassen/, 'Task des Empfängers');
   for (const no of ['Silikonfugen', 'Elektroinstallation', '8.000', 'max@demo.local', 'Wireframes', 'Petra Lenz']) assert.ok(!context.includes(no), `Außenkontext enthält „${no}“`);
   assert.match(prompt, /an fliesen@extern\.example/);
+  assert.equal(unions(composeBodies.at(-1).response_format.json_schema.schema), 0, 'Schema der Neuformulierung ohne Union-Typen');
   assert.equal(t.mail.dev.sent.length, before + 1);
   const sent = t.mail.dev.sent.at(-1)!.msg;
   assert.equal(sent.subject, 'Lieferung Fliesen');
@@ -192,6 +269,62 @@ test('Außenprüfung hält an: Entwurf mit Fundstellen in Mail › Freigaben, �
   assert.ok((await logOf(ap.id)).some((c) => /^Nach außen an fliesen@extern\.example \(Außenprüfung\): von Petra Lenz bearbeitet und freigegeben, gesendet/.test(c.body)));
   assert.equal((await t.api(pl).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks.length, 0);
   assert.equal((await t.api(pl).post(`/outbound-checks/${held[0].id}/decide`, { action: 'release' })).statusCode, 400, 'schon entschieden');
+
+  // Ablehnen: nichts gesendet, Entwurf weg, Log, Audit, der Agent läuft erneut
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const again = (await t.api(pl).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks[0];
+  const runs0 = (await t.db.one(`select count(*)::int as c from agent_runs where task_id = $1 and trigger = 'rejected'`, [ap.id])).c;
+  next = [A({ type: 'none', reason: 'abgelehnt zur Kenntnis' })];
+  const sent0 = t.mail.dev.sent.length;
+  const blk = await t.api(pl).post(`/outbound-checks/${again.id}/decide`, { action: 'block' });
+  assert.equal(blk.statusCode, 200, blk.body);
+  assert.equal(t.mail.dev.sent.length, sent0);
+  assert.equal(await t.db.maybeOne(`select 1 from mail_drafts where id = $1`, [again.mailDraftId]), null);
+  assert.ok((await t.db.one(`select decided_at from outbound_checks where id = $1`, [again.id])).decided_at);
+  assert.ok((await logOf(ap.id)).some((c) => c.body === 'Außenprüfung: Mail von Außendienst an fliesen@extern.example abgelehnt (nicht gesendet): „Lieferung Fliesen“'));
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'ai.outbound' and details->>'checkId' = $1 and details->>'decision' = 'block'`, [again.id]));
+  await flushAgentRuns();
+  assert.equal((await t.db.one(`select count(*)::int as c from agent_runs where task_id = $1 and trigger = 'rejected'`, [ap.id])).c, runs0 + 1);
+});
+
+test('Entscheiden nur mit Senderecht, auch für die verfassende Person; eigene Mails an Externe: Hinweis vor dem Senden und Protokoll, kein Block', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const t4 = t.ids.tasks.t4;
+  // Max hat an der Hosting-Ansicht (persönliches Konto der PL) nur Entwurfsrecht: Einreichen protokolliert einen Hinweis
+  const sub = await t.api(max).post('/mail/drafts', { viewId: t.ids.views.hosting, projectId: web(), taskId: t4, to: ['k.mueller@mueller-design.de'], subject: 'Stand', body: 'Parallel laufen die Wireframes Startseite und Produktseiten.', send: true });
+  assert.equal(sub.statusCode, 200, sub.body);
+  const draft = sub.json().draft;
+  assert.equal(draft.status, 'pending_approval');
+  assert.deepEqual([draft.outbound.channel, draft.outbound.result, draft.outbound.findings[0].kind], ['draft', 'held', 'task']);
+  // Kein Weg an der Freigabe der Eigentümerin vorbei: decide verlangt das echte Senderecht und nur Agenten-Kanäle
+  for (const action of ['edit', 'release']) assert.equal((await t.api(max).post(`/outbound-checks/${draft.outbound.checkId}/decide`, { action, body: 'beliebiger Text' })).statusCode, 403);
+  assert.equal((await t.api(pl).post(`/outbound-checks/${draft.outbound.checkId}/decide`, { action: 'release' })).statusCode, 400, 'Hinweise zu Entwürfen von Menschen entscheidet das normale Senden');
+  assert.equal((await t.db.one(`select status, sent_by from mail_drafts where id = $1`, [draft.id])).status, 'pending_approval');
+  for (const c of [max, pl]) assert.ok(!(await t.api(c).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks.some((x: any) => x.id === draft.outbound.checkId));
+  await t.api(pl).del(`/mail/drafts/${draft.id}`);
+
+  // Vorschau vor dem Senden: Hinweise ohne Protokoll; Titel aus eingeschränkten Teilprojekten nur für Personen, die sie sehen
+  const n0 = (await t.db.one(`select count(*)::int as c from outbound_checks`)).c;
+  const text = 'Parallel laufen die Wireframes Startseite und Produktseiten und Agenturvertrag verhandeln.';
+  const hint = (c: any) => t.api(c).post(`/projects/${web()}/outbound-hint`, { taskId: t4, to: ['k.mueller@mueller-design.de'], subject: 'Stand', body: text });
+  const forPl = (await hint(pl)).json().outbound;
+  assert.equal(forPl.audience, 'task_external');
+  assert.deepEqual(forPl.findings.map((f: any) => f.match).sort(), ['Agenturvertrag verhandeln', 'Wireframes Startseite und Produktseiten']);
+  assert.deepEqual((await hint(max)).json().outbound.findings.map((f: any) => f.match), ['Wireframes Startseite und Produktseiten'], 'kein Hinweis auf ein eingeschränktes Teilprojekt');
+  assert.equal((await t.api(pl).post(`/projects/${web()}/outbound-hint`, { taskId: t4, to: ['max@demo.local'], subject: 'x', body: text })).json().outbound, null, 'intern: keine Prüfung');
+  assert.equal((await t.db.one(`select count(*)::int as c from outbound_checks`)).c, n0);
+  const vertrag = await t.db.one(`select id from tasks where title = 'Agenturvertrag verhandeln'`);
+  assert.equal((await t.api(max).post(`/projects/${web()}/outbound-hint`, { taskId: vertrag.id, to: ['x@extern.example'], subject: 'x', body: 'x' })).statusCode, 403);
+
+  // Die PL sendet selbst: gesendet, Prüfung als Hinweis protokolliert (Kanal draft)
+  const sent0 = t.mail.dev.sent.length;
+  const own = await t.api(pl).post('/mail/drafts', { viewId: t.ids.views.project, projectId: web(), taskId: t4, to: ['k.mueller@mueller-design.de'], subject: 'Stand', body: 'Parallel laufen die Wireframes Startseite und Produktseiten.', send: true });
+  assert.equal(own.statusCode, 200, own.body);
+  assert.equal(own.json().draft.status, 'sent');
+  assert.equal(t.mail.dev.sent.length, sent0 + 1);
+  const chk = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [own.json().draft.id]);
+  assert.deepEqual([chk.channel, chk.result, chk.findings[0].kind], ['draft', 'held', 'task']);
 });
 
 test('Erster Kontakt immer als Entwurf, keine Mail an Interne, fehlgeschlagene Neuformulierung hält an, Stufe check ohne Neuformulierung', async () => {
@@ -276,10 +409,67 @@ test('Prompt kennzeichnet Absenderklassen; refer: Log, Meldung und Chat an die e
   assert.match(next2, /Petra Lenz \[für Externe sichtbar\]: Rückmeldung per Chat an Außendienst/, 'der Agent läuft und sieht die Freigabe');
   const ctx = await externalContext(t.db, ap.id, await aud(ap.id, ['fliesen@extern.example']));
   assert.match(ctx.text, /Lieferfenster ist KW 47/);
-  // Ohne den Satz bleibt eine Antwort intern
-  await t.api(pl).post(`/chat/channels/${dm.channel_id}/messages`, { body: 'Noch ein interner Hinweis.' });
+  // Ohne den Satz, verneint oder als Frage bleibt eine Antwort intern
+  for (const body of ['Noch ein interner Hinweis.', 'Das Budget beträgt 1,2 Mio. Nichts davon darf weitergegeben werden.', 'Kein Wort darf weitergegeben werden!', 'Was davon darf weitergegeben werden, kläre ich noch.']) {
+    await t.api(pl).post(`/chat/channels/${dm.channel_id}/messages`, { body });
+    await flushAgentRuns();
+    assert.equal((await logOf(ap.id)).find((c) => c.body === `Rückmeldung per Chat an Außendienst: ${body}`)?.visibility, 'internal', body);
+  }
+  assert.ok(!(await externalContext(t.db, ap.id, await aud(ap.id, ['fliesen@extern.example']))).text.includes('1,2 Mio'));
+  assert.equal(releasedText('Lieferung Montag. Das darf weitergegeben werden.'), 'Lieferung Montag.');
+  assert.equal(releasedText('Termin 5.11.\nDarf weitergegeben werden'), 'Termin 5.11.');
+  for (const no of ['Darf weitergegeben werden.', 'Ob das darf weitergegeben werden?', 'Das darf nicht weitergegeben werden.', 'Es darf weitergegeben werden, dass wir prüfen.']) assert.equal(releasedText(no), null, no);
+
+  // Ohne Ansprechpartner im externen Profil: Verweis an „die Projektleitung“ über die Projektadresse, kein interner Name
+  const prof = (await t.api(pl).get(`/projects/${web()}`)).json().project.externalProfile;
+  await t.api(pl).put(`/projects/${web()}/external-profile`, { ...prof, contacts: [] });
+  next = [A({ type: 'refer', text: 'Fragt nach den Kosten der Küche.', subject: 'Küche' })];
+  const before2 = t.mail.dev.sent.length;
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  assert.equal(t.mail.dev.sent.length, before2 + 1);
+  const notice2 = t.mail.dev.sent.at(-1)!.msg;
+  assert.match(notice2.text, /Ihre Frage zu „Küche“ gebe ich an die Projektleitung \(erreichbar über projekt-web@demo\.local\) weiter\./);
+  for (const no of ['Petra', 'Lenz', 'pl@demo.local']) assert.ok(!notice2.text.includes(no), no);
+  await t.api(pl).put(`/projects/${web()}/external-profile`, prof);
+});
+
+test('Kette (Regel C): Über-AP, Teilprojekt-Verantwortung mit Sicht, PL; Agenten-Chat nur an Interne', async () => {
+  const pl = await t.login('pl@demo.local');
+  const chain = async (title: string) => { const x = await t.db.one(`select id, project_id, parent_id, subproject_id from tasks where title = $1`, [title]); return (await contactChain(t.db, x, { exclude: [agent.id] })).map((c) => [c.name, c.why]); };
+  const cmsN = (await t.db.one(`select number from tasks where title = 'CMS-Auswahl: Headless vs. klassisch'`)).number;
+  assert.deepEqual(await chain('Angebot Agentur Müller-Design prüfen'), [['Max Keller', 'verantwortlich für Teilprojekt „Konzept & Design“'], ['Petra Lenz', 'Projektleitung']]);
+  assert.deepEqual((await chain('Anforderungen der Fachbereiche sammeln'))[0], ['Max Keller', `zuständig für WEB-${cmsN}`], 'Zuständige des Über-AP');
+  // Eingeschränktes Teilprojekt: wer es nicht sieht, wird übersprungen
+  const vertrag = await t.db.one(`select id from tasks where title = 'Agenturvertrag verhandeln'`);
+  await t.db.query(`update tasks set responsible_user_id = $2 where id = $1`, [vertrag.id, t.ids.users.max]);
+  const klausel = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Haftungsklausel prüfen', parentId: vertrag.id })).json().task;
+  assert.ok(klausel?.id);
+  assert.deepEqual((await chain('Haftungsklausel prüfen'))[0], ['Anna Berger', 'verantwortlich für Teilprojekt „Vertrag und Budget“']);
+  await t.db.query(`update tasks set responsible_user_id = null where id = $1`, [vertrag.id]);
+
+  // Agent an einem AP im eingeschränkten Teilprojekt: keine Direktnachricht an Mitglieder ohne Sicht, nicht in den Projektkanal
+  next = [A({ type: 'none', reason: 'Start' })];
+  await t.api(pl).patch(`/tasks/${vertrag.id}`, { responsibleUserId: agent.id });
   await flushAgentRuns();
-  assert.equal((await logOf(ap.id)).find((c) => c.body.includes('interner Hinweis'))?.visibility, 'internal');
+  const dmsTo = async (userId: string) => (await t.db.one(`select count(*)::int as c from chat_messages m join chat_channel_members x on x.channel_id = m.channel_id and x.user_id = $2 join chat_channels c on c.id = m.channel_id and c.kind = 'dm' where m.user_id = $1`, [agent.id, userId])).c;
+  const projectPosts = async () => (await t.db.one(`select count(*)::int as c from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'project' where m.user_id = $1`, [agent.id])).c;
+  const max0 = await dmsTo(t.ids.users.max);
+  const proj0 = await projectPosts();
+  next = [A({ type: 'chat', to: ['max@demo.local'], text: 'Vertragsentwurf liegt bei 40.000 EUR.' })];
+  const r1 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  assert.match(String(r1.error), /Chat verworfen: Max Keller hat keinen Zugriff auf das Teilprojekt/);
+  next = [A({ type: 'chat', to: ['projekt'], text: 'Vertragsentwurf liegt bei 40.000 EUR.' })];
+  const r2 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  assert.match(String(r2.error), /Projektkanal nicht bei eingeschränkten Teilprojekten/);
+  assert.equal(await dmsTo(t.ids.users.max), max0);
+  assert.equal(await projectPosts(), proj0);
+  // Wer das Teilprojekt sieht, bekommt die Nachricht
+  next = [A({ type: 'chat', to: ['anna@demo.local'], text: 'Bitte Haftungsklausel ansehen.' })];
+  const anna0 = await dmsTo(t.ids.users.anna);
+  const r3 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  assert.equal(r3.error, undefined);
+  assert.equal(await dmsTo(t.ids.users.anna), anna0 + 1);
+  await t.api(pl).patch(`/tasks/${vertrag.id}`, { responsibleUserId: null });
 });
 
 test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenze; angehaltenes PDF hängt nach Freigabe die Seite an', async () => {
@@ -316,6 +506,14 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   assert.equal(held.channel, 'pdf');
   assert.equal(held.draft.pageTitle, 'Protokoll JF Auftraggeber 02.10.2026');
   assert.equal(held.findings[0].pageId, report.id);
+  // Seite inzwischen nicht mehr final: nichts gesendet, nichts freigegeben
+  await t.db.query(`update doc_pages set status = 'draft' where id = $1`, [page.id]);
+  const nf = await t.api(pl).post(`/outbound-checks/${held.id}/decide`, { action: 'release', sharePageIds: [report.id] });
+  assert.equal(nf.statusCode, 400);
+  assert.match(nf.json().error ?? nf.body, /nicht mehr final/);
+  assert.equal(t.mail.dev.sent.length, before);
+  assert.equal(await t.db.maybeOne(`select 1 from doc_shares where page_id = $1 and email = 'gf@demo.local'`, [report.id]), null);
+  await t.db.query(`update doc_pages set status = 'final' where id = $1`, [page.id]);
   const d = await t.api(pl).post(`/outbound-checks/${held.id}/decide`, { action: 'release', sharePageIds: [report.id] });
   assert.equal(d.statusCode, 200, d.body);
   const sent = t.mail.dev.sent.at(-1)!.msg;
@@ -326,6 +524,30 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   next = [A({ type: 'doc_send_pdf', pageId: page.id, to: ['gf@demo.local'], subject: 'Protokoll JF 2', text: 'Anbei das Protokoll, Zahlen im Statusbericht KW 41.' })];
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   assert.equal(t.mail.dev.sent.at(-1)!.msg.subject, 'Protokoll JF 2');
+
+  // Senderecht ohne „Final setzen / Versand“: freigeben ja, Seiten freigeben nein
+  const max = await t.login('max@demo.local');
+  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'kunde2@extern.example', name: 'Kunde' }, to: ['projekt-web@demo.local'], subject: 'Frage zu Fugen', text: 'Welche Fugenfarbe?', folder: 'INBOX' } as any);
+  await t.mail.syncAccount(t.ids.accounts.project);
+  const m2 = await t.db.one(`select id from mails where subject = 'Frage zu Fugen'`);
+  next = [A({ type: 'none', reason: 'Start' })];
+  const t2x = (await t.api(pl).post(`/mail/mails/${m2.id}/create-task`, { projectId: web() })).json().task;
+  await t.api(pl).patch(`/tasks/${t2x.id}`, { responsibleUserId: agent.id });
+  await flushAgentRuns();
+  compose = (p) => { const i = p.slice(p.lastIndexOf('Absicht des Agenten')); return JSON.stringify({ subject: i.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: i.split(/^Text:\n/m)[1] ?? '', withheld: [] }); };
+  next = [A({ type: 'reply_origin', text: 'Grau, wie im Statusbericht KW 41.' })];
+  await t.api(pl).post(`/tasks/${t2x.id}/agent-run`);
+  const viaView = (await t.api(pl).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks.find((c: any) => c.taskId === t2x.id);
+  assert.equal(viaView.channel, 'reply_origin');
+  assert.equal(viaView.findings[0].pageId, report.id);
+  assert.equal((await t.api(max).post(`/outbound-checks/${viaView.id}/decide`, { action: 'release' })).statusCode, 403, 'Mitglied ohne Senderecht an der Ansicht');
+  await t.db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,true,false,false)`, [t.ids.views.project, t.ids.users.max]);
+  assert.equal((await t.api(max).post(`/outbound-checks/${viaView.id}/decide`, { action: 'release', sharePageIds: [report.id] })).statusCode, 403);
+  assert.equal(await t.db.maybeOne(`select 1 from doc_shares where page_id = $1 and email = 'kunde2@extern.example'`, [report.id]), null);
+  const okMax = await t.api(max).post(`/outbound-checks/${viaView.id}/decide`, { action: 'release' });
+  assert.equal(okMax.statusCode, 200, okMax.body);
+  assert.deepEqual(t.mail.dev.sent.at(-1)!.msg.to, ['kunde2@extern.example']);
+  await t.db.query(`delete from mail_view_rights where view_id = $1 and user_id = $2`, [t.ids.views.project, t.ids.users.max]);
 });
 
 test('Hinweise statt Sperre: Abschluss-Antwort mit KI zeigt Fundstellen; Chat-Agent gibt Org-Benutzern ohne Projektzugriff nichts aus dem Projekt', async () => {

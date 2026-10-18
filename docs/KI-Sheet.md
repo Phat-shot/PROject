@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1246 Token, Regeln für Arbeitspaket-Läufe 941, Regeln für Chat 185, Regeln für Mail-Läufe 587.
+Umfang (Qwen3-Tokenizer): Sheet 1246 Token, Regeln für Arbeitspaket-Läufe 961, Regeln für Chat 185, Regeln für Mail-Läufe 587.
 
 ## Sheet
 
@@ -34,7 +34,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - set_status: column = Status exakt aus „Mögliche Status“
 - check_item: itemId aus der Task-Liste; update_item: itemId und neuer text; add_item: text = neuer Task
 - mail: to, subject, text; nur an Nicht-Interne (Projektmitglieder per chat); höchstens drei je Lauf. Das System formuliert die Mail mit dem Außenkontext der Aufgabe neu und prüft sie; was projektintern wirkt, hält es zurück. Der erste Kontakt zu einer Adresse ohne Bezug zum AP geht als Entwurf in die Freigabe
-- chat: to (E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal), text = Chat-Nachricht; Fragen und Abstimmung mit Projektbeteiligten per Chat, nicht per Mail; höchstens drei je Lauf. Antworten kommen im Chat an und stehen danach im Log
+- chat: to (E-Mail von Projektmitgliedern, die das Teilprojekt sehen; leer = PL; „projekt“ = Projektkanal, nicht bei eingeschränkten Teilprojekten), text = Chat-Nachricht; Fragen und Abstimmung mit Projektbeteiligten per Chat, nicht per Mail; höchstens drei je Lauf. Antworten kommen im Chat an und stehen danach im Log
 - reply_origin: text = Antwort an den Absender der Ursprungsmail, geht aus deren Konto (ohne Senderecht als Entwurf zur Freigabe); einmal, wenn das Ergebnis vorliegt
 - read_page: pageId; liest eine Seite. Erst lesen, ändernde Aktionen danach angeben.
 - doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: nur finale Seiten; pageId, subject, text, to (Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners)
