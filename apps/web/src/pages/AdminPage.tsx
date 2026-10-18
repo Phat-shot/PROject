@@ -100,17 +100,21 @@ export function UsersCard({ users, reload }: { users: User[]; reload: () => Prom
   );
 }
 
-/** Verantwortliche PL je Projekt (Org-Admin): neu bestimmen, ohne Projektinhalte zu sehen; die bisherige wird Stellvertretung. */
-function ProjectLeadsCard({ users }: { users: User[] }) {
+/**
+ * Verantwortliche PL je Projekt (Org-Admin): neu bestimmen, ohne Projektinhalte zu sehen; die bisherige wird Stellvertretung.
+ * Sich selbst wählt der Org-Admin nicht (das wäre Inhaltszugriff über die Verwaltung, die API lehnt es ab).
+ */
+export function ProjectLeadsCard({ users }: { users: User[] }) {
+  const { user: me } = useAuth();
   const { data, reload } = useData<{ projects: AdminProject[] }>('/admin/projects');
   const [edit, setEdit] = useState<AdminProject | null>(null);
   const [f, setF] = useState({ userId: '', transferTasks: false });
   const { busy, error, run } = useAsync();
-  const people = users.filter((u) => u.active && u.kind !== 'agent');
+  const people = users.filter((u) => u.active && u.kind !== 'agent' && u.id !== me?.id);
   return (
     <div className="card">
       <h2>Projekte: verantwortliche PL</h2>
-      <p className="muted small">Nur Kennung, Name und PL, keine Inhalte. Neu bestimmen z. B., wenn die PL das Unternehmen verlässt; die bisherige PL bleibt Stellvertretung, bis die neue sie entfernt.</p>
+      <p className="muted small">Nur Kennung, Name und PL, keine Inhalte. Neu bestimmen z. B., wenn die PL das Unternehmen verlässt; die bisherige PL bleibt Stellvertretung, bis die neue sie entfernt, und bekommt eine Meldung. Sich selbst bestimmt man hier nicht.</p>
       {data && data.projects.length === 0 && <div className="empty">Keine Projekte.</div>}
       {data && data.projects.length > 0 && <table className="table"><thead><tr><th>Projekt</th><th>Verantwortliche PL</th><th /></tr></thead><tbody>
         {data.projects.map((p) => <tr key={p.id}><td><strong>{p.key}</strong> {p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 4 }}>archiviert</span>}</td>

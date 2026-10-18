@@ -55,6 +55,17 @@ test('Gruppe als Projektmitglied: Personen werden Mitglied mit Herkunft Gruppe u
 
   const d = await t.api(max).get(`/projects/${pid}`);
   assert.equal(d.statusCode, 200, 'Zugriff über die Gruppe');
+  // Als Mitglied (über die Gruppe) holt Max keine Gruppen ins Projekt: nur die PL vergibt so Rechte
+  const g2pre = await newGroup('Nachzügler', [ids.anna]);
+  const asMember = await t.api(max).put(`/projects/${pid}/groups/${g2pre}`, { role: 'member', canEditPlan: true });
+  assert.equal(asMember.statusCode, 403, asMember.body);
+  assert.match(asMember.body, /Rolle pl erforderlich/);
+  assert.equal(await row(pid, ids.anna), null);
+  // Gruppen eines anderen Mandanten gibt es hier nicht
+  const foreignOrg = (await t.db.one(`insert into orgs (name) values ('Fremdmandant') returning id`)).id;
+  const foreignGroup = (await t.db.one(`insert into groups (org_id, name) values ($1, 'Fremde Gruppe') returning id`, [foreignOrg])).id;
+  assert.equal((await t.api(pl).put(`/projects/${pid}/groups/${foreignGroup}`, { role: 'member' })).statusCode, 404, 'nur Gruppen des eigenen Mandanten');
+  assert.equal(await t.db.maybeOne(`select 1 from project_groups where group_id = $1`, [foreignGroup]), null);
   assert.equal(d.json().members.find((x: any) => x.userId === ids.max).origin, 'group');
   assert.equal(d.json().members.find((x: any) => x.userId === ids.pl).origin, 'direct');
   assert.deepEqual(d.json().groups.map((g: any) => g.name), ['Elektro-Team']);
@@ -148,11 +159,15 @@ test('Agenten werden nie Gruppenmitglied; persönliche Projekte nehmen keine Gru
   const pl = await t.login('pl@demo.local');
   const agent = (await t.api(admin).post('/agents', { name: 'Gruppenagent' })).json().agent;
   assert.equal((await t.api(admin).post('/groups', { name: 'Mit Agent', memberIds: [ids.max, agent.id] })).statusCode, 400);
+  assert.equal(await t.db.maybeOne(`select 1 from groups where name = 'Mit Agent'`), null, 'keine leere Gruppe angelegt');
+  assert.equal((await t.api(admin).post('/groups', { name: 'Mit Agent', memberIds: [ids.max], managerIds: [agent.id] })).statusCode, 400, 'auch nicht als Verwalter');
+  assert.equal((await t.api(admin).post('/groups', { name: 'Mit Agent', memberIds: [ids.max] })).statusCode, 200, 'zweiter Versuch ohne Agent');
   const gid = await newGroup('Ohne Agent', [ids.max]);
-  const p = await t.api(admin).patch(`/groups/${gid}`, { memberIds: [ids.max, agent.id] });
+  const p = await t.api(admin).patch(`/groups/${gid}`, { name: 'Umbenannt mit Agent', memberIds: [ids.max, agent.id] });
   assert.equal(p.statusCode, 400);
   assert.match(p.json().error ?? p.body, /KI-Agenten werden nie Gruppenmitglied/);
-  assert.deepEqual((await t.api(admin).get('/groups')).json().groups.find((g: any) => g.id === gid).memberIds, [ids.max], 'unverändert');
+  const unchanged = (await t.api(admin).get('/groups')).json().groups.find((g: any) => g.id === gid);
+  assert.deepEqual([unchanged.name, unchanged.memberIds], ['Ohne Agent', [ids.max]], 'nichts halb geändert');
   // Bestand (Agent bereits in der Gruppe): der Abgleich macht ihn nie zum Projektmitglied
   const pid = await newProject();
   await t.db.query(`insert into group_members (group_id, user_id) values ($1,$2)`, [gid, agent.id]);
@@ -268,6 +283,10 @@ test('Gruppenverwaltung: groups_admin pflegt alle Gruppen, Verwalter einer Grupp
   const leser = await t.login('leser@demo.local');
   assert.equal((await t.api(max).get('/auth/me')).json().user.managesGroups, true);
   assert.equal((await t.api(leser).get('/auth/me')).json().user.managesGroups, false);
+  // Anmeldung und eigene Einstellungen liefern es ebenso (die Web-App ersetzt damit den Benutzer)
+  assert.equal((await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'max@demo.local', password: DEMO_PASSWORD } })).json().user.managesGroups, true);
+  assert.equal((await t.api(max).patch('/me', { settings: { theme: 'dark' } })).json().user.managesGroups, true);
+  assert.equal((await t.api(leser).patch('/me', { settings: { theme: 'dark' } })).json().user.managesGroups, false);
 
   const pid = await newProject();
   await t.api(pl).put(`/projects/${pid}/groups/${gid}`, { role: 'reader' });
@@ -316,6 +335,15 @@ test('Org-Admin bestimmt die verantwortliche PL neu, ohne Inhaltszugriff; die bi
 
   const agent = (await t.api(admin).post('/agents', { name: 'Leitagent' })).json().agent;
   assert.equal((await t.api(admin).put(`/admin/projects/${pid}/lead`, { userId: agent.id })).statusCode, 400, 'nur Personen');
+  const dora = await newUser('dora@demo.local', 'Dora Deaktiviert');
+  assert.equal((await t.api(admin).patch(`/users/${dora}`, { active: false })).statusCode, 200);
+  assert.equal((await t.api(admin).put(`/admin/projects/${pid}/lead`, { userId: dora })).statusCode, 400, 'nur aktive Personen');
+  // Nie sich selbst: das wäre Zugriff auf die Projektinhalte über die Verwaltung
+  const self = await t.api(admin).put(`/admin/projects/${pid}/lead`, { userId: ids.admin });
+  assert.equal(self.statusCode, 403, self.body);
+  assert.equal(await row(pid, ids.admin), null);
+  assert.equal((await t.api(admin).get(`/projects/${pid}`)).statusCode, 403);
+  assert.deepEqual([(await row(pid, ids.pl)).role, (await row(pid, ids.pl)).is_deputy], ['pl', false], 'PL unverändert');
   const r = await t.api(admin).put(`/admin/projects/${pid}/lead`, { userId: ids.max, transferTasks: true });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal(r.json().transferred, 1);
@@ -327,6 +355,10 @@ test('Org-Admin bestimmt die verantwortliche PL neu, ohne Inhaltszugriff; die bi
   assert.equal((await t.api(admin).get(`/projects/${pid}`)).statusCode, 403, 'kein Inhaltszugriff');
   assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [task.id])).responsible_user_id, ids.max);
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'project.lead' and project_id = $2`, [ids.max, pid]));
+  const told = await t.db.maybeOne(`select title, body from notifications where user_id = $1 and type = 'project.lead' and project_id = $2`, [ids.pl, pid]);
+  assert.ok(told, 'die bisherige PL erfährt es');
+  assert.match(told.title, /Verantwortliche PL neu bestimmt/);
+  assert.match(told.body, /Max Keller.*Stellvertretung/);
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'project.lead' and project_id = $1`, [pid]));
 
   const pp = (await t.db.one(`select id from projects where key = 'GRP'`)).id;

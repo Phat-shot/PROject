@@ -117,6 +117,25 @@ test('Essenz → Arbeitspaket: Vorschlag, Freigabe nur mit Recht, Anwendung setz
   assert.deepEqual(done.json().proposals.map((p: any) => p.status).sort(), ['approved', 'rejected']);
 });
 
+test('Essenz zum AP im eingeschränkten Teilprojekt: Meldung nur an Freigebende mit Sicht darauf', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const mid = await mailBySubject('Angebot Website-Relaunch – Design und Umsetzung');
+  const secret = (await t.db.one(`select id from tasks where mail_code = 'c0ffee11'`)).id;
+  // Max darf freigeben, sieht „Vertrag und Budget“ aber nicht; Anna (Stellvertretung, Lenkungskreis) sieht es
+  await t.db.query(`update project_members set can_approve = true where project_id = $1 and user_id = $2`, [web, t.ids.users.max]);
+  const count = async (id: string) => (await t.db.one(`select count(*)::int as c from notifications where user_id = $1 and type = 'ai.proposal'`, [id])).c;
+  const before = { max: await count(t.ids.users.max), anna: await count(t.ids.users.anna) };
+  const r = await t.api(pl).post(`/mail/mails/${mid}/ai/essence`, { taskId: secret });
+  assert.equal(r.statusCode, 200, r.body);
+  assert.equal(await count(t.ids.users.anna), before.anna + 1, 'Anna sieht das Teilprojekt');
+  assert.equal(await count(t.ids.users.max), before.max, 'keine Meldung mit dem Titel des vertraulichen AP an Max');
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).post(`/ai/proposals/${r.json().proposal.id}/approve`)).statusCode, 403, 'Freigabe nur mit Sicht');
+  assert.equal((await t.api(max).post(`/mail/mails/${mid}/ai/essence`, { taskId: secret })).statusCode, 403, 'Essenz nur mit Sicht');
+  await t.db.query(`update project_members set can_approve = false where project_id = $1 and user_id = $2`, [web, t.ids.users.max]);
+});
+
 test('Essenz → Seite: Vorschlag und Anwendung hängen den Abschnitt als neue Version an; finale Seite gesperrt', async () => {
   const pl = await t.login('pl@demo.local');
   const mid = await mailBySubject('Angebot Website-Relaunch – Design und Umsetzung');

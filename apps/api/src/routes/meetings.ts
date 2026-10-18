@@ -1,9 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import type { Meeting, MeetingAttendee } from '@projekttool/shared';
+import type { Meeting, MeetingAttendee, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { requireProject, requireTaskRef, visibleSubprojectSql } from '../rights.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import * as L from '../docs/layout.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -41,10 +41,11 @@ function mapMeeting(r: any): Meeting {
  */
 export async function meetingRoutes(app: FastifyInstance) {
   const db = app.db;
-  const SELECT = `select m.*, sp.title as series_title, pg.title as page_title,
-      coalesce((select json_agg(json_build_object('id', t.id, 'title', t.title, 'number', t.number, 'done', c.is_done) order by t.created_at) from meeting_tasks mt join tasks t on t.id = mt.task_id join board_columns c on c.id = t.column_id where mt.meeting_id = m.id and t.deleted_at is null), '[]'::json) as tasks
+  // Aktionspunkte nur aus Teilprojekten, die die Person sieht; userParam = Platzhalternummer der Benutzer-ID
+  const SELECT = (userParam: number) => `select m.*, sp.title as series_title, pg.title as page_title,
+      coalesce((select json_agg(json_build_object('id', t.id, 'title', t.title, 'number', t.number, 'done', c.is_done) order by t.created_at) from meeting_tasks mt join tasks t on t.id = mt.task_id join board_columns c on c.id = t.column_id where mt.meeting_id = m.id and t.deleted_at is null and ${visibleSubprojectSql(userParam)}), '[]'::json) as tasks
       from meetings m left join doc_pages sp on sp.id = m.series_page_id left join doc_pages pg on pg.id = m.page_id`;
-  const load = async (id: string) => db.maybeOne(`${SELECT} where m.id = $1`, [id]);
+  const load = async (id: string, user: User) => db.maybeOne(`${SELECT(2)} where m.id = $1`, [id, user.id]);
   const parseAttendees = async (projectId: string, raw: any): Promise<MeetingAttendee[]> => {
     if (!Array.isArray(raw)) return [];
     const out: MeetingAttendee[] = [];
@@ -71,7 +72,7 @@ export async function meetingRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string }; Querystring: { from?: string; to?: string } }>('/projects/:id/meetings', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
-    const rows = await db.query(`${SELECT} where m.project_id = $1 and ($2::timestamptz is null or m.ends_at >= $2) and ($3::timestamptz is null or m.starts_at <= $3) order by m.starts_at desc limit 300`, [req.params.id, req.query.from ?? null, req.query.to ?? null]);
+    const rows = await db.query(`${SELECT(4)} where m.project_id = $1 and ($2::timestamptz is null or m.ends_at >= $2) and ($3::timestamptz is null or m.starts_at <= $3) order by m.starts_at desc limit 300`, [req.params.id, req.query.from ?? null, req.query.to ?? null, user.id]);
     return { meetings: rows.rows.map(mapMeeting) };
   });
 
@@ -86,7 +87,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     const r = await db.one(`insert into meetings (project_id, title, starts_at, ends_at, location, description, series_page_id, attendees, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
       [req.params.id, b.title.trim(), starts, ends, b.location?.trim() || null, b.description?.trim() || null, b.seriesPageId ?? null, JSON.stringify(attendees), user.id]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'meeting.create', objectType: 'meeting', objectId: r.id, details: { title: b.title, startsAt: starts.toISOString() } });
-    return { meeting: mapMeeting(await load(r.id)) };
+    return { meeting: mapMeeting(await load(r.id, user)) };
   });
 
   app.patch<{ Params: { id: string }; Body: any }>('/meetings/:id', async (req) => {
@@ -101,7 +102,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     await db.query(`update meetings set title = coalesce($2, title), starts_at = $3, ends_at = $4, location = coalesce($5, location), description = coalesce($6, description), series_page_id = case when $7::text = 'null' then null else coalesce($7::uuid, series_page_id) end, attendees = $8, updated_at = now() where id = $1`,
       [cur.id, b.title?.trim() || null, starts, ends, b.location ?? null, b.description ?? null, b.seriesPageId === null ? 'null' : b.seriesPageId ?? null, JSON.stringify(attendees)]);
     await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.update', objectType: 'meeting', objectId: cur.id, details: Object.fromEntries(Object.entries(b).filter(([k]) => k !== 'attendees')) });
-    return { meeting: mapMeeting(await load(cur.id)) };
+    return { meeting: mapMeeting(await load(cur.id, user)) };
   });
 
   app.delete<{ Params: { id: string } }>('/meetings/:id', async (req) => {
@@ -155,11 +156,11 @@ export async function meetingRoutes(app: FastifyInstance) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [taskId, user.id, `Aktionspunkt aus Besprechung „${cur.title}“ vom ${fmtDe(new Date(cur.starts_at))}.`]);
       await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'task.create', objectType: 'task', objectId: taskId, details: { title: b.title, meetingId: cur.id } });
     } else {
-      const t = await db.maybeOne(`select 1 from tasks where id = $1 and project_id = $2 and deleted_at is null`, [taskId, cur.project_id]);
-      if (!t) throw notFound('Arbeitspaket nicht gefunden');
+      // Vorhandenes Arbeitspaket: im Projekt und in einem sichtbaren Teilprojekt
+      await requireTaskRef(db, user, cur.project_id, taskId);
     }
     await db.query(`insert into meeting_tasks (meeting_id, task_id) values ($1,$2) on conflict do nothing`, [cur.id, taskId]);
-    return { meeting: mapMeeting(await load(cur.id)), task: await loadTask(db, taskId!) };
+    return { meeting: mapMeeting(await load(cur.id, user)), task: await loadTask(db, taskId!) };
   });
 
   app.delete<{ Params: { id: string; taskId: string } }>('/meetings/:id/tasks/:taskId', async (req) => {
@@ -168,7 +169,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (!cur) throw notFound('Besprechung nicht gefunden');
     await requireProject(db, user, cur.project_id, 'member');
     await db.query(`delete from meeting_tasks where meeting_id = $1 and task_id = $2`, [cur.id, req.params.taskId]);
-    return { meeting: mapMeeting(await load(cur.id)) };
+    return { meeting: mapMeeting(await load(cur.id, user)) };
   });
 
   // Vorläufigen Termin (von KI eingetragen) bestätigen: verbindlich, Log an den verknüpften Arbeitspaketen, deren Agent läuft
@@ -188,7 +189,7 @@ export async function meetingRoutes(app: FastifyInstance) {
       }
       await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.confirm', objectType: 'meeting', objectId: cur.id, details: { title: cur.title } });
     }
-    return { meeting: mapMeeting(await load(cur.id)) };
+    return { meeting: mapMeeting(await load(cur.id, user)) };
   });
 
   // Einladung per Mail mit ICS (METHOD:REQUEST) über das Projektkonto an alle Teilnehmer
@@ -210,7 +211,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     const r = await app.mail.sendFromAccount(account, { to: attendees.map((a) => a.email), subject: `Einladung: ${cur.title} · ${fmtDe(starts)}`, text, userId: user.id, projectId: cur.project_id, attachments: [{ filename: 'einladung.ics', content: Buffer.from(ics, 'utf8'), contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
     await db.query(`update meetings set invite_sent_at = now(), external = external || $2::jsonb, updated_at = now() where id = $1`, [cur.id, JSON.stringify({ sequence: seq + 1 })]);
     await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.invite', objectType: 'meeting', objectId: cur.id, details: { to: attendees.map((a) => a.email) } });
-    return { ok: true, sent: attendees.length, mailId: (r as any)?.mailId ?? null, meeting: mapMeeting(await load(cur.id)) };
+    return { ok: true, sent: attendees.length, mailId: (r as any)?.mailId ?? null, meeting: mapMeeting(await load(cur.id, user)) };
   });
 
   app.get<{ Params: { id: string } }>('/meetings/:id/ics', async (req, reply) => {

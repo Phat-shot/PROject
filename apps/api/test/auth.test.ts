@@ -5,7 +5,15 @@ import { testApp } from './helpers.js';
 const t = await testApp();
 test.after(() => t.close());
 
+/** Person verwaltet eine Gruppe (Menüpunkt Verwaltung): jede Anmeldung liefert managesGroups mit. */
+async function makeManager(email: string) {
+  const u = await t.db.one(`select id, org_id from users where email = $1`, [email]);
+  const g = await t.db.one(`insert into groups (org_id, name) values ($1, $2) returning id`, [u.org_id, `Verwaltet von ${email}`]);
+  await t.db.query(`insert into group_members (group_id, user_id, is_manager) values ($1,$2,true)`, [g.id, u.id]);
+}
+
 test('Passwort vergessen: Mail über Org-Postfach, Link setzt neues Passwort und meldet an', async () => {
+  await makeManager('max@demo.local');
   const forgot = await t.app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: 'max@demo.local' } });
   assert.equal(forgot.statusCode, 200, forgot.body);
   assert.equal(forgot.json().sent, true);
@@ -25,6 +33,7 @@ test('Passwort vergessen: Mail über Org-Postfach, Link setzt neues Passwort und
   const reset = await t.app.inject({ method: 'POST', url: `/api/auth/reset/${token}`, payload: { password: 'neuesPasswort123' } });
   assert.equal(reset.statusCode, 200, reset.body);
   assert.ok(reset.cookies.find((c) => c.name === 'pt_session'), 'angemeldet nach Reset');
+  assert.equal(reset.json().user.managesGroups, true, 'Gruppenverwalter');
 
   const again = await t.app.inject({ method: 'POST', url: `/api/auth/reset/${token}`, payload: { password: 'nochEinPasswort123' } });
   assert.equal(again.statusCode, 404, 'Token nur einmal gültig');
@@ -68,6 +77,7 @@ test('PL lädt per Mail direkt ins Projekt ein; Annahme macht die Person zum Mit
 test('Zweiter Faktor: einrichten, aktivieren, Anmeldung in zwei Schritten, abschalten', async () => {
   const { totpCode } = await import('../src/totp.js');
   const anna = await t.login('anna@demo.local');
+  await makeManager('anna@demo.local');
   const setup = await t.api(anna).post('/me/totp/setup');
   assert.equal(setup.statusCode, 200, setup.body);
   const secret = setup.json().secret;
@@ -84,6 +94,7 @@ test('Zweiter Faktor: einrichten, aktivieren, Anmeldung in zwei Schritten, absch
   assert.equal(step2.statusCode, 200, step2.body);
   assert.ok(step2.cookies.find((c) => c.name === 'pt_session'), 'Sitzung nach zweitem Schritt');
   assert.equal(step2.json().user.totpEnabled, true);
+  assert.equal(step2.json().user.managesGroups, true, 'Gruppenverwalterin');
   const again = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
   assert.equal(again.statusCode, 401, 'Challenge nur einmal');
   const sess = { pt_session: step2.cookies.find((c) => c.name === 'pt_session')!.value };

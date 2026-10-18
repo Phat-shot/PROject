@@ -3,7 +3,7 @@ import type { AiFeature, AiProposal, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { hasOrgRight, requireProject } from '../rights.js';
+import { canSeeSubproject, hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
 import { aiConfigFor, aiStatus, complete, MODELS, projectProfiles } from '../ai/client.js';
@@ -38,6 +38,11 @@ export async function aiRoutes(app: FastifyInstance) {
   };
   const requireAiAdmin = (user: User) => { if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung'); };
   const canApprove = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe nur mit dem Recht „Freigeben“ oder als PL'); return m; };
+  /** Vorschlag zu einem Arbeitspaket entscheiden nur mit Sicht auf dessen Teilprojekt (eingeschränkte TPs). */
+  const canSeeProposal = async (user: User, p: any) => {
+    const t = p.task_id ? await db.maybeOne(`select subproject_id from tasks where id = $1`, [p.task_id]) : null;
+    if (t && !(await canSeeSubproject(db, user.id, t.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+  };
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
@@ -234,12 +239,13 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!access.ok || !access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
     const task = await db.maybeOne(`select t.*, c.name as column_name from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
+    await requireTask(db, user, task.id);
     const cfg = await gate(user, task.project_id, 'assist.essence');
     const cols = await db.query(`select name from board_columns where project_id = $1 order by position`, [task.project_id]);
     const e = await essenceForTask(db, cfg, app.fetchFn, user, mail, { id: task.id, title: task.title, description: task.description, dueDate: task.due_date ? String(task.due_date).slice(0, 10) : null, columnName: task.column_name, projectId: task.project_id }, cols.rows.map((c: any) => c.name));
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'task_update', taskId: task.id, mailId: mail.id } });
-    await notifyApprovers(task.project_id, user.id, `KI-Vorschlag: ${task.title}`, e.summary, `/projekte/${task.project_id}/ki`);
+    await notifyApprovers(task.project_id, user.id, `KI-Vorschlag: ${task.title}`, e.summary, `/projekte/${task.project_id}/ki`, task.subproject_id);
     return { proposal: mapProposal(r) };
   });
 
@@ -261,6 +267,7 @@ export async function aiRoutes(app: FastifyInstance) {
     return { proposal: mapProposal(r) };
   });
 
+  // Vorschläge zu Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf
   app.get<{ Params: { id: string }; Querystring: { status?: string } }>('/projects/:id/ai/proposals', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
@@ -268,7 +275,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const rows = await db.query(
       `select p.*, u.name as created_by_name, t.title as task_title, d.title as page_title, m.subject as mail_subject from ai_proposals p
        left join users u on u.id = p.created_by left join tasks t on t.id = p.task_id left join doc_pages d on d.id = p.page_id left join mails m on m.id = p.mail_id
-       where p.project_id = $1 and ($2 = 'all' or p.status = $2) order by p.created_at desc limit 100`, [req.params.id, status]);
+       where p.project_id = $1 and ($2 = 'all' or p.status = $2) and ${visibleSubprojectSql(3)} order by p.created_at desc limit 100`, [req.params.id, status, user.id]);
     return { proposals: rows.rows.map(mapProposal), canApprove: m.role === 'pl' || m.canApprove };
   });
 
@@ -279,6 +286,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!p) throw notFound('Vorschlag nicht gefunden');
     if (p.status !== 'pending') throw badRequest('Vorschlag ist bereits entschieden');
     await canApprove(user, p.project_id);
+    await canSeeProposal(user, p);
     const b = req.body ?? {};
     if (p.kind === 'task_update') {
       const task = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [p.task_id]);
@@ -322,6 +330,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!p) throw notFound('Vorschlag nicht gefunden');
     if (p.status !== 'pending') throw badRequest('Vorschlag ist bereits entschieden');
     await canApprove(user, p.project_id);
+    await canSeeProposal(user, p);
     await db.query(`update ai_proposals set status = 'rejected', decided_by = $2, decided_at = now(), note = $3 where id = $1`, [p.id, user.id, req.body?.note?.trim() || null]);
     await audit(db, { orgId: user.orgId, projectId: p.project_id, userId: user.id, action: 'ai.reject', objectType: 'ai_proposal', objectId: p.id, details: { note: req.body?.note } });
     return { ok: true };
@@ -351,8 +360,9 @@ export async function aiRoutes(app: FastifyInstance) {
     return askProject(db, cfg, app.fetchFn, user, req.params.id, q);
   });
 
-  async function notifyApprovers(projectId: string, byUserId: string, title: string, body: string, link: string) {
+  /** Meldung an PL und Freigebende; bei einem Arbeitspaket im eingeschränkten Teilprojekt nur an die, die es sehen. */
+  async function notifyApprovers(projectId: string, byUserId: string, title: string, body: string, link: string, subprojectId: string | null = null) {
     const rows = await db.query(`select user_id from project_members where project_id = $1 and (role = 'pl' or can_approve) and user_id <> $2`, [projectId, byUserId]);
-    for (const r of rows.rows) await notify(db, { userId: r.user_id, projectId, type: 'ai.proposal', title, body, link });
+    for (const r of rows.rows) if (await canSeeSubproject(db, r.user_id, subprojectId)) await notify(db, { userId: r.user_id, projectId, type: 'ai.proposal', title, body, link });
   }
 }

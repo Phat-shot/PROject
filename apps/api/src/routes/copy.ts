@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { getMembership, requireProject, requireTask } from '../rights.js';
+import { canSeeSubproject, getMembership, requireProject, requireTask } from '../rights.js';
 import { loadTask, mapSubproject, newMailCode, resolveProjectLead } from '../tasks/service.js';
 import { uploadDir } from '../docs/layout.js';
 
@@ -222,9 +222,11 @@ export async function copyRoutes(app: FastifyInstance) {
     return { task: await loadTask(db, src.id), projectId: target.id, projectKey: target.key };
   });
 
-  async function loadSub(projectId: string, sid: string) {
+  /** Quell-Teilprojekt: im Projekt und für die Person sichtbar (eingeschränkte TPs nur mit Zugriff). */
+  async function loadSub(user: any, projectId: string, sid: string) {
     const s = await db.maybeOne(`select * from subprojects where id = $1 and project_id = $2`, [sid, projectId]);
     if (!s) throw notFound('Teilprojekt nicht gefunden');
+    if (!(await canSeeSubproject(db, user.id, s.id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     return s;
   }
 
@@ -237,7 +239,7 @@ export async function copyRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string; sid: string }; Body: CopyBody }>('/projects/:id/subprojects/:sid/copy', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
-    const src = await loadSub(req.params.id, req.params.sid);
+    const src = await loadSub(user, req.params.id, req.params.sid);
     const b = req.body ?? {};
     const target = await targetOf(user, req.params.id, b, true);
     if (target.id === req.params.id && m.role !== 'pl' && !m.canEditPlan) throw forbidden('Teilprojekte anlegen erfordert das Recht „Projektplan ändern“');
@@ -268,7 +270,7 @@ export async function copyRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Verschieben erfordert das Recht „Projektplan ändern“');
-    const src = await loadSub(req.params.id, req.params.sid);
+    const src = await loadSub(user, req.params.id, req.params.sid);
     const b = req.body ?? {};
     if (!b.targetProjectId || b.targetProjectId === req.params.id) throw badRequest('Zielprojekt fehlt oder ist das Quellprojekt');
     const target = await targetOf(user, req.params.id, b, true);

@@ -113,7 +113,9 @@ export async function projectRoutes(app: FastifyInstance) {
        order by s.position, s.created_at`,
       [p.id, user.id, m.role === 'pl']
     );
-    const milestones = await db.query(`select * from milestones where project_id = $1 order by date`, [p.id]);
+    // Meilensteine eingeschränkter Teilprojekte nur mit Sicht darauf (wie die Teilprojekte oben)
+    const visible = new Set(subprojects.rows.map((r: any) => r.id as string));
+    const milestones = (await db.query(`select * from milestones where project_id = $1 order by date`, [p.id])).rows.filter((r: any) => !r.subproject_id || visible.has(r.subproject_id));
     const lead = await resolveProjectLead(db, p.id);
     const labels = await db.query(`select * from labels where project_id = $1 order by position, name`, [p.id]);
     return {
@@ -123,7 +125,7 @@ export async function projectRoutes(app: FastifyInstance) {
       groups: await projectGroups(p.id),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
-      milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
+      milestones: milestones.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
     };
   });
 
@@ -321,8 +323,8 @@ export async function projectRoutes(app: FastifyInstance) {
     return { projects: rows.rows.map((r: any): AdminProject => ({ id: r.id, key: r.key, name: r.name, status: r.status, lead: r.lead_id ? { userId: r.lead_id, name: r.lead_name, active: Boolean(r.lead_active) } : null })) };
   });
 
-  // Org-Admin bestimmt die verantwortliche PL neu (z. B. wenn sie das Unternehmen verlässt), ohne selbst Mitglied zu werden;
-  // die bisherige wird Stellvertretung
+  // Org-Admin bestimmt die verantwortliche PL neu (z. B. wenn sie das Unternehmen verlässt), ohne selbst Mitglied zu werden
+  // (nie sich selbst: das wäre Inhaltszugriff über die Verwaltung); die bisherige wird Stellvertretung und erfährt es
   app.put<{ Params: { id: string }; Body: { userId: string; transferTasks?: boolean } }>('/admin/projects/:id/lead', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
@@ -331,6 +333,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (p.personal) throw forbidden('Persönliche Projekte gehören ihrem Ersteller');
     const target = await db.maybeOne(`select id, name from users where id = $1 and org_id = $2 and active and kind = 'person'`, [req.body?.userId, user.orgId]);
     if (!target) throw badRequest('Verantwortliche PL ist eine aktive Person des Mandanten');
+    if (target.id === user.id) throw forbidden('Der Org-Admin bestimmt eine andere Person zur verantwortlichen PL (kein Zugriff auf Projektinhalte über die Verwaltung)');
     const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [p.id]);
     if (primary?.user_id === target.id) return { ok: true, transferred: 0 };
     const transferred = primary ? await handOver(p.id, primary.user_id, target.id, Boolean(req.body?.transferTasks)) : 0;
@@ -340,6 +343,7 @@ export async function projectRoutes(app: FastifyInstance) {
       [p.id, target.id]
     );
     await notify(db, { userId: target.id, projectId: p.id, type: 'project.lead', title: `Du bist verantwortliche PL: ${p.key} ${p.name}`, body: `Bestimmt durch ${user.name} (Verwaltung)`, link: `/projekte/${p.id}` });
+    if (primary) await notify(db, { userId: primary.user_id, projectId: p.id, type: 'project.lead', title: `Verantwortliche PL neu bestimmt: ${p.key} ${p.name}`, body: `Neu verantwortlich: ${target.name}. Du bist jetzt Stellvertretung. Bestimmt durch ${user.name} (Verwaltung)`, link: `/projekte/${p.id}` });
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.lead', objectType: 'project', objectId: p.id, details: { from: primary?.user_id ?? null, to: target.id, transferred } });
     return { ok: true, transferred };
   });
@@ -519,7 +523,9 @@ export async function projectRoutes(app: FastifyInstance) {
        where s.project_id = $1 group by s.id, s.name, s.position order by s.position`,
       [pid, today]
     );
-    const milestones = await db.query(`select * from milestones where project_id = $1 and date >= $2 order by date limit 5`, [pid, today]);
+    // Eingeschränkte Teilprojekte nur mit Sicht darauf: Kennzahlen je Teilprojekt, Meilensteine und Eskalationen
+    const subs = await visibleSubIds(pid, user.id);
+    const milestones = (await db.query(`select * from milestones where project_id = $1 and date >= $2 order by date`, [pid, today])).rows.filter((r: any) => !r.subproject_id || subs.has(r.subproject_id)).slice(0, 5);
     const pending = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [pid]);
     const review = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' and deleted_at is null order by updated_at desc limit 5`, [pid]);
     const activity = await db.query(
@@ -542,14 +548,15 @@ export async function projectRoutes(app: FastifyInstance) {
     const time = await db.one(`select coalesce(sum(minutes), 0)::int as logged from time_entries where project_id = $1`, [pid]);
     const est = await db.one(`select coalesce(sum(estimate_minutes), 0)::int as est from tasks where project_id = $1 and archived_at is null`, [pid]);
     const proj = await db.one(`select time_tracking_enabled, budget_hours from projects where id = $1`, [pid]);
-    const esc = await evaluateProject(db, pid, today);
+    const seen = new Set(tasks.map((t) => t.id));
+    const esc = (await evaluateProject(db, pid, today)).filter((e) => seen.has(e.taskId));
     const raid = await db.query(`select id, number, kind, title, probability, impact, status, due_date from raid_items where project_id = $1 and status <> 'closed' order by coalesce(probability * impact, 0) desc, number limit 5`, [pid]);
     return {
       raid: raid.rows.map((r: any) => ({ id: r.id, number: r.number, kind: r.kind, title: r.title, score: r.probability && r.impact ? r.probability * r.impact : null, status: r.status, dueDate: dateStr(r.due_date) })),
       escalations: esc.filter((e) => e.targetLevel > 0 || e.level > 0).slice(0, 10),
       time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
-      counts, perSubproject: perSub.rows,
-      milestones: milestones.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), subprojectId: r.subproject_id })),
+      counts, perSubproject: perSub.rows.filter((r: any) => subs.has(r.id)),
+      milestones: milestones.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), subprojectId: r.subproject_id })),
       pendingDrafts: pending.c, pagesInReview: review.rows, conflicts, overdue,
       workload: [...load.entries()].map(([userId, v]) => ({ userId, ...v })).sort((a, b) => b.open - a.open),
       activity: activity.rows.map((a: any) => ({ action: a.action, objectType: a.object_type, objectId: a.object_id, details: a.details, createdAt: a.created_at, userName: a.user_name }))
@@ -560,12 +567,21 @@ export async function projectRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string } }>('/projects/:id/escalations', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
-    const rows = await evaluateProject(db, req.params.id, new Date().toISOString().slice(0, 10));
+    const seen = new Set((await db.query(`select t.id from tasks t where t.project_id = $1 and ${visibleSubprojectSql(2)}`, [req.params.id, user.id])).rows.map((r: any) => r.id as string));
+    const rows = (await evaluateProject(db, req.params.id, new Date().toISOString().slice(0, 10))).filter((e) => seen.has(e.taskId));
     const policy = policyOf((await db.one(`select escalation from projects where id = $1`, [req.params.id])).escalation);
     return { policy, escalations: rows };
   });
 
   // Projektkontakte (Externe)
+
+  /** Teilprojekte des Projekts, die die Person sieht (eingeschränkte nur mit Zugriff, canSeeSubproject). */
+  async function visibleSubIds(projectId: string, userId: string): Promise<Set<string>> {
+    const rows = await db.query(`select id from subprojects where project_id = $1`, [projectId]);
+    const out = new Set<string>();
+    for (const r of rows.rows) if (await canSeeSubproject(db, userId, r.id)) out.add(r.id);
+    return out;
+  }
 
   /** Übergabe der verantwortlichen PL: die bisherige wird Stellvertretung; direkt zugewiesene Arbeitspakete auf Wunsch mit (geerbte folgen ohnehin). */
   async function handOver(projectId: string, fromUserId: string, toUserId: string, transferTasks: boolean): Promise<number> {

@@ -1,7 +1,7 @@
 import type { Membership, OrgRight, ProjectRole, User, MailViewRights } from '@projekttool/shared';
 import { ROLE_RANK } from '@projekttool/shared';
 import type { Db } from './db.js';
-import { forbidden, HttpError, notFound } from './errors.js';
+import { badRequest, forbidden, HttpError, notFound } from './errors.js';
 
 export function mapMembership(row: any): Membership {
   return {
@@ -62,7 +62,7 @@ export async function requireTask(db: Db, user: User, taskId: string, min: Proje
   return { task, membership };
 }
 
-/** Wie requireTask als Ja/Nein (z. B. Leserecht an einer Mail über ihre Kopie im Arbeitspaket). */
+/** Wie requireTask als Ja/Nein (Projektsicht samt impliziter Leserolle und Sicht auf das Teilprojekt). */
 export async function canSeeTask(db: Db, user: User, taskId: string): Promise<boolean> {
   try {
     await requireTask(db, user, taskId);
@@ -108,6 +108,17 @@ export async function getViewRights(db: Db, viewId: string, user: User, membersh
   }
   if (view.account_type === 'personal') r.canSend = false;
   return r;
+}
+
+/**
+ * Arbeitspaket als Bezug (Zeitbuchung, Mail-Entwurf, RAID-Eintrag, Aktionspunkt …): gehört zum Projekt und liegt in einem
+ * Teilprojekt, das die Person sieht. Die Projektrolle prüft der Aufrufer (requireProject).
+ */
+export async function requireTaskRef(db: Db, user: User, projectId: string, taskId: string): Promise<any> {
+  const task = await db.maybeOne(`select * from tasks where id = $1 and project_id = $2 and deleted_at is null`, [taskId, projectId]);
+  if (!task) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
+  if (!(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+  return task;
 }
 
 /**

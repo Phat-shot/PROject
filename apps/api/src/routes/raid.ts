@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { RaidItem, ProjectContact } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
-import { requireProject } from '../rights.js';
+import { requireProject, requireTaskRef } from '../rights.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { dateStr } from '../tasks/service.js';
@@ -43,6 +43,7 @@ export async function raidRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
     validate(b);
+    if (b.taskId) await requireTaskRef(db, user, req.params.id, b.taskId);
     const n = await db.one(`select coalesce(max(number), 0) + 1 as n from raid_items where project_id = $1`, [req.params.id]);
     const r = await db.one(
       `insert into raid_items (project_id, number, kind, title, description, probability, impact, status, owner_user_id, due_date, mitigation, decided_on, task_id, page_id, created_by)
@@ -60,6 +61,8 @@ export async function raidRoutes(app: FastifyInstance) {
     validate(b);
     const cur = await db.maybeOne(`select * from raid_items where id = $1 and project_id = $2`, [req.params.rid, req.params.id]);
     if (!cur) throw notFound('Eintrag nicht gefunden');
+    // Neuer Bezug: Arbeitspaket des Projekts in einem sichtbaren Teilprojekt
+    if (b.taskId && b.taskId !== cur.task_id) await requireTaskRef(db, user, req.params.id, b.taskId);
     const v = (k: string, col: string) => (k in b ? (b as any)[k] : cur[col]);
     const r = await db.one(
       `update raid_items set kind = $3, title = $4, description = $5, probability = $6, impact = $7, status = $8, owner_user_id = $9, due_date = $10, mitigation = $11, decided_on = $12, task_id = $13, page_id = $14, updated_at = now() where id = $1 and project_id = $2 returning *`,

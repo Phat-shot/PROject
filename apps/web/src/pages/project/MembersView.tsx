@@ -11,13 +11,13 @@ import { ContactsCard } from './ContactsCard';
 import { HealthDialog } from '../PortfolioPage';
 import { PromptModal } from '../../components/ui';
 import { InlineText } from './TaskDrawer';
-import { LABEL_COLORS } from '@projekttool/shared';
+import { AI_FEATURES, LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import { AiFolderDialog } from './MailAi';
-import type { AgentUser, DocPage, DocTemplate, Group, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
+import type { AgentUser, AiFeatureDef, DocPage, DocTemplate, Group, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
   const { detail, reload } = useProject();
@@ -183,6 +183,7 @@ export function MembersCard() {
         })}
       </tbody></table>
       {personal && <p className="notice small mt">Persönliches Projekt: nur du und KI-Agenten. Weitere Personen, Gruppen und Einladungen sind gesperrt.</p>}
+      <MyRights />
       {!personal && (isPl || groups.length > 0) && <>
         <h3 className="mt">Gruppen im Projekt</h3>
         {groups.length === 0
@@ -201,6 +202,30 @@ export function MembersCard() {
       {invite && <RoleForm onClose={() => setInvite(false)} />}
       {group && <GroupForm group={group === 'new' ? null : group} onClose={() => setGroup(null)} />}
     </div>
+  );
+}
+
+/**
+ * Eigene Rechte im Projekt: Rolle, Einzelrechte und je KI-Funktion erlaubt oder die Begründung (KI-Freigaben, aus
+ * /projects/:id/ai/capabilities). Leser sehen nur die Auskunftsfunktionen, Funktionen der PL nur die PL.
+ */
+export function MyRights() {
+  const { detail, ai } = useProject();
+  const me = detail.project.myMembership;
+  const features = (AI_FEATURES as readonly AiFeatureDef[]).filter((f) => f.who !== 'agent' && !f.later
+    && (me.role === 'pl' || (!f.key.startsWith('pl.') && (me.role !== 'reader' || f.key === 'assist.ask' || f.key === 'agent.chat'))));
+  return (
+    <>
+      <h3 className="mt">Deine Rechte</h3>
+      <p className="small">{roleLabel[me.role]}{me.role === 'pl' && (me.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')} · Einzelrechte: {me.role === 'pl' ? 'alle' : rightsText(me)}</p>
+      {!ai ? <p className="muted small">KI-Freigaben werden geladen …</p>
+        : <table className="table"><thead><tr><th>KI-Funktion</th><th>Für dich</th></tr></thead><tbody>
+          {features.map((f) => {
+            const c = ai.features[f.key as keyof typeof ai.features];
+            return <tr key={f.key}><td>{f.label}</td><td className="small">{!c ? <span className="muted">–</span> : c.allowed ? <span className="badge ok">erlaubt</span> : <span className="muted">gesperrt: {c.reason}</span>}</td></tr>;
+          })}
+        </tbody></table>}
+    </>
   );
 }
 

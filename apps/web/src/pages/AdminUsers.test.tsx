@@ -6,13 +6,15 @@ import type { User } from '@projekttool/shared';
 const get = vi.fn();
 const patch = vi.fn();
 const post = vi.fn();
-vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), put: vi.fn(), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a), del: vi.fn() }, downloadCsv: vi.fn(), fmtDateTime: (d: string) => d }));
+const put = vi.fn();
+vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), put: (...a: unknown[]) => put(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a), del: vi.fn() }, downloadCsv: vi.fn(), fmtDateTime: (d: string) => d }));
 vi.mock('../lib/useAi', () => ({ invalidateAi: vi.fn(async () => undefined), useAiStatus: () => null }));
 let me = 'u0';
-vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: me, globalRole: me === 'u0' ? 'org_admin' : 'user' } }) }));
+let extra: Partial<User> = {};
+vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: me, globalRole: me === 'u0' ? 'org_admin' : 'user', ...extra } }) }));
 vi.mock('../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('../components/Layout', () => ({ TopBar: () => null }));
-import { GroupsCard, UsersCard } from './AdminPage';
+import { AdminPage, GroupsCard, ProjectLeadsCard, UsersCard } from './AdminPage';
 
 const person = (id: string, name: string, extra: Partial<User> = {}): User => ({ id, orgId: 'o1', email: `${id}@demo.local`, name, globalRole: 'user', orgRights: [], active: true, kind: 'person', ...extra });
 const users: User[] = [
@@ -25,7 +27,7 @@ const users: User[] = [
 
 describe('Verwaltung: Benutzer', () => {
   const reload = vi.fn(async () => undefined);
-  beforeEach(() => { me = 'u0'; patch.mockReset(); patch.mockResolvedValue({}); post.mockReset(); reload.mockClear(); });
+  beforeEach(() => { me = 'u0'; extra = {}; patch.mockReset(); patch.mockResolvedValue({}); post.mockReset(); reload.mockClear(); });
 
   it('ändert Rolle und Org-Rechte, reaktiviert Deaktivierte; den eigenen Zugang deaktiviert man nicht', async () => {
     render(<UsersCard users={users} reload={reload} />);
@@ -53,6 +55,7 @@ describe('Verwaltung: Gruppen mit Verwaltern', () => {
     { id: 'g2', name: 'Fremd', description: null, memberIds: ['u2'], managerIds: [] }
   ];
   beforeEach(() => {
+    extra = {};
     patch.mockReset(); patch.mockResolvedValue({}); post.mockReset(); post.mockResolvedValue({});
     get.mockReset(); get.mockResolvedValue({ groups });
   });
@@ -84,5 +87,55 @@ describe('Verwaltung: Gruppen mit Verwaltern', () => {
     fireEvent.click(screen.getByLabelText('Verwalter Max Keller'));
     fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/groups/g2', { name: 'Fremd', description: '', idpName: '', memberIds: ['u2', 'u1'], managerIds: ['u1'] }));
+  });
+});
+
+describe('Verwaltung: verantwortliche PL neu bestimmen', () => {
+  beforeEach(() => {
+    me = 'u0'; extra = {};
+    get.mockReset(); get.mockResolvedValue({ projects: [{ id: 'p1', key: 'WEB', name: 'Website', status: 'active', lead: { userId: 'u1', name: 'Max Keller', active: true } }] });
+    put.mockReset(); put.mockResolvedValue({ ok: true, transferred: 0 });
+  });
+
+  it('wählt eine andere aktive Person (nicht sich selbst, nicht die bisherige PL, keine Agenten) und überträgt auf Wunsch die Arbeitspakete', async () => {
+    render(<ProjectLeadsCard users={users} />);
+    const row = (await screen.findByText('WEB')).closest('tr')!;
+    expect(within(row).getByText('Max Keller')).toBeInTheDocument();
+    fireEvent.click(within(row).getByRole('button', { name: 'PL neu bestimmen' }));
+    const select = screen.getByLabelText('Neue verantwortliche PL');
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Lea Reuter (u2@demo.local)']);
+    fireEvent.click(screen.getByLabelText(/direkt zugewiesene Arbeitspakete/));
+    fireEvent.click(screen.getByRole('button', { name: 'Bestimmen' }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/admin/projects/p1/lead', { userId: 'u2', transferTasks: true }));
+  });
+});
+
+describe('Verwaltung ohne Org-Admin: nur die passenden Karten', () => {
+  beforeEach(() => {
+    get.mockReset();
+    get.mockImplementation(async (url: string) => (url === '/groups' ? { groups: [{ id: 'g1', name: 'Bau', description: null, memberIds: ['u1', 'u2'], managerIds: ['u2'] }] } : { users }));
+  });
+
+  it('Gruppenverwaltung (Org-Recht) sieht alle Gruppen, keine Benutzer, keine KI', async () => {
+    me = 'u1'; extra = { orgRights: ['groups_admin'] };
+    render(<AdminPage />);
+    expect(await screen.findByText('Berechtigungsgruppen')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: '+ Gruppe' })).toBeInTheDocument();
+    expect(screen.queryByText('Benutzer')).not.toBeInTheDocument();
+    expect(screen.queryByText('Projekte: verantwortliche PL')).not.toBeInTheDocument();
+  });
+
+  it('Verwalter einer Gruppe sieht nur seine Gruppe', async () => {
+    me = 'u2'; extra = { managesGroups: true };
+    render(<AdminPage />);
+    expect(await screen.findByText('Bau')).toBeInTheDocument();
+    expect(screen.getByText('Berechtigungsgruppen')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '+ Gruppe' })).not.toBeInTheDocument();
+  });
+
+  it('ohne Org-Recht und ohne Gruppe: keine Karte', () => {
+    me = 'u1'; extra = { managesGroups: false };
+    render(<AdminPage />);
+    expect(screen.queryByText('Berechtigungsgruppen')).not.toBeInTheDocument();
   });
 });

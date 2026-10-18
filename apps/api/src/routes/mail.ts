@@ -3,7 +3,7 @@ import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailView
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject, requireTask } from '../rights.js';
+import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject, requireTask, requireTaskRef } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
 import { aiConfigFor } from '../ai/client.js';
 import { aiAllowed, aiError } from '../ai/policy.js';
@@ -891,10 +891,7 @@ export async function mailRoutes(app: FastifyInstance) {
     } else throw badRequest('viewId oder accountId erforderlich');
     if (!(await accountAllowedInProject(db, account!, b.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (!rights.canDraft && !rights.canSend) throw forbidden('Kein Entwurfsrecht an dieser Ansicht');
-    if (b.taskId) {
-      const t = await db.maybeOne(`select project_id from tasks where id = $1`, [b.taskId]);
-      if (!t || t.project_id !== b.projectId) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
-    }
+    if (b.taskId) await requireTaskRef(db, user, b.projectId, b.taskId);
     const d = await db.one(
       `insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status, checklist_item_id) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'draft',$11) returning *`,
       [account!.id, b.viewId ?? null, b.taskId ?? null, b.projectId, user.id, JSON.stringify(b.to), JSON.stringify(b.cc ?? []), b.subject, b.body ?? '', b.inReplyTo ?? null, b.checklistItemId ?? null]

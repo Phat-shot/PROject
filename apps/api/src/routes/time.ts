@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject, requireTask } from '../rights.js';
+import { requireProject, requireTask, requireTaskRef, visibleSubprojectSql } from '../rights.js';
 import { touchTask } from '../tasks/service.js';
 
 function mapEntry(r: any) {
@@ -22,13 +22,13 @@ export async function timeRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
     const { from, to } = req.query;
-    // Mitglieder sehen eigene Buchungen, PL alle
+    // Mitglieder sehen eigene Buchungen, PL alle; Titel von Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf
     const userFilter = m.role === 'pl' ? req.query.userId ?? null : user.id;
     const rows = await db.query(
-      `select e.*, t.title as task_title, u.name as user_name from time_entries e left join tasks t on t.id = e.task_id join users u on u.id = e.user_id
+      `select e.*, case when ${visibleSubprojectSql(5)} then t.title end as task_title, u.name as user_name from time_entries e left join tasks t on t.id = e.task_id join users u on u.id = e.user_id
        where e.project_id = $1 and ($2::date is null or e.date >= $2) and ($3::date is null or e.date <= $3) and ($4::uuid is null or e.user_id = $4)
        order by e.date desc, e.created_at desc limit 1000`,
-      [req.params.id, from ?? null, to ?? null, userFilter]
+      [req.params.id, from ?? null, to ?? null, userFilter, user.id]
     );
     const byUser = await db.query(
       `select u.id as user_id, u.name, sum(e.minutes)::int as minutes from time_entries e join users u on u.id = e.user_id where e.project_id = $1 ${m.role === 'pl' ? '' : 'and e.user_id = $2'} group by u.id, u.name order by minutes desc`,
@@ -36,8 +36,8 @@ export async function timeRoutes(app: FastifyInstance) {
     );
     const bySub = await db.query(
       `select coalesce(s.name, 'Ohne Teilprojekt') as name, sum(e.minutes)::int as minutes, sum(coalesce(t.estimate_minutes, 0))::int as estimate
-       from time_entries e left join tasks t on t.id = e.task_id left join subprojects s on s.id = t.subproject_id where e.project_id = $1 group by s.name, s.position order by s.position nulls last`,
-      [req.params.id]
+       from time_entries e left join tasks t on t.id = e.task_id left join subprojects s on s.id = t.subproject_id where e.project_id = $1 and ${visibleSubprojectSql(2)} group by s.name, s.position order by s.position nulls last`,
+      [req.params.id, user.id]
     );
     const total = await db.one(`select coalesce(sum(minutes), 0)::int as minutes from time_entries where project_id = $1`, [req.params.id]);
     const estimate = await db.one(`select coalesce(sum(estimate_minutes), 0)::int as minutes from tasks where project_id = $1 and archived_at is null`, [req.params.id]);
@@ -60,10 +60,7 @@ export async function timeRoutes(app: FastifyInstance) {
     const b = req.body ?? ({} as any);
     const minutes = Number(b.minutes);
     if (!Number.isInteger(minutes) || minutes <= 0 || minutes > 1440) throw badRequest('Minuten zwischen 1 und 1440');
-    if (b.taskId) {
-      const t = await db.maybeOne(`select id from tasks where id = $1 and project_id = $2`, [b.taskId, req.params.id]);
-      if (!t) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
-    }
+    if (b.taskId) await requireTaskRef(db, user, req.params.id, b.taskId);
     const r = await db.one(
       `insert into time_entries (project_id, task_id, user_id, date, minutes, note) values ($1,$2,$3,$4,$5,$6) returning *`,
       [req.params.id, b.taskId ?? null, user.id, b.date ?? new Date().toISOString().slice(0, 10), minutes, b.note?.trim() || null]
@@ -85,10 +82,11 @@ export async function timeRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Zeiten am Arbeitspaket wie im Projekt (Rechtematrix): PL alle Buchungen, sonst nur die eigenen; Summe über die sichtbaren
   app.get<{ Params: { id: string } }>('/tasks/:id/time', async (req) => {
     const user = requireUser(req);
-    await requireTask(db, user, req.params.id);
-    const rows = await db.query(`select e.*, u.name as user_name from time_entries e join users u on u.id = e.user_id where e.task_id = $1 order by e.date desc, e.created_at desc`, [req.params.id]);
+    const { membership: m } = await requireTask(db, user, req.params.id);
+    const rows = await db.query(`select e.*, u.name as user_name from time_entries e join users u on u.id = e.user_id where e.task_id = $1 and ($2::uuid is null or e.user_id = $2) order by e.date desc, e.created_at desc`, [req.params.id, m.role === 'pl' ? null : user.id]);
     return { entries: rows.rows.map(mapEntry), totalMinutes: rows.rows.reduce((a: number, r: any) => a + r.minutes, 0) };
   });
 

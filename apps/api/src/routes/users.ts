@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { hashPassword, mapUser, requireUser, verifyPassword } from '../auth.js';
+import { hashPassword, mapUser, requireUser, verifyPassword, withManagedGroups } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
@@ -128,7 +128,8 @@ export async function userRoutes(app: FastifyInstance) {
     }
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
-    return { user: mapUser(r) };
+    // Die Web-App ersetzt damit den angemeldeten Benutzer: managesGroups wie bei /auth/me (Menüpunkt Verwaltung)
+    return { user: await withManagedGroups(app.db, mapUser(r)) };
   });
 
   // ---- Zweiter Faktor (TOTP): einrichten → Code bestätigen → aktiv; abschalten mit Passwort
@@ -301,14 +302,18 @@ export async function userRoutes(app: FastifyInstance) {
     const ids = (v: any): string[] => (typeof v === 'string' ? JSON.parse(v) : v) ?? [];
     return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, idpName: g.idp_name ?? null, memberIds: ids(g.member_ids), managerIds: ids(g.manager_ids) }));
   };
-  /** Mitglieder setzen (nur Personen des Mandanten, nie KI-Agenten); Verwalter sind immer auch Mitglied. Ohne managerIds bleiben die bisherigen Verwalter. */
-  const setMembers = async (orgId: string, groupId: string, ids: string[], managerIds?: string[]) => {
-    const managers = new Set(managerIds ?? (await app.db.query(`select user_id from group_members where group_id = $1 and is_manager`, [groupId])).rows.map((r: any) => r.user_id as string));
+  /** Gewünschte Mitglieder prüfen, bevor etwas geschrieben wird: nur Personen des Mandanten, nie KI-Agenten; Verwalter sind immer auch Mitglied. */
+  const checkMembers = async (orgId: string, ids: string[], managerIds?: string[]): Promise<string[]> => {
     const wanted = [...new Set([...ids, ...(managerIds ?? [])].map(String))];
     const known = wanted.length ? (await app.db.query(`select id, kind from users where org_id = $1 and id = any($2::uuid[])`, [orgId, wanted])).rows : [];
     if (known.some((u: any) => u.kind === 'agent')) throw badRequest('KI-Agenten werden nie Gruppenmitglied');
+    return known.map((u: any) => u.id as string);
+  };
+  /** Mitglieder setzen (geprüft mit checkMembers). Ohne managerIds bleiben die bisherigen Verwalter. */
+  const setMembers = async (groupId: string, memberIds: string[], managerIds?: string[]) => {
+    const managers = new Set(managerIds ?? (await app.db.query(`select user_id from group_members where group_id = $1 and is_manager`, [groupId])).rows.map((r: any) => r.user_id as string));
     await app.db.query(`delete from group_members where group_id = $1`, [groupId]);
-    for (const u of known) await app.db.query(`insert into group_members (group_id, user_id, is_manager) values ($1,$2,$3)`, [groupId, u.id, managers.has(u.id)]);
+    for (const id of memberIds) await app.db.query(`insert into group_members (group_id, user_id, is_manager) values ($1,$2,$3)`, [groupId, id, managers.has(id)]);
   };
   /** Gruppen pflegen der Org-Admin und das Org-Recht „Gruppen verwalten“; Verwalter einer Gruppe nur deren Mitglieder. */
   const groupsAdmin = (user: User) => hasOrgRight(user, 'groups_admin');
@@ -324,8 +329,9 @@ export async function userRoutes(app: FastifyInstance) {
     const b = req.body ?? ({} as any);
     if (!b.name?.trim()) throw badRequest('Name erforderlich');
     if (await app.db.maybeOne(`select 1 from groups where org_id = $1 and lower(name) = lower($2)`, [user.orgId, b.name.trim()])) throw badRequest('Gruppe existiert bereits');
+    const members = await checkMembers(user.orgId, b.memberIds ?? [], b.managerIds ?? []);
     const g = await app.db.one(`insert into groups (org_id, name, description, idp_name) values ($1,$2,$3,$4) returning id`, [user.orgId, b.name.trim(), b.description ?? null, b.idpName?.trim() || null]);
-    await setMembers(user.orgId, g.id, b.memberIds ?? [], b.managerIds ?? []);
+    await setMembers(g.id, members, b.managerIds ?? []);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.create', objectType: 'group', objectId: g.id, details: { name: b.name, members: b.memberIds, managers: b.managerIds } });
     return { group: (await groupRows(user.orgId, g.id))[0] };
   });
@@ -341,10 +347,12 @@ export async function userRoutes(app: FastifyInstance) {
       const managers = (await app.db.query(`select user_id from group_members where group_id = $1 and is_manager`, [g.id])).rows.map((r: any) => r.user_id);
       if (managers.some((id: string) => !b.memberIds!.includes(id))) throw badRequest('Verwalter bleiben Mitglied der Gruppe; Verwalter ändert die Gruppenverwaltung');
     }
+    // Mitglieder vor jeder Änderung prüfen, damit ein Fehler nichts halb schreibt
+    const current = (await app.db.query(`select user_id from group_members where group_id = $1`, [g.id])).rows.map((r: any) => r.user_id as string);
+    const members = b.memberIds || b.managerIds ? await checkMembers(user.orgId, b.memberIds ?? current, b.managerIds) : null;
     await app.db.query(`update groups set name = coalesce($2, name), description = case when $3 then $4 else description end, idp_name = case when $5 then $6 else idp_name end where id = $1`, [g.id, b.name?.trim() || null, 'description' in b, b.description ?? null, 'idpName' in b, b.idpName?.trim() || null]);
-    if (b.memberIds || b.managerIds) {
-      const current = (await app.db.query(`select user_id from group_members where group_id = $1`, [g.id])).rows.map((r: any) => r.user_id as string);
-      await setMembers(user.orgId, g.id, b.memberIds ?? current, b.managerIds);
+    if (members) {
+      await setMembers(g.id, members, b.managerIds);
       await syncProjectGroups(app.db, { groupId: g.id });
     }
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.update', objectType: 'group', objectId: g.id, details: b });
