@@ -9,6 +9,7 @@ import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
 import { profileAvailableInProject } from '../ai/client.js';
+import { ownLlmReason } from '../ai/policy.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
 import { createReport, reportingOf } from '../docs/report.js';
@@ -128,6 +129,11 @@ export async function projectRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if ('aiProfileId' in b) {
       if (b.aiProfileId && !(await profileAvailableInProject(db, req.params.id, b.aiProfileId))) throw badRequest('Dieses LLM ist im Projekt nicht verfügbar (Freigabe durch den Org-Admin oder eigenes LLM des Projekts)');
+      // Ein eigenes LLM des Projekts neu als Projekt-KI wählen gilt wie Einbinden (Profilachse und Freigabe pl.own_llm)
+      if (b.aiProfileId && (await db.maybeOne(`select 1 from ai_profiles a join projects p on p.id = a.project_id where a.id = $1 and p.id = $2 and p.ai_profile_id is distinct from a.id`, [b.aiProfileId, req.params.id]))) {
+        const reason = await ownLlmReason(db, user, req.params.id);
+        if (reason) throw forbidden(reason);
+      }
       await db.query(`update projects set ai_profile_id = $2 where id = $1`, [req.params.id, b.aiProfileId ?? null]);
     }
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');

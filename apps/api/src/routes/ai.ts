@@ -6,8 +6,8 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { hasOrgRight, requireProject } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
-import { aiConfigFor, aiStatus, complete, MODELS, orgAiSettings, projectProfiles } from '../ai/client.js';
-import { aiAllowed, aiError, PROJECT_LABEL_SQL, setAiPolicy } from '../ai/policy.js';
+import { aiConfigFor, aiStatus, complete, MODELS, projectProfiles } from '../ai/client.js';
+import { aiError, ownLlmAllowed, ownLlmReason, PROJECT_LABEL_SQL, setAiPolicy } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -94,19 +94,10 @@ export async function aiRoutes(app: FastifyInstance) {
     return { llms: r.rows.map((x: any) => ({ id: x.id, name: x.name, provider: x.provider, model: x.model, baseUrl: x.base_url, active: x.active, adminBlocked: x.admin_blocked, tokensIn: Number(x.tokens_in), tokensOut: Number(x.tokens_out), lastUsedAt: x.last_used_at, createdAt: x.created_at, project: x.project_label, createdBy: x.created_by_name ?? null })) };
   });
 
-  // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden (PL), wenn der Mandant es für diese Projektart erlaubt
-  const ownAllowed = async (orgId: string, projectId: string) => {
-    const s = await orgAiSettings(db, orgId);
-    const p = await db.one(`select personal from projects where id = $1`, [projectId]);
-    return s.ownLlm === 'all' || (s.ownLlm === 'personal' && Boolean(p.personal));
-  };
+  // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden (PL), wenn der Mandant es für diese Projektart erlaubt und pl.own_llm freigegeben ist
+  const ownAllowed = (orgId: string, projectId: string) => ownLlmAllowed(db, orgId, projectId);
   const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
-  /** Eigenes LLM einbinden: Profilachse (Mandant erlaubt eigene LLMs für diese Projektart) und Freigabe pl.own_llm für die PL. */
-  const ownReason = async (user: User, projectId: string): Promise<string | null> => {
-    if (!(await ownAllowed(user.orgId, projectId))) return 'Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)';
-    const d = await aiAllowed(db, { userId: user.id, projectId, feature: 'pl.own_llm' });
-    return d.allowed ? null : d.reason;
-  };
+  const ownReason = (user: User, projectId: string) => ownLlmReason(db, user, projectId);
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
@@ -133,6 +124,10 @@ export async function aiRoutes(app: FastifyInstance) {
     const cur = await ownOf(req.params.id, req.params.lid);
     const b: any = req.body ?? {};
     const v = validProfile(b, cur);
+    // Ohne Freigabe (Profilachse, pl.own_llm) nur einschränken: deaktivieren oder Schlüssel entfernen; jede andere Änderung wie Einbinden
+    const changes = v.name !== cur.name || v.provider !== cur.provider || v.baseUrl !== cur.base_url || v.model !== cur.model || Boolean(b.apiKey?.trim?.())
+      || (b.active === true && !cur.active) || (typeof b.thinkingOff === 'boolean' && b.thinkingOff !== Boolean(cur.thinking_off));
+    if (changes) { const reason = await ownReason(user, req.params.id); if (reason) throw forbidden(reason); }
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'ai.project_llm.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, keyChanged: b.apiKey !== undefined } });

@@ -28,6 +28,6 @@ insert into audit_log (org_id, action, object_type, object_id, details)
            'stoppedAgents', case when r.effect = 'deny' then coalesce((select jsonb_agg(jsonb_build_object('id', u.id, 'name', u.name, 'projectId', u.agent_project_id) order by u.name)
              from users u where u.org_id = r.org_id and u.kind = 'agent' and u.active and u.agent_project_id is not null), '[]'::jsonb) else '[]'::jsonb end)
   from ai_policies r;
--- Bestandsschutz: wer Mail-KI eingeschaltet hat, behält „KI nutzen“
+-- Bestandsschutz: wer Mail-KI eingeschaltet hat, behält „KI nutzen“; nicht Leser (ihre Mail-KI lief nie, sonst bekämen sie still Frage und Chat)
 update project_members pm set can_use_ai = true from mail_views v
-  where v.ai_process and v.ai_process_by = pm.user_id and v.project_id = pm.project_id;
+  where v.ai_process and v.ai_process_by = pm.user_id and v.project_id = pm.project_id and pm.role <> 'reader';

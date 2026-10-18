@@ -166,7 +166,7 @@ export async function agentRoutes(app: FastifyInstance) {
     // Auch der Lauf von Hand beachtet Pause, KI-Freigaben und Tagesbudget
     if (t.agent_paused) throw badRequest('Der Agent ist an diesem Arbeitspaket pausiert. Erst fortsetzen.');
     const d = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id });
-    if (!d.allowed) throw aiError(d);
+    if (!d.allowed) throw aiError(d, true);
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
     if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');

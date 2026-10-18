@@ -413,8 +413,8 @@ const ROW_SECTIONS: { kind: RowKind; label: string; hint: string }[] = [
   { kind: 'group', label: 'Gruppen', hint: 'Mitglieder der Gruppe in allen Projekten' },
   { kind: 'project', label: 'Projekte', hint: 'alle Personen und Agenten im Projekt, auch Agenten der Org' },
   { kind: 'user', label: 'Benutzer', hint: 'eigene Nutzung der Person in allen Projekten' },
-  { kind: 'agent', label: 'Agenten', hint: 'Läufe, Chat und Mail-Ansichten des Agenten' },
-  { kind: 'exception', label: 'Ausnahmen', hint: 'Person oder Gruppe in einem Projekt: übersteuert Person und Projekt, nicht den Notaus' }
+  { kind: 'agent', label: 'Agenten', hint: 'Läufe, Chat und Mail-Ansichten des Agenten in allen Projekten (für ein Projekt: Ausnahmen)' },
+  { kind: 'exception', label: 'Ausnahmen', hint: 'Person, Agent oder Gruppe in einem Projekt: übersteuert Person bzw. Agent und Projekt, nicht den Notaus' }
 ];
 const STAGE_LABEL: Record<string, string> = { killswitch: 'Notaus', policy: 'Regeln', project: 'Ebene der PL', profile: 'Profil', budget: 'Budget', ok: '' };
 const rowKey = (r: PolicyRow) => `${r.projectId ?? ''}|${r.userId ?? ''}|${r.groupId ?? ''}`;
@@ -425,7 +425,7 @@ const rowKey = (r: PolicyRow) => `${r.projectId ?? ''}|${r.userId ?? ''}|${r.gro
  * sperren mit Notiz; Vorschau der Wirkung für eine Person oder einen Agenten in einem Projekt mit Spur. Sperre gewinnt;
  * eine Ausnahme gibt es nur über „Person in Projekt“; die PL kann im Projekt weiter einschränken.
  */
-function AiPolicyCard() {
+export function AiPolicyCard() {
   const d = useData<PolicyListing>('/ai/policies');
   const tg = useData<PolicyTargets>('/ai/policy-targets');
   const [detailed, setDetailed] = useState(false);
@@ -446,7 +446,14 @@ function AiPolicyCard() {
   const cols = [{ key: '*', label: 'Alle' }, ...AI_CATEGORIES.flatMap((c) => [{ key: c.key as string, label: c.label }, ...(detailed ? AI_FEATURES.filter((f) => f.category === c.key && !('later' in f && f.later)).map((f) => ({ key: f.key as string, label: f.label })) : [])])];
   const ruleAt = (r: PolicyRow, feature: string) => rules.find((x) => rowKey(x) === rowKey(r) && x.feature === feature);
   const save = (row: PolicyRow, feature: string, effect: 'allow' | 'deny' | null, note: string | null) => run(async () => { d.setData(await api.put<PolicyListing>('/ai/policies', { ...row, feature, effect, note })); await invalidateAi(); });
-  const targetOptions = add.kind === 'group' ? t.groups.map((g) => ({ id: g.id, label: g.name })) : add.kind === 'project' ? t.projects.map((p) => ({ id: p.id, label: p.label })) : add.kind === 'agent' ? t.agents.map((a) => ({ id: a.id, label: a.name })) : [...t.users.map((u) => ({ id: u.id, label: u.name })), ...(add.kind === 'exception' ? t.groups.map((g) => ({ id: `g:${g.id}`, label: `Gruppe ${g.name}` })) : [])];
+  // Auswahl je Zeilenart; Ausnahmen gelten für Personen, Agenten (z. B. Morton nur in BAU) und Gruppen in einem Projekt
+  const people = t.users.map((u) => ({ id: u.id, label: u.name }));
+  const agentOpts = t.agents.map((a) => ({ id: a.id, label: a.name }));
+  const targetGroups: { label: string | null; options: { id: string; label: string }[] }[] = add.kind === 'group' ? [{ label: null, options: t.groups.map((g) => ({ id: g.id, label: g.name })) }]
+    : add.kind === 'project' ? [{ label: null, options: t.projects.map((p) => ({ id: p.id, label: p.label })) }]
+    : add.kind === 'agent' ? [{ label: null, options: agentOpts }]
+    : add.kind === 'exception' ? [{ label: 'Personen', options: people }, { label: 'Agenten', options: agentOpts }, { label: 'Gruppen', options: t.groups.map((g) => ({ id: `g:${g.id}`, label: `Gruppe ${g.name}` })) }]
+    : [{ label: null, options: people }];
   const addRow = () => {
     const tid = add.target;
     const row: PolicyRow = add.kind === 'group' ? { projectId: null, userId: null, groupId: tid } : add.kind === 'project' ? { projectId: tid, userId: null, groupId: null }
@@ -481,9 +488,10 @@ function AiPolicyCard() {
       </div>
       <div className="row small mt" style={{ flexWrap: 'wrap' }}>
         <span className="muted">Zeile hinzufügen:</span>
-        <select value={add.kind} onChange={(e) => setAdd({ kind: e.target.value as RowKind, target: '', projectId: '' })} style={{ width: 'auto' }}>{ROW_SECTIONS.filter((x) => x.kind !== 'org').map((x) => <option key={x.kind} value={x.kind}>{x.label}</option>)}</select>
-        {add.kind === 'exception' && <select value={add.projectId} onChange={(e) => setAdd({ ...add, projectId: e.target.value })} style={{ width: 'auto' }}><option value="">Projekt …</option>{t.projects.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>}
-        <select value={add.target} onChange={(e) => setAdd({ ...add, target: e.target.value })} style={{ width: 'auto' }}><option value="">{add.kind === 'exception' ? 'Person oder Gruppe …' : 'wählen …'}</option>{targetOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+        <select aria-label="Zeilenart" value={add.kind} onChange={(e) => setAdd({ kind: e.target.value as RowKind, target: '', projectId: '' })} style={{ width: 'auto' }}>{ROW_SECTIONS.filter((x) => x.kind !== 'org').map((x) => <option key={x.kind} value={x.kind}>{x.label}</option>)}</select>
+        {add.kind === 'exception' && <select aria-label="Projekt" value={add.projectId} onChange={(e) => setAdd({ ...add, projectId: e.target.value })} style={{ width: 'auto' }}><option value="">Projekt …</option>{t.projects.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>}
+        <select aria-label="Wer" value={add.target} onChange={(e) => setAdd({ ...add, target: e.target.value })} style={{ width: 'auto' }}><option value="">{add.kind === 'exception' ? 'Person, Agent oder Gruppe …' : 'wählen …'}</option>
+          {targetGroups.map((g) => { const opts = g.options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>); return g.label ? (g.options.length ? <optgroup key={g.label} label={g.label}>{opts}</optgroup> : null) : opts; })}</select>
         <button className="btn sm" disabled={!add.target || (add.kind === 'exception' && !add.projectId)} onClick={addRow}>Hinzufügen</button>
       </div>
       <AiPolicyPreview targets={t} />

@@ -134,7 +134,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
   if (!m) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Agent ist kein Mitglied' };
   const { cfg: c, decision } = await aiConfigFor(db, { userId: agent.id, projectId: task.project_id, feature: 'agent.run', taskId: task.id, now });
-  if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.reason, now);
+  if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.publicReason, now);
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
@@ -692,7 +692,8 @@ export { agentBudgetLeft };
 
 /**
  * Gesperrter Lauf (KI-Freigaben): ohne LLM-Aufruf als skipped mit Begründung protokolliert, zählt nicht gegen das Budget;
- * je Agent und Arbeitspaket höchstens ein Eintrag am Tag, damit Worker und Ereignisse das Protokoll nicht fluten.
+ * je Agent und Arbeitspaket höchstens ein Eintrag am Tag, damit Worker und Ereignisse das Protokoll nicht fluten. Die
+ * Lauflisten sehen alle Mitglieder: reason ist die Begründung für geteilte Orte (publicReason).
  */
 export async function logSkippedRun(db: Db, agent: { id: string; org_id: string }, projectId: string, taskId: string, trigger: string, reason: string, now = new Date()): Promise<AgentRunResult> {
   const today = await db.maybeOne(`select id from agent_runs where agent_user_id = $1 and task_id = $2 and status = 'skipped' and created_at >= $3::date limit 1`, [agent.id, taskId, now.toISOString().slice(0, 10)]);
@@ -762,7 +763,7 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
       if (!trigger) continue;
       const gate = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id, now });
       if (!gate.allowed && gate.stage === 'budget') break;
-      if (!gate.allowed) { out.push(await logSkippedRun(db, agent, t.project_id, t.id, trigger, gate.reason, now)); continue; }
+      if (!gate.allowed) { out.push(await logSkippedRun(db, agent, t.project_id, t.id, trigger, gate.publicReason, now)); continue; }
       if (mark) await mark();
       budget--;
       out.push(await runAgentOnTask(db, mail, fetchFn, agent, t.id, trigger, now));

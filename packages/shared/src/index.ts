@@ -200,6 +200,11 @@ export interface AiDecision {
   allowed: boolean;
   /** Begründung: bei Sperre die erste Sperre, sonst kurz, was gilt */
   reason: string;
+  /**
+   * Begründung für geteilte Orte (Projektkanal, Lauflisten, Fähigkeiten der Agenten): ohne Namen und Notiz, wenn eine Regel
+   * für eine Person, eine Gruppe oder eine Ausnahme entschieden hat; sonst wie reason
+   */
+  publicReason: string;
   stage: AiStage;
   /** Regel, die in Stufe 1 entschieden hat */
   rule?: { id: string; effect: 'allow' | 'deny' } | null;

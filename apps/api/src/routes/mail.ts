@@ -281,7 +281,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (b.agentUserId && !(await db.maybeOne(`select 1 from project_members pm join users u on u.id = pm.user_id where pm.project_id = $1 and pm.user_id = $2 and u.kind = 'agent' and u.active`, [v.project_id, b.agentUserId]))) throw badRequest('Agent ist kein aktives Mitglied des Projekts');
     if (b.agentUserId) {
       const d = await aiAllowed(db, { userId: b.agentUserId, projectId: v.project_id, feature: 'mail.triage', budget: false });
-      if (!d.allowed && !d.missing) throw aiError(d);
+      if (!d.allowed && !d.missing) throw aiError(d, true);
     }
     if ('aiProcess' in b) await db.query(`update mail_views set ai_process = $2, ai_process_by = case when $2 then $3::uuid else null end where id = $1`, [v.id, Boolean(b.aiProcess), user.id]);
     if ('agentUserId' in b) await db.query(`update mail_views set agent_user_id = $2 where id = $1`, [v.id, b.agentUserId || null]);

@@ -15,7 +15,9 @@ import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
  * fragende Person sehen darf. Enthält die Nachricht etwas für eines seiner Arbeitspakete, hält er es dort im Log fest
  * (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Jeder Lauf zählt gegen das Tagesbudget.
  * KI-Freigaben (agent.chat) gelten für Absender und Agent; in Direktnachrichten ohne Projekt, danach antwortet der Agent
- * nur aus Projekten, in denen der Absender „KI nutzen“ hat oder PL ist und beide freigegeben sind.
+ * nur aus Projekten, in denen der Absender „KI nutzen“ hat oder PL ist und beide freigegeben sind. Gesperrt antwortet er
+ * nur auf Direktnachrichten und Erwähnungen (nicht auf jede Folgenachricht im Thread); im Projektkanal ohne Namen und Notiz
+ * persönlicher Regeln, die volle Begründung bekommt der Absender als Meldung.
  */
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['reply', 'notes'],
@@ -47,25 +49,34 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Im Projektkanal antwortet der Agent im Thread der Nachricht, in Direktnachrichten direkt
   const threadId: string | null = channel.kind === 'project' ? msg.thread_id ?? msg.id : null;
 
-  const post = async (body: string) => {
+  /** Antwort im Chat; die Meldung an den Absender trägt note statt des Texts (volle Begründung, die der Kanal nicht zeigt). */
+  const post = async (body: string, note = body) => {
     await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body) values ($1,$2,$3,$4)`, [channel.id, agent.id, threadId, body.slice(0, 8000)]);
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channel.id, agent.id]);
     const link = channel.kind === 'project' ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
-    await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(body, 160), link, dedupeKey: null });
+    await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(note, note === body ? 160 : 400), link, dedupeKey: null });
   };
 
-  /** Gesperrt: kein LLM-Aufruf, Begründung im Chat und als übersprungener Lauf. */
-  const blocked = async (reply: string, reason: string): Promise<AgentChatResult> => {
-    await post(reply);
-    await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','skipped',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, reason.slice(0, 500), channel.id]);
-    return { status: 'skipped', error: reason };
+  // Gesperrt antwortet der Agent nur, wenn er gemeint ist (Direktnachricht oder Erwähnung), nicht auf jede Folgenachricht im Thread
+  const mentions: string[] = typeof msg.mentions === 'string' ? JSON.parse(msg.mentions) : msg.mentions ?? [];
+  const addressed = channel.kind !== 'project' || mentions.includes(agent.id);
+  /**
+   * Gesperrt: kein LLM-Aufruf, Begründung im Chat und als übersprungener Lauf. Lauflisten und Projektkanal sehen alle
+   * Mitglieder, daher dort die Begründung ohne Namen und Notiz persönlicher Regeln (shown); full nur für den Absender.
+   */
+  const blocked = async (shown: string, full: string, logged: string): Promise<AgentChatResult> => {
+    if (!addressed) return { status: 'skipped', error: logged };
+    await post(channel.kind === 'project' ? shown : full, full);
+    await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','skipped',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, logged.slice(0, 500), channel.id]);
+    return { status: 'skipped', error: logged };
   };
   const sender = await aiAllowed(db, { userId: msg.user_id, projectId: channel.project_id ?? null, feature: 'agent.chat' });
-  if (!sender.allowed) return blocked(`Ich kann dir hier nicht antworten: ${sender.reason}`, `Absender: ${sender.reason}`);
+  if (!sender.allowed) return blocked(`Ich kann dir hier nicht antworten: ${sender.publicReason}`, `Ich kann dir hier nicht antworten: ${sender.reason}`, `Absender: ${sender.publicReason}`);
   const { cfg, decision } = await aiConfigFor(db, { userId: agent.id, projectId: channel.project_id ?? null, feature: 'agent.chat', now });
   if (!cfg && decision.stage === 'profile') { await post('Mir ist gerade kein aktives KI-Profil zugewiesen, ich kann nicht antworten. Bitte an die Verwaltung (KI-Agenten) wenden.'); return { status: 'skipped', error: 'kein KI-Profil' }; }
   if (!cfg && decision.stage === 'budget') { await post('Mein Tagesbudget ist aufgebraucht. Ich melde mich morgen; Dringendes bitte an die Projektleitung.'); return { status: 'skipped', error: 'Tagesbudget' }; }
-  if (!cfg) return blocked(`Ich bin hier gesperrt: ${decision.reason}`, decision.reason);
+  // Sperre des Agenten (auch „Eigene Agenten der PL“ für die PL, die ihn angelegt hat): nie mit Namen und Notiz persönlicher Regeln
+  if (!cfg) return blocked(`Ich bin hier gesperrt: ${decision.publicReason}`, `Ich bin hier gesperrt: ${decision.publicReason}`, decision.publicReason);
 
   // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
   const history = threadId

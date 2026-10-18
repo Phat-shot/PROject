@@ -103,13 +103,14 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
       const actor = await userRow(db, run.actor_user_id);
       if (!actor) return void (await finish('skipped', { error: 'Auftraggeber ist nicht mehr aktiv' }));
       gate = await aiConfigFor(db, { userId: actor.id, projectId: project.id, feature: 'mail.process', viewId: view.id });
-      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.reason })));
+      // Die Läufe sehen alle mit Zugriff auf die Ansicht: Begründung ohne Namen und Notiz persönlicher Regeln
+      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.publicReason })));
       header = `# Du\nDu bist die Projekt-KI von ${project.key} „${project.name}“. ${actor.name} hat diese Mail zur Bearbeitung abgelegt; was du listest, wird sofort in seinem Auftrag angelegt.`;
     } else {
       agent = await db.maybeOne(`select u.id, u.name, u.org_id, u.persona from users u join project_members pm on pm.user_id = u.id and pm.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [run.agent_user_id, project.id]);
       if (!agent) return void (await finish('skipped', { error: 'Agent nicht aktiv oder kein Mitglied' }));
       gate = await aiConfigFor(db, { userId: agent.id, projectId: project.id, feature: 'mail.triage' });
-      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.reason })));
+      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.publicReason })));
       header = `# Du\nDu bist „${agent.name}“, KI-Agent, und betreust die Mail-Ansicht „${view.name}“ im Projekt ${project.key} „${project.name}“. Du schlägst vor; ausgeführt wird erst, wenn eine Person zustimmt. ${styleText(agent.persona)}`;
     }
 
