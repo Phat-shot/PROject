@@ -1,8 +1,9 @@
 /**
  * Sofortläufe von Agenten bei Ereignissen (Zuweisung, Kommentar, Mail, Chat-Nachricht): die Routen melden ein Ereignis,
- * der registrierte Läufer startet kurz danach entkoppelt vom Request. Ereignisse zum selben Arbeitspaket bzw. Gespräch,
- * die vor dem Start eintreffen, gehen im anstehenden Lauf auf; was während eines Laufs eintrifft, setzt das Dirty-Flag
- * und löst danach genau einen Folgelauf aus, der den Stand neu liest. flushAgentRuns() wartet in Tests auf alle Läufe.
+ * der registrierte Läufer startet kurz danach entkoppelt vom Request. Ereignisse zum selben Arbeitspaket bzw. Gespräch
+ * (Direktnachricht oder Thread im Projektkanal), die vor dem Start eintreffen, gehen im anstehenden Lauf auf; was während
+ * eines Laufs eintrifft, setzt das Dirty-Flag und löst danach genau einen Folgelauf aus, der den Stand neu liest.
+ * flushAgentRuns() wartet in Tests auf alle Läufe.
  */
 type Runner = (taskId: string, trigger: string) => Promise<unknown>;
 type ChatRunner = (agentId: string, channelId: string, messageId: string) => Promise<unknown>;
@@ -55,11 +56,15 @@ export function queueAgentRun(taskId: string, trigger: string): void {
   schedule(taskId, 'agent', () => run(taskId, trigger), true);
 }
 
-/** Agent antwortet im Chat (Direktnachricht, Erwähnung im Projektkanal oder Antwort in seinem Thread); der Lauf antwortet auf die neueste Nachricht. */
-export function queueAgentChat(agentId: string, channelId: string, messageId: string): void {
+/**
+ * Agent antwortet im Chat (Direktnachricht, Erwähnung im Projektkanal oder Antwort in seinem Thread); der Lauf antwortet auf
+ * die neueste Nachricht des Gesprächs. Gespräch ist in Direktnachrichten der Kanal, im Projektkanal der Thread (threadKey),
+ * damit Erwähnungen in verschiedenen Threads je eine Antwort bekommen.
+ */
+export function queueAgentChat(agentId: string, channelId: string, messageId: string, threadKey = ''): void {
   if (!chatRunner) return;
   const run = chatRunner;
-  schedule(`chat:${agentId}:${channelId}`, 'agent-chat', () => run(agentId, channelId, messageId));
+  schedule(`chat:${agentId}:${channelId}${threadKey ? `:${threadKey}` : ''}`, 'agent-chat', () => run(agentId, channelId, messageId));
 }
 
 /** Wartet, bis alle Läufe fertig sind, auch solche, die während des Wartens dazukommen (z. B. Agent nach Mail-KI). */

@@ -168,7 +168,7 @@ export async function chatRoutes(app: FastifyInstance) {
       if (t) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${body}`]);
         queueAgentRun(t.id, 'comment');
-      } else queueAgentChat(a, channel.id, r.id);
+      } else queueAgentChat(a, channel.id, r.id, channel.kind === 'project' ? threadId ?? r.id : '');
     }
     return { message: mapMessage({ ...r, user_name: user.name, reply_count: 0 }) };
   });

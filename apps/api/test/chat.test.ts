@@ -92,5 +92,14 @@ test('Projektkanal: schreiben nur ausdrücklich eingetragene Mitglieder; implizi
   const web = (await t.api(leser).get(`/projects/${t.ids.projects.web}/chat`)).json();
   assert.equal(web.canWrite, true);
   assert.equal((await t.api(leser).post(`/chat/channels/${web.channel.id}/messages`, { body: 'Lese mit und frage nach.' })).statusCode, 200);
+  // Ehemals eingetragene Person liest nur noch implizit mit: eigene alte Nachrichten lassen sich nicht mehr bearbeiten
+  assert.equal((await t.api(anna).put(`/projects/${erp}/members/${t.ids.users.leser}`, { role: 'reader' })).statusCode, 200);
+  const own = await t.api(leser).post(`/chat/channels/${cid}/messages`, { body: 'Als Leserin eingetragen.' });
+  assert.equal(own.statusCode, 200, own.body);
+  assert.equal((await t.api(leser).patch(`/chat/messages/${own.json().message.id}`, { body: 'Als Leserin eingetragen (korrigiert).' })).statusCode, 200);
+  assert.equal((await t.api(anna).del(`/projects/${erp}/members/${t.ids.users.leser}`)).statusCode, 200);
+  const edit = await t.api(leser).patch(`/chat/messages/${own.json().message.id}`, { body: 'Nachträglich geändert.' });
+  assert.equal(edit.statusCode, 403);
+  assert.match(edit.json().error, /nur Mitglieder des Projekts/);
   await t.api(anna).patch(`/projects/${erp}`, { visibility: 'members' });
 });

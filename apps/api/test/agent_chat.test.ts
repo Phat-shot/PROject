@@ -128,3 +128,25 @@ test('Nachrichten während eines Chat-Laufs gehen nicht verloren: genau ein Folg
   assert.match(prompts[n0 + 1], /Erste Frage[\s\S]*Zweite Frage[\s\S]*Dritte Frage/, 'Folgelauf liest den Verlauf neu');
   assert.equal(await replies(), r0 + 2);
 });
+
+test('Projektkanal: Erwähnungen in verschiedenen Threads während eines Laufs bekommen je eine Antwort im eigenen Thread', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const agent = await t.db.one(`select id from users where name = 'Chatty' and kind = 'agent'`);
+  const ch = (await t.api(pl).get(`/projects/${t.ids.projects.web}/chat`)).json().channel.id;
+  const answers = async (id: string) => (await t.api(pl).get(`/chat/channels/${ch}/messages?thread=${id}`)).json().messages.filter((m: any) => m.userId === agent.id).length;
+  let release!: () => void;
+  gate = new Promise<void>((r) => { release = r; });
+  const n0 = prompts.length;
+  const a = (await t.api(pl).post(`/chat/channels/${ch}/messages`, { body: '@Chatty Frage A' })).json().message;
+  for (let i = 0; i < 400 && prompts.length === n0; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(prompts.length, n0 + 1, 'Lauf für Thread A läuft');
+  // Zwei neue Threads, während der Lauf für A noch wartet: keiner verdrängt den anderen
+  const b = (await t.api(max).post(`/chat/channels/${ch}/messages`, { body: '@Chatty Frage B' })).json().message;
+  const c = (await t.api(pl).post(`/chat/channels/${ch}/messages`, { body: '@Chatty Frage C' })).json().message;
+  gate = null;
+  release();
+  await flushAgentRuns();
+  assert.deepEqual([await answers(a.id), await answers(b.id), await answers(c.id)], [1, 1, 1]);
+  assert.equal(prompts.length, n0 + 3, 'ein Lauf je Thread');
+});

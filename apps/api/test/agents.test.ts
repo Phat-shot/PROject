@@ -2,19 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { agentBudgetLeft, runAgents } from '../src/ai/agent.js';
-import { flushAgentRuns } from '../src/ai/agentEvents.js';
+import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM (OpenAI-kompatibel wie vLLM): antwortet mit Aktionen je nach Prompt. */
 const calls: { url: string; body: any }[] = [];
 let nextActions: any[] = [];
 /** Antworten für mehrere Modellaufrufe in einem Lauf (Leserunden); leer = nextActions */
 let queue: any[][] = [];
+/** Solange gesetzt, wartet ein Agentenlauf nach dem Prompt auf die Freigabe (Lauf „läuft gerade“). */
+let gate: Promise<void> | null = null;
 const fakeFetch: typeof fetch = async (input, init) => {
   const url = String(input);
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   calls.push({ url, body });
   if (url === 'http://llm.local:8000/v1/chat/completions') {
     if (body.model !== 'qwen3') return new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 404 });
+    if (gate && body.response_format) await gate;
     const content = body.response_format ? JSON.stringify({ note: 'Stand unklar, Lieferant gefragt.', actions: queue.length ? queue.shift() : nextActions }) : 'bereit';
     return new Response(JSON.stringify({ model: 'qwen3', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 500, completion_tokens: 40 } }), { status: 200 });
   }
@@ -301,9 +304,9 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   assert.match(p2.content_html, /<h2>Beschlüsse<\/h2>/);
   assert.equal((await t.db.one(`select count(*)::int as n from doc_page_versions where page_id = $1`, [page.id])).n, 2);
   assert.equal((await t.db.one(`select title, done from checklist_items where id = $1`, [itemId])).title, 'PDF an Teilnehmer gesendet');
-  // Final gesetzt (von einer Person mit Recht): PDF an eine Adresse aus dem Verteiler mit Anhang
+  // Final gesetzt (von einer Person mit Recht): PDF an ein Projektmitglied mit Anhang (Verteiler-Adressen erst mit „Final setzen / Versand“)
   await t.db.query(`update doc_pages set status = 'final' where id = $1`, [page.id]);
-  nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to: ['gf@demo.local'], subject: 'Protokoll JF', text: 'Anbei das Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
+  nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to: ['max@demo.local'], subject: 'Protokoll JF', text: 'Anbei das Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
   assert.equal((await t.api(pl).post(`/tasks/${taskId}/agent-run`)).statusCode, 200);
   assert.equal(t.mail.dev.sent.length, before + 1);
   const sent = t.mail.dev.sent[before].msg;
@@ -423,6 +426,30 @@ test('PDF-Versand an genannte Empfänger: Projektmitglieder, Verteiler oder Adre
   // Agenten und deaktivierte Personen zählen nicht als Mitglieder
   assert.match((await send([agent.email])).error, /ist weder Projektmitglied/);
   assert.match(calls[calls.length - 1].body.messages[1].content, /PDF einer finalen Seite per Mail senden \(doc_send_pdf: an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite/);
+  await t.db.query(`update users set active = false where id = $1`, [t.ids.users.max]);
+  const inactive = await send(['max@demo.local']);
+  await t.db.query(`update users set active = true where id = $1`, [t.ids.users.max]);
+  assert.deepEqual(inactive.sent, []);
+  assert.match(inactive.error, /max@demo\.local ist weder Projektmitglied/);
+  // Freigabe über die Oberseite nur mit „inkl. Unterseiten“; abgelaufene Freigaben zählen nicht
+  const top = await t.db.one(`select id from doc_pages where project_id = $1 and title = 'JF Auftraggeber'`, [pid]);
+  await t.db.query(`update doc_pages set parent_page_id = $2 where id = $1`, [page.id, top.id]);
+  assert.equal((await t.api(pl).post(`/docs/pages/${top.id}/shares`, { email: 'reihe@example.com', mode: 'read', includeChildren: true })).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/docs/pages/${top.id}/shares`, { email: 'nurober@example.com', mode: 'read', includeChildren: false })).statusCode, 200);
+  assert.deepEqual((await send(['reihe@example.com'])).sent, [['reihe@example.com']]);
+  assert.match((await send(['nurober@example.com'])).error, /nurober@example\.com ist weder Projektmitglied/);
+  const old = (await t.api(pl).post(`/docs/pages/${page.id}/shares`, { email: 'abgelaufen@example.com', mode: 'read', expiresDays: 1 })).json().share;
+  await t.db.query(`update doc_shares set expires_at = now() - interval '1 hour' where id = $1`, [old.id]);
+  assert.match((await send(['abgelaufen@example.com'])).error, /abgelaufen@example\.com ist weder Projektmitglied/);
+  await t.db.query(`update doc_pages set parent_page_id = null where id = $1`, [page.id]);
+  // Ohne „Final setzen / Versand“ auch keine einzelnen Adressen aus dem Verteiler; Projektmitglieder bleiben erlaubt
+  await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true, canFinalize: false });
+  const listed = await send(['k.mueller@mueller-design.de']);
+  assert.deepEqual(listed.sent, []);
+  assert.match(listed.error, /k\.mueller@mueller-design\.de ist kein Projektmitglied.*Adressen aus dem Verteiler nur mit Recht „Final setzen \/ Versand“/);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /doc_send_pdf: an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast/);
+  assert.deepEqual((await send(['max@demo.local'])).sent, [['max@demo.local']]);
+  await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true, canFinalize: true });
 });
 
 test('Lauf von Hand beachtet Pause und Tagesbudget; Budget 0 sperrt; übersprungene Läufe zählen nicht', async () => {
@@ -453,4 +480,36 @@ test('Lauf von Hand beachtet Pause und Tagesbudget; Budget 0 sperrt; übersprung
   await flushAgentRuns();
   assert.equal((await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 3600_000))).length, 0);
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
+});
+
+test('Ereignisse am Arbeitspaket gehen nicht verloren: vor dem Start bleibt der erste Anlass, während eines Laufs folgt genau ein Folgelauf', async () => {
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  const agent = (await t.api(pl).get('/agents')).json().agents.find((a: any) => a.name === 'Prüfer');
+  nextActions = [{ type: 'none', reason: 'nichts zu tun' }];
+  queue = [];
+  const taskId = (await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Folgelauf prüfen', responsibleUserId: agent.id })).json().task.id;
+  await flushAgentRuns();
+  const runs = async () => (await t.db.query(`select trigger from agent_runs where task_id = $1 order by created_at`, [taskId])).rows.map((r: any) => r.trigger);
+  assert.deepEqual(await runs(), ['assigned']);
+  // Zwei Ereignisse, bevor der Lauf startet: ein Lauf, der erste Anlass bleibt (Zuweisung vor dem folgenden Kommentar)
+  queueAgentRun(taskId, 'assigned');
+  queueAgentRun(taskId, 'comment');
+  await flushAgentRuns();
+  assert.deepEqual(await runs(), ['assigned', 'assigned']);
+  // Während eines Laufs: zwei Kommentare setzen das Dirty-Flag, danach genau ein Folgelauf mit dem neuen Stand
+  let release!: () => void;
+  gate = new Promise<void>((r) => { release = r; });
+  const n0 = calls.length;
+  await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Erster Hinweis.' });
+  for (let i = 0; i < 400 && calls.length === n0; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(calls.length, n0 + 1, 'erster Lauf wartet auf das Modell');
+  await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Zweiter Hinweis.' });
+  await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Dritter Hinweis.' });
+  gate = null;
+  release();
+  await flushAgentRuns();
+  assert.deepEqual(await runs(), ['assigned', 'assigned', 'comment', 'comment']);
+  assert.ok(!calls[n0].body.messages[1].content.includes('Zweiter Hinweis'));
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Dritter Hinweis/, 'Folgelauf liest den Stand neu');
 });
