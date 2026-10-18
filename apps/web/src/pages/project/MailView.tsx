@@ -161,7 +161,7 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
 function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; base: string; onChanged: () => void; onGone: () => void; viewHint?: string }) {
   const { detail, tasks, reloadTasks, openTask } = useProject();
   const canUseAi = detail.project.myMembership.role === 'pl' || detail.project.myMembership.canUseAi;
-  const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; copied: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
+  const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; code: string; projectId: string; copied: boolean; origin: boolean; isSubtask: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
   const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
@@ -250,7 +250,9 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Zur Freigabe</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
-          {d.data.links.length > 0 && <>Arbeitspakete: {d.data.links.map((l) => <button key={l.taskId} className="btn sm link" onClick={() => openTask(l.taskId)}>{l.title}{l.copied ? ' (Kopie)' : ''}</button>)}</>}
+          {d.data.links.length > 0 && <>{d.data.links.some((l) => l.origin) ? 'Daraus entstanden / verknüpft' : 'Verknüpft'}: {d.data.links.map((l) => l.projectId === detail.project.id
+            ? <button key={l.taskId} className="btn sm link" title={l.origin ? 'Aus dieser Mail entstanden' : undefined} onClick={() => openTask(l.taskId)}><span className="tkey">{l.code}</span> {l.title}{l.origin ? ' · Ursprung' : ''}{l.copied ? ' (Kopie)' : ''}</button>
+            : <Link key={l.taskId} className="btn sm link" to={`/projekte/${l.projectId}/board?task=${l.taskId}`}><span className="tkey">{l.code}</span> {l.title}{l.origin ? ' · Ursprung' : ''}</Link>)}</>}
           {(actions.data?.pages.length ?? 0) > 0 && <> · Doku: {actions.data!.pages.map((p) => <Link key={p.pageId} className="btn sm link" to={`/projekte/${detail.project.id}/doku/${p.pageId}`}>{p.title}{p.kind === 'section' ? ' (Abschnitt)' : ''}</Link>)}</>}
         </p>
       )}
@@ -434,13 +436,23 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   const [params] = useSearchParams();
   const replyTo = params.get('reply');
   const taskParam = params.get('task');
+  // Abschluss-Antwort auf die Ursprungsmail eines Arbeitspakets (aufbereitetes Ergebnis, optional mit KI)
+  const final = params.get('final') === '1';
+  const [finalInfo, setFinalInfo] = useState<string | null>(final ? 'Antwort wird vorbereitet …' : null);
   const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   const { busy, error, run } = useAsync();
   // Ansichten laden asynchron: erste schreibbare Ansicht nachziehen, sobald sie da ist
   useEffect(() => { if (!f.viewId && writable[0]) setF((x) => ({ ...x, viewId: writable[0].id })); }, [writable.length]);
   useEffect(() => {
-    if (replyTo) {
+    if (final && taskParam) {
+      api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? '?ai=1' : ''}`).then(async (r) => {
+        const { mail } = await api.get<{ mail: MailDetail }>(`/mail/mails/${r.mailId}`);
+        setF((x) => ({ ...x, viewId: r.viewId ?? x.viewId, to: r.to.join(', '), subject: r.subject, inReplyTo: r.inReplyTo, taskId: taskParam,
+          body: `${r.body}\n\n---\nAm ${fmtDateTime(mail.date)} schrieb ${mail.fromName ?? mail.fromAddr}:\n${(mail.textBody ?? '').split('\n').map((l) => `> ${l}`).join('\n')}` }));
+        setFinalInfo(!r.viewId ? 'Keine Ansicht mit Entwurfsrecht für das Konto der Ursprungsmail: Ansicht unten bitte prüfen.' : r.answered ? 'Hinweis: Die Ursprungsmail wurde bereits beantwortet.' : r.draftOpen ? 'Hinweis: Eine Antwort auf die Ursprungsmail liegt schon als Entwurf vor.' : null);
+      }).catch((e) => setFinalInfo(String(e?.message ?? e)));
+    } else if (replyTo) {
       api.get<{ mail: MailDetail }>(`/mail/mails/${replyTo}`).then(({ mail }) => {
         setF((x) => ({ ...x, to: mail.fromAddr, subject: mail.subject.startsWith('Re:') ? mail.subject : `Re: ${mail.subject}`, inReplyTo: mail.messageId, taskId: x.taskId || (mail.linkedTaskIds[0] ?? ''),
           body: `\n\n---\nAm ${fmtDateTime(mail.date)} schrieb ${mail.fromName ?? mail.fromAddr}:\n${(mail.textBody ?? '').split('\n').map((l) => `> ${l}`).join('\n')}` }));
@@ -449,13 +461,15 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
       const t = tasks.find((x) => x.id === taskParam);
       if (t) setF((x) => ({ ...x, to: t.responsible.email && !t.responsible.userId ? t.responsible.email : '', subject: `${detail.project.key}: ${t.title}`, body: `Guten Tag,\n\nzum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}:\n\n\n\nMit freundlichen Grüßen\n` }));
     }
-  }, [replyTo, taskParam]);
+  }, [replyTo, taskParam, final]);
   const view = views.find((v) => v.id === f.viewId);
   if (writable.length === 0) return <div className="mail-detail"><div className="empty">Du hast an keiner Ansicht ein Entwurfs- oder Senderecht.</div></div>;
   const split = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
   return (
     <div className="mail-detail">
-      <h2>{replyTo ? 'Antwort' : 'Neue Mail'}</h2>
+      <h2>{final ? 'Antwort auf die Ursprungsmail' : replyTo ? 'Antwort' : 'Neue Mail'}</h2>
+      {final && <p className="muted small">Aufbereitetes Ergebnis für den Absender, bitte prüfen und ergänzen. Die Mail hängt danach am Arbeitspaket, ein Log-Eintrag entsteht nicht.</p>}
+      {finalInfo && <div className="notice small mb">{finalInfo}</div>}
       <div className="form">
         <label className="field"><span>Senden über Ansicht / Konto</span>
           <select value={f.viewId} onChange={(e) => setF({ ...f, viewId: e.target.value })}>{writable.map((v) => <option key={v.id} value={v.id}>{v.name} – {v.accountAddress}{v.myRights.canSend ? '' : ' (nur Entwurf, Versand nach Freigabe)'}</option>)}</select></label>

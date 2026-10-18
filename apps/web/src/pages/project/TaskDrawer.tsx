@@ -15,7 +15,7 @@ import { CopyMoveDialog } from './CopyMove';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 
-interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string }
+interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string; origin: boolean; answered: boolean }
 
 interface TaskDetail {
   task: Task;
@@ -76,6 +76,18 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {error && <div className="error mb">{error}</div>}
       {t.parent && <p className="small mb" style={{ marginTop: 0 }}><span className="muted">Aufgabe im Arbeitspaket</span> <button className="btn sm link" onClick={() => openTask(t.parent!.id)}><span className="tkey">{detail.project.key}-{t.parent.number}</span> {t.parent.title}</button></p>}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
+      {(() => {
+        // Ursprungsmail: Sprung zur Mail; zum Abschluss die Mail beantworten (aufbereitetes Ergebnis, nicht im Log)
+        const o = d.mails.find((m) => m.origin && !m.outgoing);
+        if (!o) return null;
+        const prompt = t.done && !o.answered;
+        const aiOn = Boolean(detail.project.aiProfileId) && (me.role === 'pl' || me.canUseAi);
+        return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
+          Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
+          {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
+          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&task=${t.id}`}>Ursprungsmail beantworten</Link>{aiOn && <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&task=${t.id}`}>Mit KI formulieren</Link>}</div>}
+        </div>;
+      })()}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
         <div className={`notice mb ${t.escalationLevel >= 2 || t.blocked ? 'danger' : ''}`}>
@@ -162,7 +174,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
       <h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
       {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
-        <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />
+        <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
       )}
       {canEdit && <div className="row mt">
         <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
@@ -276,19 +288,21 @@ function PredecessorPicker({ task, all, projectKey, canEdit, onChange }: { task:
 }
 
 /** Mailverlauf zu einem Task oder Arbeitspaket: Nachfrage / Antwort, Zeit, Absender, gekürzter Inhalt. */
-function MailThread({ mails, projectId }: { mails: TaskMail[]; projectId: string }) {
+function MailThread({ mails, projectId, onOrigin }: { mails: TaskMail[]; projectId: string; onOrigin?: (m: TaskMail) => void }) {
   if (mails.length === 0) return null;
   const sorted = [...mails].sort((a, b) => a.date.localeCompare(b.date));
   return (
     <ul className="mail-thread">
       {sorted.map((m) => (
         <li key={m.id} className={m.outgoing ? 'out' : 'in'}>
-          <span className={`badge ${m.outgoing ? '' : 'ok'}`}>{m.outgoing ? 'Nachfrage' : 'Antwort'}</span>
+          <span className={`badge ${m.outgoing ? '' : 'ok'}`}>{m.outgoing ? 'Gesendet' : m.origin ? 'Ursprung' : 'Eingang'}</span>
           <span className="muted small nowrap">{fmtDateTime(m.date)}</span>
           <span className="small">{m.outgoing ? `an ${m.to.join(', ')}` : `von ${m.fromName ?? m.fromAddr}`}</span>
           <Link className="small" to={`/projekte/${projectId}/mail/m/${m.id}`}>{m.subject}</Link>
           {m.snippet && <span className="muted small ell" title={m.snippet}>{m.snippet.length > 160 ? `${m.snippet.slice(0, 160)} …` : m.snippet}</span>}
           {m.copied && <span className="badge">Kopie</span>}
+          {m.origin && m.answered && <span className="badge ok">beantwortet</span>}
+          {onOrigin && !m.outgoing && <button className="btn sm link" title={m.origin ? 'Nicht mehr als Ursprungsmail führen' : 'Als Ursprungsmail markieren: daraus ist das Arbeitspaket entstanden, die Abschluss-Antwort geht an sie'} onClick={() => onOrigin(m)}>{m.origin ? 'Ursprung aufheben' : 'als Ursprung'}</button>}
         </li>
       ))}
     </ul>

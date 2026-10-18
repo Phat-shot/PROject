@@ -3,12 +3,13 @@ import type { MailAccount, MailDraft, MailSummary, MailView, MailViewFilter, Mai
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { ALL_RIGHTS, canSeeSubproject, getMembership, getViewRights, requireProject } from '../rights.js';
+import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireFlag, requireProject } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
 import { aiConfigForProject } from '../ai/client.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
+import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
 import { seal } from '../secrets.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
@@ -376,13 +377,16 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!r) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, r.id);
     if (!access.ok) throw forbidden('Verknüpfte Mail, keine Berechtigung');
-    const links = await db.query(`select l.*, t.title, t.project_id from mail_task_links l join tasks t on t.id = l.task_id where l.mail_id = $1`, [r.id]);
+    // Abgeleitete Arbeitspakete/Aufgaben (auch in anderen Projekten), nur soweit man sie sehen darf
+    const linkRows = await db.query(`select l.*, t.title, t.number, t.project_id, t.subproject_id, t.parent_id, p.key, p.visibility from mail_task_links l join tasks t on t.id = l.task_id join projects p on p.id = t.project_id where l.mail_id = $1 and t.deleted_at is null and p.org_id = $2 order by l.origin desc, t.created_at`, [r.id, user.orgId]);
+    const links: any[] = [];
+    for (const l of linkRows.rows) if ((await effectiveMembership(db, user, l.project_id, l.visibility)) && (await canSeeSubproject(db, user.id, l.subproject_id))) links.push(l);
     return {
       mail: { ...mapSummary(r), ccJson: r.cc_json ?? [], textBody: r.text_body, htmlBody: r.html_body, inReplyTo: r.in_reply_to },
       rights: access.rights,
       viewIds: access.viewIds,
       canModify: await canModifyMail(user, r),
-      links: links.rows.map((l: any) => ({ taskId: l.task_id, title: l.title, projectId: l.project_id, copied: l.copied }))
+      links: links.map((l: any) => ({ taskId: l.task_id, title: l.title, code: `${l.key}-${l.number}`, projectId: l.project_id, copied: l.copied, origin: Boolean(l.origin), isSubtask: Boolean(l.parent_id) }))
     };
   });
 
@@ -516,7 +520,7 @@ export async function mailRoutes(app: FastifyInstance) {
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
       [b.projectId, b.subprojectId ?? null, col.id, (b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200), desc, b.dueDate ?? null, b.responsibleUserId ?? null, b.responsibleEmail ?? null, pos.p, newMailCode(), user.id]
     );
-    await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4)`, [mail.id, t.id, copy, user.id]);
+    await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by, origin) values ($1,$2,$3,$4,$5)`, [mail.id, t.id, copy, user.id, !mail.outgoing]);
     if (b.responsibleEmail) await db.query(`insert into project_contacts (project_id, email) values ($1, lower($2)) on conflict do nothing`, [b.projectId, String(b.responsibleEmail).trim()]);
     queueAgentRun(t.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy, confirmed: Boolean(b.confirmed) } });
@@ -642,6 +646,45 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   // W4: Entwürfe und Versand
+  // Ursprungsmail markieren/aufheben (Mitglied mit Sicht auf das Arbeitspaket, Verknüpfung muss bestehen)
+  app.post<{ Params: { id: string; mid: string }; Body: { origin: boolean } }>('/tasks/:id/mails/:mid/origin', async (req) => {
+    const user = requireUser(req);
+    const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
+    await requireProject(db, user, t.project_id, 'member');
+    if (!(await canSeeSubproject(db, user.id, t.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const l = await db.maybeOne(`update mail_task_links l set origin = $3 from mails m where m.id = l.mail_id and l.task_id = $1 and l.mail_id = $2 and not m.outgoing returning l.mail_id`, [t.id, req.params.mid, Boolean(req.body?.origin)]);
+    if (!l) throw notFound('Eingehende Mail ist nicht mit dem Arbeitspaket verknüpft');
+    await audit(db, { orgId: user.orgId, projectId: t.project_id, userId: user.id, action: 'mail.origin', objectType: 'task', objectId: t.id, details: { mailId: req.params.mid, origin: Boolean(req.body?.origin) } });
+    return { ok: true };
+  });
+
+  // Abschluss: Antwort auf die Ursprungsmail vorbereiten (aufbereitetes Ergebnis, optional mit der Projekt-KI); gesendet wird über den normalen Entwurf
+  app.get<{ Params: { id: string }; Querystring: { ai?: string } }>('/tasks/:id/final-reply', async (req) => {
+    const user = requireUser(req);
+    const task = await db.maybeOne(`select t.*, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.params.id]);
+    if (!task) throw notFound('Arbeitspaket nicht gefunden');
+    const m = await requireProject(db, user, task.project_id, 'member');
+    if (!(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    let mail: any = null;
+    for (const o of await originMails(db, task.id)) if ((await mailReadable(user, o.id)).ok) { mail = o; break; }
+    if (!mail) throw badRequest('Keine Ursprungsmail, die du lesen darfst');
+    // Antwort aus dem Konto der Mail: eine Ansicht dieses Projekts mit Entwurfs- oder Senderecht
+    let viewId: string | null = null;
+    const views = await db.query(`select v.id from mail_view_matches x join mail_views v on v.id = x.view_id where x.mail_id = $1 and v.project_id = $2 order by v.created_at`, [mail.id, task.project_id]);
+    for (const v of views.rows) { const r = await getViewRights(db, v.id, user, m); if (r.canDraft || r.canSend) { viewId = v.id; break; } }
+    let body = await finalReplyText(db, task, mail, user.name);
+    if (req.query.ai === '1') {
+      requireFlag(m, 'canUseAi', 'Erfordert das Recht „KI nutzen“');
+      const cfg = await aiConfigForProject(db, task.project_id);
+      if (!cfg) throw badRequest('KI im Projekt nicht aktiv');
+      const r = await aiFinalReply(db, cfg, app.fetchFn, task, mail, user.name);
+      body = r.text || body;
+      await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.final_reply', objectType: 'task', objectId: task.id, details: { mailId: mail.id, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+    }
+    return { mailId: mail.id, viewId, to: [mail.from_addr], subject: reSubject(mail.subject), inReplyTo: mail.message_id ?? null, body, answered: Boolean(mail.answered), draftOpen: Boolean(mail.draft_open) };
+  });
+
   app.get<{ Params: { id: string } }>('/projects/:id/mail/drafts', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);

@@ -248,7 +248,9 @@ export async function taskRoutes(app: FastifyInstance) {
       [task.id]
     );
     const mails = await db.query(
-      `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, m.outgoing, m.to_json, l.copied, l.checklist_item_id, m.account_id from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
+      `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, m.outgoing, m.to_json, l.copied, l.checklist_item_id, m.account_id, l.origin,
+         exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
+       from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
       [task.id]
     );
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
@@ -259,7 +261,7 @@ export async function taskRoutes(app: FastifyInstance) {
       subtasks,
       meetings: meetings.rows.map((m: any) => ({ id: m.id, title: m.title, startsAt: new Date(m.starts_at).toISOString(), pageId: m.page_id })),
       comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
-      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id })),
+      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id, origin: Boolean(m.origin), answered: Boolean(m.answered) })),
       attachments: attachments.rows.map(mapAttachment)
     };
   });

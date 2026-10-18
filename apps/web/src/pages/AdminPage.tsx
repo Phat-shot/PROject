@@ -292,7 +292,15 @@ function PersonaField({ value, disabled, onSave }: { value: string; disabled: bo
     onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />;
 }
 
-/** KI-Agenten: Benutzer ohne Login, vom Org-Admin benannt; in Projekten nur Mitglied mit Stellvertretung, Arbeitspakete weist die PL zu. */
+/** Unterschrift für Mails des Agenten: frei, mehrzeilig; leer = „Name (KI-Agent, Projekt KEY)“. */
+function SignatureField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return <details className="small" style={{ marginTop: 4 }}><summary className="muted">{value ? 'Unterschrift: eigene' : 'Unterschrift: Standard'}</summary>
+    <textarea rows={3} maxLength={500} value={v} disabled={disabled} style={{ width: '100%', minHeight: 64 }} placeholder={'leer = „Name (KI-Agent, Projekt KEY)“\nz. B. Viele Grüße\nMorton, Assistenz von Philipp Schwarz'} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v.trim() !== value) onSave(v.trim()); }} /></details>;
+}
+
+/** KI-Agenten: Benutzer ohne Login, vom Org-Admin benannt; in Projekten Mitglied oder stellvertretende PL, nie verantwortliche PL. */
 function AgentsCard() {
   const d = useData<{ agents: AgentUser[] }>('/agents');
   const st = useAiStatus();
@@ -303,11 +311,12 @@ function AgentsCard() {
   return (
     <div className="card">
       <h2>KI-Agenten</h2>
-      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie PL oder Org-Admin. Die PL nimmt ihn als Mitglied mit Stellvertretung ins Projekt (dort auch „darf Mails senden“) und weist ihm Arbeitspakete zu. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Nachfragen per Mail, Blockade melden, Eskalation an die PL; im Chat ist er direkt erreichbar. Die Persona beschreibt in einer Zeile seinen Schreibstil (Log, Mails, Doku, Chat); Fakten- und Rechteregeln gehen ihr vor. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
+      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie verantwortliche PL oder Org-Admin. Die PL nimmt ihn als Mitglied oder stellvertretende PL ins Projekt (dort auch „darf Mails senden“) und macht ihn zuständig: für Arbeitspakete, Aufgaben oder ein Teilprojekt. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Planung (Aufgaben, Termine, Zuweisungen), Nachfragen per Mail, Antwort auf die Ursprungsmail, Blockade melden, Eskalation an die PL; im Chat ist er direkt erreichbar. Projekte legt er nie an. Die Persona beschreibt in einer Zeile seinen Schreibstil (Log, Mails, Doku, Chat); Fakten- und Rechteregeln gehen ihr vor. Die Unterschrift ist frei; leer gilt „Name (KI-Agent, Projekt KEY)“. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
       {error && <div className="error mb">{error}</div>}
       {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Persona (Schreibstil)</th><th>KI-Profil</th><th>Projekte</th><th>Läufe</th><th>Letzter Lauf</th><th /></tr></thead><tbody>
         {d.data.agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.email}</div></td>
-          <td style={{ minWidth: 240 }}><PersonaField value={a.persona ?? ''} disabled={busy} onSave={(persona) => void run(async () => { await api.patch(`/agents/${a.id}`, { persona: persona || null }); await d.reload(); })} /></td>
+          <td style={{ minWidth: 240 }}><PersonaField value={a.persona ?? ''} disabled={busy} onSave={(persona) => void run(async () => { await api.patch(`/agents/${a.id}`, { persona: persona || null }); await d.reload(); })} />
+            <SignatureField value={a.signature ?? ''} disabled={busy} onSave={(signature) => void run(async () => { await api.patch(`/agents/${a.id}`, { signature: signature || null }); await d.reload(); })} /></td>
           <td><select value={a.aiProfileId ?? ''} disabled={busy} onChange={(e) => void run(async () => { await api.patch(`/agents/${a.id}`, { aiProfileId: e.target.value || null }); await d.reload(); })}><option value="">– Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ': keines'} –</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>
             <ThinkingSelect agent={a} profile={st?.profiles.find((p) => p.id === (a.aiProfileId ?? st?.defaultProfileId)) ?? null} disabled={busy} onChange={(thinkingMode) => void run(async () => { await api.patch(`/agents/${a.id}`, { thinkingMode }); await d.reload(); })} /></td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}{a.projects.length === 0 && <span className="muted">–</span>}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
           <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => { const n = window.prompt('Neuer Name', a.name); if (n?.trim()) void run(async () => { await api.patch(`/agents/${a.id}`, { name: n.trim() }); await d.reload(); }); }}>Umbenennen</button>{' '}

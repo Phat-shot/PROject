@@ -391,6 +391,7 @@ table.table { width: 100%; border-collapse: collapse; }
 .ampel.small { width: 11px; height: 11px; border-width: 1px; margin-left: 4px; }
 .ampel.green { background: var(--ok); } .ampel.yellow { background: #e0a800; } .ampel.red { background: var(--danger); } .ampel.none { background: var(--border); }
 .notice.ok { background: var(--ok-soft); border-color: var(--ok-border); color: var(--ok); }
+.notice.info { background: var(--neutral-soft); border-color: var(--border); color: var(--text); }
 table.portfolio td { vertical-align: middle; }
 
 /* RAID */
