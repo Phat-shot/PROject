@@ -12,10 +12,10 @@ export function Drawer({ title, onClose, children, actions }: { title: ReactNode
     <>
       <div className="drawer-backdrop" onClick={onClose} />
       <aside className="drawer">
+        {/* Titel volle Breite (darf umbrechen), Schließen daneben; Aktionen in einer Zeile darunter (mobil seitlich scrollbar) */}
         <header>
-          <h2>{title}</h2>
-          {actions}
-          <button className="btn sm" onClick={onClose}>Schließen</button>
+          <div className="drawer-title"><h2>{title}</h2><button className="btn sm drawer-close" title="Schließen (Esc)" aria-label="Schließen" onClick={onClose}>✕</button></div>
+          {actions && <div className="drawer-actions">{actions}</div>}
         </header>
         <div className="body">{children}</div>
       </aside>

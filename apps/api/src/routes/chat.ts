@@ -193,8 +193,9 @@ export async function chatRoutes(app: FastifyInstance) {
   app.post<{ Body: { userId: string } }>('/chat/dm', async (req) => {
     const user = requireUser(req);
     if (user.kind === 'agent') throw forbidden('KI-Agenten chatten nicht');
-    const other = await db.maybeOne(`select id, name, kind from users where id = $1 and org_id = $2 and active`, [req.body?.userId, user.orgId]);
+    const other = await db.maybeOne(`select id, name, kind, agent_project_id from users where id = $1 and org_id = $2 and active`, [req.body?.userId, user.orgId]);
     if (!other || other.id === user.id) throw badRequest('Gesprächspartner wählen');
+    if (other.agent_project_id && !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [other.agent_project_id, user.id]))) throw forbidden('Dieser Agent gehört zu einem Projekt, in dem du nicht Mitglied bist');
     const existing = await db.maybeOne(
       `select c.id from chat_channels c join chat_channel_members a on a.channel_id = c.id and a.user_id = $1 join chat_channel_members b on b.channel_id = c.id and b.user_id = $2 where c.kind = 'dm' and c.org_id = $3 limit 1`,
       [user.id, other.id, user.orgId]

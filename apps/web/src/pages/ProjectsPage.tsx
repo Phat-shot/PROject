@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Project, ProjectTemplate } from '@projekttool/shared';
+import type { OrgSettings, Project, ProjectTemplate } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { api, fmtDate } from '../lib/api';
 import { useAuth } from '../lib/auth';
@@ -11,10 +11,13 @@ export function ProjectsPage() {
   const { user } = useAuth();
   const { data, reload } = useData<{ projects: Project[] }>('/projects');
   const [create, setCreate] = useState(false);
-  const canCreate = user && ['org_admin', 'project_creator'].includes(user.globalRole);
+  const org = useData<{ settings: OrgSettings }>('/org/settings');
+  const canCreate = Boolean(user && ['org_admin', 'project_creator'].includes(user.globalRole));
+  // Persönliches Projekt (Assistent): Projektersteller immer, sonst wenn der Mandant es erlaubt
+  const canPersonal = canCreate || Boolean(org.data?.settings.personalProjects);
   return (
     <>
-      <TopBar title="Projekte">{canCreate && <button className="btn primary" onClick={() => setCreate(true)}>Neues Projekt</button>}</TopBar>
+      <TopBar title="Projekte">{(canCreate || canPersonal) && <button className="btn primary" onClick={() => setCreate(true)}>{canCreate ? 'Neues Projekt' : 'Persönliches Projekt'}</button>}</TopBar>
       <div className="content">
         {data && data.projects.length === 0 && <div className="empty">Du bist noch in keinem Projekt Mitglied.</div>}
         <div className="grid cols-3 proj-cards">
@@ -23,7 +26,7 @@ export function ProjectsPage() {
             const total = s ? s.open + s.done : 0;
             return (
               <Link key={p.id} to={`/projekte/${p.id}`} className="card">
-                <div className="row between"><span className="badge">{p.key}</span><span className="row" style={{ gap: 4 }}>{p.status === 'archived' && <span className="badge">archiviert</span>}<span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></span></div>
+                <div className="row between"><span className="badge">{p.key}</span><span className="row" style={{ gap: 4 }}>{p.personal && <span className="badge" title="Nur du und KI-Agenten">persönlich</span>}{p.status === 'archived' && <span className="badge">archiviert</span>}<span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></span></div>
                 <h2 className="mt">{p.name}</h2>
                 <p className="muted small">{p.description}</p>
                 {s && p.status === 'active' && <>
@@ -39,12 +42,13 @@ export function ProjectsPage() {
           })}
         </div>
       </div>
-      {create && <CreateProject onClose={() => setCreate(false)} onCreated={() => { setCreate(false); void reload(); }} />}
+      {create && <CreateProject personalOnly={!canCreate} onClose={() => setCreate(false)} onCreated={() => { setCreate(false); void reload(); }} />}
     </>
   );
 }
 
-function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateProject({ personalOnly = false, onClose, onCreated }: { personalOnly?: boolean; onClose: () => void; onCreated: () => void }) {
+  const [personal, setPersonal] = useState(personalOnly);
   const [key, setKey] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -54,18 +58,20 @@ function CreateProject({ onClose, onCreated }: { onClose: () => void; onCreated:
   const tpl = templates.data?.templates.find((t) => t.id === templateId);
   const { busy, error, run } = useAsync();
   return (
-    <Modal title="Neues Projekt" onClose={onClose}>
+    <Modal title={personal ? 'Persönliches Projekt' : 'Neues Projekt'} onClose={onClose}>
       <div className="form">
+        <label className="check"><input type="checkbox" checked={personal} disabled={personalOnly} onChange={(e) => setPersonal(e.target.checked)} /> Persönlich (Assistent): nur du und KI-Agenten</label>
+        {personal && <p className="muted small">Startet leer. Weitere Personen und Einladungen sind gesperrt, sichtbar nur für dich; der Org-Admin sieht im Audit keine Inhalte und verwaltet die Konten nicht. Agenten nimmst du unter Einstellungen › Mitglieder auf oder legst eigene an (wenn freigegeben). Mit einem Ordner „KI Bearbeiten“ im Postfach legt die Projekt-KI aus Mails direkt Aufgaben und Termine an.</p>}
         <label className="field"><span>Kürzel</span><input type="text" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="z. B. CRM" /></label>
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-        {templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
+        {!personal && templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
           <label className="field"><span>Vorlage</span><select value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">– keine, Standardspalten –</option>{templates.data.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
           {tpl && <label className="field"><span>Projektstart (Termine der Vorlage sind relativ dazu)</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>}
         </div>}
-        {tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
+        {!personal && tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, templateId: templateId || null, startDate: tpl ? startDate : null }); onCreated(); })}>Anlegen</button></div>
+        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, personal, templateId: personal ? null : templateId || null, startDate: !personal && tpl ? startDate : null }); onCreated(); })}>Anlegen</button></div>
         <p className="muted small">Du wirst PL. Die Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto.</p>
       </div>
     </Modal>

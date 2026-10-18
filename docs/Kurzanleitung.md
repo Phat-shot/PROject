@@ -35,8 +35,15 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 
 ## Mit KI-Agenten arbeiten
 
-- Ein **Agent** ist ein Benutzer ohne Login. Der Org-Admin legt ihn an (mit KI-Profil und Persona), die PL nimmt ihn ins Projekt auf und **weist ihm Arbeitspakete oder Aufgaben zu**.
-- Der Agent arbeitet sofort los: Log schreiben, nachfragen, Tasks abhaken, Status setzen, warten und nachfassen, an die PL eskalieren.
+- Ein **Agent** ist ein Benutzer ohne Login. Der Org-Admin legt ihn an (mit KI-Profil, Persona, Unterschrift) oder die PL legt einen eigenen für ihr Projekt an (wenn freigegeben). Die PL nimmt ihn als Mitglied oder **stellvertretende PL** auf und macht ihn **zuständig**: für Arbeitspakete, Aufgaben oder ein ganzes Teilprojekt (geerbt).
+- Der Agent arbeitet sofort los: Log schreiben, nachfragen, Tasks abhaken, Status setzen, **planen** (Aufgaben und APs mit Terminen anlegen, zuweisen, Termine in den Kalender), warten und nachfassen, an die PL eskalieren. Projekte legt er nie an.
 - **Gute Zuweisung:** klares Ziel in der Beschreibung, Termin, Tasks als Checkliste, externe Ansprechpartner als Kontakt.
 - **Informieren:** Kommentar ins Log oder Chat an den Agenten. Im Projektkanal mit `@Name`.
 - **Kontrolle:** Projekt › KI zeigt jeden Lauf mit Begründung und Aktionen; die PL kann den Agenten je AP pausieren. Mails ohne Senderecht landen als Entwurf in den Freigaben.
+
+## Mail und KI
+
+- **Ursprungsmail:** Aus einer Mail entstandene APs merken sich die Mail. Erledigt? „Ursprungsmail beantworten“ im AP schreibt das Ergebnis als Antwort (nicht ins Log).
+- **Ordner „KI Bearbeiten“:** Mail dort ablegen (oder „KI bearbeiten“ an der Mail): Die Projekt-KI legt AP/Aufgabe, Termin und Antwortentwurf an, weist passend auch Agenten zu und legt die Mail ab („Archiv“ oder „In Arbeit“).
+- **Agent betreut eine Ansicht:** Er schlägt für neue Mails Aktionen vor; annehmen mit einem Klick an der Mail oder unter Projekt › KI.
+- **Persönliches Projekt:** nur du und KI-Agenten, als Assistent mit eigenem Postfach und KI-Ordner.

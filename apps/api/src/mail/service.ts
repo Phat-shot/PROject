@@ -7,6 +7,7 @@ import { GraphMailProvider } from './graphProvider.js';
 import { oauthProviders, refreshTokens } from '../oauth.js';
 import { seal, unseal } from '../secrets.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
+import { enqueueForNewMail } from '../ai/mailAi.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
 
@@ -103,12 +104,14 @@ export class MailService {
     for (const v of viewIds) {
       await this.db.query(`insert into mail_view_matches (mail_id, view_id) values ($1,$2) on conflict do nothing`, [r.id, v]);
     }
-    await this.linkByPlusAddress(account, r.id, m);
+    const autoLinked = await this.linkByPlusAddress(account, r.id, m);
+    // Mail-KI: Ordner „KI Bearbeiten“ bzw. Agent an der Ansicht (entkoppelt, je Mail und Projekt einmal)
+    await enqueueForNewMail(this.db, r.id, viewIds, { outgoing: m.folder.toLowerCase() === 'sent', autoLinked });
     return r.id;
   }
 
   /** Antwort eines Externen: Plus-Adresse → Arbeitspaket; Fallback In-Reply-To auf eine gesendete Mail mit Aufgabenbezug. */
-  private async linkByPlusAddress(account: AccountRow, mailId: string, m: IncomingMessage) {
+  private async linkByPlusAddress(account: AccountRow, mailId: string, m: IncomingMessage): Promise<boolean> {
     const code = taskCodeFromAddresses([...m.to, ...m.cc]);
     let taskId: string | null = null;
     let itemId: string | null = null;
@@ -130,6 +133,7 @@ export class MailService {
       await audit(this.db, { orgId: account.org_id, projectId: account.project_id, action: 'mail.auto_linked', objectType: 'mail', objectId: mailId, details: { taskId, via: code ? 'plus-address' : 'in-reply-to' } });
       queueAgentRun(taskId, 'reply');
     }
+    return Boolean(taskId);
   }
 
   async sendFromAccount(

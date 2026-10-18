@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { AgentRun, AiProposal } from '@projekttool/shared';
+import type { AgentRun, AiProposal, MailAiRun } from '@projekttool/shared';
+import { MailAiRunCard } from './MailAi';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useAiStatus } from '../../lib/useAi';
@@ -25,6 +26,7 @@ export function AiView() {
   const [answer, setAnswer] = useState<{ answer: string; sources: { type: 'task' | 'page' | 'mail'; id: string; title: string }[] } | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
   const runs = useData<{ runs: AgentRun[] }>(`/projects/${pid}/agent-runs`);
+  const mailAi = useData<{ runs: MailAiRun[] }>(`/projects/${pid}/mail-ai`);
   const { busy, error, run } = useAsync();
   const nav = useNavigate();
   const projectAiOff = Boolean(ai && (!ai.enabled || !detail.project.aiProfileId));
@@ -43,6 +45,11 @@ export function AiView() {
       {error && <div className="error mb">{error}</div>}
       {projectAiOff && <div className="notice mb">Projekt-KI ist aus{ai && !ai.enabled ? ': kein KI-Profil im Mandanten (Verwaltung › KI-Profile)' : isPl ? ': unter Einstellungen › Projekt ein KI-Profil zuweisen' : ': die PL weist unter Einstellungen › Projekt ein KI-Profil zu'}. Agenten laufen unabhängig davon mit ihrem eigenen Profil.</div>}
       {profileName && <p className="muted small">Projekt-KI: {profileName}</p>}
+      {(mailAi.data?.runs.length ?? 0) > 0 && <div className="card mb">
+        <h2 style={{ marginTop: 0 }}>Mail-KI</h2>
+        <p className="muted small">Mails aus dem Ordner „KI Bearbeiten“ bearbeitet die Projekt-KI direkt; Agenten, die eine Ansicht betreuen, schlagen vor. Angenommen wird mit einem Klick, ausgeführt mit deinen Rechten.</p>
+        {mailAi.data!.runs.slice(0, 30).map((r) => <MailAiRunCard key={r.id} run={r} showMail onChanged={async () => { await mailAi.reload(); await reloadTasks(); }} />)}
+      </div>}
       <div className="card mb">
         <div className="row between"><h2 style={{ margin: 0 }}>Vorschläge zur Freigabe</h2><span className="row" style={{ gap: 2 }}><button className={`chip ${status === 'pending' ? 'on' : ''}`} onClick={() => setStatus('pending')}>offen</button><button className={`chip ${status === 'all' ? 'on' : ''}`} onClick={() => setStatus('all')}>alle</button></span></div>
         <p className="muted small">Essenz einer Mail als Log-Eintrag, Status- oder Terminänderung im Arbeitspaket oder als Abschnitt einer Seite. Entsteht im Postfach über „KI: Essenz …“; angewendet wird erst nach Freigabe{props.data?.canApprove ? ' (du darfst freigeben)' : ' durch PL oder Personen mit Freigaberecht'}.</p>

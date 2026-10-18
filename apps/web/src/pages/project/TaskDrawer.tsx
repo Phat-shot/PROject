@@ -15,7 +15,7 @@ import { CopyMoveDialog } from './CopyMove';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 
-interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string }
+interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string; origin: boolean; answered: boolean }
 
 interface TaskDetail {
   task: Task;
@@ -57,7 +57,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   };
   const isPlHere = detail.project.myMembership.role === 'pl';
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
-  const respAgent = users.find((u) => u.id === t.responsibleUserId && u.kind === 'agent');
+  // Zuständiger Agent direkt oder geerbt (vom Arbeitspaket bzw. Teilprojekt): auch dann läuft er
+  const respAgent = users.find((u) => u.id === t.responsible.userId && u.kind === 'agent');
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
@@ -75,6 +76,18 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {error && <div className="error mb">{error}</div>}
       {t.parent && <p className="small mb" style={{ marginTop: 0 }}><span className="muted">Aufgabe im Arbeitspaket</span> <button className="btn sm link" onClick={() => openTask(t.parent!.id)}><span className="tkey">{detail.project.key}-{t.parent.number}</span> {t.parent.title}</button></p>}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
+      {(() => {
+        // Ursprungsmail: Sprung zur Mail; zum Abschluss die Mail beantworten (aufbereitetes Ergebnis, nicht im Log)
+        const o = d.mails.find((m) => m.origin && !m.outgoing);
+        if (!o) return null;
+        const prompt = t.done && !o.answered;
+        const aiOn = Boolean(detail.project.aiProfileId) && (me.role === 'pl' || me.canUseAi);
+        return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
+          Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
+          {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
+          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiOn && <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}`}>Mit KI formulieren</Link>}</div>}
+        </div>;
+      })()}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
         <div className={`notice mb ${t.escalationLevel >= 2 || t.blocked ? 'danger' : ''}`}>
@@ -107,7 +120,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
             {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
           </select></label>
-        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}</span>{isPlHere && <><button className="btn sm" onClick={() => void run(async () => { const r = await api.post<{ status: string; actions: { type: string }[]; error?: string }>(`/tasks/${t.id}/agent-run`); setAgentMsg(`${r.actions.length ? `Aktionen: ${r.actions.map((x) => x.type).join(', ')}` : 'keine Aktion'}${r.error ? ` · Fehler: ${r.error}` : ''}`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
+        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" onClick={() => void run(async () => { const r = await api.post<{ status: string; actions: { type: string }[]; error?: string }>(`/tasks/${t.id}/agent-run`); setAgentMsg(`${r.actions.length ? `Aktionen: ${r.actions.map((x) => x.type).join(', ')}` : 'keine Aktion'}${r.error ? ` · Fehler: ${r.error}` : ''}`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
         <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
         <label className="field"><span>Priorität</span>
@@ -161,10 +174,10 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
       <h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
       {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
-        <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />
+        <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
       )}
       {canEdit && <div className="row mt">
-        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?ap=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
       </div>}
 
@@ -275,19 +288,21 @@ function PredecessorPicker({ task, all, projectKey, canEdit, onChange }: { task:
 }
 
 /** Mailverlauf zu einem Task oder Arbeitspaket: Nachfrage / Antwort, Zeit, Absender, gekürzter Inhalt. */
-function MailThread({ mails, projectId }: { mails: TaskMail[]; projectId: string }) {
+function MailThread({ mails, projectId, onOrigin }: { mails: TaskMail[]; projectId: string; onOrigin?: (m: TaskMail) => void }) {
   if (mails.length === 0) return null;
   const sorted = [...mails].sort((a, b) => a.date.localeCompare(b.date));
   return (
     <ul className="mail-thread">
       {sorted.map((m) => (
         <li key={m.id} className={m.outgoing ? 'out' : 'in'}>
-          <span className={`badge ${m.outgoing ? '' : 'ok'}`}>{m.outgoing ? 'Nachfrage' : 'Antwort'}</span>
+          <span className={`badge ${m.outgoing ? '' : 'ok'}`}>{m.outgoing ? 'Gesendet' : m.origin ? 'Ursprung' : 'Eingang'}</span>
           <span className="muted small nowrap">{fmtDateTime(m.date)}</span>
           <span className="small">{m.outgoing ? `an ${m.to.join(', ')}` : `von ${m.fromName ?? m.fromAddr}`}</span>
           <Link className="small" to={`/projekte/${projectId}/mail/m/${m.id}`}>{m.subject}</Link>
           {m.snippet && <span className="muted small ell" title={m.snippet}>{m.snippet.length > 160 ? `${m.snippet.slice(0, 160)} …` : m.snippet}</span>}
           {m.copied && <span className="badge">Kopie</span>}
+          {m.origin && m.answered && <span className="badge ok">beantwortet</span>}
+          {onOrigin && !m.outgoing && <button className="btn sm link" title={m.origin ? 'Nicht mehr als Ursprungsmail führen' : 'Als Ursprungsmail markieren: daraus ist das Arbeitspaket entstanden, die Abschluss-Antwort geht an sie'} onClick={() => onOrigin(m)}>{m.origin ? 'Ursprung aufheben' : 'als Ursprung'}</button>}
         </li>
       ))}
     </ul>
@@ -298,11 +313,16 @@ function MailThread({ mails, projectId }: { mails: TaskMail[]; projectId: string
 function TitleEdit({ value, canEdit, done, onSave }: { value: string; canEdit: boolean; done: boolean; onSave: (v: string) => Promise<void> }) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
+  // Mehrzeilig in voller Länge: Höhe folgt dem Text
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const fit = () => { const el = ref.current; if (el) { el.style.height = 'auto'; el.style.height = `${el.scrollHeight + 2}px`; } };
+  useEffect(fit, [v]);
+  useEffect(() => { const el = ref.current; if (!el || typeof ResizeObserver === 'undefined') return; let w = el.clientWidth; const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } }); ro.observe(el); return () => ro.disconnect(); }, []);
   const commit = () => { if (v.trim() && v.trim() !== value) void onSave(v.trim()); else setV(value); };
   return (
-    <span className="row" style={{ gap: 8, flex: 1 }}>
-      <input className="title-edit" type="text" value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={commit}
-        onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />
+    <span className="row" style={{ gap: 8, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+      <textarea ref={ref} className="title-edit" rows={1} value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value.replace(/\n/g, ' '))} onBlur={commit}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } if (e.key === 'Escape') { setV(value); (e.target as HTMLTextAreaElement).blur(); } }} />
       {done && <span className="badge ok">erledigt</span>}
     </span>
   );

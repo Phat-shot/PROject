@@ -7,7 +7,7 @@ import { queueAgentRun } from '../ai/agentEvents.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 
 import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
-import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { mailAccess } from '../mail/access.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
@@ -208,14 +208,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
     await assertResponsible(db, req.params.id, m, b.responsibleUserId);
-    let columnId = b.columnId;
-    if (!columnId) {
-      const c = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [req.params.id]);
-      columnId = c.id;
-    } else {
-      const c = await db.maybeOne(`select id from board_columns where id = $1 and project_id = $2`, [columnId, req.params.id]);
-      if (!c) throw badRequest('Spalte gehört nicht zum Projekt');
-    }
+    if (b.columnId && !(await db.maybeOne(`select id from board_columns where id = $1 and project_id = $2`, [b.columnId, req.params.id]))) throw badRequest('Spalte gehört nicht zum Projekt');
     if (b.priority && !PRIORITIES.includes(b.priority)) throw badRequest('Ungültige Priorität');
     if (b.subprojectId) {
       const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]);
@@ -230,13 +223,8 @@ export async function taskRoutes(app: FastifyInstance) {
       if (!(await canSeeSubproject(db, user.id, parent.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
       subprojectId = parent.subproject_id;
     }
-    const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1 and parent_id is not distinct from $2`, [columnId, b.parentId ?? null]);
-    const r = await db.one(
-      `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, parent_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
-      [req.params.id, subprojectId, columnId, b.title.trim(), b.description ?? null, b.priority ?? 'normal', b.startDate ?? null, b.dueDate ?? null,
-        b.responsibleUserId ?? null, b.responsibleEmail?.trim() || null, pos.p, newMailCode(), user.id, b.parentId ?? null]
-    );
+    const r = await insertTask(db, { projectId: req.params.id, subprojectId, columnId: b.columnId ?? null, title: b.title.trim(), description: b.description ?? null, priority: b.priority ?? 'normal', startDate: b.startDate ?? null, dueDate: b.dueDate ?? null,
+      responsibleUserId: b.responsibleUserId ?? null, responsibleEmail: b.responsibleEmail?.trim() || null, createdBy: user.id, parentId: b.parentId ?? null });
     if (b.responsibleEmail) await rememberContact(req.params.id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(r.id, req.params.id, b.predecessorIds);
     if (b.responsibleUserId) queueAgentRun(r.id, 'assigned');
@@ -260,7 +248,9 @@ export async function taskRoutes(app: FastifyInstance) {
       [task.id]
     );
     const mails = await db.query(
-      `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, m.outgoing, m.to_json, l.copied, l.checklist_item_id, m.account_id from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
+      `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, m.outgoing, m.to_json, l.copied, l.checklist_item_id, m.account_id, l.origin,
+         exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
+       from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 order by m.date desc`,
       [task.id]
     );
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
@@ -271,7 +261,7 @@ export async function taskRoutes(app: FastifyInstance) {
       subtasks,
       meetings: meetings.rows.map((m: any) => ({ id: m.id, title: m.title, startsAt: new Date(m.starts_at).toISOString(), pageId: m.page_id })),
       comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
-      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id })),
+      mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id, origin: Boolean(m.origin), answered: Boolean(m.answered) })),
       attachments: attachments.rows.map(mapAttachment)
     };
   });

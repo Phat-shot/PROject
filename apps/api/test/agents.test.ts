@@ -60,9 +60,16 @@ test('Agent: nur Org-Admin legt an; kein Login; Mitgliedschaft wird Mitglied mit
   const forgot = await t.app.inject({ method: 'POST', url: '/api/auth/forgot', payload: { email: a.email } });
   assert.ok([200, 400, 404].includes(forgot.statusCode));
   const pid = t.ids.projects.web;
-  const mem = await t.api(pl).put(`/projects/${pid}/members/${a.id}`, { role: 'pl', isDeputy: false, canApprove: true, agentCanMail: false });
+  // Agent als PL nur Stellvertretung: die verantwortliche PL bleibt, KI-Freigaben nie
+  const asPl = await t.api(pl).put(`/projects/${pid}/members/${a.id}`, { role: 'pl', isDeputy: false, canApprove: true, agentCanMail: false });
+  assert.equal(asPl.statusCode, 200, asPl.body);
+  assert.equal(asPl.json().membership.role, 'pl');
+  assert.equal(asPl.json().membership.isDeputy, true);
+  assert.equal(asPl.json().membership.canApprove, false);
+  assert.equal((await t.db.one(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [pid])).user_id, t.ids.users.pl);
+  const mem = await t.api(pl).put(`/projects/${pid}/members/${a.id}`, { role: 'reader', agentCanMail: false });
   assert.equal(mem.statusCode, 200, mem.body);
-  assert.equal(mem.json().membership.role, 'member');
+  assert.equal(mem.json().membership.role, 'member', 'Leser gibt es für Agenten nicht');
   assert.equal(mem.json().membership.isDeputy, true);
   assert.equal(mem.json().membership.canApprove, false);
   assert.equal(mem.json().membership.agentCanMail, false);

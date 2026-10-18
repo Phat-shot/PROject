@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
-import { dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
+import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
@@ -31,6 +31,7 @@ export function mapProject(r: any): Project {
     reminders: remindersOf(r.reminders),
     health: healthOf(r.health),
     visibility: r.visibility ?? 'members',
+    personal: Boolean(r.personal),
     kind: r.kind === 'workflow' ? 'workflow' : 'project',
     myRole: r.my_role ?? undefined
   };
@@ -56,9 +57,12 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // W1: Projekt anlegen (Projektersteller oder Org-Admin wird PL)
-  app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string; templateId?: string | null; startDate?: string | null } }>('/projects', async (req) => {
+  app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string; templateId?: string | null; startDate?: string | null; personal?: boolean } }>('/projects', async (req) => {
     const user = requireUser(req);
-    if (!['org_admin', 'project_creator'].includes(user.globalRole)) throw forbidden('Nur Projektersteller dürfen Projekte anlegen');
+    const personal = Boolean(req.body?.personal);
+    // Persönliches Projekt (Assistent): Projektersteller und Org-Admin immer, alle anderen, wenn der Mandant es erlaubt
+    const allowAll = personal && user.kind !== 'agent' && Boolean((await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.personalProjects);
+    if (!['org_admin', 'project_creator'].includes(user.globalRole) && !allowAll) throw forbidden(personal ? 'Persönliche Projekte sind im Mandanten nicht freigegeben (Verwaltung)' : 'Nur Projektersteller dürfen Projekte anlegen');
     const { key, name, description, mailAddress, templateId, startDate } = req.body ?? ({} as any);
     const template = templateId ? await db.maybeOne(`select * from project_templates where id = $1 and org_id = $2`, [templateId, user.orgId]) : null;
     if (templateId && !template) throw badRequest('Vorlage nicht gefunden');
@@ -69,8 +73,8 @@ export async function projectRoutes(app: FastifyInstance) {
     if (exists) throw conflict('Kürzel bereits vergeben');
     void mailAddress; // Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto
     const p = await db.one(
-      `insert into projects (org_id, key, name, description, created_by) values ($1,$2,$3,$4,$5) returning *`,
-      [user.orgId, key, name, description ?? null, user.id]
+      `insert into projects (org_id, key, name, description, created_by, personal, visibility) values ($1,$2,$3,$4,$5,$6,'members') returning *`,
+      [user.orgId, key, name, description ?? null, user.id, personal]
     );
     await db.query(
       `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
@@ -79,9 +83,10 @@ export async function projectRoutes(app: FastifyInstance) {
     for (const [i, [name, kind]] of DEFAULT_COLUMNS.entries()) {
       await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
     }
-    await createDefaultFolders(db, p.id);
+    // Persönlich: leer starten (nur Spalten), Ordner legt man selbst oder ein Agent an
+    if (!personal) await createDefaultFolders(db, p.id);
     if (template) await applyTemplate(db, p.id, template.spec ?? {}, startDate ?? new Date().toISOString().slice(0, 10));
-    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, template: template?.name ?? null } });
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, template: template?.name ?? null, personal } });
     return { project: { ...mapProject(p), myRole: 'pl' } };
   });
 
@@ -125,6 +130,7 @@ export async function projectRoutes(app: FastifyInstance) {
       await db.query(`update projects set ai_profile_id = $2 where id = $1`, [req.params.id, b.aiProfileId ?? null]);
     }
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
+    if (b.visibility === 'org' && (await db.maybeOne(`select 1 from projects where id = $1 and personal`, [req.params.id]))) throw badRequest('Persönliche Projekte sind nur für Mitglieder sichtbar');
     if (b.reporting) {
       const cur = reportingOf((await db.one(`select reporting from projects where id = $1`, [req.params.id])).reporting);
       const { lastRunOn, lastPageId, ...incoming } = b.reporting as any;
@@ -197,11 +203,14 @@ export async function projectRoutes(app: FastifyInstance) {
       await requireProject(db, user, req.params.id, 'pl');
       const b = req.body ?? ({} as any);
       if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
-      const target = await db.maybeOne(`select id, kind from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
+      const target = await db.maybeOne(`select id, kind, agent_project_id from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
-      // KI-Agent: nur Mitglied mit Stellvertretung, nie PL; Rechte wie ein Mitglied (auch „Final setzen“ zuweisbar), Mailversand abschaltbar, keine KI-Freigabe
+      const proj = await db.one(`select personal, created_by from projects where id = $1`, [req.params.id]);
+      if (proj.personal && target.kind !== 'agent' && target.id !== proj.created_by) throw forbidden('Persönliches Projekt: nur der Ersteller und KI-Agenten');
+      if (target.agent_project_id && target.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
+      // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar, keine KI-Freigabe
       const isAgent = target.kind === 'agent';
-      if (isAgent) { b.role = 'member'; b.canUseAi = true; }
+      if (isAgent) { if (b.role !== 'pl') b.role = 'member'; b.isDeputy = true; b.canUseAi = true; }
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
       const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
@@ -217,7 +226,8 @@ export async function projectRoutes(app: FastifyInstance) {
         }
       }
       if (primary && primary.user_id === req.params.userId && b.role !== 'pl') {
-        const other = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and user_id <> $2`, [req.params.id, req.params.userId]);
+        // Nachfolge nur durch eine Person (Agenten sind nie verantwortliche PL)
+        const other = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.user_id <> $2 and u.kind <> 'agent' and u.active order by m.created_at limit 1`, [req.params.id, req.params.userId]);
         if (!other) throw badRequest('Das Projekt braucht einen PL. Erst einen zweiten PL bestimmen.');
         await db.query(`update project_members set is_deputy = false where project_id = $1 and user_id = $2`, [req.params.id, other.user_id]);
       }
@@ -227,7 +237,7 @@ export async function projectRoutes(app: FastifyInstance) {
          on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
            can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail
          returning *`,
-        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
+        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, b.role === 'pl' || Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
       );
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };
@@ -304,6 +314,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Teilprojekte anlegen erfordert das Recht „Projektplan ändern“');
     const b = req.body ?? ({} as any);
     if (!b.name) throw badRequest('Name erforderlich');
+    await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from subprojects where project_id = $1`, [req.params.id]);
     const r = await db.one(
       `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning *`,
@@ -320,8 +331,10 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     if (!(await canSeeSubproject(db, user.id, req.params.sid))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
-    await setAccess(user, req.params.id, req.params.sid, b, m);
     const before = await db.maybeOne(`select responsible_user_id from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
+    // Nur eine neue Verantwortung prüfen; unveränderte blockiert andere Änderungen nicht
+    if (b.responsibleUserId && b.responsibleUserId !== before?.responsible_user_id) await assertResponsible(db, req.params.id, m, b.responsibleUserId);
+    await setAccess(user, req.params.id, req.params.sid, b, m);
     const r = await db.maybeOne(
       `update subprojects set name = coalesce($3, name),
          responsible_user_id = case when $4 then $5::uuid else responsible_user_id end,

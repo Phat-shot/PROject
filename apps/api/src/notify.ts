@@ -27,6 +27,6 @@ export async function notifyMany(db: Db, userIds: Iterable<string>, n: Omit<Noti
 
 /** PL und Mitglieder mit einem Einzelrecht. */
 export async function usersWithRight(db: Db, projectId: string, flag: 'can_approve' | 'can_finalize' | 'can_edit_plan'): Promise<string[]> {
-  const rows = await db.query(`select user_id from project_members where project_id = $1 and (role = 'pl' or ${flag})`, [projectId]);
+  const rows = await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and (m.role = 'pl' or m.${flag}) and u.kind <> 'agent'`, [projectId]);
   return rows.rows.map((r: any) => r.user_id);
 }

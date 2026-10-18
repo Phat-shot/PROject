@@ -16,7 +16,8 @@ import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
-import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
+import { AiFolderDialog } from './MailAi';
+import type { AgentUser, DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
   const { detail, users, reload, tasks, reloadTasks } = useProject();
@@ -57,8 +58,10 @@ export function MembersView() {
                 </tr>
               ))}
             </tbody></table>
-            {isPl && <InviteCard />}
+            {detail.project.personal && <p className="notice small mt">Persönliches Projekt: nur du und KI-Agenten. Weitere Personen und Einladungen sind gesperrt.</p>}
+            {isPl && !detail.project.personal && <InviteCard />}
           </div>
+          <ProjectAgentsCard />
           <div className="card" id="kontakte">
             <h2>Kontakte und Stakeholder</h2>
             <ContactsCard />
@@ -125,7 +128,8 @@ export function MembersView() {
   );
 
   function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void }) {
-    const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id));
+    // Agenten anderer Projekte (von deren PL angelegt) sind nicht wählbar; im persönlichen Projekt nur Agenten
+    const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!detail.project.personal || u.kind === 'agent'));
     const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
     const { busy, error, run } = useAsync();
     const picked = users.find((u) => u.id === f.userId);
@@ -135,7 +139,7 @@ export function MembersView() {
       <Modal title={member ? `Rolle: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
         <div className="form">
           {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
-          {isAgent && <div className="notice small">KI-Agent: wird Mitglied mit Stellvertretung, nie PL. Er handelt nur bei Arbeitspaketen, die ihm die PL zuweist, und schreibt Log-Einträge unter seinem Namen.<label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
+          {isAgent && <div className="notice small">KI-Agent: handelt bei Arbeitspaketen und Aufgaben, für die er zuständig ist (direkt oder geerbt, z. B. als Teilprojekt-Verantwortung), und schreibt Log-Einträge unter seinem Namen. Als stellvertretende PL plant er im ganzen Projekt (Teilprojekte, Arbeitspakete, Aufgaben, Zuweisungen, Termine), verwaltet aber keine Mitglieder, Rechte oder Einstellungen und legt keine Projekte an.<label className="field" style={{ marginTop: 6 }}><span>Rolle</span><select value={f.role === 'pl' ? 'pl' : 'member'} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL</option></select></label><label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
           {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
           {!isAgent && f.role === 'pl' && <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>}
           {!isAgent && f.role === 'member' && <>
@@ -148,7 +152,7 @@ export function MembersView() {
           {!isAgent && f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
           {error && <div className="error">{error}</div>}
           <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
-            const body: Record<string, unknown> = isAgent ? { role: 'member', agentCanMail, canFinalize: f.canFinalize } : { ...f };
+            const body: Record<string, unknown> = isAgent ? { role: f.role === 'pl' ? 'pl' : 'member', isDeputy: true, agentCanMail, canFinalize: f.canFinalize } : { ...f };
             const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
             if (f.role === 'pl' && !f.isDeputy && primary && primary.userId !== f.userId) {
               const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
@@ -267,18 +271,32 @@ function MailViewsCard() {
   const [newView, setNewView] = useState(false);
   const [rightsFor, setRightsFor] = useState<ViewRow | null>(null);
   const [filterFor, setFilterFor] = useState<ViewRow | null>(null);
+  const [aiFolder, setAiFolder] = useState(false);
+  const { busy, error, run } = useAsync();
+  const agents = detail.members.filter((m) => m.kind === 'agent');
+  const setAi = (v: ViewRow, body: { aiProcess?: boolean; agentUserId?: string | null }) => run(async () => { await api.patch(`/mail/views/${v.id}`, body); await views.reload(); });
   const f = (v: ViewRow) => { const x = v.filter; return [x.folders?.length && `Ordner ${x.folders.join(', ')}`, x.from?.length && `Von ${x.from.join(', ')}`, x.to?.length && `An ${x.to.join(', ')}`, x.subject?.length && `Betreff ${x.subject.join(', ')}`, x.keyword?.length && `Stichwort ${x.keyword.join(', ')}`, x.since && `ab ${x.since}`].filter(Boolean).join(' · ') || 'alle Mails des Kontos'; };
   return (
     <div>
       <p className="muted small">Eine Ansicht ist ein Filter auf ein Konto. Nur Treffer werden gespeichert. Rechte (Lesen, Entwurf, Senden, Arbeitspaket erzeugen) hängen an der Ansicht: je Person, Rolle oder Gruppe.</p>
       {views.data && views.data.views.length === 0 && <div className="empty">Noch keine Ansicht. Ohne Ansicht werden keine Mails geladen.</div>}
-      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th /></tr></thead><tbody>
+      {error && <div className="error small">{error}</div>}
+      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th title="Projekt-KI bearbeitet neue Mails direkt; ein Agent betreut die Ansicht und schlägt vor">KI</th><th /></tr></thead><tbody>
         {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
+          <td className="small">{(() => {
+            const may = v.canManage && (v.accountType === 'personal' || isPl);
+            if (!may) return <span className="muted">{v.aiProcess ? 'Projekt-KI bearbeitet' : v.agentName ? `${v.agentName} schlägt vor` : '–'}</span>;
+            return <>
+              <label className="check" title={detail.project.aiProfileId ? 'Jede neue Mail dieser Ansicht bearbeitet die Projekt-KI sofort in deinem Auftrag' : 'Projekt-KI ist aus'}><input type="checkbox" checked={Boolean(v.aiProcess)} disabled={busy || (!v.aiProcess && !detail.project.aiProfileId)} onChange={(e) => void setAi(v, { aiProcess: e.target.checked })} /> Projekt-KI bearbeitet direkt</label>
+              {!v.aiProcess && <select value={v.agentUserId ?? ''} disabled={busy} style={{ width: 'auto', marginTop: 4 }} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">– kein Agent schlägt vor –</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name} schlägt vor</option>)}</select>}
+            </>;
+          })()}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
       {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button>{oauth.data?.providers.map((p) => <button key={p.key} className="btn sm" style={{ marginLeft: 6 }} onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}</>}</p>}
       {oauthStart && <OAuthStartDialog provider={oauthStart} projects={[detail.project]} fixedProject={detail.project} onClose={() => setOauthStart(null)} />}
-      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><button className="btn sm" disabled={!detail.project.aiProfileId} title={detail.project.aiProfileId ? 'Ordner im Konto, dessen Mails die Projekt-KI direkt bearbeitet' : 'Erst unter Projekt eine Projekt-KI zuweisen'} onClick={() => setAiFolder(true)}>Ordner „KI Bearbeiten“ einrichten</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      {aiFolder && <AiFolderDialog onClose={() => setAiFolder(false)} onDone={() => { setAiFolder(false); void views.reload(); }} />}
       {account && <AccountForm projects={[detail.project]} fixedProject={detail.project} onClose={() => setAccount(false)} onSaved={async () => { setAccount(false); await reload(); await views.reload(); }} />}
       {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
       {rightsFor && <RightsEditor view={rightsFor} onClose={() => setRightsFor(null)} onChanged={() => void views.reload()} />}
@@ -375,4 +393,54 @@ function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
   if (!ai) return null;
   if (readOnly) return <>{ai.profiles.find((p) => p.id === detail.project.aiProfileId)?.name ?? <span className="muted">aus</span>}</>;
   return <span className="row"><select value={detail.project.aiProfileId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { aiProfileId: e.target.value || null }); await reload(); })}><option value="">aus</option>{ai.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>{ai.profiles.length === 0 && <span className="muted small">Noch kein KI-Profil (Verwaltung › KI-Profile).</span>}</span>;
+}
+
+/** Eigene KI-Agenten des Projekts: legt die PL an (wenn der Mandant es erlaubt), nur hier einsetzbar, nur freigegebene KI-Profile. */
+function ProjectAgentsCard() {
+  const { detail, reload } = useProject();
+  const d = useData<{ agents: AgentUser[]; policy: { enabled: boolean; maxBudget: number; profiles: { id: string; name: string }[] }; canManage: boolean }>(`/projects/${detail.project.id}/agents`);
+  const [edit, setEdit] = useState<AgentUser | 'new' | null>(null);
+  if (!d.data || (!d.data.canManage && d.data.agents.length === 0)) return null;
+  const { agents, policy, canManage } = d.data;
+  return (
+    <div className="card" id="agenten">
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>{canManage && <button className="btn primary sm" onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
+      <p className="muted small">Agenten nur für dieses Projekt. Sie arbeiten wie andere Agenten (Zuständigkeit, Planung, Mail-Vorschläge), mit einem freigegebenen KI-Profil und höchstens {policy.maxBudget} Läufen am Tag. Der Org-Admin sieht sie und kann sie deaktivieren, aber keine Inhalte.</p>
+      {agents.length === 0 ? <div className="empty">Noch keiner.</div> : <table className="table"><tbody>
+        {agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.persona ?? 'Standardstil'}</div></td><td className="small">{policy.profiles.find((p) => p.id === a.aiProfileId)?.name ?? '–'} · {a.dailyBudget ?? policy.maxBudget}/Tag</td><td className="small">{a.runs} Läufe</td><td>{canManage && <button className="btn sm link" onClick={() => setEdit(a)}>Bearbeiten</button>}</td></tr>)}
+      </tbody></table>}
+      {edit && <AgentForm agent={edit === 'new' ? null : edit} policy={policy} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); await reload(); }} />}
+    </div>
+  );
+
+  function AgentForm({ agent, policy, onClose, onSaved }: { agent: AgentUser | null; policy: { maxBudget: number; profiles: { id: string; name: string }[] }; onClose: () => void; onSaved: () => Promise<void> }) {
+    const [f, setF] = useState({ name: agent?.name ?? '', persona: agent?.persona ?? '', signature: agent?.signature ?? '', aiProfileId: agent?.aiProfileId ?? policy.profiles[0]?.id ?? '', dailyBudget: agent?.dailyBudget ?? policy.maxBudget, role: 'member' as 'member' | 'pl', thinkingMode: agent?.thinkingMode ?? null, agentCanMail: false });
+    const { busy, error, run } = useAsync();
+    const body = { name: f.name, persona: f.persona || null, signature: f.signature || null, aiProfileId: f.aiProfileId || null, dailyBudget: f.dailyBudget, thinkingMode: f.thinkingMode };
+    return (
+      <Modal title={agent ? `Agent: ${agent.name}` : 'Agent anlegen'} onClose={onClose}>
+        <div className="form">
+          <label className="field"><span>Name</span><input type="text" value={f.name} maxLength={80} autoFocus onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. Morton" /></label>
+          <label className="field"><span>Persona (Schreibstil, eine Zeile)</span><input type="text" value={f.persona} maxLength={300} onChange={(e) => setF({ ...f, persona: e.target.value })} placeholder="z. B. freundlich, knapp, duzt" /></label>
+          <label className="field"><span>Unterschrift für Mails (frei; leer = „Name (KI-Agent, Projekt KEY)“)</span><textarea rows={3} maxLength={500} value={f.signature} onChange={(e) => setF({ ...f, signature: e.target.value })} /></label>
+          <div className="grid cols-2">
+            <label className="field"><span>KI-Profil</span><select value={f.aiProfileId} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}>{policy.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <label className="field"><span>Tagesbudget (höchstens {policy.maxBudget})</span><input type="number" min={0} max={policy.maxBudget} value={f.dailyBudget} onChange={(e) => setF({ ...f, dailyBudget: Number(e.target.value) })} /></label>
+          </div>
+          <label className="field"><span>Denkmodus</span><select value={f.thinkingMode ?? ''} onChange={(e) => setF({ ...f, thinkingMode: (e.target.value || null) as any })}><option value="">wie Profil</option><option value="off">aus</option><option value="on">an</option></select></label>
+          {!agent && <>
+            <label className="field"><span>Rolle im Projekt</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL (plant im ganzen Projekt)</option></select></label>
+            <label className="check"><input type="checkbox" checked={f.agentCanMail} onChange={(e) => setF({ ...f, agentCanMail: e.target.checked })} /> darf Mails über das Projektkonto senden (sonst Entwürfe zur Freigabe)</label>
+          </>}
+          {policy.profiles.length === 0 && <div className="notice small">Kein KI-Profil für Agenten der PL freigegeben (Verwaltung › KI).</div>}
+          {error && <div className="error">{error}</div>}
+          <div className="row">
+            <button className="btn primary" disabled={busy || !f.name.trim() || !f.aiProfileId} onClick={() => void run(async () => { if (agent) await api.patch(`/projects/${detail.project.id}/agents/${agent.id}`, body); else await api.post(`/projects/${detail.project.id}/agents`, { ...body, role: f.role, agentCanMail: f.agentCanMail }); await onSaved(); })}>{agent ? 'Speichern' : 'Anlegen'}</button>
+            {agent && <button className="btn" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}/agents/${agent.id}`, { active: !agent.active }); await onSaved(); })}>{agent.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
+            <button className="btn" onClick={onClose}>Abbrechen</button>
+          </div>
+        </div>
+      </Modal>
+    );
+  }
 }

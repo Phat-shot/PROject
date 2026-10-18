@@ -147,6 +147,7 @@ export async function userRoutes(app: FastifyInstance) {
     let projectRole: 'member' | 'reader' | null = null;
     if (projectId) {
       await requireProject(app.db, user, projectId, 'pl');
+      if (await app.db.maybeOne(`select 1 from projects where id = $1 and personal`, [projectId])) throw forbidden('In persönliche Projekte lädt man niemanden ein');
       projectRole = b.projectRole === 'reader' ? 'reader' : 'member';
     } else if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin oder ein PL für sein Projekt');
     const { email, name } = b;
@@ -299,12 +300,12 @@ export async function userRoutes(app: FastifyInstance) {
     const o = await app.db.one(`select name, settings from orgs where id = $1`, [user.orgId]);
     return { name: o.name, settings: o.settings ?? {} };
   });
-  app.put<{ Body: { company?: string; accentColor?: string; footerText?: string; timeTracking?: boolean } }>('/org/settings', async (req) => {
+  app.put<{ Body: { company?: string; accentColor?: string; footerText?: string; timeTracking?: boolean; personalProjects?: boolean } }>('/org/settings', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
     if (b.accentColor && !/^#[0-9a-fA-F]{6}$/.test(b.accentColor)) throw badRequest('Akzentfarbe als #rrggbb');
-    const o = await app.db.one(`update orgs set settings = settings || $2::jsonb where id = $1 returning settings`, [user.orgId, JSON.stringify({ company: b.company ?? undefined, accentColor: b.accentColor ?? undefined, footerText: b.footerText ?? undefined, timeTracking: b.timeTracking ?? undefined })]);
+    const o = await app.db.one(`update orgs set settings = settings || $2::jsonb where id = $1 returning settings`, [user.orgId, JSON.stringify({ company: b.company ?? undefined, accentColor: b.accentColor ?? undefined, footerText: b.footerText ?? undefined, timeTracking: b.timeTracking ?? undefined, personalProjects: typeof b.personalProjects === 'boolean' ? b.personalProjects : undefined })]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'org.settings', objectType: 'org', objectId: user.orgId, details: b });
     return { settings: o.settings };
   });
@@ -338,13 +339,17 @@ export async function userRoutes(app: FastifyInstance) {
       return { entries: rows.rows.map(mapAudit) };
     }
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    // Persönliche Projekte: Aktion, Person und Zeit ja, Inhaltsdetails nein (auch bei Einträgen ohne Projekt zu Agenten des Projekts)
     const rows = await app.db.query(
-      `select a.*, u.name as user_name from audit_log a left join users u on u.id = a.user_id
+      `select a.*, u.name as user_name,
+         (exists (select 1 from projects p where p.id = a.project_id and p.personal)
+          or exists (select 1 from users ag join projects p on p.id = ag.agent_project_id where ag.id::text = a.object_id::text and p.personal and a.object_type = 'user')) as redact
+       from audit_log a left join users u on u.id = a.user_id
        where a.org_id = $1 order by a.created_at desc limit 1000`,
       [user.orgId]
     );
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'audit.export', objectType: 'audit', details: { count: rows.rows.length } });
-    return { entries: rows.rows.map(mapAudit) };
+    return { entries: rows.rows.map((r: any) => (r.redact ? { ...mapAudit(r), details: { personalProject: true } } : mapAudit(r))) };
   });
 }
 
