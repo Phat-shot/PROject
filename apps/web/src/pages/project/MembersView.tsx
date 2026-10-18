@@ -61,6 +61,7 @@ export function MembersView() {
             {detail.project.personal && <p className="notice small mt">Persönliches Projekt: nur du und KI-Agenten. Weitere Personen und Einladungen sind gesperrt.</p>}
             {isPl && !detail.project.personal && <InviteCard />}
           </div>
+          <OwnLlmCard />
           <ProjectAgentsCard />
           <div className="card" id="kontakte">
             <h2>Kontakte und Stakeholder</h2>
@@ -385,14 +386,65 @@ function BudgetInput() {
 }
 
 
-/** Projekt-KI: Profil aus der Verwaltung zuweisen; ohne Profil sind Zusammenfassen, Essenz, Fragen und Statusbericht-Entwurf aus. */
+type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null }[]; canAddOwn: boolean };
+
+/** Projekt-KI: eines der im Projekt verfügbaren LLMs (vom Org-Admin freigegeben oder eigenes); ohne Auswahl sind die KI-Funktionen aus. */
 function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
   const { detail, reload } = useProject();
-  const ai = useAiStatus();
-  const { busy, run } = useAsync();
-  if (!ai) return null;
-  if (readOnly) return <>{ai.profiles.find((p) => p.id === detail.project.aiProfileId)?.name ?? <span className="muted">aus</span>}</>;
-  return <span className="row"><select value={detail.project.aiProfileId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { aiProfileId: e.target.value || null }); await reload(); })}><option value="">aus</option>{ai.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>{ai.profiles.length === 0 && <span className="muted small">Noch kein KI-Profil (Verwaltung › KI-Profile).</span>}</span>;
+  const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
+  const { busy, error, run } = useAsync();
+  if (!d.data) return null;
+  const avail = d.data.available;
+  const cur = avail.find((p) => p.id === detail.project.aiProfileId);
+  if (readOnly) return <>{cur?.name ?? <span className="muted">{detail.project.aiProfileId ? 'nicht mehr verfügbar' : 'aus'}</span>}</>;
+  return <span className="row"><select value={cur ? cur.id : ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { aiProfileId: e.target.value || null }); await reload(); })}><option value="">aus</option>{avail.map((p) => <option key={p.id} value={p.id}>{p.name}{p.own ? ' (eigenes LLM)' : ''}</option>)}</select>
+    {detail.project.aiProfileId && !cur && <span className="muted small">bisheriges LLM nicht mehr verfügbar</span>}
+    {avail.length === 0 && <span className="muted small">Kein LLM für dieses Projekt freigegeben{d.data.canAddOwn ? '; unten ein eigenes einbinden' : ' (Org-Admin)'}.</span>}
+    {error && <span className="error small">{error}</span>}</span>;
+}
+
+/** Eigene LLMs des Projekts (PL): nur hier nutzbar, Schlüssel verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann sperren. */
+function OwnLlmCard() {
+  const { detail, reload } = useProject();
+  const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
+  const [edit, setEdit] = useState<ProjectLlms['own'][number] | 'new' | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const { busy, error, run } = useAsync();
+  if (!d.data || (!d.data.canAddOwn && d.data.own.length === 0)) return null;
+  const base = `/projects/${detail.project.id}/llms`;
+  return (
+    <div className="card" id="llm">
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigenes LLM</h2>{d.data.canAddOwn && <button className="btn primary sm" onClick={() => setEdit('new')}>Einbinden</button>}</div>
+      <p className="muted small">Ein eigenes LLM (lokal, OpenAI-kompatibel, oder Anthropic) nur für dieses Projekt: für die Projekt-KI und eigene Agenten. Der Schlüssel liegt verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann es sperren.</p>
+      {error && <div className="error small">{error}</div>}
+      {msg && <div className="success small">{msg}</div>}
+      {d.data.own.length > 0 && <table className="table"><tbody>{d.data.own.map((l) => <tr key={l.id} style={l.active && !l.adminBlocked ? undefined : { opacity: 0.6 }}>
+        <td>{l.name}<div className="muted small">{l.provider === 'local' ? l.baseUrl : 'Anthropic'} · {l.model}</div></td>
+        <td className="small">{l.adminBlocked ? <span className="badge danger">vom Org-Admin gesperrt</span> : l.active ? <span className="badge ok">aktiv</span> : <span className="badge">inaktiv</span>}<div className="muted">{(l.tokensIn + l.tokensOut).toLocaleString('de-DE')} Token</div></td>
+        <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>(`${base}/${l.id}/test`); setMsg(`${l.name}: ${r.model} antwortet „${r.reply}“.`); })}>Testen</button> <button className="btn sm link" onClick={() => setEdit(l)}>Bearbeiten</button> <button className="btn sm link" disabled={busy} onClick={() => void run(async () => { await api.del(`${base}/${l.id}`); await d.reload(); await reload(); })}>Entfernen</button></td></tr>)}</tbody></table>}
+      {edit && <OwnLlmForm llm={edit === 'new' ? null : edit} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); await reload(); }} />}
+    </div>
+  );
+
+  function OwnLlmForm({ llm, onClose, onSaved }: { llm: ProjectLlms['own'][number] | null; onClose: () => void; onSaved: () => Promise<void> }) {
+    const [f, setF] = useState({ name: llm?.name ?? '', provider: llm?.provider ?? 'local' as 'local' | 'anthropic', baseUrl: llm?.baseUrl ?? '', model: llm?.model ?? '', apiKey: '', thinkingOff: llm?.thinkingOff ?? false, active: llm?.active ?? true });
+    const f2 = useAsync();
+    return (
+      <Modal title={llm ? `LLM: ${llm.name}` : 'Eigenes LLM einbinden'} onClose={onClose}>
+        <div className="form">
+          <label className="field"><span>Name</span><input type="text" value={f.name} autoFocus onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. Qwen auf meiner 3090" /></label>
+          <label className="field"><span>Anbieter</span><select value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value as any })}><option value="local">Lokales LLM (OpenAI-kompatibel: vLLM, Ollama, LM Studio)</option><option value="anthropic">Anthropic</option></select></label>
+          {f.provider === 'local' && <label className="field"><span>Adresse der API</span><input type="url" value={f.baseUrl} placeholder="http://llm.intern:8000/v1" onChange={(e) => setF({ ...f, baseUrl: e.target.value })} /></label>}
+          <label className="field"><span>Modell</span><input type="text" value={f.model} placeholder={f.provider === 'local' ? 'z. B. Qwen/Qwen3-32B' : 'claude-sonnet-5-5'} onChange={(e) => setF({ ...f, model: e.target.value })} /></label>
+          <label className="field"><span>Schlüssel{llm?.hasKey ? ' · gesetzt, leer = unverändert' : f.provider === 'local' ? ' (optional)' : ''}</span><input type="password" autoComplete="new-password" value={f.apiKey} onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>
+          {f.provider === 'local' && <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus</label>}
+          {llm && <label className="check"><input type="checkbox" checked={f.active} onChange={(e) => setF({ ...f, active: e.target.checked })} /> aktiv</label>}
+          {f2.error && <div className="error">{f2.error}</div>}
+          <div className="row"><button className="btn primary" disabled={f2.busy || !f.name.trim() || !f.model.trim() || (f.provider === 'local' && !f.baseUrl)} onClick={() => void f2.run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.provider === 'local' ? f.baseUrl : null, model: f.model, apiKey: f.apiKey || undefined, thinkingOff: f.provider === 'local' && f.thinkingOff, ...(llm ? { active: f.active } : {}) }; if (llm) await api.patch(`${base}/${llm.id}`, body); else await api.post(base, body); await onSaved(); })}>{llm ? 'Speichern' : 'Einbinden'}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+        </div>
+      </Modal>
+    );
+  }
 }
 
 /** Eigene KI-Agenten des Projekts: legt die PL an (wenn der Mandant es erlaubt), nur hier einsetzbar, nur freigegebene KI-Profile. */
@@ -405,7 +457,7 @@ function ProjectAgentsCard() {
   return (
     <div className="card" id="agenten">
       <div className="row between mb"><h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>{canManage && <button className="btn primary sm" onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
-      <p className="muted small">Agenten nur für dieses Projekt. Sie arbeiten wie andere Agenten (Zuständigkeit, Planung, Mail-Vorschläge), mit einem freigegebenen KI-Profil und höchstens {policy.maxBudget} Läufen am Tag. Der Org-Admin sieht sie und kann sie deaktivieren, aber keine Inhalte.</p>
+      <p className="muted small">Agenten nur für dieses Projekt. Sie arbeiten wie andere Agenten (Zuständigkeit, Planung, Mail-Vorschläge), auf einem im Projekt verfügbaren LLM und mit höchstens {policy.maxBudget} Läufen am Tag. Der Org-Admin sieht sie und kann sie deaktivieren, aber keine Inhalte.</p>
       {agents.length === 0 ? <div className="empty">Noch keiner.</div> : <table className="table"><tbody>
         {agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.persona ?? 'Standardstil'}</div></td><td className="small">{policy.profiles.find((p) => p.id === a.aiProfileId)?.name ?? '–'} · {a.dailyBudget ?? policy.maxBudget}/Tag</td><td className="small">{a.runs} Läufe</td><td>{canManage && <button className="btn sm link" onClick={() => setEdit(a)}>Bearbeiten</button>}</td></tr>)}
       </tbody></table>}
@@ -424,7 +476,7 @@ function ProjectAgentsCard() {
           <label className="field"><span>Persona (Schreibstil, eine Zeile)</span><input type="text" value={f.persona} maxLength={300} onChange={(e) => setF({ ...f, persona: e.target.value })} placeholder="z. B. freundlich, knapp, duzt" /></label>
           <label className="field"><span>Unterschrift für Mails (frei; leer = „Name (KI-Agent, Projekt KEY)“)</span><textarea rows={3} maxLength={500} value={f.signature} onChange={(e) => setF({ ...f, signature: e.target.value })} /></label>
           <div className="grid cols-2">
-            <label className="field"><span>KI-Profil</span><select value={f.aiProfileId} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}>{policy.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            <label className="field"><span>LLM (im Projekt verfügbar)</span><select value={f.aiProfileId} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}>{policy.profiles.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
             <label className="field"><span>Tagesbudget (höchstens {policy.maxBudget})</span><input type="number" min={0} max={policy.maxBudget} value={f.dailyBudget} onChange={(e) => setF({ ...f, dailyBudget: Number(e.target.value) })} /></label>
           </div>
           <label className="field"><span>Denkmodus</span><select value={f.thinkingMode ?? ''} onChange={(e) => setF({ ...f, thinkingMode: (e.target.value || null) as any })}><option value="">wie Profil</option><option value="off">aus</option><option value="on">an</option></select></label>
@@ -432,7 +484,7 @@ function ProjectAgentsCard() {
             <label className="field"><span>Rolle im Projekt</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL (plant im ganzen Projekt)</option></select></label>
             <label className="check"><input type="checkbox" checked={f.agentCanMail} onChange={(e) => setF({ ...f, agentCanMail: e.target.checked })} /> darf Mails über das Projektkonto senden (sonst Entwürfe zur Freigabe)</label>
           </>}
-          {policy.profiles.length === 0 && <div className="notice small">Kein KI-Profil für Agenten der PL freigegeben (Verwaltung › KI).</div>}
+          {policy.profiles.length === 0 && <div className="notice small">Im Projekt ist kein LLM verfügbar: Freigabe durch den Org-Admin oder eigenes LLM einbinden.</div>}
           {error && <div className="error">{error}</div>}
           <div className="row">
             <button className="btn primary" disabled={busy || !f.name.trim() || !f.aiProfileId} onClick={() => void run(async () => { if (agent) await api.patch(`/projects/${detail.project.id}/agents/${agent.id}`, body); else await api.post(`/projects/${detail.project.id}/agents`, { ...body, role: f.role, agentCanMail: f.agentCanMail }); await onSaved(); })}>{agent ? 'Speichern' : 'Anlegen'}</button>

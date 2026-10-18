@@ -57,10 +57,10 @@ test('Eigene Agenten der PL: nur mit Freigabe, nur freigegebene Profile, Budget 
   const pl = await t.login('pl@demo.local');
   const anna = await t.login('anna@demo.local');
   profileA = (await t.api(admin).post('/ai/profiles', { name: 'Lokal A', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile.id;
-  profileB = (await t.api(admin).post('/ai/profiles', { name: 'Teuer B', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'big' })).json().profile.id;
+  profileB = (await t.api(admin).post('/ai/profiles', { name: 'Teuer B', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'big', projectScope: 'none' })).json().profile.id;
   assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA })).statusCode, 403, 'nicht freigegeben');
-  await t.api(admin).put('/ai/settings', { agentDailyBudget: 40, plAgents: { enabled: true, profileIds: [profileA], maxBudget: 10 } });
-  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileB })).statusCode, 400, 'Profil nicht freigegeben');
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 40, plAgents: { enabled: true, maxBudget: 10 } });
+  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileB })).statusCode, 400, 'Profil im Projekt nicht freigegeben');
   assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 11 })).statusCode, 400, 'Budget über dem Deckel');
   const r = await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 5, role: 'pl', persona: 'knapp', signature: 'Morton\nfür Max' });
   assert.equal(r.statusCode, 200, r.body);

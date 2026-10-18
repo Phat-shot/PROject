@@ -127,7 +127,10 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Ein **KI-Profil** ist eine KI: lokales LLM mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio, llama.cpp) oder Anthropic.
 - **Denkmodus aus** (nur lokal): für Modelle mit Thinking wie Qwen. Schneller, weniger Token, keine abgeschnittenen Antworten.
 - **Tagesbudget** je Agent (Läufe pro Tag) und Standardprofil für neue Agenten.
-- Projekte bekommen ihr Profil für die Projekt-KI in den Projekteinstellungen (PL); ohne Profil ist die KI dort aus.
+- **Freigabe je Profil:** für alle Projekte, für ausgewählte Projekte oder für keins (dann nur für Agenten des Org-Admins). Gilt für normale und persönliche Projekte.
+- **Eigenes LLM:** Der Org-Admin erlaubt es nicht, nur in persönlichen Projekten (Standard) oder in allen Projekten. Dann bindet die PL unter Einstellungen › Eigenes LLM ein eigenes LLM nur für ihr Projekt ein (Schlüssel verschlüsselt). Der Org-Admin sieht unter Verwaltung › Eigene LLMs der Projekte Name, Anbieter, Adresse und Verbrauch, nicht Schlüssel oder Inhalte, und kann sperren.
+- Die PL wählt die Projekt-KI aus den im Projekt verfügbaren LLMs (Projekteinstellungen); ohne Auswahl ist die KI dort aus. Wird eine Freigabe entzogen oder ein LLM gesperrt, ist die Projekt-KI aus, bis die PL ein anderes wählt.
+- Neue Projekte, auch persönliche, haben keinen Agenten. Die PL nimmt Agenten des Org-Admins auf oder legt eigene an; eigene Agenten laufen nur auf den im Projekt verfügbaren LLMs.
 
 **Projekt-KI (Projekt › KI und Postfach)**
 - Mail zusammenfassen, Essenz einer Mail als Vorschlag für ein AP oder eine Seite; Vorschläge gibt frei, wer „KI-Vorschläge freigeben“ hat.

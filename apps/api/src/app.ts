@@ -32,6 +32,7 @@ import { registerAgentChatRunner, registerAgentRunner, registerMailAiRunner } fr
 import { runForTask } from './ai/agent.js';
 import { runAgentChat } from './ai/agentChat.js';
 import { runMailAi } from './ai/mailAi.js';
+import { registerAiUsage } from './ai/client.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
@@ -64,6 +65,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   registerAgentRunner((taskId, trigger) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger));
   registerAgentChatRunner((agentId, channelId, messageId) => runAgentChat(opts.db, opts.fetchFn ?? fetch, agentId, channelId, messageId));
   registerMailAiRunner((runId) => runMailAi(opts.db, opts.mail, opts.fetchFn ?? fetch, runId));
+  registerAiUsage((profileId, i, o) => opts.db.query(`update ai_profiles set tokens_in = tokens_in + $2, tokens_out = tokens_out + $3, last_used_at = now() where id = $1`, [profileId, i, o]));
   app.decorateRequest('user', null);
 
   registerRateLimit(app);

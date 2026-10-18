@@ -48,6 +48,9 @@ test('Teilprojekt-Verantwortung: Agent läuft bei geerbter Zuständigkeit; Agent
   assert.equal(mine.length, 1, 'geerbtes Arbeitspaket bekommt einen Lauf');
   const prompt = calls.find((c) => c.messages[1].content.includes('Teilprojekt durchplanen'));
   assert.match(prompt.messages[1].content, /Deine Zuständigkeit: geerbt vom Teilprojekt „Elektrik“/);
+  // Anthropic Structured Outputs begrenzt Union-Typen (Typ-Listen, anyOf): das Schema kommt ohne aus
+  const unions = (o: any): number => !o || typeof o !== 'object' ? 0 : (Array.isArray(o.type) || o.anyOf ? 1 : 0) + Object.values(o).reduce((n: number, v) => n + unions(v), 0);
+  assert.equal(unions(prompt.response_format.json_schema.schema), 0);
   assert.match(prompt.messages[1].content, /Arbeitspakete legst|create_ap\) in deinen Teilprojekten/);
   // Manueller Lauf über die Route findet den geerbten Agenten
   assert.equal((await t.api(pl).post(`/tasks/${ap.id}/agent-run`)).statusCode, 200);

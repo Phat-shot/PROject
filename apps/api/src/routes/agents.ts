@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
-import { orgAiSettings } from '../ai/client.js';
+import { orgAiSettings, projectProfiles } from '../ai/client.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
@@ -55,7 +55,7 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!name) throw badRequest('Name erforderlich');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
     const profileId = req.body?.aiProfileId ?? (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai?.defaultProfileId ?? null;
-    if (profileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [profileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
+    if (profileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [profileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
     const persona = cleanPersona(req.body?.persona);
     const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona) values ($1,$2,$3,'','user','agent',$4,$5) returning *`, [user.orgId, email, name, profileId, persona]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, persona } });
@@ -70,7 +70,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     // Agent einer PL: der Org-Admin sieht ihn und kann ihn (de)aktivieren, gestaltet ihn aber nicht
     if (a.agent_project_id && Object.keys(b).some((k) => k !== 'active')) throw forbidden('Dieser Agent gehört zu einem Projekt; Einstellungen macht dessen PL');
-    if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
+    if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
     const persona = 'persona' in b ? cleanPersona(b.persona) : null;
     if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, b.thinkingMode ?? null]);
@@ -83,11 +83,13 @@ export async function agentRoutes(app: FastifyInstance) {
 
   // ---- Eigene Agenten der PL: nur für das eigene Projekt, nur freigegebene KI-Profile, Tagesbudget höchstens der Mandantenwert
   const boundOf = async (projectId: string, id: string) => db.maybeOne(`select * from users where id = $1 and kind = 'agent' and agent_project_id = $2`, [id, projectId]);
-  const checkPolicy = async (orgId: string, b: { aiProfileId?: string | null; dailyBudget?: number | null }, cur?: any) => {
+  const checkPolicy = async (orgId: string, projectId: string, b: { aiProfileId?: string | null; dailyBudget?: number | null }, cur?: any) => {
     const s = await orgAiSettings(db, orgId);
     if (!s.plAgents.enabled) throw forbidden('Eigene Agenten der PL sind im Mandanten nicht freigegeben (Verwaltung › KI)');
-    const profileId = 'aiProfileId' in b ? b.aiProfileId ?? null : cur?.ai_profile_id ?? s.plAgents.profileIds[0] ?? null;
-    if (!profileId || !s.plAgents.profileIds.includes(profileId)) throw badRequest('KI-Profil ist für Agenten der PL nicht freigegeben');
+    // Nur LLMs, die im Projekt verfügbar sind (vom Org-Admin freigegeben oder eigenes LLM des Projekts)
+    const available = await projectProfiles(db, projectId);
+    const profileId = 'aiProfileId' in b ? b.aiProfileId ?? null : cur?.ai_profile_id ?? available[0]?.id ?? null;
+    if (!profileId || !available.some((p) => p.id === profileId)) throw badRequest('Dieses LLM ist im Projekt nicht verfügbar');
     const budget = 'dailyBudget' in b ? (b.dailyBudget == null ? s.plAgents.maxBudget : Number(b.dailyBudget)) : cur?.agent_daily_budget ?? s.plAgents.maxBudget;
     if (!Number.isInteger(budget) || budget < 0 || budget > s.plAgents.maxBudget) throw badRequest(`Tagesbudget 0 bis ${s.plAgents.maxBudget} Läufe`);
     return { profileId, budget, policy: s.plAgents };
@@ -97,7 +99,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, req.params.id);
     const s = await orgAiSettings(db, user.orgId);
     const rows = await db.query(`select u.*, (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at from users u where u.agent_project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id]);
-    const profiles = (await db.query(`select id, name from ai_profiles where org_id = $1 and id = any($2::uuid[]) order by name`, [user.orgId, s.plAgents.profileIds])).rows;
+    const profiles = (await projectProfiles(db, req.params.id)).map((p) => ({ id: p.id, name: p.name }));
     return { agents: rows.rows.map((r: any) => ({ ...mapAgent(r), runs: r.runs, lastRunAt: r.last_run_at })), policy: { ...s.plAgents, profiles }, canManage: m.role === 'pl' && s.plAgents.enabled };
   });
   app.post<{ Params: { id: string }; Body: { name: string; persona?: string | null; signature?: string | null; aiProfileId?: string | null; thinkingMode?: 'off' | 'on' | null; dailyBudget?: number | null; role?: 'member' | 'pl'; agentCanMail?: boolean } }>('/projects/:id/agents', async (req) => {
@@ -106,7 +108,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const b = req.body ?? ({} as any);
     const name = String(b.name ?? '').trim().slice(0, 80);
     if (!name) throw badRequest('Name erforderlich');
-    const { profileId, budget } = await checkPolicy(user.orgId, b);
+    const { profileId, budget } = await checkPolicy(user.orgId, req.params.id, b);
     if (b.thinkingMode != null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
     const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, signature, thinking_mode, agent_project_id, agent_daily_budget, agent_created_by) values ($1,$2,$3,'','user','agent',$4,$5,$6,$7,$8,$9,$10) returning *`,
@@ -122,7 +124,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const a = await boundOf(req.params.id, req.params.aid);
     if (!a) throw notFound('Agent des Projekts nicht gefunden');
     const b = req.body ?? {};
-    const { profileId, budget } = await checkPolicy(user.orgId, b, a);
+    const { profileId, budget } = await checkPolicy(user.orgId, req.params.id, b, a);
     if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     await db.query(`update users set name = coalesce($2, name), persona = case when $3 then $4 else persona end, signature = case when $5 then $6 else signature end, ai_profile_id = $7, thinking_mode = case when $8 then $9 else thinking_mode end, agent_daily_budget = $10, active = coalesce($11, active) where id = $1`,
       [a.id, b.name?.trim().slice(0, 80) || null, 'persona' in b, cleanPersona(b.persona), 'signature' in b, cleanSignature(b.signature), profileId, 'thinkingMode' in b, b.thinkingMode ?? null, budget, typeof b.active === 'boolean' ? b.active : null]);

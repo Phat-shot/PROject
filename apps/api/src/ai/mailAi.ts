@@ -33,19 +33,19 @@ const SCHEMA = {
       required: ['type', 'title', 'text', 'ref', 'subproject', 'responsible', 'startDate', 'dueDate', 'items', 'startsAt', 'endsAt', 'location', 'folder', 'reason'],
       properties: {
         type: { type: 'string', enum: TYPES },
-        title: { type: ['string', 'null'], description: 'create_ap/create_aufgabe/create_event: Titel; sonst null' },
-        text: { type: ['string', 'null'], description: 'create_ap/create_aufgabe/create_event: Beschreibung; link: Log-Notiz; reply_draft: Antworttext; sonst null' },
-        ref: { type: ['string', 'null'], description: 'create_aufgabe: Kennung des Arbeitspakets; link: Kennung; sonst null' },
-        subproject: { type: ['string', 'null'], description: 'create_ap: Name des Teilprojekts oder null' },
-        responsible: { type: ['string', 'null'], description: 'create_ap/create_aufgabe: E-Mail eines Mitglieds oder null' },
-        startDate: { type: ['string', 'null'], description: 'YYYY-MM-DD oder null' },
-        dueDate: { type: ['string', 'null'], description: 'YYYY-MM-DD oder null' },
-        items: { type: ['array', 'null'], items: { type: 'string' }, description: 'create_ap/create_aufgabe: Tasks; sonst null' },
-        startsAt: { type: ['string', 'null'], description: 'create_event: YYYY-MM-DDTHH:MM; sonst null' },
-        endsAt: { type: ['string', 'null'], description: 'create_event: YYYY-MM-DDTHH:MM oder null (eine Stunde)' },
-        location: { type: ['string', 'null'], description: 'create_event: Ort oder null' },
-        folder: { type: ['string', 'null'], description: 'move: Archiv, In Arbeit oder ein Ordner aus der Liste; sonst null' },
-        reason: { type: ['string', 'null'], description: 'none: Grund; sonst null' }
+        title: { type: 'string', description: 'create_ap/create_aufgabe/create_event: Titel; sonst leer' },
+        text: { type: 'string', description: 'create_ap/create_aufgabe/create_event: Beschreibung; link: Log-Notiz; reply_draft: Antworttext; sonst leer' },
+        ref: { type: 'string', description: 'create_aufgabe: Kennung des Arbeitspakets; link: Kennung; sonst leer' },
+        subproject: { type: 'string', description: 'create_ap: Name des Teilprojekts oder leer' },
+        responsible: { type: 'string', description: 'create_ap/create_aufgabe: E-Mail eines Mitglieds oder leer' },
+        startDate: { type: 'string', description: 'YYYY-MM-DD oder leer' },
+        dueDate: { type: 'string', description: 'YYYY-MM-DD oder leer' },
+        items: { type: 'array', items: { type: 'string' }, description: 'create_ap/create_aufgabe: Tasks; sonst leer' },
+        startsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM; sonst leer' },
+        endsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM oder leer (eine Stunde)' },
+        location: { type: 'string', description: 'create_event: Ort oder leer' },
+        folder: { type: 'string', description: 'move: Archiv, In Arbeit oder ein Ordner aus der Liste; sonst leer' },
+        reason: { type: 'string', description: 'none: Grund; sonst leer' }
       } } }
   }
 };
@@ -166,7 +166,7 @@ Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.sp
 
 interface Ctx { run: any; project: any; mail: any; view: any; actor: User }
 
-const clean = (a: MailAiAction): MailAiAction => Object.fromEntries(Object.entries(a).filter(([, v]) => v !== null && v !== undefined)) as MailAiAction;
+const clean = (a: MailAiAction): MailAiAction => Object.fromEntries(Object.entries(a).filter(([, v]) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length))) as MailAiAction;
 
 /** Aktionen ausführen (Projekt-KI direkt oder freigegebener Vorschlag), mit den Rechten von ctx.actor. */
 export async function applyActions(db: Db, svc: MailService, ctx: Ctx, actions: MailAiAction[]): Promise<StoredAction[]> {

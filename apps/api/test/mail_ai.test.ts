@@ -53,6 +53,8 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   ];
   await inject({ subject: 'Besichtigung und Angebot', text: 'Wir können am 5.11. um 14 Uhr vorbeikommen.', folder: 'KI Bearbeiten' });
   const mail = await t.db.one(`select * from mails where subject = 'Besichtigung und Angebot'`);
+  const unions = (o: any): number => !o || typeof o !== 'object' ? 0 : (Array.isArray(o.type) || o.anyOf ? 1 : 0) + Object.values(o).reduce((n: number, v) => n + unions(v), 0);
+  assert.equal(unions(calls.find((c) => c.messages[0].content.includes('# Mail bearbeiten')).response_format.json_schema.schema), 0, 'keine Union-Typen im Schema');
   const run = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [mail.id]);
   assert.equal(run.status, 'ok', run.error ?? '');
   assert.equal(run.mode, 'process');

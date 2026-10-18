@@ -29,16 +29,16 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - mail: to, subject, text; höchstens drei je Lauf
 - reply_origin: text = Antwort an den Absender der Ursprungsmail, geht aus deren Konto (ohne Senderecht als Entwurf zur Freigabe); einmal, wenn das Ergebnis vorliegt
 - read_page: pageId; liest eine Seite. Erst lesen, ändernde Aktionen danach angeben.
-- doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: pageId, subject, text, to (to null = Verteiler des Ordners, nur bei finaler Seite)
-- create_aufgabe: title, text, ref (Kennung des AP, null = dieses), startDate, dueDate, responsible, items (Tasks); create_ap: title, text, subproject (null = dieses Teilprojekt), startDate, dueDate, responsible, items
-- assign: ref, responsible (null = direkte Zuweisung aufheben, dann gilt die geerbte); set_dates: ref (null = dieses), startDate, dueDate
+- doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: pageId, subject, text, to (leer = Verteiler des Ordners, nur bei finaler Seite)
+- create_aufgabe: title, text, ref (Kennung des AP, leer = dieses), startDate, dueDate, responsible, items (Tasks); create_ap: title, text, subproject (leer = dieses Teilprojekt), startDate, dueDate, responsible, items
+- assign: ref, responsible (leer = direkte Zuweisung aufheben, dann gilt die geerbte); set_dates: ref (leer = dieses), startDate, dueDate
 - create_subproject: title, responsible, startDate, dueDate (Ende); create_milestone: title, dueDate, subproject
 - create_event: title, startsAt, endsAt, location, text = Termin im Projektkalender
 - Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin), responsible = E-Mail aus „Projektmitglieder“; höchstens 15 Anlagen je Lauf, jede Anlage steht danach automatisch im Log
 - blocked: reason; escalate: text an die PL
 - wait: kind und reason. kind reply = Rückmeldung einer Person (dazu remindAfterHours, z. B. 48, und escalateAfterHours, z. B. 120), date = Termin (until als Datum), task = Erledigung durch andere, info = Information; checkAfterHours = nächste Prüfung
 - none: reason, wenn nichts zu tun ist und nichts erwartet wird
-Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder sind null.`;
+Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).`;
 
 /** Chat-Läufe: Verhalten und Antwortformat (fest, nach dem Sheet). */
 export const CHAT_RULES = `# Chat
@@ -48,7 +48,7 @@ Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, n
 /** Mail-Läufe (Ordner „KI Bearbeiten“ und Agent an einer Ansicht): Ableitung und Antwortformat (fest, nach dem Sheet). */
 export const MAIL_RULES = `# Mail bearbeiten: Aktionen und Antwortformat
 Leite aus der Mail ab, was im Projekt zu tun ist. Es passiert ausschließlich, was du in actions listest.
-- create_ap: neues Arbeitspaket (ein Ergebnis): title, text, subproject (Name oder null), startDate, dueDate, responsible, items (Tasks)
+- create_ap: neues Arbeitspaket (ein Ergebnis): title, text, subproject (Name oder leer), startDate, dueDate, responsible, items (Tasks)
 - create_aufgabe: Schritt unter einem bestehenden Arbeitspaket: ref (Kennung des AP), title, text, startDate, dueDate, responsible, items
 - link: die Mail gehört zu einem bestehenden Arbeitspaket oder einer Aufgabe: ref, text = kurze Log-Notiz, was die Mail Neues bringt
 - create_event: Termin mit Uhrzeit im Projektkalender (Besprechung, Besichtigung, Anruf, Abgabe): title, startsAt, endsAt, location, text; nur wenn kein Termin eines Arbeitspakets ihn abdeckt und er nicht schon im Kalender steht
@@ -56,4 +56,4 @@ Leite aus der Mail ab, was im Projekt zu tun ist. Es passiert ausschließlich, w
 - move: folder = Ablage der Mail danach: „Archiv“, wenn nichts mehr offen ist; „In Arbeit“, wenn sie offen bleibt (Antwort oder Erledigung ausstehend); sonst ein passender Ordner aus der Liste
 - none: reason, wenn die Mail nichts für das Projekt enthält
 Titel kurz, als Ergebnis oder Tätigkeit. text enthält das Nötige aus der Mail (wer, was, bis wann), keine Kopie der ganzen Mail. dueDate, wenn die Mail einen Termin nennt oder er sich klar ergibt. responsible = E-Mail aus „Mitglieder“: einem KI-Agenten gibst du, was er selbst erledigen kann (nachfragen, abstimmen, recherchieren, planen, Mails vorbereiten); was eine Person tun muss, bekommt die Person oder bleibt ohne Zuweisung. Nichts doppelt anlegen, was es schon gibt (Arbeitspakete, Kalender), nichts erfinden, höchstens 8 Aktionen. Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin).
-Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, actions = Liste der Aktionen; nicht genutzte Felder sind null.`;
+Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).`;

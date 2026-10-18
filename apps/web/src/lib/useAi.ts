@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { api } from './api';
 
 import type { AiProfile } from '@projekttool/shared';
-export interface AiStatus { enabled: boolean; profiles: AiProfile[]; defaultProfileId: string | null; agentDailyBudget: number; plAgents?: { enabled: boolean; profileIds: string[]; maxBudget: number }; models: string[] }
+export interface AiStatus { enabled: boolean; profiles: (AiProfile & { projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[] })[]; defaultProfileId: string | null; agentDailyBudget: number; plAgents?: { enabled: boolean; maxBudget: number }; ownLlm?: 'off' | 'personal' | 'all'; models: string[] }
 let cache: AiStatus | null = null;
 let pending: Promise<AiStatus> | null = null;
 const listeners = new Set<(s: AiStatus) => void>();
