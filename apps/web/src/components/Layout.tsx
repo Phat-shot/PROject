@@ -85,7 +85,7 @@ export function Layout({ children }: { children: ReactNode }) {
             <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
             <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
             <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
-            {ai?.enabled && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
+            {(ai?.enabled || ai?.killswitch) && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
             {p.myRole === 'pl' && <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) || isActive(`${base}/audit`) ? 'active' : '')}>Einstellungen</NavLink>}
           </div>
         )}
@@ -121,7 +121,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="section">Einstellungen</div>
         <NavLink to="/einstellungen/benutzer" data-tour="benutzer">Benutzereinstellungen</NavLink>
         <NavLink to="/einstellungen/konfiguration" data-tour="mailkonten">Konfiguration</NavLink>
-        {user?.globalRole === 'org_admin' && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
+        {user && (user.globalRole === 'org_admin' || user.orgRights?.includes('ai_admin')) && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>

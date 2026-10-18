@@ -28,6 +28,7 @@ export function mapUser(row: any): User {
     email: row.email,
     name: row.name,
     globalRole: row.global_role,
+    orgRights: row.org_rights ?? [],
     active: row.active,
     settings: row.settings ?? {},
     totpEnabled: Boolean(row.totp_enabled),

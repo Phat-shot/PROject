@@ -7,6 +7,7 @@ import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
 import { useData } from '../../lib/useData';
+import { aiBlocked } from '../../lib/useAi';
 import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
@@ -28,7 +29,7 @@ interface TaskDetail {
 
 /** Arbeitspaket oder Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
-  const { detail, users, tasks, reloadTasks, openTask } = useProject();
+  const { detail, users, tasks, reloadTasks, openTask, ai } = useProject();
   const { timeTracking } = useAuth();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [shift, setShift] = useState<{ changes: any[] } | null>(null);
@@ -59,6 +60,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
   // Zuständiger Agent direkt oder geerbt (vom Arbeitspaket bzw. Teilprojekt): auch dann läuft er
   const respAgent = users.find((u) => u.id === t.responsible.userId && u.kind === 'agent');
+  // KI-Freigaben des zuständigen Agenten im Projekt (Notaus, Regeln, eigene Agenten der PL, Profil, Budget)
+  const agentRun = respAgent ? ai?.agents.find((a) => a.id === respAgent.id)?.run : undefined;
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
@@ -81,11 +84,13 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         const o = d.mails.find((m) => m.origin && !m.outgoing);
         if (!o) return null;
         const prompt = t.done && !o.answered;
-        const aiOn = Boolean(detail.project.aiProfileId) && (me.role === 'pl' || me.canUseAi);
+        // Mit KI formulieren: Knopf bleibt sichtbar, gesperrt mit Begründung aus den KI-Freigaben
+        const aiNo = aiBlocked(ai, 'assist.final_reply');
         return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
           Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
           {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
-          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiOn && <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}`}>Mit KI formulieren</Link>}</div>}
+          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiNo ? <button className="btn sm" disabled title={aiNo}>Mit KI formulieren</button> : <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}`}>Mit KI formulieren</Link>}</div>}
+          {canEdit && !o.answered && aiNo && ai && <div className="muted" style={{ marginTop: 4 }}>KI: {aiNo}</div>}
         </div>;
       })()}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
@@ -120,7 +125,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
             {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
           </select></label>
-        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : undefined} onClick={() => void run(async () => { const r = await api.post<{ status: string; actions: { type: string }[]; error?: string }>(`/tasks/${t.id}/agent-run`); setAgentMsg(`${r.actions.length ? `Aktionen: ${r.actions.map((x) => x.type).join(', ')}` : 'keine Aktion'}${r.error ? ` · Fehler: ${r.error}` : ''}`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
+        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { const r = await api.post<{ status: string; actions: { type: string }[]; error?: string }>(`/tasks/${t.id}/agent-run`); setAgentMsg(`${r.actions.length ? `Aktionen: ${r.actions.map((x) => x.type).join(', ')}` : 'keine Aktion'}${r.error ? ` · Fehler: ${r.error}` : ''}`); await load(); })}>Jetzt laufen lassen</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentRun && !agentRun.allowed && <div className="small" style={{ marginTop: 4, color: 'var(--warn)' }}>Läuft nicht: {agentRun.reason}</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
         <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
         <label className="field"><span>Priorität</span>

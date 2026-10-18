@@ -761,3 +761,11 @@ body:has(.drawer) .chat-fab { display: none; }
 
 /* HTML-Mails: isoliert im Sandbox-iframe */
 .mail-html { display: block; width: 100%; height: 60vh; min-height: 320px; border: 1px solid var(--border); border-radius: 6px; background: #fff; }
+/* KI-Freigaben: Matrix mit drei Zuständen je Zelle (erbt, erlaubt, gesperrt) */
+.ai-matrix th, .ai-matrix td { text-align: center; }
+.ai-matrix th:first-child, .ai-matrix td:first-child { text-align: left; }
+.ai-matrix tr.sec td { background: var(--surface-2); font-weight: 600; font-size: 12px; text-align: left; }
+.ai-cell { min-width: 32px; padding: 1px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); color: var(--muted); font-size: 12px; cursor: pointer; }
+.ai-cell.allow { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); font-weight: 700; }
+.ai-cell.deny { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); font-weight: 700; }
+.ai-cell.note::after { content: '•'; margin-left: 2px; }

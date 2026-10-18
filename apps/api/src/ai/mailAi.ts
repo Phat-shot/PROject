@@ -6,10 +6,10 @@ import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { canSeeSubproject, getMembership, getViewRights, visibleSubprojectSql } from '../rights.js';
 import { reSubject } from '../mail/origin.js';
-import { aiConfigForAgent, aiConfigForProject, complete, orgAiSettings, parseJson } from './client.js';
+import { aiConfigFor, complete, parseJson } from './client.js';
 import { AGENT_SHEET, MAIL_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
-import { agentBudgetLeft, parseUntil, styleText } from './agent.js';
+import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
 
 /**
@@ -20,6 +20,8 @@ import { queueAgentRun, queueMailAi } from './agentEvents.js';
  * triage: Ein Agent betreut die Ansicht und schlägt für neue Mails dieselben Aktionen vor; ausgeführt wird erst, wenn eine
  *   Person zustimmt, und dann mit deren Rechten.
  * Jede Mail wird je Projekt und Art höchstens einmal bearbeitet (eindeutiger Index), Läufe zählen gegen das Tagesbudget.
+ * Vor jedem Lauf gelten die KI-Freigaben (mail.process für den Auftraggeber, mail.triage für den Agenten): gesperrt heißt
+ * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
  */
 export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; folder?: string | null; reason?: string | null };
 export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string }; decidedBy?: string | null };
@@ -95,27 +97,23 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
     const view = run.view_id ? await db.maybeOne(`select * from mail_views where id = $1`, [run.view_id]) : null;
     if (!project || !m || !view) return void (await finish('skipped', { error: 'Projekt, Mail oder Ansicht nicht mehr vorhanden' }));
 
-    let cfg; let header: string; let agent: any = null;
+    let header: string; let agent: any = null;
+    let gate: Awaited<ReturnType<typeof aiConfigFor>>;
     if (run.mode === 'process') {
       const actor = await userRow(db, run.actor_user_id);
-      const am = actor ? await getMembership(db, project.id, actor.id) : null;
-      const rights = actor ? await getViewRights(db, view.id, actor, am) : null;
-      if (!actor || !am || am.role === 'reader' || !rights?.canCreateTask) return void (await finish('skipped', { error: 'Auftraggeber hat keine Rechte mehr an Projekt oder Ansicht' }));
-      cfg = await aiConfigForProject(db, project.id);
-      if (!cfg) return void (await finish('skipped', { error: 'KI im Projekt nicht aktiv' }));
-      const settings = await orgAiSettings(db, project.org_id);
-      const used = await db.one(`select count(*)::int as c from mail_ai_runs where project_id = $1 and mode = 'process' and status in ('ok','error') and started_at >= current_date`, [project.id]);
-      if (used.c >= settings.agentDailyBudget) return void (await requeue('wartet: Tagesbudget erreicht'));
+      if (!actor) return void (await finish('skipped', { error: 'Auftraggeber ist nicht mehr aktiv' }));
+      gate = await aiConfigFor(db, { userId: actor.id, projectId: project.id, feature: 'mail.process', viewId: view.id });
+      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.reason })));
       header = `# Du\nDu bist die Projekt-KI von ${project.key} „${project.name}“. ${actor.name} hat diese Mail zur Bearbeitung abgelegt; was du listest, wird sofort in seinem Auftrag angelegt.`;
     } else {
       agent = await db.maybeOne(`select u.id, u.name, u.org_id, u.persona from users u join project_members pm on pm.user_id = u.id and pm.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [run.agent_user_id, project.id]);
       if (!agent) return void (await finish('skipped', { error: 'Agent nicht aktiv oder kein Mitglied' }));
-      cfg = await aiConfigForAgent(db, agent.id);
-      if (!cfg) return void (await finish('skipped', { error: 'Dem Agenten ist kein aktives KI-Profil zugewiesen' }));
-      if ((await agentBudgetLeft(db, agent)) <= 0) return void (await requeue('wartet: Tagesbudget des Agenten erreicht'));
+      gate = await aiConfigFor(db, { userId: agent.id, projectId: project.id, feature: 'mail.triage' });
+      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.reason })));
       header = `# Du\nDu bist „${agent.name}“, KI-Agent, und betreust die Mail-Ansicht „${view.name}“ im Projekt ${project.key} „${project.name}“. Du schlägst vor; ausgeführt wird erst, wenn eine Person zustimmt. ${styleText(agent.persona)}`;
     }
 
+    const cfg = gate.cfg;
     const now = new Date();
     const actorForVis = run.mode === 'process' ? run.actor_user_id : agent.id;
     const subprojects = await db.query(`select name, start_date, end_date from subprojects s where project_id = $1 and (not restricted or responsible_user_id = $2) order by position`, [project.id, actorForVis]);

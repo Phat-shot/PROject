@@ -4,7 +4,8 @@ import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
 import { dateStr, touchTask } from '../tasks/service.js';
-import { aiConfigForAgent, complete, orgAiSettings, parseJson, type AiConfig } from './client.js';
+import { aiConfigFor, complete, parseJson } from './client.js';
+import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { htmlToPdf } from '../docs/pdfHtml.js';
 import * as L from '../docs/layout.js';
@@ -122,14 +123,18 @@ const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').t
 
 export interface AgentRunResult { runId: string | null; taskId: string; status: 'ok' | 'error' | 'skipped'; actions: AgentAction[]; error?: string }
 
-/** Ein Lauf für ein Arbeitspaket. trigger beschreibt den Anlass (assigned, mail, comment, due, daily, manual). */
-export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, taskId: string, trigger: string, cfg?: AiConfig | null, now = new Date()): Promise<AgentRunResult> {
+/**
+ * Ein Lauf für ein Arbeitspaket. trigger beschreibt den Anlass (assigned, mail, comment, due, daily, manual). Vorher prüft
+ * aiConfigFor (agent.run): ist der Agent gesperrt, wird der Lauf ohne LLM-Aufruf als übersprungen protokolliert (höchstens
+ * einmal je Arbeitspaket und Tag); ein aufgebrauchtes Tagesbudget überspringt still.
+ */
+export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, taskId: string, trigger: string, now = new Date()): Promise<AgentRunResult> {
   const task = await db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
   if (!task) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Arbeitspaket nicht gefunden' };
   const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
   if (!m) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Agent ist kein Mitglied' };
-  const c = cfg ?? (await aiConfigForAgent(db, agent.id));
-  if (!c) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Dem Agenten ist kein aktives KI-Profil zugewiesen (Verwaltung › KI-Agenten)' };
+  const { cfg: c, decision } = await aiConfigFor(db, { userId: agent.id, projectId: task.project_id, feature: 'agent.run', taskId: task.id, now });
+  if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.reason, now);
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
@@ -683,21 +688,24 @@ export async function agentForTask(db: Db, taskId: string): Promise<{ id: string
      where t.id = $1 and u.kind = 'agent' and u.active and exists (select 1 from project_members m where m.project_id = t.project_id and m.user_id = u.id)`, [taskId]);
 }
 
-/** Läufe, die einem Agenten heute noch zustehen: Tagesbudget des Mandanten bzw. das kleinere eigene (Agenten der PL); Läufe an Arbeitspaketen, im Chat und an Mails zählen, übersprungene nicht. */
-export async function agentBudgetLeft(db: Db, agent: { id: string; org_id: string }, now = new Date()): Promise<number> {
-  const settings = await orgAiSettings(db, agent.org_id);
-  const own = (await db.maybeOne(`select agent_daily_budget from users where id = $1`, [agent.id]))?.agent_daily_budget;
-  const limit = own == null ? settings.agentDailyBudget : Math.min(settings.agentDailyBudget, Number(own));
-  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and status in ('ok','error') and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
-  return Math.max(0, limit - used.c);
+export { agentBudgetLeft };
+
+/**
+ * Gesperrter Lauf (KI-Freigaben): ohne LLM-Aufruf als skipped mit Begründung protokolliert, zählt nicht gegen das Budget;
+ * je Agent und Arbeitspaket höchstens ein Eintrag am Tag, damit Worker und Ereignisse das Protokoll nicht fluten.
+ */
+export async function logSkippedRun(db: Db, agent: { id: string; org_id: string }, projectId: string, taskId: string, trigger: string, reason: string, now = new Date()): Promise<AgentRunResult> {
+  const today = await db.maybeOne(`select id from agent_runs where agent_user_id = $1 and task_id = $2 and status = 'skipped' and created_at >= $3::date limit 1`, [agent.id, taskId, now.toISOString().slice(0, 10)]);
+  const runId = today ? null : (await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error) values ($1,$2,$3,$4,$5,'skipped',$6) returning id`, [agent.org_id, agent.id, projectId, taskId, trigger, reason.slice(0, 500)])).id;
+  return { runId, taskId, status: 'skipped', actions: [], error: reason };
 }
 
-/** Ereignislauf: der zuständige Agent läuft sofort (von Routen über queueAgentRun ausgelöst), solange sein Tagesbudget reicht. */
+/** Ereignislauf: der zuständige Agent läuft sofort (von Routen über queueAgentRun ausgelöst); Freigabe und Tagesbudget prüft der Lauf. */
 export async function runForTask(db: Db, mail: MailService, fetchFn: typeof fetch, taskId: string, trigger: string): Promise<AgentRunResult | null> {
   const t = await db.maybeOne(`select t.agent_paused, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
   if (!t || t.agent_paused || t.is_done) return null;
   const agent = await agentForTask(db, taskId);
-  if (!agent || (await agentBudgetLeft(db, agent)) <= 0) return null;
+  if (!agent) return null;
   return runAgentOnTask(db, mail, fetchFn, agent, taskId, trigger);
 }
 
@@ -713,42 +721,51 @@ export async function fingerprintOf(db: Db, taskId: string): Promise<string> {
   return `${r.column_id}|${r.due_date ? String(r.due_date).slice(0, 10) : ''}|${r.blocked}|${r.comments}|${r.mails}|${r.done_items}|${h}`;
 }
 
-/** Worker: alle aktiven Agenten über ihre offenen, direkt zugewiesenen Arbeitspakete; Anlass aus Zustandsänderung, Fälligkeit oder Tagesrhythmus; Tagesbudget je Agent. */
+/**
+ * Worker: alle aktiven Agenten über ihre offenen, direkt zugewiesenen Arbeitspakete; Anlass aus Zustandsänderung, Fälligkeit
+ * oder Tagesrhythmus; Tagesbudget je Agent. Vor jedem Lauf gilt aiAllowed (agent.run, je Projekt): gesperrte Läufe stehen
+ * als übersprungen im Protokoll, ohne Nachfassen oder Wiedervorlage zu verbrauchen.
+ */
 export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch, now = new Date()): Promise<AgentRunResult[]> {
   const out: AgentRunResult[] = [];
   const agents = await db.query(`select id, name, org_id, persona from users where kind = 'agent' and active`);
   for (const agent of agents.rows as any[]) {
-    const cfg = await aiConfigForAgent(db, agent.id);
-    if (!cfg) continue;
     let budget = await agentBudgetLeft(db, agent, now);
     // Direkt zugewiesen oder geerbt (Aufgabe vom Arbeitspaket, Arbeitspaket vom Teilprojekt); nur in Projekten, in denen der Agent Mitglied ist
     const tasks = await db.query(
-      `select t.id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
+      `select t.id, t.project_id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
        where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active'
          and exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $1) order by t.due_date nulls last`, [agent.id]);
     for (const t of tasks.rows as any[]) {
       if (budget <= 0) break;
-      const last = await db.maybeOne(`select created_at, fingerprint from agent_runs where task_id = $1 and agent_user_id = $2 order by created_at desc limit 1`, [t.id, agent.id]);
+      // Übersprungene Läufe zählen nicht als letzter Lauf (Fingerabdruck und Rhythmus bleiben beim letzten echten Lauf)
+      const last = await db.maybeOne(`select created_at, fingerprint from agent_runs where task_id = $1 and agent_user_id = $2 and status <> 'skipped' order by created_at desc limit 1`, [t.id, agent.id]);
       const fp = await fingerprintOf(db, t.id);
       const hours = last ? (now.getTime() - new Date(last.created_at).getTime()) / 3600_000 : Infinity;
       const due = t.due_date ? (new Date(String(t.due_date).slice(0, 10)).getTime() - now.getTime()) / 86400_000 : null;
       let trigger: string | null = null;
+      let mark: (() => Promise<unknown>) | null = null;
       const w: AgentWait | null = t.agent_wait ?? null;
       if (w?.kind === 'reply' && w.escalateAt && !w.escalated && now >= new Date(w.escalateAt)) {
         trigger = 'escalation_due';
-        await db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, escalated: true })]);
+        mark = () => db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, escalated: true })]);
       } else if (w?.kind === 'reply' && w.remindAt && !w.reminded && now >= new Date(w.remindAt)) {
         trigger = 'reminder_due';
-        await db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, reminded: true })]);
-      } else if (t.agent_next_check_at && now >= new Date(t.agent_next_check_at)) trigger = 'check';
-      else if (!last) trigger = 'assigned';
+        mark = () => db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, reminded: true })]);
+      } else if (t.agent_next_check_at && now >= new Date(t.agent_next_check_at)) {
+        trigger = 'check';
+        mark = () => db.query(`update tasks set agent_next_check_at = null where id = $1`, [t.id]);
+      } else if (!last) trigger = 'assigned';
       else if (last.fingerprint !== fp && hours >= 0.5) trigger = 'changed';
       else if (due != null && due <= 2 && hours >= 24) trigger = due < 0 ? 'overdue' : 'due_soon';
       else if (hours >= 24 * 3) trigger = 'periodic';
       if (!trigger) continue;
-      if (trigger === 'check') await db.query(`update tasks set agent_next_check_at = null where id = $1`, [t.id]);
+      const gate = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id, now });
+      if (!gate.allowed && gate.stage === 'budget') break;
+      if (!gate.allowed) { out.push(await logSkippedRun(db, agent, t.project_id, t.id, trigger, gate.reason, now)); continue; }
+      if (mark) await mark();
       budget--;
-      out.push(await runAgentOnTask(db, mail, fetchFn, agent, t.id, trigger, cfg, now));
+      out.push(await runAgentOnTask(db, mail, fetchFn, agent, t.id, trigger, now));
     }
   }
   return out;

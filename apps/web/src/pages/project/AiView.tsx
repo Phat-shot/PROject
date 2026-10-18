@@ -4,24 +4,24 @@ import type { AgentRun, AiProposal, MailAiRun } from '@projekttool/shared';
 import { MailAiRunCard } from './MailAi';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { useAiStatus } from '../../lib/useAi';
+import { aiBlocked, useAiStatus } from '../../lib/useAi';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
 /**
  * KI je Projekt: Vorschläge aus Mails (Essenz in Arbeitspaket oder Seite) mit Freigabe durch PL oder Personen mit
  * Freigaberecht; Frage ans Projekt mit Quellen; Statusbericht-Entwurf als Entwurfsseite. Regel vor KI: nichts wird
- * ohne Freigabe geändert, jede Anfrage steht im Audit.
+ * ohne Freigabe geändert, jede Anfrage steht im Audit. Was die KI-Freigaben sperren, zeigt der Knopf mit Begründung.
  */
 export function AiView() {
-  const { detail, openTask, reloadTasks } = useProject();
+  const { detail, openTask, reloadTasks, ai: caps } = useProject();
   const ai = useAiStatus();
   const pid = detail.project.id;
   const base = `/projekte/${pid}`;
   const isPl = detail.project.myMembership.role === 'pl';
-  const canUse = isPl || detail.project.myMembership.canUseAi;
-  // Leser mit „KI nutzen“ stellen nur Fragen ans Projekt
-  const canAssist = canUse && detail.project.myMembership.role !== 'reader';
+  // Begründungen aus den KI-Freigaben (Leser mit „KI nutzen“ stellen nur Fragen ans Projekt)
+  const askNo = aiBlocked(caps, 'assist.ask');
+  const reportNo = aiBlocked(caps, 'assist.report');
   const [status, setStatus] = useState<'pending' | 'all'>('pending');
   const props = useData<{ proposals: AiProposal[]; canApprove: boolean }>(`/projects/${pid}/ai/proposals?status=${status}`, [status]);
   const [question, setQuestion] = useState('');
@@ -46,7 +46,8 @@ export function AiView() {
   return (
     <div className="content">
       {error && <div className="error mb">{error}</div>}
-      {projectAiOff && <div className="notice mb">Projekt-KI ist aus{ai && !ai.enabled ? ': kein KI-Profil im Mandanten (Verwaltung › KI-Profile)' : isPl ? ': unter Einstellungen › Projekt ein KI-Profil zuweisen' : ': die PL weist unter Einstellungen › Projekt ein KI-Profil zu'}. Agenten laufen unabhängig davon mit ihrem eigenen Profil.</div>}
+      {caps?.killswitch && <div className="notice danger mb"><strong>KI im Mandanten abgeschaltet (Notaus).</strong> Keine KI-Funktion und keine Agentenläufe, bis der Org-Admin sie unter Verwaltung › KI-Freigaben wieder einschaltet.</div>}
+      {projectAiOff && !caps?.killswitch && <div className="notice mb">Projekt-KI ist aus{ai && !ai.enabled ? ': kein KI-Profil im Mandanten (Verwaltung › KI-Profile)' : isPl ? ': unter Einstellungen › Projekt ein KI-Profil zuweisen' : ': die PL weist unter Einstellungen › Projekt ein KI-Profil zu'}. Agenten laufen unabhängig davon mit ihrem eigenen Profil.</div>}
       {profileName && <p className="muted small">Projekt-KI: {profileName}</p>}
       {(mailAi.data?.runs.length ?? 0) > 0 && <div className="card mb">
         <h2 style={{ marginTop: 0 }}>Mail-KI</h2>
@@ -81,10 +82,10 @@ export function AiView() {
       <div className="card mb">
         <h2>Frage ans Projekt</h2>
         <p className="muted small">Antwort aus Arbeitspaketen, Seiten und den Mails, die du lesen darfst, mit Quellenangabe. Keine Änderung an Daten.</p>
-        {!canUse && <p className="notice small">Kein KI-Recht in diesem Projekt („KI nutzen“ in der Mitgliedschaft).</p>}
+        {caps && askNo && <p className="notice small">{askNo}</p>}
         <form className="row" onSubmit={(e) => { e.preventDefault(); void run(async () => setAnswer(await api.post(`/projects/${pid}/ai/ask`, { question }))); }}>
-          <input type="text" style={{ flex: 1 }} value={question} placeholder="z. B. Was blockiert den Go-Live? Wer liefert das Design?" onChange={(e) => setQuestion(e.target.value)} disabled={!canUse || projectAiOff} />
-          <button className="btn primary" disabled={busy || !canUse || projectAiOff || question.trim().length < 3}>Fragen</button>
+          <input type="text" style={{ flex: 1 }} value={question} placeholder="z. B. Was blockiert den Go-Live? Wer liefert das Design?" onChange={(e) => setQuestion(e.target.value)} disabled={Boolean(askNo)} title={askNo} />
+          <button className="btn primary" disabled={busy || Boolean(askNo) || question.trim().length < 3} title={askNo}>Fragen</button>
         </form>
         {answer && <div className="mt">
           <div style={{ whiteSpace: 'pre-wrap' }}>{answer.answer}</div>
@@ -97,9 +98,9 @@ export function AiView() {
         {runs.data && runs.data.runs.length === 0 && <div className="empty">Noch keine Läufe. Einen Agenten unter Einstellungen › Mitglieder aufnehmen und ihm ein Arbeitspaket zuweisen.</div>}
         {(runs.data?.runs ?? []).slice(0, 40).map((r) => (
           <div key={r.id} className={`ai-proposal ${r.status === 'error' ? 'rejected' : ''}`}>
-            <div className="row between"><div><span className="badge">{r.agentName}</span> <button className="btn sm link" onClick={() => r.taskId && openTask(r.taskId)}>{r.taskNumber ? `${detail.project.key}-${r.taskNumber} ` : ''}{r.taskTitle ?? (r.trigger === 'chat' ? 'Chat im Projektkanal' : '–')}</button> <span className="muted small">· Anlass {r.trigger}</span></div><span className="muted small">{fmtDateTime(r.createdAt)} · {r.inputTokens + r.outputTokens} Token {r.status === 'error' && <span className="badge danger">Fehler</span>}</span></div>
+            <div className="row between"><div><span className="badge">{r.agentName}</span> <button className="btn sm link" onClick={() => r.taskId && openTask(r.taskId)}>{r.taskNumber ? `${detail.project.key}-${r.taskNumber} ` : ''}{r.taskTitle ?? (r.trigger === 'chat' ? 'Chat im Projektkanal' : '–')}</button> <span className="muted small">· Anlass {r.trigger}</span></div><span className="muted small">{fmtDateTime(r.createdAt)} · {r.inputTokens + r.outputTokens} Token {r.status === 'error' && <span className="badge danger">Fehler</span>}{r.status === 'skipped' && <span className="badge warn" title="Kein LLM-Aufruf, zählt nicht gegen das Tagesbudget">übersprungen</span>}</span></div>
             {r.reasoning && <div className="small mt" style={{ whiteSpace: 'pre-wrap' }}>{r.reasoning}</div>}
-            {r.error && <div className="error small mt">{r.error}</div>}
+            {r.error && <div className={`${r.status === 'skipped' ? 'muted' : 'error'} small mt`}>{r.error}</div>}
             {r.proposed && r.status === 'error' && <details className="small mt"><summary className="muted">Rohantwort des Modells</summary><pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{JSON.stringify(r.proposed, null, 1)}</pre></details>}
             {r.actions.length > 0 && <ul className="small mt" style={{ margin: '4px 0 0', paddingLeft: 18 }}>{r.actions.map((a, i) => <li key={i}>{a.type === 'comment' ? `Log: ${a.text}` : a.type === 'set_status' ? `Status → ${a.column}` : a.type === 'check_item' ? 'Task abgehakt' : a.type === 'add_item' ? `Task ergänzt: ${a.text}` : a.type === 'update_item' ? `Task umformuliert: ${a.text}` : a.type === 'doc_create' ? `Doku-Seite angelegt: ${(a as any).title}` : a.type === 'doc_append' ? 'Doku-Seite ergänzt' : a.type === 'doc_update' ? 'Doku-Seite überarbeitet' : a.type === 'doc_status' ? `Doku-Status → ${(a as any).status}` : a.type === 'doc_move' ? `Doku-Seite nach „${(a as any).folder}“ verschoben` : a.type === 'folder_create' ? `Doku-Ordner angelegt: ${(a as any).folder}` : a.type === 'doc_send_pdf' ? `PDF an ${(a.to ?? []).join(', ')}: ${a.subject}` : a.type === 'mail' ? `Mail an ${(a.to ?? []).join(', ')}: ${a.subject}${a.text?.startsWith('[Entwurf') ? ' (Entwurf zur Freigabe)' : ''}` : a.type === 'blocked' ? `Blockiert gemeldet: ${a.reason}` : a.type === 'escalate' ? `An PL: ${a.text}` : a.type === 'wait' ? `Wartet auf ${{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[(a as any).kind as string] ?? (a as any).kind}: ${a.reason}` : `nichts zu tun${a.reason ? `: ${a.reason}` : ''}`}</li>)}</ul>}
           </div>
@@ -108,7 +109,7 @@ export function AiView() {
       <div className="card">
         <h2>Statusbericht-Entwurf</h2>
         <p className="muted small">Aus den Kennzahlen des Regelwerks, dem RAID-Register, der Ampel und den Log-Einträgen der letzten zwei Wochen entsteht ein Entwurf (Management-Summary, Fortschritt, Risiken, Entscheidungsbedarf, nächste Schritte) als Seite im Ordner „Berichte“ mit Status Entwurf. Versand wie gewohnt über das Reporting.</p>
-        <button className="btn primary" disabled={busy || !canAssist} title={canUse && !canAssist ? 'Leser stellen nur Fragen ans Projekt' : undefined} onClick={() => void run(async () => { const r = await api.post<{ page: { id: string } }>(`/projects/${pid}/ai/status-report`); nav(`${base}/doku/${r.page.id}`); })}>Entwurf erzeugen</button>
+        <span className="row"><button className="btn primary" disabled={busy || Boolean(reportNo)} title={reportNo} onClick={() => void run(async () => { const r = await api.post<{ page: { id: string } }>(`/projects/${pid}/ai/status-report`); nav(`${base}/doku/${r.page.id}`); })}>Entwurf erzeugen</button>{caps && reportNo && <span className="muted small">{reportNo}</span>}</span>
       </div>
     </div>
   );

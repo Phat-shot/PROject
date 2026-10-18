@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { MailAccount, MailAiRun } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
+import { aiBlocked } from '../../lib/useAi';
 import { Modal, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import type { ViewRow } from './MailView';
@@ -63,8 +64,9 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
 
 /** An der Mail: was die KI damit gemacht hat bzw. vorschlägt; „KI bearbeiten“ legt sie in den KI-Ordner des Kontos. */
 export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }: { mailId: string; accountId: string; outgoing: boolean; views: ViewRow[]; canCreateTask: boolean }) {
-  const { detail, reloadTasks } = useProject();
+  const { detail, reloadTasks, ai } = useProject();
   const d = useData<{ runs: MailAiRun[] }>(`/mail/mails/${mailId}/ai`, [mailId]);
+  const blocked = aiBlocked(ai, 'mail.process');
   const { busy, error, run } = useAsync();
   const busyRun = d.data?.runs.some((r) => r.status === 'queued' || r.status === 'running');
   // Solange ein Lauf wartet oder läuft, kurz nachsehen
@@ -75,7 +77,7 @@ export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }:
   if (!d.data) return null;
   return (
     <div className="mb">
-      {kiView && !processed && !outgoing && canCreateTask && <button className="btn sm" disabled={busy} title={`In den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“ legen: die Projekt-KI legt Arbeitspaket, Termin und Antwortentwurf an`} onClick={() => void run(async () => { await api.post(`/mail/mails/${mailId}/ai-process`, { projectId: detail.project.id }); await d.reload(); })}>KI bearbeiten</button>}
+      {kiView && !processed && !outgoing && canCreateTask && <button className="btn sm" disabled={busy || Boolean(blocked)} title={blocked ?? `In den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“ legen: die Projekt-KI legt Arbeitspaket, Termin und Antwortentwurf an`} onClick={() => void run(async () => { await api.post(`/mail/mails/${mailId}/ai-process`, { projectId: detail.project.id }); await d.reload(); })}>KI bearbeiten</button>}
       {error && <div className="error small">{error}</div>}
       {d.data.runs.map((r) => <MailAiRunCard key={r.id} run={r} onChanged={reload} />)}
     </div>

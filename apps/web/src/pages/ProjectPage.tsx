@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import type { BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
+import type { AiCapabilities, BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { BoardView } from './project/BoardView';
@@ -38,6 +38,9 @@ interface ProjectCtx {
   reload: () => Promise<void>;
   reloadTasks: () => Promise<void>;
   openTask: (id: string | null) => void;
+  /** KI-Fähigkeiten der angemeldeten Person im Projekt (Freigaben mit Begründung); null, solange sie laden */
+  ai: AiCapabilities | null;
+  reloadAi: () => Promise<void>;
 }
 
 const Ctx = createContext<ProjectCtx | null>(null);
@@ -51,10 +54,11 @@ export function ProjectScope({ projectId, openTask, children }: { projectId: str
   const detail = useData<ProjectDetail>(`/projects/${projectId}`, [projectId]);
   const tasks = useData<{ tasks: Task[] }>(`/projects/${projectId}/tasks`, [projectId]);
   const users = useData<{ users: User[] }>('/users');
+  const ai = useData<AiCapabilities>(`/projects/${projectId}/ai/capabilities`, [projectId]);
   if (detail.error) return <div className="content"><div className="error">{detail.error}</div></div>;
   if (!detail.data || !tasks.data || !users.data) return <div className="content muted">Lade …</div>;
   const ctx: ProjectCtx = {
-    detail: detail.data, tasks: tasks.data.tasks, users: users.data.users, reload: detail.reload, reloadTasks: tasks.reload,
+    detail: detail.data, tasks: tasks.data.tasks, users: users.data.users, reload: async () => { await detail.reload(); await ai.reload(); }, reloadTasks: tasks.reload, ai: ai.data, reloadAi: ai.reload,
     openTask: openTask ?? ((tid) => { if (tid) nav(`/projekte/${projectId}/board?task=${tid}`); })
   };
   return <Ctx.Provider value={ctx}>{children}</Ctx.Provider>;

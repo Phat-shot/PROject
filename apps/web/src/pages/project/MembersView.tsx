@@ -391,7 +391,7 @@ function BudgetInput() {
 }
 
 
-type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null }[]; canAddOwn: boolean };
+type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null }[]; canAddOwn: boolean; addOwnReason?: string | null; ownLlmAllowed?: boolean };
 
 /** Projekt-KI: eines der im Projekt verfügbaren LLMs (vom Org-Admin freigegeben oder eigenes); ohne Auswahl sind die KI-Funktionen aus. */
 function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
@@ -415,11 +415,13 @@ function OwnLlmCard() {
   const [edit, setEdit] = useState<ProjectLlms['own'][number] | 'new' | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const { busy, error, run } = useAsync();
-  if (!d.data || (!d.data.canAddOwn && d.data.own.length === 0)) return null;
+  // Sichtbar, wenn der Mandant eigene LLMs für diese Projektart erlaubt; sperren die KI-Freigaben, nennt der Knopf den Grund
+  if (!d.data || (!d.data.canAddOwn && !d.data.ownLlmAllowed && d.data.own.length === 0)) return null;
   const base = `/projects/${detail.project.id}/llms`;
   return (
     <div className="card" id="llm">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigenes LLM</h2>{d.data.canAddOwn && <button className="btn primary sm" onClick={() => setEdit('new')}>Einbinden</button>}</div>
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigenes LLM</h2>{(d.data.canAddOwn || d.data.ownLlmAllowed) && <button className="btn primary sm" disabled={!d.data.canAddOwn} title={d.data.addOwnReason ?? undefined} onClick={() => setEdit('new')}>Einbinden</button>}</div>
+      {!d.data.canAddOwn && d.data.ownLlmAllowed && d.data.addOwnReason && <div className="notice small mb">{d.data.addOwnReason}</div>}
       <p className="muted small">Ein eigenes LLM (lokal, OpenAI-kompatibel, oder Anthropic) nur für dieses Projekt: für die Projekt-KI und eigene Agenten. Der Schlüssel liegt verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann es sperren.</p>
       {error && <div className="error small">{error}</div>}
       {msg && <div className="success small">{msg}</div>}
@@ -455,13 +457,16 @@ function OwnLlmCard() {
 /** Eigene KI-Agenten des Projekts: legt die PL an (wenn der Mandant es erlaubt), nur hier einsetzbar, nur freigegebene KI-Profile. */
 function ProjectAgentsCard() {
   const { detail, reload } = useProject();
-  const d = useData<{ agents: AgentUser[]; policy: { enabled: boolean; maxBudget: number; profiles: { id: string; name: string }[] }; canManage: boolean }>(`/projects/${detail.project.id}/agents`);
+  const d = useData<{ agents: AgentUser[]; policy: { enabled: boolean; maxBudget: number; profiles: { id: string; name: string }[] }; canManage: boolean; manageReason?: string | null }>(`/projects/${detail.project.id}/agents`);
   const [edit, setEdit] = useState<AgentUser | 'new' | null>(null);
-  if (!d.data || (!d.data.canManage && d.data.agents.length === 0)) return null;
+  const isPl = detail.project.myMembership.role === 'pl';
+  // Für die PL immer sichtbar: ohne Freigabe (KI-Freigaben, Regel „Eigene Agenten der PL“) mit Begründung statt ohne Knopf
+  if (!d.data || (!isPl && d.data.agents.length === 0)) return null;
   const { agents, policy, canManage } = d.data;
   return (
     <div className="card" id="agenten">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>{canManage && <button className="btn primary sm" onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>{isPl && <button className="btn primary sm" disabled={!canManage} title={d.data.manageReason ?? undefined} onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
+      {isPl && !canManage && d.data.manageReason && <div className="notice small mb">{d.data.manageReason}</div>}
       <p className="muted small">Agenten nur für dieses Projekt. Sie arbeiten wie andere Agenten (Zuständigkeit, Planung, Mail-Vorschläge), auf einem im Projekt verfügbaren LLM und mit höchstens {policy.maxBudget} Läufen am Tag. Der Org-Admin sieht sie und kann sie deaktivieren, aber keine Inhalte.</p>
       {agents.length === 0 ? <div className="empty">Noch keiner.</div> : <table className="table"><tbody>
         {agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.persona ?? 'Standardstil'}</div></td><td className="small">{policy.profiles.find((p) => p.id === a.aiProfileId)?.name ?? '–'} · {a.dailyBudget ?? policy.maxBudget}/Tag</td><td className="small">{a.runs} Läufe</td><td>{canManage && <button className="btn sm link" onClick={() => setEdit(a)}>Bearbeiten</button>}</td></tr>)}

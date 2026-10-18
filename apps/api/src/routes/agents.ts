@@ -1,11 +1,13 @@
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
+import type { User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { hasOrgRight, requireProject } from '../rights.js';
 import { orgAiSettings, projectProfiles } from '../ai/client.js';
-import { agentBudgetLeft, agentForTask, runAgentOnTask } from '../ai/agent.js';
+import { aiAllowed, aiError } from '../ai/policy.js';
+import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
@@ -27,8 +29,8 @@ function cleanSignature(v: unknown): string | null {
 }
 
 /**
- * KI-Agenten verwaltet der Org-Admin (Anlage, Name, Persona, Deaktivierung). Ein Agent ist ein Benutzer ohne Login,
- * nie Org-Admin, in Projekten nur Mitglied mit Stellvertretung; Arbeitspakete weist ihm nur die PL zu.
+ * KI-Agenten verwaltet der Org-Admin bzw. die KI-Verwaltung (Anlage, Name, Persona, Deaktivierung). Ein Agent ist ein
+ * Benutzer ohne Login, nie Org-Admin, in Projekten nur Mitglied mit Stellvertretung; Arbeitspakete weist ihm nur die PL zu.
  */
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
@@ -50,7 +52,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { name: string; aiProfileId?: string | null; persona?: string | null } }>('/agents', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin legt Agenten an');
+    if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung legt Agenten an');
     const name = req.body?.name?.trim();
     if (!name) throw badRequest('Name erforderlich');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
@@ -64,7 +66,7 @@ export async function agentRoutes(app: FastifyInstance) {
 
   app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung');
     const a = await db.maybeOne(`select * from users where id = $1 and org_id = $2 and kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
     const b = req.body ?? {};
@@ -81,11 +83,13 @@ export async function agentRoutes(app: FastifyInstance) {
     return { agent: mapAgent(await db.one(`select * from users where id = $1`, [a.id])) };
   });
 
-  // ---- Eigene Agenten der PL: nur für das eigene Projekt, nur freigegebene KI-Profile, Tagesbudget höchstens der Mandantenwert
+  // ---- Eigene Agenten der PL: nur für das eigene Projekt, nur freigegebene KI-Profile, Tagesbudget höchstens der Mandantenwert;
+  // erlaubt über die KI-Freigaben (pl.agents für die PL im Projekt)
   const boundOf = async (projectId: string, id: string) => db.maybeOne(`select * from users where id = $1 and kind = 'agent' and agent_project_id = $2`, [id, projectId]);
-  const checkPolicy = async (orgId: string, projectId: string, b: { aiProfileId?: string | null; dailyBudget?: number | null }, cur?: any) => {
-    const s = await orgAiSettings(db, orgId);
-    if (!s.plAgents.enabled) throw forbidden('Eigene Agenten der PL sind im Mandanten nicht freigegeben (Verwaltung › KI)');
+  const checkPolicy = async (user: User, projectId: string, b: { aiProfileId?: string | null; dailyBudget?: number | null }, cur?: any) => {
+    const s = await orgAiSettings(db, user.orgId);
+    const d = await aiAllowed(db, { userId: user.id, projectId, feature: 'pl.agents' });
+    if (!d.allowed) throw forbidden(`Eigene Agenten der PL sind nicht freigegeben: ${d.reason}`);
     // Nur LLMs, die im Projekt verfügbar sind (vom Org-Admin freigegeben oder eigenes LLM des Projekts)
     const available = await projectProfiles(db, projectId);
     const profileId = 'aiProfileId' in b ? b.aiProfileId ?? null : cur?.ai_profile_id ?? available[0]?.id ?? null;
@@ -100,7 +104,8 @@ export async function agentRoutes(app: FastifyInstance) {
     const s = await orgAiSettings(db, user.orgId);
     const rows = await db.query(`select u.*, (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at from users u where u.agent_project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id]);
     const profiles = (await projectProfiles(db, req.params.id)).map((p) => ({ id: p.id, name: p.name }));
-    return { agents: rows.rows.map((r: any) => ({ ...mapAgent(r), runs: r.runs, lastRunAt: r.last_run_at })), policy: { ...s.plAgents, profiles }, canManage: m.role === 'pl' && s.plAgents.enabled };
+    const d = m.role === 'pl' ? await aiAllowed(db, { userId: user.id, projectId: req.params.id, feature: 'pl.agents' }) : null;
+    return { agents: rows.rows.map((r: any) => ({ ...mapAgent(r), runs: r.runs, lastRunAt: r.last_run_at })), policy: { enabled: Boolean(d?.allowed), maxBudget: s.plAgents.maxBudget, profiles }, canManage: Boolean(d?.allowed), manageReason: d ? (d.allowed ? null : d.reason) : 'Nur die PL' };
   });
   app.post<{ Params: { id: string }; Body: { name: string; persona?: string | null; signature?: string | null; aiProfileId?: string | null; thinkingMode?: 'off' | 'on' | null; dailyBudget?: number | null; role?: 'member' | 'pl'; agentCanMail?: boolean } }>('/projects/:id/agents', async (req) => {
     const user = requireUser(req);
@@ -108,7 +113,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const b = req.body ?? ({} as any);
     const name = String(b.name ?? '').trim().slice(0, 80);
     if (!name) throw badRequest('Name erforderlich');
-    const { profileId, budget } = await checkPolicy(user.orgId, req.params.id, b);
+    const { profileId, budget } = await checkPolicy(user, req.params.id, b);
     if (b.thinkingMode != null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
     const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, signature, thinking_mode, agent_project_id, agent_daily_budget, agent_created_by) values ($1,$2,$3,'','user','agent',$4,$5,$6,$7,$8,$9,$10) returning *`,
@@ -124,7 +129,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const a = await boundOf(req.params.id, req.params.aid);
     if (!a) throw notFound('Agent des Projekts nicht gefunden');
     const b = req.body ?? {};
-    const { profileId, budget } = await checkPolicy(user.orgId, req.params.id, b, a);
+    const { profileId, budget } = await checkPolicy(user, req.params.id, b, a);
     if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     await db.query(`update users set name = coalesce($2, name), persona = case when $3 then $4 else persona end, signature = case when $5 then $6 else signature end, ai_profile_id = $7, thinking_mode = case when $8 then $9 else thinking_mode end, agent_daily_budget = $10, active = coalesce($11, active) where id = $1`,
       [a.id, b.name?.trim().slice(0, 80) || null, 'persona' in b, cleanPersona(b.persona), 'signature' in b, cleanSignature(b.signature), profileId, 'thinkingMode' in b, b.thinkingMode ?? null, budget, typeof b.active === 'boolean' ? b.active : null]);
@@ -158,9 +163,10 @@ export async function agentRoutes(app: FastifyInstance) {
     await requireProject(db, user, t.project_id, 'pl');
     const agent = await agentForTask(db, t.id);
     if (!agent) throw badRequest('Für das Arbeitspaket ist kein Agent zuständig (direkt oder geerbt)');
-    // Auch der Lauf von Hand beachtet Pause und Tagesbudget
+    // Auch der Lauf von Hand beachtet Pause, KI-Freigaben und Tagesbudget
     if (t.agent_paused) throw badRequest('Der Agent ist an diesem Arbeitspaket pausiert. Erst fortsetzen.');
-    if ((await agentBudgetLeft(db, agent)) <= 0) throw badRequest(`Tagesbudget von ${agent.name} ist aufgebraucht (Verwaltung › KI)`);
+    const d = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id });
+    if (!d.allowed) throw aiError(d);
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
     if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');

@@ -133,6 +133,17 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Die PL wählt die Projekt-KI aus den im Projekt verfügbaren LLMs (Projekteinstellungen); ohne Auswahl ist die KI dort aus. Wird eine Freigabe entzogen oder ein LLM gesperrt, ist die Projekt-KI aus, bis die PL ein anderes wählt.
 - Neue Projekte, auch persönliche, haben keinen Agenten. Die PL nimmt Agenten des Org-Admins auf oder legt eigene an; eigene Agenten laufen nur auf den im Projekt verfügbaren LLMs.
 
+**KI-Freigaben und Notaus (Verwaltung › KI-Freigaben)**
+- Verwalten dürfen der Org-Admin und Personen mit dem Org-Recht **KI verwalten** (Verwaltung › Benutzer). Sie sehen unter Verwaltung nur die KI-Karten: Freigaben, Profile, eigene LLMs der Projekte, Agenten und Budgets.
+- **Notaus:** schaltet jede KI im Mandanten sofort ab (Assistenz, Mail-KI, Agentenläufe, Chat mit Agenten, Verbindungstests), auch gegen Ausnahmen. Steht im Audit.
+- **Matrix:** Zeilen Mandant, Gruppen, Projekte, Benutzer, Agenten und Ausnahmen („Person bzw. Gruppe in Projekt“), Spalten „Alle“, die Kategorien (KI-Assistenz, Mail-KI, Agenten, PL-Funktionen) oder einzelne Funktionen. Jede Zelle erbt, erlaubt oder sperrt, optional mit Notiz; innerhalb einer Zeile gilt die Funktion vor der Kategorie vor „Alle“.
+- **Sperre gewinnt:** Ist ein Projekt gesperrt, hilft eine Freigabe der Person nicht; gibt es beide Regeln, müssen beide erlauben. Eine Ausnahme gibt es nur über eine Regel „Person in Projekt“. Mehrere Gruppen: Sperre gewinnt. Eine Projektsperre gilt auch für Agenten der Org. Ohne Regel ist alles erlaubt, außer **Eigene Agenten der PL** (früher der Schalter unter Verwaltung › KI; bestehende Mandanten behalten ihre Einstellung).
+- Darunter prüft die PL im Projekt weiter (sie kann nur einschränken): ausdrückliche Mitgliedschaft (implizite Leser haben keine KI), „KI nutzen“ (Leser nur Frage ans Projekt), gewählte Projekt-KI, Agent aktiv, Mitglied und nicht pausiert; danach Profil und Tagesbudget.
+- **Vorschau „Wirkung für“** Person oder Agent in einem Projekt: je Funktion erlaubt oder gesperrt mit Begründung und Spur (Notaus, Regeln, Ebene der PL, Profil, Budget).
+- **Gestoppte Agenten der PL** listet die Karte mit dem Knopf „erlauben“ (Ausnahme für die PL in ihrem Projekt). Agenten einer PL prüfen die Regel „Eigene Agenten der PL“ für die PL, die sie angelegt hat, auch während sie laufen.
+- Gesperrte Läufe kosten kein Budget und rufen kein LLM: Agentenläufe stehen unter Projekt › KI als „übersprungen“ mit Begründung (höchstens einmal je AP und Tag), Mail-KI-Läufe ebenso, der Agent antwortet im Chat mit dem Grund. Knöpfe in Postfach, AP und Projekt › KI bleiben sichtbar und nennen den Grund.
+- **Tagesbudget KI-Assistenz** je Projekt (Anfragen; Standard 200, 0 = keine) neben dem Tagesbudget je Agent.
+
 **Projekt-KI (Projekt › KI und Postfach)**
 - Mail zusammenfassen, Essenz einer Mail als Vorschlag für ein AP oder eine Seite; Vorschläge gibt frei, wer „KI-Vorschläge freigeben“ hat.
 - Frage ans Projekt: Antwort aus APs, Seiten und lesbaren Mails mit Quellenangabe (Stichwortsuche). Fragen dürfen auch Leser mit „KI nutzen“.
@@ -144,7 +155,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 **Einrichten**
 1. Org-Admin: Verwaltung › KI-Agenten › Agent anlegen. KI-Profil wählen (sonst Standard), **Persona** als eine Zeile Schreibstil (z. B. „freundlich, knapp, duzt das Team, siezt Externe“), **Denkmodus** wie Profil, aus oder an.
-   Oder die PL legt einen **eigenen Agenten** für ihr Projekt an (Einstellungen › Eigene KI-Agenten), wenn der Org-Admin das unter Verwaltung › KI freigegeben hat: nur freigegebene KI-Profile, Tagesbudget höchstens der Deckel, nur in diesem Projekt einsetzbar und per Chat nur für dessen Mitglieder erreichbar. Der Org-Admin sieht solche Agenten und kann sie deaktivieren, aber keine Inhalte.
+   Oder die PL legt einen **eigenen Agenten** für ihr Projekt an (Einstellungen › Eigene KI-Agenten), wenn die Regel „Eigene Agenten der PL“ unter Verwaltung › KI-Freigaben es erlaubt (sonst nennt der Knopf den Grund): nur freigegebene KI-Profile, Tagesbudget höchstens der Deckel, nur in diesem Projekt einsetzbar und per Chat nur für dessen Mitglieder erreichbar. Der Org-Admin sieht solche Agenten und kann sie deaktivieren, aber keine Inhalte.
 2. PL: Projekteinstellungen › Mitglieder › Agent aufnehmen, Rolle **Mitglied** oder **stellvertretende PL**; „darf Mails senden“ festlegen (sonst gehen Mails als Entwurf in die Freigabe), optional „Final setzen“. **Unterschrift** frei je Agent (Verwaltung bzw. eigene Agenten), leer = „Name (KI-Agent, Projekt KEY)“.
 3. PL: AP, Aufgabe oder Teilprojekt dem Agenten zuweisen. Der erste Lauf startet sofort bzw. beim nächsten Takt (geerbte Zuständigkeit).
 
@@ -176,7 +187,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Projekt › KI › Agenten-Läufe: jeder Lauf mit Anlass, Begründung, Aktionen, Token und Fehlern.
 - Im AP: „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand mit nächster Prüfung, Nachfassen und Eskalation. Auch „Jetzt laufen lassen“ hält Pause und Tagesbudget ein.
 - Freigaben: Mail-Entwürfe des Agenten ohne Senderecht; Ablehnen steht im Log, der Agent läuft erneut.
-- Audit-Log und Tagesbudget begrenzen und belegen alles.
+- Audit-Log und Tagesbudget begrenzen und belegen alles. Sperrt eine KI-Freigabe oder der Notaus den Agenten, steht der Lauf als „übersprungen“ mit Begründung in der Liste; im AP steht „Läuft nicht: …“.
 
 **Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen vorläufig in den Kalender (die PL bestätigt) und klärt Fragen per Chat mit der PL.
 
@@ -184,7 +195,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 - **Benutzereinstellungen:** Name, Theme, Sprache, Mail-Benachrichtigungen (aus, sofort, täglich), Passwort, zweiter Faktor (Authenticator-App), Kalender-Abo und Kalender schreiben.
 - **Konfiguration:** Mail-Konten (persönlich, Projekt, Organisation; Microsoft 365 und Google per OAuth).
-- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Profile, eigene Agenten der PL (Freigabe, Profile, Budgetdeckel), KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export.
+- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Org-Recht „KI verwalten“, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten.
 - **Anmeldung:** Passwort mit optionalem zweiten Faktor oder Single Sign-on (OIDC), falls eingerichtet.
 
 ## 14. Persönliches Projekt (Assistent)

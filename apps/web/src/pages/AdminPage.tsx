@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { AgentUser, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
+import type { AgentUser, AiDecision, AiPolicyRule, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
+import { AI_CATEGORIES, AI_FEATURES } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
 import { api, downloadCsv, fmtDateTime } from '../lib/api';
@@ -7,15 +8,28 @@ import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { Modal, useAsync, useDialog } from '../components/ui';
 import { invalidateAi, useAiStatus } from '../lib/useAi';
+import { useAuth } from '../lib/auth';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
+/**
+ * Verwaltung: der Org-Admin sieht alle Karten; die KI-Verwaltung (Org-Recht ai_admin) nur die KI-Karten
+ * (Freigaben und Notaus, Profile, eigene LLMs der Projekte, Agenten).
+ */
 export function AdminPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.globalRole === 'org_admin';
   const users = useData<{ users: User[] }>('/users');
   const [create, setCreate] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const { error, run, busy } = useAsync();
   const dialog = useDialog();
+  if (!isAdmin) return (
+    <>
+      <TopBar title="Verwaltung › KI" />
+      <div className="content"><AiPolicyCard /><AiCard /><ProjectLlmsCard /><AgentsCard /></div>
+    </>
+  );
   return (
     <>
       <TopBar title="Verwaltung"><button className="btn" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></TopBar>
@@ -24,13 +38,15 @@ export function AdminPage() {
         <div className="card">
           <h2>Benutzer</h2>
           {error && <div className="error mb">{error}</div>}
-          <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th /></tr></thead><tbody>
+          <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th /></tr></thead><tbody>
             {users.data?.users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><span className="badge">{globalLabel[u.globalRole]}</span>{u.totpEnabled && <span className="badge ok" style={{ marginLeft: 4 }} title="Zweiter Faktor aktiv">2FA</span>}</td>
+              <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : u.globalRole === 'org_admin' ? <span className="muted">alle</span> : <label className="check" title="Verwaltung › KI: Freigaben und Notaus, Profile, Agenten, Budgets; keine Benutzer, Gruppen oder Audit"><input type="checkbox" disabled={busy} checked={Boolean(u.orgRights?.includes('ai_admin'))} onChange={(e) => void run(async () => { const rest = (u.orgRights ?? []).filter((r) => r !== 'ai_admin'); await api.patch(`/users/${u.id}`, { orgRights: e.target.checked ? [...rest, 'ai_admin'] : rest }); await users.reload(); })} /> KI verwalten</label>}</td>
               <td className="nowrap">{u.totpEnabled && <button className="btn sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => void dialog.confirm({ title: 'Zweiten Faktor zurücksetzen', text: `${u.name} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor neu einrichten.`, confirmLabel: 'Zurücksetzen' }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/totp/reset`); await users.reload(); }); })}>2FA zurücksetzen</button>}<button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Benutzer deaktivieren', text: `${u.name} deaktivieren? Der Login endet, persönliche Mail-Konten werden getrennt, Zuständigkeiten fallen auf die Vererbung zurück.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); })}>Deaktivieren</button></td></tr>)}
           </tbody></table>
         </div>
         <GroupsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
+        <AiPolicyCard />
         <AiCard />
         <ProjectLlmsCard />
         <AgentsCard />
@@ -224,6 +240,7 @@ function AiCard() {
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
   const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[] });
   const [budget, setBudget] = useState<number | null>(null);
+  const [assist, setAssist] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
@@ -244,7 +261,8 @@ function AiCard() {
             <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Profil löschen', text: `„${p.name}“ löschen? Agenten und Projekte, die es nutzen, verlieren ihre KI, bis ein anderes Profil zugewiesen ist.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/ai/profiles/${p.id}`); await invalidateAi(); }); })}>Löschen</button></td></tr>)}
       </tbody></table>}
       <div className="row small"><span className="muted" title="0 = Agenten laufen nicht; gezählt werden ausgeführte Läufe (auch mit Fehler)">Tagesbudget je Agent (Läufe, 0 = keine):</span><input type="number" min={0} max={1000} value={budget ?? st.agentDailyBudget} onChange={(e) => setBudget(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || budget == null} onClick={() => void run(async () => { await api.put('/ai/settings', { agentDailyBudget: budget }); setBudget(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
-      <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Regel für eigene Agenten gespeichert.'); }} />
+      <div className="row small mt"><span className="muted" title="Zusammenfassen, Essenz, Statusbericht, Frage ans Projekt, Abschluss-Antwort; 0 = keine">Tagesbudget KI-Assistenz je Projekt (Anfragen, 0 = keine):</span><input type="number" min={0} max={10000} value={assist ?? st.assistDailyBudget ?? 200} onChange={(e) => setAssist(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || assist == null} onClick={() => void run(async () => { await api.put('/ai/settings', { assistDailyBudget: assist }); setAssist(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
+      <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
       {edit && (
         <Modal title={edit === 'new' ? 'KI-Profil anlegen' : `Profil: ${edit.name}`} onClose={() => setEdit(null)}>
           <div className="form cols-2">
@@ -275,22 +293,21 @@ function AiCard() {
   );
 }
 
-/** Eigene Agenten der PL: erlauben, freigegebene KI-Profile, höchstes Tagesbudget je Agent (nie über dem Mandantenwert). */
+/** Eigene LLMs der Projekte und höchstes Tagesbudget eigener Agenten der PL (nie über dem Mandantenwert); ob PL Agenten anlegen dürfen, regeln die KI-Freigaben. */
 function PlAgentPolicy({ st, onSaved }: { st: NonNullable<ReturnType<typeof useAiStatus>>; onSaved: () => Promise<void> }) {
-  const cur = { enabled: st.plAgents?.enabled ?? false, maxBudget: st.plAgents?.maxBudget ?? 20, ownLlm: st.ownLlm ?? 'personal' };
+  const cur = { maxBudget: st.plAgents?.maxBudget ?? 20, ownLlm: st.ownLlm ?? 'personal' };
   const [f, setF] = useState<typeof cur | null>(null);
   const v = f ?? cur;
   const { busy, error, run } = useAsync();
   return (
     <div className="mt" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
       <label className="field"><span>Eigenes LLM in Projekten einbinden (durch die PL)</span><select value={v.ownLlm} onChange={(e) => setF({ ...v, ownLlm: e.target.value as any })} style={{ width: 'auto' }}><option value="off">nicht erlaubt</option><option value="personal">nur in persönlichen Projekten</option><option value="all">in allen Projekten</option></select></label>
-      <label className="check mt"><input type="checkbox" checked={v.enabled} onChange={(e) => setF({ ...v, enabled: e.target.checked })} /> PL dürfen eigene Agenten für ihr Projekt anlegen</label>
-      {v.enabled && <div className="small mt">
-        <div className="row"><span className="muted">Höchstes Tagesbudget je Agent:</span><input type="number" min={0} max={st.agentDailyBudget} value={v.maxBudget} onChange={(e) => setF({ ...v, maxBudget: Number(e.target.value) })} style={{ width: 90 }} /><span className="muted">(Mandant: {st.agentDailyBudget})</span></div>
+      <div className="small mt">
+        <div className="row"><span className="muted">Eigene Agenten der PL ({st.plAgents?.enabled ? 'erlaubt' : 'gesperrt'}, Regel unter KI-Freigaben), höchstes Tagesbudget je Agent:</span><input type="number" min={0} max={st.agentDailyBudget} value={v.maxBudget} onChange={(e) => setF({ ...v, maxBudget: Number(e.target.value) })} style={{ width: 90 }} /><span className="muted">(Mandant: {st.agentDailyBudget})</span></div>
         <p className="muted">Eigene Agenten laufen auf den im Projekt verfügbaren LLMs (Freigabe je Profil oben, eigenes LLM des Projekts). Sie gehören zum Projekt: nur dort einsetzbar, Chat nur für Mitglieder. Du siehst sie unten und kannst sie deaktivieren, aber nicht ihre Inhalte oder Läufe.</p>
-      </div>}
+      </div>
       {error && <div className="error small">{error}</div>}
-      <button className="btn sm mt" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/ai/settings', { plAgents: { enabled: v.enabled, maxBudget: v.maxBudget }, ownLlm: v.ownLlm }); setF(null); await onSaved(); })}>Speichern</button>
+      <button className="btn sm mt" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/ai/settings', { plAgents: { maxBudget: v.maxBudget }, ownLlm: v.ownLlm }); setF(null); await onSaved(); })}>Speichern</button>
     </div>
   );
 }
@@ -383,6 +400,125 @@ function AgentsCard() {
         <input type="text" placeholder="Persona (optional): Schreibstil, z. B. freundlich, knapp, duzt das Team" maxLength={300} value={persona} onChange={(e) => setPersona(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
         <button className="btn primary sm" disabled={busy || !name.trim()}>Agent anlegen</button>
       </form>
+    </div>
+  );
+}
+
+type PolicyListing = { rules: AiPolicyRule[]; killswitch: boolean; stoppedAgents: { id: string; name: string; projectId: string; projectLabel: string; createdById: string | null; createdByName: string | null; reason: string }[] };
+type PolicyTargets = { projects: { id: string; label: string }[]; users: { id: string; name: string; email: string }[]; agents: { id: string; name: string }[]; groups: { id: string; name: string }[] };
+type PolicyRow = { projectId: string | null; userId: string | null; groupId: string | null };
+type RowKind = 'org' | 'group' | 'project' | 'user' | 'agent' | 'exception';
+const ROW_SECTIONS: { kind: RowKind; label: string; hint: string }[] = [
+  { kind: 'org', label: 'Mandant', hint: 'alle Personen und Agenten in allen Projekten' },
+  { kind: 'group', label: 'Gruppen', hint: 'Mitglieder der Gruppe in allen Projekten' },
+  { kind: 'project', label: 'Projekte', hint: 'alle Personen und Agenten im Projekt, auch Agenten der Org' },
+  { kind: 'user', label: 'Benutzer', hint: 'eigene Nutzung der Person in allen Projekten' },
+  { kind: 'agent', label: 'Agenten', hint: 'Läufe, Chat und Mail-Ansichten des Agenten' },
+  { kind: 'exception', label: 'Ausnahmen', hint: 'Person oder Gruppe in einem Projekt: übersteuert Person und Projekt, nicht den Notaus' }
+];
+const STAGE_LABEL: Record<string, string> = { killswitch: 'Notaus', policy: 'Regeln', project: 'Ebene der PL', profile: 'Profil', budget: 'Budget', ok: '' };
+const rowKey = (r: PolicyRow) => `${r.projectId ?? ''}|${r.userId ?? ''}|${r.groupId ?? ''}`;
+
+/**
+ * KI-Freigaben (ersetzt den Schalter für eigene Agenten der PL): roter Notaus; Matrix mit den Zeilen Mandant, Gruppen,
+ * Projekte, Benutzer, Agenten und Ausnahmen und den Spalten Kategorien bzw. Funktionen, jede Zelle erben, erlauben oder
+ * sperren mit Notiz; Vorschau der Wirkung für eine Person oder einen Agenten in einem Projekt mit Spur. Sperre gewinnt;
+ * eine Ausnahme gibt es nur über „Person in Projekt“; die PL kann im Projekt weiter einschränken.
+ */
+function AiPolicyCard() {
+  const d = useData<PolicyListing>('/ai/policies');
+  const tg = useData<PolicyTargets>('/ai/policy-targets');
+  const [detailed, setDetailed] = useState(false);
+  const [added, setAdded] = useState<PolicyRow[]>([]);
+  const [add, setAdd] = useState<{ kind: RowKind; target: string; projectId: string }>({ kind: 'project', target: '', projectId: '' });
+  const [cell, setCell] = useState<{ row: PolicyRow; label: string; feature: string; effect: 'allow' | 'deny' | null; note: string } | null>(null);
+  const dialog = useDialog();
+  const { busy, error, run } = useAsync();
+  if (!d.data || !tg.data) return null;
+  const { rules, killswitch, stoppedAgents } = d.data;
+  const t = tg.data;
+  const kindOf = (r: PolicyRow): RowKind => r.projectId ? (r.userId || r.groupId ? 'exception' : 'project') : r.groupId ? 'group' : r.userId ? (t.agents.some((a) => a.id === r.userId) || rules.some((x) => x.userId === r.userId && x.userKind === 'agent') ? 'agent' : 'user') : 'org';
+  const projectName = (id: string) => t.projects.find((p) => p.id === id)?.label ?? rules.find((x) => x.projectId === id)?.projectLabel ?? 'Projekt';
+  const whoName = (r: PolicyRow) => r.userId ? ([...t.users, ...t.agents].find((u) => u.id === r.userId)?.name ?? rules.find((x) => x.userId === r.userId)?.userName ?? '?') : r.groupId ? `Gruppe ${t.groups.find((g) => g.id === r.groupId)?.name ?? rules.find((x) => x.groupId === r.groupId)?.groupName ?? '?'}` : '';
+  const label = (r: PolicyRow) => { const k = kindOf(r); return k === 'org' ? 'Alle (Mandant)' : k === 'project' ? projectName(r.projectId!) : k === 'exception' ? `${whoName(r)} in ${projectName(r.projectId!)}` : whoName(r); };
+  const rows = new Map<string, PolicyRow>([[rowKey({ projectId: null, userId: null, groupId: null }), { projectId: null, userId: null, groupId: null }]]);
+  for (const r of [...rules.map((x) => ({ projectId: x.projectId, userId: x.userId, groupId: x.groupId })), ...added]) rows.set(rowKey(r), r);
+  const cols = [{ key: '*', label: 'Alle' }, ...AI_CATEGORIES.flatMap((c) => [{ key: c.key as string, label: c.label }, ...(detailed ? AI_FEATURES.filter((f) => f.category === c.key && !('later' in f && f.later)).map((f) => ({ key: f.key as string, label: f.label })) : [])])];
+  const ruleAt = (r: PolicyRow, feature: string) => rules.find((x) => rowKey(x) === rowKey(r) && x.feature === feature);
+  const save = (row: PolicyRow, feature: string, effect: 'allow' | 'deny' | null, note: string | null) => run(async () => { d.setData(await api.put<PolicyListing>('/ai/policies', { ...row, feature, effect, note })); await invalidateAi(); });
+  const targetOptions = add.kind === 'group' ? t.groups.map((g) => ({ id: g.id, label: g.name })) : add.kind === 'project' ? t.projects.map((p) => ({ id: p.id, label: p.label })) : add.kind === 'agent' ? t.agents.map((a) => ({ id: a.id, label: a.name })) : [...t.users.map((u) => ({ id: u.id, label: u.name })), ...(add.kind === 'exception' ? t.groups.map((g) => ({ id: `g:${g.id}`, label: `Gruppe ${g.name}` })) : [])];
+  const addRow = () => {
+    const tid = add.target;
+    const row: PolicyRow = add.kind === 'group' ? { projectId: null, userId: null, groupId: tid } : add.kind === 'project' ? { projectId: tid, userId: null, groupId: null }
+      : add.kind === 'exception' ? { projectId: add.projectId, userId: tid.startsWith('g:') ? null : tid, groupId: tid.startsWith('g:') ? tid.slice(2) : null } : { projectId: null, userId: tid, groupId: null };
+    setAdded([...added, row]);
+    setAdd({ ...add, target: '' });
+  };
+  return (
+    <div className="card">
+      <div className="row between"><h2 style={{ margin: 0 }}>KI-Freigaben</h2>
+        {killswitch
+          ? <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { enabled: true }); await d.reload(); await invalidateAi(); })}>KI wieder einschalten</button>
+          : <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Notaus: KI abschalten', text: 'Alle KI-Funktionen im Mandanten sind sofort aus: Assistenz, Mail-KI, Agentenläufe und Chat mit Agenten, auch Verbindungstests. Ausnahmen gelten nicht. Läufe stehen als übersprungen im Protokoll.', confirmLabel: 'KI abschalten', danger: true }).then((ok) => { if (ok) void run(async () => { await api.put('/ai/settings', { enabled: false }); await d.reload(); await invalidateAi(); }); })}>Notaus: KI abschalten</button>}
+      </div>
+      {killswitch && <div className="notice danger mt"><strong>Notaus aktiv:</strong> KI ist im Mandanten abgeschaltet, auch gegen Ausnahmen.</div>}
+      <p className="muted small">Regeln für Ort (alle Projekte oder ein Projekt), Wer (alle, Gruppe, Person, Agent) und Funktion. Ohne Regel wird geerbt; innerhalb einer Zeile gilt die Funktion vor der Kategorie vor „Alle“. Sperre gewinnt: Ist ein Projekt gesperrt, hilft eine Personenfreigabe nicht; eine Ausnahme gibt es nur als „Person in Projekt“. Die PL kann im Projekt weiter einschränken (Projekt-KI, „KI nutzen“, Agenten), der Notaus gilt immer. Ohne Regel erlaubt, außer „Eigene Agenten der PL“.</p>
+      {error && <div className="error mb">{error}</div>}
+      {stoppedAgents.length > 0 && <div className="notice mb small">
+        <strong>Gestoppte Agenten der PL</strong> (Regel „Eigene Agenten der PL“):
+        <ul style={{ margin: '4px 0 0', paddingLeft: 18 }}>{stoppedAgents.map((a) => <li key={a.id}>{a.name} · {a.projectLabel}{a.createdByName ? ` · angelegt von ${a.createdByName}` : ''} <button className="btn sm link" disabled={busy} title="Ausnahme für die PL in ihrem Projekt" onClick={() => void save({ projectId: a.projectId, userId: a.createdById, groupId: null }, 'pl.agents', 'allow', `Agent ${a.name} erlaubt`)}>erlauben</button><div className="muted">{a.reason}</div></li>)}</ul>
+      </div>}
+      <div className="row mb small"><label className="check"><input type="checkbox" checked={detailed} onChange={(e) => setDetailed(e.target.checked)} /> Funktionen einzeln</label><span className="muted">✓ erlaubt · ✕ gesperrt · · erbt; Klick ändert, • = mit Notiz</span></div>
+      <div style={{ overflowX: 'auto' }}>
+        <table className="table ai-matrix"><thead><tr><th>Wer / Ort</th>{cols.map((c) => <th key={c.key} className="small" title={c.key}>{c.label}</th>)}</tr></thead><tbody>
+          {ROW_SECTIONS.map((sec) => {
+            const list = [...rows.values()].filter((r) => kindOf(r) === sec.kind);
+            if (!list.length) return null;
+            return [<tr key={sec.kind} className="sec"><td colSpan={cols.length + 1}>{sec.label} <span className="muted" style={{ fontWeight: 400 }}>· {sec.hint}</span></td></tr>,
+              ...list.map((r) => <tr key={rowKey(r)}><td className="small">{label(r)}</td>{cols.map((c) => { const x = ruleAt(r, c.key); return <td key={c.key}><button className={`ai-cell ${x?.effect ?? ''} ${x?.note ? 'note' : ''}`} disabled={busy} title={x ? `${x.effect === 'allow' ? 'erlaubt' : 'gesperrt'}${x.note ? `: ${x.note}` : ''}${x.setByName ? ` (${x.setByName})` : ''}` : 'erbt'} onClick={() => setCell({ row: r, label: label(r), feature: c.key, effect: x?.effect ?? null, note: x?.note ?? '' })}>{x ? (x.effect === 'allow' ? '✓' : '✕') : '·'}</button></td>; })}</tr>)];
+          })}
+        </tbody></table>
+      </div>
+      <div className="row small mt" style={{ flexWrap: 'wrap' }}>
+        <span className="muted">Zeile hinzufügen:</span>
+        <select value={add.kind} onChange={(e) => setAdd({ kind: e.target.value as RowKind, target: '', projectId: '' })} style={{ width: 'auto' }}>{ROW_SECTIONS.filter((x) => x.kind !== 'org').map((x) => <option key={x.kind} value={x.kind}>{x.label}</option>)}</select>
+        {add.kind === 'exception' && <select value={add.projectId} onChange={(e) => setAdd({ ...add, projectId: e.target.value })} style={{ width: 'auto' }}><option value="">Projekt …</option>{t.projects.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>}
+        <select value={add.target} onChange={(e) => setAdd({ ...add, target: e.target.value })} style={{ width: 'auto' }}><option value="">{add.kind === 'exception' ? 'Person oder Gruppe …' : 'wählen …'}</option>{targetOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}</select>
+        <button className="btn sm" disabled={!add.target || (add.kind === 'exception' && !add.projectId)} onClick={addRow}>Hinzufügen</button>
+      </div>
+      <AiPolicyPreview targets={t} />
+      {cell && (
+        <Modal title={`${cell.label} · ${cols.find((c) => c.key === cell.feature)?.label ?? cell.feature}`} onClose={() => setCell(null)}>
+          <div className="form">
+            <div className="row">{([[null, 'erben'], ['allow', 'erlauben'], ['deny', 'sperren']] as const).map(([v, l]) => <label key={l} className="check"><input type="radio" name="ai-cell" checked={cell.effect === v} onChange={() => setCell({ ...cell, effect: v })} /> {l}</label>)}</div>
+            {cell.effect && <label className="field"><span>Notiz (erscheint in der Begründung)</span><input type="text" maxLength={300} value={cell.note} placeholder="z. B. Datenschutz Bauherr" onChange={(e) => setCell({ ...cell, note: e.target.value })} /></label>}
+            <div className="row"><button className="btn primary" disabled={busy} onClick={() => void save(cell.row, cell.feature, cell.effect, cell.note.trim() || null).then(() => setCell(null))}>Speichern</button><button className="btn" onClick={() => setCell(null)}>Abbrechen</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+/** Vorschau: Wirkung für eine Person oder einen Agenten (optional in einem Projekt), je Funktion mit Begründung und Spur. */
+function AiPolicyPreview({ targets }: { targets: PolicyTargets }) {
+  const [who, setWho] = useState('');
+  const [projectId, setProjectId] = useState('');
+  const eff = useData<{ subject: { name: string; kind: string }; project: { label: string } | null; features: { feature: string; label: string; decision: AiDecision }[] }>(who ? `/ai/policies/effective?userId=${who}${projectId ? `&projectId=${projectId}` : ''}` : null, [who, projectId]);
+  return (
+    <div className="mt" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}>
+      <div className="row small" style={{ flexWrap: 'wrap' }}>
+        <strong>Wirkung für</strong>
+        <select value={who} onChange={(e) => setWho(e.target.value)} style={{ width: 'auto' }}><option value="">Person oder Agent …</option><optgroup label="Personen">{targets.users.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</optgroup><optgroup label="Agenten">{targets.agents.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</optgroup></select>
+        <span>in</span>
+        <select value={projectId} onChange={(e) => setProjectId(e.target.value)} style={{ width: 'auto' }}><option value="">ohne Projekt</option>{targets.projects.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
+      </div>
+      {eff.error && <div className="error small mt">{eff.error}</div>}
+      {who && eff.data && <table className="table mt"><thead><tr><th>Funktion</th><th>Ergebnis</th><th>Begründung</th></tr></thead><tbody>
+        {eff.data.features.map((f) => <tr key={f.feature}><td className="small">{f.label}<div className="muted"><code>{f.feature}</code></div></td>
+          <td>{f.decision.allowed ? <span className="badge ok">erlaubt</span> : <span className="badge danger">{STAGE_LABEL[f.decision.stage] || 'gesperrt'}</span>}</td>
+          <td className="small">{f.decision.reason}<details><summary className="muted">Spur</summary><ol style={{ margin: '2px 0 0', paddingLeft: 18 }}>{f.decision.trace.map((s, i) => <li key={i} style={s.ok ? undefined : { color: 'var(--danger)' }}>{s.ok ? '✓' : '✕'} {STAGE_LABEL[s.stage]}: {s.text}</li>)}</ol></details></td></tr>)}
+      </tbody></table>}
     </div>
   );
 }

@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
 import type { Group, Invitation } from '@projekttool/shared';
+import { ORG_RIGHTS } from '@projekttool/shared';
 import { requireProject } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
 
@@ -28,6 +29,22 @@ export async function userRoutes(app: FastifyInstance) {
       [user.orgId, email.toLowerCase(), name, hashPassword(password), globalRole]
     );
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.create', objectType: 'user', objectId: row.id, details: { email, globalRole } });
+    return { user: mapUser(row) };
+  });
+
+  // Org-Admin: Org-Rechte einer Person (ai_admin, groups_admin, resources_admin); KI-Agenten haben keine
+  app.patch<{ Params: { id: string }; Body: { orgRights?: string[] } }>('/users/:id', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const b = req.body ?? {};
+    if (Object.keys(b).some((k) => k !== 'orgRights') || !Array.isArray(b.orgRights)) throw badRequest('Änderbar: orgRights');
+    const rights = [...new Set(b.orgRights.map(String))];
+    if (rights.some((r) => !ORG_RIGHTS.some((x) => x.key === r))) throw badRequest(`Org-Rechte: ${ORG_RIGHTS.map((x) => x.key).join(', ')}`);
+    const target = await app.db.maybeOne(`select * from users where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!target) throw notFound('Benutzer nicht gefunden');
+    if (target.kind === 'agent' && rights.length) throw badRequest('KI-Agenten haben keine Org-Rechte');
+    const row = await app.db.one(`update users set org_rights = $2 where id = $1 returning *`, [target.id, rights]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.role', objectType: 'user', objectId: target.id, details: { orgRights: rights, before: target.org_rights ?? [] } });
     return { user: mapUser(row) };
   });
 

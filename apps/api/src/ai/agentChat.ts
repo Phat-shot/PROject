@@ -2,9 +2,10 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { visibleSubprojectSql } from '../rights.js';
-import { aiConfigForAgent, complete, parseJson } from './client.js';
+import { aiConfigFor, complete, parseJson } from './client.js';
+import { aiAllowed } from './policy.js';
 import { queueAgentRun } from './agentEvents.js';
-import { agentBudgetLeft, styleText } from './agent.js';
+import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 
@@ -13,6 +14,8 @@ import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
  * schon geantwortet hat. Auskunft gibt er nur über seine eigenen Arbeitspakete und nur aus Projekten, die die
  * fragende Person sehen darf. Enthält die Nachricht etwas für eines seiner Arbeitspakete, hält er es dort im Log fest
  * (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Jeder Lauf zählt gegen das Tagesbudget.
+ * KI-Freigaben (agent.chat) gelten für Absender und Agent; in Direktnachrichten ohne Projekt, danach antwortet der Agent
+ * nur aus Projekten, in denen der Absender „KI nutzen“ hat oder PL ist und beide freigegeben sind.
  */
 const SCHEMA = {
   type: 'object', additionalProperties: false, required: ['reply', 'notes'],
@@ -51,9 +54,18 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(body, 160), link, dedupeKey: null });
   };
 
-  const cfg = await aiConfigForAgent(db, agent.id);
-  if (!cfg) { await post('Mir ist gerade kein aktives KI-Profil zugewiesen, ich kann nicht antworten. Bitte an die Verwaltung (KI-Agenten) wenden.'); return { status: 'skipped', error: 'kein KI-Profil' }; }
-  if ((await agentBudgetLeft(db, agent, now)) <= 0) { await post('Mein Tagesbudget ist aufgebraucht. Ich melde mich morgen; Dringendes bitte an die Projektleitung.'); return { status: 'skipped', error: 'Tagesbudget' }; }
+  /** Gesperrt: kein LLM-Aufruf, Begründung im Chat und als übersprungener Lauf. */
+  const blocked = async (reply: string, reason: string): Promise<AgentChatResult> => {
+    await post(reply);
+    await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','skipped',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, reason.slice(0, 500), channel.id]);
+    return { status: 'skipped', error: reason };
+  };
+  const sender = await aiAllowed(db, { userId: msg.user_id, projectId: channel.project_id ?? null, feature: 'agent.chat' });
+  if (!sender.allowed) return blocked(`Ich kann dir hier nicht antworten: ${sender.reason}`, `Absender: ${sender.reason}`);
+  const { cfg, decision } = await aiConfigFor(db, { userId: agent.id, projectId: channel.project_id ?? null, feature: 'agent.chat', now });
+  if (!cfg && decision.stage === 'profile') { await post('Mir ist gerade kein aktives KI-Profil zugewiesen, ich kann nicht antworten. Bitte an die Verwaltung (KI-Agenten) wenden.'); return { status: 'skipped', error: 'kein KI-Profil' }; }
+  if (!cfg && decision.stage === 'budget') { await post('Mein Tagesbudget ist aufgebraucht. Ich melde mich morgen; Dringendes bitte an die Projektleitung.'); return { status: 'skipped', error: 'Tagesbudget' }; }
+  if (!cfg) return blocked(`Ich bin hier gesperrt: ${decision.reason}`, decision.reason);
 
   // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
   const history = threadId
@@ -62,15 +74,23 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Eigene Arbeitspakete: im Projektkanal nur dieses Projekt und keine eingeschränkten Teilprojekte (alle Mitglieder lesen mit),
   // in Direktnachrichten nur Projekte und Teilprojekte, die die fragende Person sieht
   const tasks = await db.query(
-    `select t.id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
+    `select t.id, t.project_id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
        (select string_agg(x.body, ' | ' order by x.created_at desc) from (select body, created_at from task_comments where task_id = t.id order by created_at desc limit 3) x) as recent
      from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
      where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
        and ${project ? `t.project_id = $2 and (t.subproject_id is null or not exists (select 1 from subprojects s where s.id = t.subproject_id and s.restricted))`
-                     : `exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $2) and ${visibleSubprojectSql(2)}`}
+                     : `exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $2 and (pm.role = 'pl' or pm.can_use_ai)) and ${visibleSubprojectSql(2)}`}
      order by t.due_date nulls last limit 25`,
     [agent.id, project ? project.id : msg.user_id]
   );
+  // Direktnachricht: nur Projekte, in denen Absender und Agent freigegeben sind (Projektregeln, Ausnahmen)
+  if (!project) {
+    const ok = new Map<string, boolean>();
+    for (const pid of new Set<string>(tasks.rows.map((t: any) => t.project_id))) {
+      ok.set(pid, (await aiAllowed(db, { userId: msg.user_id, projectId: pid, feature: 'agent.chat' })).allowed && (await aiAllowed(db, { userId: agent.id, projectId: pid, feature: 'agent.chat', budget: false })).allowed);
+    }
+    tasks.rows = tasks.rows.filter((t: any) => ok.get(t.project_id));
+  }
   const known = new Map<string, any>(tasks.rows.map((t: any) => [t.id, t]));
   const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   const prompt = `Jetzt: ${hhmm(now)}

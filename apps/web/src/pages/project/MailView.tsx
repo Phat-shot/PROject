@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
+import type { AiFeature, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
-import { useAiStatus } from '../../lib/useAi';
+import { aiBlocked } from '../../lib/useAi';
 import { MailAiBox } from './MailAi';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
@@ -160,14 +160,12 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
 }
 
 function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; base: string; onChanged: () => void; onGone: () => void; viewHint?: string }) {
-  const { detail, tasks, reloadTasks, openTask } = useProject();
-  const canUseAi = detail.project.myMembership.role === 'pl' || detail.project.myMembership.canUseAi;
+  const { detail, tasks, reloadTasks, openTask, ai } = useProject();
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; code: string; projectId: string; copied: boolean; origin: boolean; isSubtask: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
   const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
   const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask' | 'aiEssence' | 'aiMerge'>(null);
-  const ai = useAiStatus();
   const [summary, setSummary] = useState<string | null>(null);
   const [aiMsg, setAiMsg] = useState<string | null>(null);
   const [confirmCopy, setConfirmCopy] = useState<{ run: () => Promise<void>; willSee: { name: string; role: string }[] } | null>(null);
@@ -184,6 +182,9 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const folderAction = (call: () => Promise<unknown>) => run(async () => { await call(); onGone(); });
   const enabled = (key: string) => actions.data?.rule.find((a) => a.key === key)?.enabled ?? false;
   const reason = (key: string) => actions.data?.rule.find((a) => a.key === key)?.reason ?? '';
+  // KI-Knöpfe bleiben sichtbar und nennen den Grund, wenn sie nicht gehen: Recht an der Ansicht, sonst die KI-Freigaben
+  const aiNo = (f: AiFeature) => (!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : aiBlocked(ai, f));
+  const aiReasons = [...new Set([aiNo('assist.summarize'), aiNo('assist.essence')].filter((x): x is string => Boolean(x)))];
 
   /** Führt eine Aktion aus, die eine Bestätigung verlangen kann (Kopie wird für Mitglieder sichtbar). */
   const withConfirm = async (call: (confirmed: boolean) => Promise<any>, after: (res: any) => Promise<void>) => {
@@ -238,14 +239,11 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       </div>
       <div className="row mb small">
         <span className="muted">KI:</span>
-        {ai?.enabled && detail.project.aiProfileId ? (
-          <>
-            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
-            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
-            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
-            <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
-          </>
-        ) : <span className="muted">{ai ? (ai.enabled ? 'im Projekt aus (Einstellungen › Projekt › Projekt-KI)' : 'kein KI-Profil (Verwaltung)') : '…'}</span>}
+        <button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
+        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
+        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
+        <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
+        {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
       </div>
       <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} />
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}

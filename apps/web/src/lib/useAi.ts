@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 
-import type { AiProfile } from '@projekttool/shared';
-export interface AiStatus { enabled: boolean; profiles: (AiProfile & { projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[] })[]; defaultProfileId: string | null; agentDailyBudget: number; plAgents?: { enabled: boolean; maxBudget: number }; ownLlm?: 'off' | 'personal' | 'all'; models: string[] }
+import type { AiCapabilities, AiFeature, AiProfile } from '@projekttool/shared';
+export interface AiStatus { enabled: boolean; /** Notaus aktiv */ killswitch?: boolean; profiles: (AiProfile & { projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[] })[]; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget?: number; plAgents?: { enabled: boolean; maxBudget: number }; ownLlm?: 'off' | 'personal' | 'all'; models: string[] }
 let cache: AiStatus | null = null;
 let pending: Promise<AiStatus> | null = null;
 const listeners = new Set<(s: AiStatus) => void>();
@@ -22,4 +22,14 @@ export async function invalidateAi() {
   cache = null; pending = null;
   const r = await api.get<AiStatus>('/ai/status');
   cache = r; listeners.forEach((l) => l(r));
+}
+
+/**
+ * Begründung, warum eine KI-Funktion im Projekt nicht geht (KI-Freigaben, aus /projects/:id/ai/capabilities); undefined = erlaubt.
+ * Solange die Fähigkeiten laden, gilt die Funktion als gesperrt, damit kein Knopf kurz aufblitzt.
+ */
+export function aiBlocked(caps: AiCapabilities | null | undefined, feature: AiFeature): string | undefined {
+  if (!caps) return 'KI-Freigaben werden geladen …';
+  const c = caps.features[feature];
+  return !c || c.allowed ? undefined : c.reason;
 }

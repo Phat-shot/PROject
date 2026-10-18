@@ -1,12 +1,13 @@
 import type { FastifyInstance } from 'fastify';
-import type { AiProposal } from '@projekttool/shared';
+import type { AiFeature, AiProposal, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { hasOrgRight, requireProject } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
-import { aiConfigForProfile, aiConfigForProject, aiStatus, complete, MODELS, orgAiSettings, profileConfig, projectProfiles } from '../ai/client.js';
+import { aiConfigFor, aiStatus, complete, MODELS, orgAiSettings, projectProfiles } from '../ai/client.js';
+import { aiAllowed, aiError, PROJECT_LABEL_SQL, setAiPolicy } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -21,27 +22,40 @@ function mapProposal(r: any): AiProposal {
 /**
  * KI-Modul (letztes Modul, Regel vor KI): Zusammenfassen direkt; Essenz in Arbeitspaket oder Seite nur als Vorschlag,
  * den eine Person mit Freigaberecht (oder die PL) anwendet; Statusbericht als Entwurfsseite; Frage ans Projekt mit Quellen.
+ * Jede Funktion läuft über aiConfigFor (KI-Freigaben); Verwaltung › KI dürfen Org-Admin und KI-Verwaltung (ai_admin).
  */
 export async function aiRoutes(app: FastifyInstance) {
   const db = app.db;
-  const cfgOrFail = async (projectId: string) => { const c = await aiConfigForProject(db, projectId); if (!c) throw badRequest('KI ist in diesem Projekt nicht aktiv. Die PL weist in den Projekteinstellungen ein KI-Profil zu (Profile verwaltet der Org-Admin).'); return c; };
-  const canUse = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canUseAi) throw forbidden('Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)'); return m; };
-  /** Frage ans Projekt: auch Leser mit „KI nutzen“ (nur diese Funktion); implizite Leser (Sichtbarkeit „alle Benutzer“) haben keine KI. */
-  const canAsk = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'reader'); if (m.role !== 'pl' && !m.canUseAi) throw forbidden('Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)'); return m; };
+  /**
+   * KI-Funktion im Projekt: Projektzugriff, dann Freigabe (Notaus, Regeln, Mitgliedschaft und „KI nutzen“, Projekt-KI, Budget);
+   * Leser nur „Frage ans Projekt“, implizite Leser (Sichtbarkeit „alle Benutzer“) haben keine KI.
+   */
+  const gate = async (user: User, projectId: string, feature: AiFeature) => {
+    await requireProject(db, user, projectId, 'reader');
+    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId, feature });
+    if (!cfg) throw aiError(decision);
+    return cfg;
+  };
+  const requireAiAdmin = (user: User) => { if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung'); };
   const canApprove = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe nur mit Recht „KI-Vorschläge freigeben“ oder als PL'); return m; };
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { defaultProfileId?: string | null; agentDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all' } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all' } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    requireAiAdmin(user);
     const b = req.body ?? {};
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
-    // Eigene Agenten der PL: Budget je Agent höchstens das Mandantenbudget; sie nutzen die im Projekt verfügbaren LLMs
-    const plAgents = b.plAgents ? { enabled: b.plAgents.enabled ?? Boolean(cur.plAgents?.enabled), maxBudget: Math.max(0, Math.min(1000, Number(b.plAgents.maxBudget ?? cur.plAgents?.maxBudget ?? 20) || 0)) } : cur.plAgents;
+    if (b.enabled !== undefined && typeof b.enabled !== 'boolean') throw badRequest('Notaus: enabled true oder false');
+    // Eigene Agenten der PL: Budget je Agent höchstens das Mandantenbudget; ob sie erlaubt sind, ist die Regel pl.agents (KI-Freigaben)
+    const plMax = b.plAgents?.maxBudget !== undefined ? Math.max(0, Math.min(1000, Number(b.plAgents.maxBudget) || 0)) : cur.plAgents?.maxBudget;
     if (b.ownLlm !== undefined && !['off', 'personal', 'all'].includes(b.ownLlm)) throw badRequest('Eigenes LLM: off, personal oder all');
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.max(0, Math.min(1000, Number(b.agentDailyBudget) || 0)) : cur.agentDailyBudget, ...(plAgents ? { plAgents } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}) } })]);
+    const clamp = (v: unknown) => Math.max(0, Math.min(10000, Number(v) || 0));
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}) } })]);
+    // Der frühere Schalter „Eigene Agenten der PL“ ist die Regel pl.agents für den Mandanten
+    if (typeof b.plAgents?.enabled === 'boolean') await setAiPolicy(db, user, { projectId: null, userId: null, groupId: null, feature: 'pl.agents', effect: b.plAgents.enabled ? 'allow' : 'deny' });
+    if (b.enabled !== undefined && b.enabled !== (cur.enabled !== false)) await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.killswitch', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled } });
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: b });
     return aiStatus(db, user.orgId);
   });
@@ -64,20 +78,18 @@ export async function aiRoutes(app: FastifyInstance) {
     await db.query(`delete from ai_profile_projects where profile_id = $1`, [profileId]);
     for (const id of ids.map(String)) if (await db.maybeOne(`select 1 from projects where id = $1 and org_id = $2`, [id, orgId])) await db.query(`insert into ai_profile_projects (profile_id, project_id) values ($1,$2) on conflict do nothing`, [profileId, id]);
   }
-  /** Projektname für den Org-Admin; persönliche Projekte nur als „persönlich (Eigentümer)“. */
-  const projectLabel = `case when p.personal then 'persönlich (' || coalesce(ow.name, '?') || ')' else p.key || ' ' || p.name end`;
   // Org-Admin: Projekte für die Freigabe „ausgewählte Projekte“
   app.get('/ai/release-projects', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
-    const r = await db.query(`select p.id, ${projectLabel} as label from projects p left join users ow on ow.id = p.created_by where p.org_id = $1 and p.status = 'active' and p.kind = 'project' order by p.personal, p.key`, [user.orgId]);
+    requireAiAdmin(user);
+    const r = await db.query(`select p.id, ${PROJECT_LABEL_SQL} as label from projects p left join users ow on ow.id = p.created_by where p.org_id = $1 and p.status = 'active' and p.kind = 'project' order by p.personal, p.key`, [user.orgId]);
     return { projects: r.rows };
   });
   // Org-Admin: eigene LLMs der Projekte mit Metadaten (ohne Schlüssel und Inhalte), sperrbar
   app.get('/ai/project-llms', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
-    const r = await db.query(`select a.id, a.name, a.provider, a.model, a.base_url, a.active, a.admin_blocked, a.tokens_in, a.tokens_out, a.last_used_at, a.created_at, ${projectLabel} as project_label, cu.name as created_by_name
+    requireAiAdmin(user);
+    const r = await db.query(`select a.id, a.name, a.provider, a.model, a.base_url, a.active, a.admin_blocked, a.tokens_in, a.tokens_out, a.last_used_at, a.created_at, ${PROJECT_LABEL_SQL} as project_label, cu.name as created_by_name
       from ai_profiles a join projects p on p.id = a.project_id left join users ow on ow.id = p.created_by left join users cu on cu.id = a.created_by where a.org_id = $1 order by a.created_at`, [user.orgId]);
     return { llms: r.rows.map((x: any) => ({ id: x.id, name: x.name, provider: x.provider, model: x.model, baseUrl: x.base_url, active: x.active, adminBlocked: x.admin_blocked, tokensIn: Number(x.tokens_in), tokensOut: Number(x.tokens_out), lastUsedAt: x.last_used_at, createdAt: x.created_at, project: x.project_label, createdBy: x.created_by_name ?? null })) };
   });
@@ -89,17 +101,25 @@ export async function aiRoutes(app: FastifyInstance) {
     return s.ownLlm === 'all' || (s.ownLlm === 'personal' && Boolean(p.personal));
   };
   const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
+  /** Eigenes LLM einbinden: Profilachse (Mandant erlaubt eigene LLMs für diese Projektart) und Freigabe pl.own_llm für die PL. */
+  const ownReason = async (user: User, projectId: string): Promise<string | null> => {
+    if (!(await ownAllowed(user.orgId, projectId))) return 'Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)';
+    const d = await aiAllowed(db, { userId: user.id, projectId, feature: 'pl.own_llm' });
+    return d.allowed ? null : d.reason;
+  };
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
     const own = m.role === 'pl' ? (await db.query(`select * from ai_profiles where project_id = $1 order by created_at`, [req.params.id])).rows.map(mapOwn) : [];
-    return { available: await projectProfiles(db, req.params.id), own, canAddOwn: m.role === 'pl' && (await ownAllowed(user.orgId, req.params.id)) };
+    const reason = m.role === 'pl' ? await ownReason(user, req.params.id) : 'Nur die PL';
+    return { available: await projectProfiles(db, req.params.id), own, canAddOwn: !reason, addOwnReason: reason, ownLlmAllowed: m.role === 'pl' && (await ownAllowed(user.orgId, req.params.id)) };
   });
   const ownOf = async (projectId: string, id: string) => { const r = await db.maybeOne(`select * from ai_profiles where id = $1 and project_id = $2`, [id, projectId]); if (!r) throw notFound('LLM des Projekts nicht gefunden'); return r; };
   app.post<{ Params: { id: string }; Body: any }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)');
+    const reason = await ownReason(user, req.params.id);
+    if (reason) throw forbidden(reason);
     const b: any = req.body ?? {};
     const v = validProfile(b);
     const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_id, project_scope, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,'none',$9) returning *`,
@@ -131,16 +151,17 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string; lid: string } }>('/projects/:id/llms/:lid/test', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt
+    // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt und pl.own_llm freigegeben ist
     if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)');
-    const cfg = profileConfig(await ownOf(req.params.id, req.params.lid));
-    if (!cfg) throw badRequest('LLM unvollständig, inaktiv oder vom Org-Admin gesperrt');
+    const own = await ownOf(req.params.id, req.params.lid);
+    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: req.params.id, feature: 'pl.own_llm', profileId: own.id });
+    if (!cfg) throw aiError(decision);
     const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
   });
   app.post<{ Body: any }>('/ai/profiles', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    requireAiAdmin(user);
     const b: any = req.body ?? {};
     const v = validProfile(b);
     const scope = validScope(b.projectScope ?? 'all');
@@ -153,7 +174,7 @@ export async function aiRoutes(app: FastifyInstance) {
   });
   app.patch<{ Params: { id: string }; Body: any }>('/ai/profiles/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    requireAiAdmin(user);
     const cur = await db.maybeOne(`select * from ai_profiles where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!cur) throw notFound('Profil nicht gefunden');
     const b: any = req.body ?? {};
@@ -175,7 +196,7 @@ export async function aiRoutes(app: FastifyInstance) {
   });
   app.delete<{ Params: { id: string } }>('/ai/profiles/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    requireAiAdmin(user);
     await db.query(`delete from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [req.params.id, user.orgId]);
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (cur.defaultProfileId === req.params.id) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: null } })]);
@@ -184,10 +205,11 @@ export async function aiRoutes(app: FastifyInstance) {
   });
   app.post<{ Params: { id: string } }>('/ai/profiles/:id/test', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    requireAiAdmin(user);
     if (!(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [req.params.id, user.orgId]))) throw notFound('Profil nicht gefunden');
-    const cfg = await aiConfigForProfile(db, user.orgId, req.params.id);
-    if (!cfg) throw badRequest('Profil unvollständig oder inaktiv (Adresse, Modell, Schlüssel prüfen)');
+    // Verbindungstest: auch er ruft das LLM, der Notaus gilt
+    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, feature: 'profile.test', profileId: req.params.id });
+    if (!cfg) throw aiError(decision);
     const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
   });
@@ -202,9 +224,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
     const pid = access.viewIds.length ? (await db.maybeOne(`select project_id from mail_views where id = $1`, [access.viewIds[0]]))?.project_id ?? null : null;
     if (!pid) throw badRequest('Mail gehört zu keiner Projektansicht');
-    // Gleiche Regel wie bei den Vorschlägen: KI-Recht an der Ansicht und „KI nutzen“ im Projekt
-    await canUse(user, pid);
-    const cfg = await cfgOrFail(pid);
+    // Gleiche Regel wie bei den Vorschlägen: KI-Recht an der Ansicht und Freigabe im Projekt („KI nutzen“)
+    const cfg = await gate(user, pid, 'assist.summarize');
     return { summary: await summarizeMail(db, cfg, app.fetchFn, user, mail, pid) };
   });
 
@@ -217,8 +238,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!access.ok || !access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
     const task = await db.maybeOne(`select t.*, c.name as column_name from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
-    await canUse(user, task.project_id);
-    const cfg = await cfgOrFail(task.project_id);
+    const cfg = await gate(user, task.project_id, 'assist.essence');
     const cols = await db.query(`select name from board_columns where project_id = $1 order by position`, [task.project_id]);
     const e = await essenceForTask(db, cfg, app.fetchFn, user, mail, { id: task.id, title: task.title, description: task.description, dueDate: task.due_date ? String(task.due_date).slice(0, 10) : null, columnName: task.column_name, projectId: task.project_id }, cols.rows.map((c: any) => c.name));
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
@@ -237,8 +257,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const page = await db.maybeOne(`select * from doc_pages where id = $1 and deleted_at is null`, [req.body?.pageId]);
     if (!page) throw notFound('Seite nicht gefunden');
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
-    await canUse(user, page.project_id);
-    const cfg = await cfgOrFail(page.project_id);
+    const cfg = await gate(user, page.project_id, 'assist.essence');
     const section = await essenceForPage(db, cfg, app.fetchFn, user, mail, page);
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'page_append', pageId: page.id, mailId: mail.id } });
@@ -315,8 +334,7 @@ export async function aiRoutes(app: FastifyInstance) {
   // Statusbericht-Entwurf als Seite (Status Entwurf) im Ordner „Berichte“
   app.post<{ Params: { id: string } }>('/projects/:id/ai/status-report', async (req) => {
     const user = requireUser(req);
-    await canUse(user, req.params.id);
-    const cfg = await cfgOrFail(req.params.id);
+    const cfg = await gate(user, req.params.id, 'assist.report');
     const today = new Date().toISOString().slice(0, 10);
     const md = await statusReportDraft(db, cfg, app.fetchFn, user, req.params.id, today);
     const folder = await db.maybeOne(`select id from doc_folders where project_id = $1 and name = 'Berichte'`, [req.params.id]);
@@ -330,10 +348,10 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string }; Body: { question: string } }>('/projects/:id/ai/ask', async (req) => {
     const user = requireUser(req);
-    await canAsk(user, req.params.id);
+    await requireProject(db, user, req.params.id, 'reader');
     const q = req.body?.question?.trim();
     if (!q || q.length < 3) throw badRequest('Frage erforderlich');
-    const cfg = await cfgOrFail(req.params.id);
+    const cfg = await gate(user, req.params.id, 'assist.ask');
     return askProject(db, cfg, app.fetchFn, user, req.params.id, q);
   });
 

@@ -22,6 +22,7 @@ import { raidRoutes } from './routes/raid.js';
 import { portfolioRoutes } from './routes/portfolio.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { aiRoutes } from './routes/ai.js';
+import { aiPolicyRoutes } from './routes/aiPolicy.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { agentRoutes } from './routes/agents.js';
@@ -122,6 +123,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(portfolioRoutes);
       await api.register(oauthRoutes);
       await api.register(aiRoutes);
+      await api.register(aiPolicyRoutes);
       await api.register(analyticsRoutes);
       await api.register(meetingRoutes);
       await api.register(agentRoutes);

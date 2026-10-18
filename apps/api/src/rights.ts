@@ -1,4 +1,4 @@
-import type { Membership, ProjectRole, User, MailViewRights } from '@projekttool/shared';
+import type { Membership, OrgRight, ProjectRole, User, MailViewRights } from '@projekttool/shared';
 import { ROLE_RANK } from '@projekttool/shared';
 import type { Db } from './db.js';
 import { forbidden, notFound } from './errors.js';
@@ -15,6 +15,11 @@ export function mapMembership(row: any): Membership {
     canUseAi: row.can_use_ai,
     agentCanMail: row.agent_can_mail !== false
   };
+}
+
+/** Org-Recht (Verwaltung): der Org-Admin hat alle, sonst einzeln vergeben (users.org_rights, z. B. ai_admin für Verwaltung › KI). */
+export function hasOrgRight(user: User, right: OrgRight): boolean {
+  return user.globalRole === 'org_admin' || Boolean(user.orgRights?.includes(right));
 }
 
 export async function getMembership(db: Db, projectId: string, userId: string): Promise<Membership | null> {

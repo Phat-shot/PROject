@@ -3,9 +3,10 @@ import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailView
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireFlag, requireProject } from '../rights.js';
+import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
-import { aiConfigForProject } from '../ai/client.js';
+import { aiConfigFor } from '../ai/client.js';
+import { aiAllowed, aiError } from '../ai/policy.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
@@ -266,14 +267,22 @@ export async function mailRoutes(app: FastifyInstance) {
   /**
    * Mail-KI an einer Ansicht: einschalten darf, wer sie inhaltlich verantwortet (persönliches Konto: Eigentümer;
    * Projekt-/Organisationskonto: PL des Projekts, nicht der Org-Admin allein). Die Projekt-KI handelt dann im Auftrag
-   * dieser Person; der Agent muss Mitglied des Projekts sein.
+   * dieser Person (KI-Freigabe mail.process: „KI nutzen“, Rechte „KI“ und „Arbeitspaket erzeugen“ an der Ansicht);
+   * der Agent muss Mitglied des Projekts und für mail.triage freigegeben sein.
    */
   async function setViewAi(user: User, v: any, a: AccountRow, b: { aiProcess?: boolean; agentUserId?: string | null }) {
     const m = await getMembership(db, v.project_id, user.id);
     const owner = a.type === 'personal' ? a.owner_user_id === user.id && Boolean(m) : m?.role === 'pl';
     if (!owner) throw forbidden(a.type === 'personal' ? 'Mail-KI am persönlichen Konto schaltet nur der Eigentümer (als Projektmitglied)' : 'Mail-KI an Projekt- und Organisationskonten schaltet die PL des Projekts');
-    if (b.aiProcess && !(await aiConfigForProject(db, v.project_id))) throw badRequest('KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)');
+    if (b.aiProcess) {
+      const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: v.project_id, feature: 'mail.process', viewId: v.id, budget: false });
+      if (!cfg) throw aiError(decision);
+    }
     if (b.agentUserId && !(await db.maybeOne(`select 1 from project_members pm join users u on u.id = pm.user_id where pm.project_id = $1 and pm.user_id = $2 and u.kind = 'agent' and u.active`, [v.project_id, b.agentUserId]))) throw badRequest('Agent ist kein aktives Mitglied des Projekts');
+    if (b.agentUserId) {
+      const d = await aiAllowed(db, { userId: b.agentUserId, projectId: v.project_id, feature: 'mail.triage', budget: false });
+      if (!d.allowed && !d.missing) throw aiError(d);
+    }
     if ('aiProcess' in b) await db.query(`update mail_views set ai_process = $2, ai_process_by = case when $2 then $3::uuid else null end where id = $1`, [v.id, Boolean(b.aiProcess), user.id]);
     if ('agentUserId' in b) await db.query(`update mail_views set agent_user_id = $2 where id = $1`, [v.id, b.agentUserId || null]);
     await audit(db, { orgId: user.orgId, projectId: v.project_id, userId: user.id, action: 'mail_view.ai', objectType: 'mail_view', objectId: v.id, details: { aiProcess: b.aiProcess, agentUserId: b.agentUserId } });
@@ -286,7 +295,9 @@ export async function mailRoutes(app: FastifyInstance) {
     const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.body?.accountId, user.orgId]);
     if (!a) throw notFound('Konto nicht gefunden');
     if (a.type === 'personal' ? a.owner_user_id !== user.id : !(a.type === 'project' && a.project_id === req.params.id && m.role === 'pl')) throw forbidden('Einrichten darf der Eigentümer des persönlichen Kontos oder die PL für das Projektkonto');
-    if (!(await aiConfigForProject(db, req.params.id))) throw badRequest('KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)');
+    // Die Ansicht entsteht mit den Rechten „KI“ und „Arbeitspaket erzeugen“ für die einrichtende Person
+    const gate = await aiConfigFor(db, { userId: user.id, projectId: req.params.id, feature: 'mail.process', budget: false });
+    if (!gate.cfg) throw aiError(gate.decision);
     const p = app.mail.providerFor(a);
     const list = await p.listFolders(a);
     const folder = list.find((f) => f.name.toLowerCase() === 'ki bearbeiten')?.path ?? (await p.createFolder(a, 'KI Bearbeiten')).path;
@@ -313,6 +324,9 @@ export async function mailRoutes(app: FastifyInstance) {
     const rights = await getViewRights(db, v.id, user, m);
     if (!rights.canCreateTask || !(rights.canDraft || rights.canSend)) throw forbidden('Erfordert an der KI-Ansicht die Rechte „Arbeitspaket erzeugen“ und Entwurf');
     if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
+    // Freigabe jetzt; das Tagesbudget hält den Lauf nur zurück
+    const gate = await aiConfigFor(db, { userId: user.id, projectId: m.projectId, feature: 'mail.process', viewId: v.id, budget: false });
+    if (!gate.cfg) throw aiError(gate.decision);
     const target = (v.filter?.folders ?? [])[0];
     if (target && String(mail.folder).toLowerCase() !== String(target).toLowerCase()) {
       const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [mail.account_id]);
@@ -729,15 +743,23 @@ export async function mailRoutes(app: FastifyInstance) {
     const projectIds = access.viewIds.length
       ? (await db.query(`select distinct project_id from mail_views where id = any($1::uuid[])`, [access.viewIds])).rows.map((r: any) => r.project_id as string)
       : (await db.query(`select distinct t.project_id from mail_task_links l join tasks t on t.id = l.task_id where l.mail_id = $1 and l.copied`, [mail.id])).rows.map((r: any) => r.project_id as string);
-    let writer = false; let aiUse = false; let aiOn = false;
+    let writer = false;
+    // KI-Aktionen: Freigabe je Funktion (assist.summarize, assist.essence) in einem der Projekte, sonst deren Begründung
+    const aiReasons: Record<string, string | undefined> = { summarize: undefined, essence_task: undefined, essence_page: undefined };
+    for (const [key, feature] of [['summarize', 'assist.summarize'], ['essence_task', 'assist.essence'], ['essence_page', 'assist.essence']] as const) {
+      let reason: string | undefined = projectIds.length ? undefined : 'Mail gehört zu keiner Projektansicht';
+      for (const [i, pid] of projectIds.entries()) {
+        const d = await aiAllowed(db, { userId: user.id, projectId: pid, feature });
+        if (d.allowed) { reason = undefined; break; }
+        if (i === 0) reason = d.reason;
+      }
+      aiReasons[key] = reason ?? (!access.rights.canAi ? 'Kein KI-Recht in dieser Ansicht' : undefined);
+    }
     for (const pid of projectIds) {
       const m = await getMembership(db, pid, user.id);
       if (m && m.role !== 'reader') writer = true;
-      if (m && (m.role === 'pl' || m.canUseAi)) aiUse = true;
-      if (await aiConfigForProject(db, pid)) aiOn = true;
     }
     const noWrite = writer ? undefined : 'Leser dürfen keine Arbeitspakete ändern';
-    const aiReason = !aiOn ? 'KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)' : !access.rights.canAi ? 'Kein KI-Recht in dieser Ansicht' : !aiUse ? 'Kein KI-Recht im Projekt („KI nutzen“)' : undefined;
     return {
       rule: [
         { key: 'link_task', target: 'task', label: 'Mit Arbeitspaket verknüpfen', enabled: writer && access.rights.canCreateTask },
@@ -748,7 +770,7 @@ export async function mailRoutes(app: FastifyInstance) {
         { key: 'to_page', target: 'doc', label: 'In Doku ablegen (eigene Seite)', enabled: writer && canCopy, reason: noWrite ?? (!canCopy ? 'Aus persönlichen Konten legt nur der Eigentümer ab' : undefined) },
         { key: 'append_page', target: 'doc', label: 'An Seite anhängen (Protokoll, Report)', enabled: writer && canCopy, reason: noWrite ?? (!canCopy ? 'Aus persönlichen Konten legt nur der Eigentümer ab' : undefined) }
       ],
-      ai: AI_ACTIONS.map((a) => ({ ...a, enabled: !aiReason, reason: aiReason })),
+      ai: AI_ACTIONS.map((a) => ({ ...a, enabled: !aiReasons[a.key], reason: aiReasons[a.key] })),
       pages: pages.rows.map((p: any) => ({ pageId: p.page_id, kind: p.kind, title: p.title, projectId: p.project_id }))
     };
   });
@@ -783,9 +805,8 @@ export async function mailRoutes(app: FastifyInstance) {
     for (const v of views.rows) { const r = await getViewRights(db, v.id, user, m); if (r.canDraft || r.canSend) { viewId = v.id; break; } }
     let body = await finalReplyText(db, task, mail, user.name);
     if (req.query.ai === '1') {
-      requireFlag(m, 'canUseAi', 'Erfordert das Recht „KI nutzen“');
-      const cfg = await aiConfigForProject(db, task.project_id);
-      if (!cfg) throw badRequest('KI im Projekt nicht aktiv');
+      const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: task.project_id, feature: 'assist.final_reply' });
+      if (!cfg) throw aiError(decision);
       const r = await aiFinalReply(db, cfg, app.fetchFn, task, mail, user.name);
       body = r.text || body;
       await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.final_reply', objectType: 'task', objectId: task.id, details: { mailId: mail.id, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
