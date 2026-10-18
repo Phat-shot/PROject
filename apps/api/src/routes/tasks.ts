@@ -6,7 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 
-import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
+import { canSeeSubproject, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
 import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { mailAccess } from '../mail/access.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
@@ -79,9 +79,7 @@ export async function taskRoutes(app: FastifyInstance) {
   // Sortieren / Verschieben per Drag & Drop
   app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null } }>('/tasks/:id/move', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'member');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     const col = await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2`, [req.body?.columnId, existing.project_id]);
     if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
     const prevCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
@@ -96,18 +94,14 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>('/tasks/:id/archive', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'member');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1 or (parent_id = $1 and archived_at is null)`, [existing.id]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.archive', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
     return { ok: true };
   });
   app.post<{ Params: { id: string } }>('/tasks/:id/unarchive', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'member');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`update tasks set archived_at = null, updated_at = now() where id = $1 or (parent_id = $1 and deleted_at is null)`, [existing.id]);
     return { task: await loadTask(db, existing.id) };
   });
@@ -215,6 +209,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.subprojectId) {
       const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]);
       if (!s) throw badRequest('Teilprojekt gehört nicht zum Projekt');
+      if (!(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     }
     // Aufgabe: hängt an einem Arbeitspaket desselben Projekts (eine Ebene), Teilprojekt folgt dem Arbeitspaket
     let subprojectId = b.subprojectId ?? null;
@@ -243,8 +238,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const task = await loadTask(db, req.params.id);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, task.projectId);
-    if (!(await canSeeSubproject(db, user.id, task.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    await requireTask(db, user, task.id);
     const comments = await db.query(
       `select c.*, u.name as user_name from task_comments c join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at`,
       [task.id]
@@ -270,10 +264,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.patch<{ Params: { id: string }; Body: TaskBody }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    const m = await requireProject(db, user, existing.project_id, 'member');
-    if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     if (existing.parent_id) delete b.subprojectId;
     if ('responsibleUserId' in b) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
@@ -363,9 +354,7 @@ export async function taskRoutes(app: FastifyInstance) {
   // Löschen = Papierkorb (archived_at wird mitgesetzt, damit nichts mehr zählt); ?permanent=1 löscht endgültig
   app.delete<{ Params: { id: string }; Querystring: { permanent?: string } }>('/tasks/:id', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'pl');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'pl');
     if (req.query.permanent === '1') {
       await db.query(`delete from tasks where id = $1`, [req.params.id]);
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.delete', objectType: 'task', objectId: req.params.id, details: { title: existing.title, permanent: true } });
@@ -380,9 +369,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>('/tasks/:id/restore', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'member');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     if (existing.deleted_at) {
       // Aufgaben, die mit dem Arbeitspaket in den Papierkorb gingen, kommen mit zurück
       await db.query(`update tasks set deleted_at = null, archived_at = case when deleted_was_archived then archived_at else null end, deleted_was_archived = false, updated_at = now() where id = $1 or (parent_id = $1 and deleted_at = $2)`, [existing.id, existing.deleted_at]);
@@ -405,9 +392,7 @@ export async function taskRoutes(app: FastifyInstance) {
   // W7: Nachfolger verschieben – Vorschau und Ausführung
   app.post<{ Params: { id: string }; Body: { apply?: boolean } }>('/tasks/:id/shift-successors', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    const m = await requireProject(db, user, existing.project_id, 'member');
+    const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     const changes: { id: string; title: string; from: string | null; to: string; dueFrom: string | null; dueTo: string | null }[] = [];
     const visited = new Set<string>();
@@ -446,9 +431,8 @@ export async function taskRoutes(app: FastifyInstance) {
   // Eskalation von Hand (Zuständiger, Teilprojekt-Verantwortlicher, PL) oder zurücksetzen (PL)
   app.post<{ Params: { id: string }; Body: { level: number; note?: string } }>('/tasks/:id/escalate', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select t.*, s.responsible_user_id as sub_resp from tasks t left join subprojects s on s.id = t.subproject_id where t.id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    const m = await requireProject(db, user, existing.project_id, 'member');
+    const { task, membership: m } = await requireTask(db, user, req.params.id, 'member');
+    const existing = { ...task, sub_resp: task.subproject_id ? (await db.maybeOne(`select responsible_user_id from subprojects where id = $1`, [task.subproject_id]))?.responsible_user_id ?? null : null };
     const level = Number(req.body?.level);
     if (![1, 2, 3].includes(level)) throw badRequest('Stufe 1 bis 3');
     const allowed = m.role === 'pl' || existing.responsible_user_id === user.id || existing.sub_resp === user.id;
@@ -470,9 +454,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.post<{ Params: { id: string } }>('/tasks/:id/escalation/reset', async (req) => {
     const user = requireUser(req);
-    const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
-    if (!existing) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, existing.project_id, 'pl');
+    const { task: existing } = await requireTask(db, user, req.params.id, 'pl');
     await db.query(`update tasks set escalation_level = 0, escalated_at = null, last_activity_at = now() where id = $1`, [existing.id]);
     await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,'Eskalation durch PL zurückgesetzt.','system')`, [existing.id, user.id]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'escalation.reset', objectType: 'task', objectId: existing.id });
@@ -482,9 +464,7 @@ export async function taskRoutes(app: FastifyInstance) {
   // Checkliste (Tasks)
   app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist', async (req) => {
     const user = requireUser(req);
-    const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, t.project_id, 'member');
+    const { task: t } = await requireTask(db, user, req.params.id, 'member');
     if (!req.body?.title?.trim()) throw badRequest('Titel erforderlich');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [req.params.id]);
     await db.query(`insert into checklist_items (task_id, title, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5)`, [req.params.id, req.body.title.trim(), req.body.responsibleUserId ?? null, req.body.responsibleEmail?.trim().toLowerCase() || null, pos.p]);
@@ -494,9 +474,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.patch<{ Params: { id: string; itemId: string }; Body: { title?: string; done?: boolean; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist/:itemId', async (req) => {
     const user = requireUser(req);
-    const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, t.project_id, 'member');
+    const { task: t } = await requireTask(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     await db.query(
       `update checklist_items set title = coalesce($3, title), done = coalesce($4, done),
@@ -512,9 +490,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   app.delete<{ Params: { id: string; itemId: string } }>('/tasks/:id/checklist/:itemId', async (req) => {
     const user = requireUser(req);
-    const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, t.project_id, 'member');
+    const { task: t } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`delete from checklist_items where id = $1 and task_id = $2`, [req.params.itemId, req.params.id]);
     return { task: await loadTask(db, req.params.id) };
   });
@@ -523,9 +499,7 @@ export async function taskRoutes(app: FastifyInstance) {
   // Log-Eintrag; visibility external = für Externe sichtbar (eigener Eintrag), Teil des Außenkontexts der Agenten
   app.post<{ Params: { id: string }; Body: { body: string; visibility?: 'internal' | 'external' } }>('/tasks/:id/comments', async (req) => {
     const user = requireUser(req);
-    const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, t.project_id, 'member');
+    const { task: t } = await requireTask(db, user, req.params.id, 'member');
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
     const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);
     const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
@@ -550,8 +524,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const c = await db.maybeOne(`select c.*, t.project_id, t.subproject_id from task_comments c join tasks t on t.id = c.task_id where c.id = $1 and c.task_id = $2`, [req.params.cid, req.params.id]);
     if (!c) throw notFound('Log-Eintrag nicht gefunden');
-    const m = await requireProject(db, user, c.project_id, 'member');
-    if (!(await canSeeSubproject(db, user.id, c.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const { membership: m } = await requireTask(db, user, c.task_id, 'member');
     if (!['internal', 'external'].includes(req.body?.visibility)) throw badRequest('visibility: internal oder external');
     if (m.role !== 'pl' && !m.canEditPlan && c.user_id !== user.id) throw forbidden('Für Externe freigeben darf die PL, wer „Projektplan ändern“ darf, oder wer den Eintrag geschrieben hat');
     await db.query(`update task_comments set visibility = $2 where id = $1`, [c.id, req.body.visibility]);

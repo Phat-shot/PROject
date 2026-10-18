@@ -9,12 +9,14 @@ Vollständige Anleitung für alle Benutzer von PROject, einschließlich der Arbe
 - **Arbeitspaket (AP):** ein Ergebnis mit Termin, Priorität und Zuständigkeit. Jedes AP hat eine Kennung aus Projektkürzel und Nummer (`WEB-12`), ein Log, Anhänge, verknüpfte Mails und eine eigene Antwortadresse für Mails.
 - **Aufgabe:** zuweisbarer Schritt eines AP (entspricht dem Vorgang nach DIN 69901). Sie hat eigenen Status, Termine, Log, Antwortadresse und kann einem KI-Agenten zugewiesen werden. Aufgaben haben keine weiteren Aufgaben. Das Teilprojekt folgt immer dem AP.
 - **Task:** Punkt der Checkliste eines AP oder einer Aufgabe, optional mit eigener Zuständigkeit (auch extern per Mail-Adresse).
-- **Teilprojekt:** Gruppe von APs mit Verantwortlichem und Zeitraum; kann eingeschränkt sichtbar sein (nur PL, Verantwortliche, benannte Benutzer und Gruppen).
+- **Teilprojekt:** Gruppe von APs mit Verantwortlichem und Zeitraum; kann eingeschränkt sichtbar sein (nur PL, Verantwortliche, benannte Benutzer und Gruppen). Das gilt für alles am AP: Log, Tasks, Anhänge, Zeiten, Kopien von Mails, Verschieben, Kopieren und Eskalieren.
 - **Meilenstein:** Termin im Plan, optional einem Teilprojekt zugeordnet.
 
 **Zuständigkeit:** ausdrücklich gesetzt oder geerbt in der Reihenfolge Aufgabe → AP → Teilprojekt → Projektleitung. Geerbte Zuständigkeit ist überall als „geerbt“ markiert. Zuständig sein können Mitglieder, KI-Agenten (nur durch die PL) und externe Kontakte per Mail-Adresse.
 
-**Rollen im Projekt:** Projektleitung (PL, optional zweite PL als Stellvertretung), Mitglied, Leser. Einzelrechte: Projektplan ändern, Freigeben, Final setzen, KI nutzen, KI-Vorschläge freigeben. Leser mit „KI nutzen“ stellen nur Fragen ans Projekt und fragen Agenten im Chat (nur Auskunft). Die verantwortliche PL übergibt ihre Rolle nur selbst; die Stellvertretung kann sich nicht selbst dazu machen und ändert die Mitgliedschaft der verantwortlichen PL nicht. Mandantenweit gibt es Org-Admins und Projektersteller. Org-Admins sehen Projektinhalte nur, wenn sie Mitglied sind.
+**Rollen im Projekt:** Projektleitung (PL, optional zweite PL als Stellvertretung), Mitglied, Leser. Einzelrechte: Projektplan ändern, Freigeben (KI-Vorschläge, Workflow-Schritte, Bestätigungen), Final setzen, KI nutzen. „KI nutzen“ ist überall gleich vorbelegt: an für Mitglieder, aus für Leser (Einladung, Formular, Gruppe). Leser mit „KI nutzen“ stellen nur Fragen ans Projekt und fragen Agenten im Chat (nur Auskunft). Die verantwortliche PL übergibt ihre Rolle nur selbst; die Stellvertretung kann sich nicht selbst dazu machen und ändert die Mitgliedschaft der verantwortlichen PL nicht. Zusätzlich kann der Org-Admin die verantwortliche PL neu bestimmen (Verwaltung › Projekte), ohne Inhalte zu sehen. Mandantenweit gibt es Org-Admins und Projektersteller, dazu einzelne Org-Rechte (KI verwalten, Gruppen verwalten, Ressourcen-Pool). Org-Admins sehen Projektinhalte nur, wenn sie Mitglied sind.
+
+**Gruppen im Projekt:** Die PL nimmt Berechtigungsgruppen als Mitglied oder Leser auf, mit Einzelrechten (Projekteinstellungen › Mitglieder › Gruppe hinzufügen). Deren Personen stehen mit Herkunft „über Gruppe“ in der Mitgliederliste. Es gilt: Ein Direkteintrag überschreibt alle Gruppen („überschreibt Elektro-Team (Mitglied)“, zurück mit „Gruppenrechte übernehmen“); zwischen mehreren Gruppen zählt die höchste Rolle, Einzelrechte addieren sich. Wer über eine Gruppe Mitglied ist, wird in der Gruppe entfernt oder per „Rolle“ direkt eingetragen. PL und Stellvertretung sind immer einzelne Personen; KI-Agenten werden nie Gruppenmitglied; persönliche Projekte nehmen keine Gruppen auf. Änderungen an Gruppen, SSO-Abgleich und Deaktivieren wirken sofort im Projekt.
 
 ## 2. Navigation
 
@@ -38,7 +40,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 ## 4. Projekte und Planung
 
 - **Neues Projekt:** Kürzel, Name, Beschreibung, optional eine Vorlage (Spalten, Teilprojekte, Meilensteine, Labels, Doku-Ordner, Termine relativ zum Projektstart). Wer anlegt, wird PL.
-- **Einstellungen (PL):** Allgemein (Name, Beschreibung, Sichtbarkeit), Mitglieder (Rollen, Rechte, Einladungen), Kontakte (externe Ansprechpartner), Planung (Teilprojekte, Meilensteine), Board (Spalten, WIP-Limits, Labels), Projekt (Ampel, Zeiterfassung, Budget, Projekt-KI, als Vorlage speichern, archivieren), Eskalation, Reporting, Mail-Ansichten, Papierkorb, Audit-Log.
+- **Einstellungen (PL):** Allgemein (Name, Beschreibung, Sichtbarkeit), Mitglieder (Rollen, Rechte, Herkunft, Gruppen, Einladungen), Kontakte (externe Ansprechpartner), Planung (Teilprojekte, Meilensteine), Board (Spalten, WIP-Limits, Labels), Projekt (Ampel, Zeiterfassung, Budget, Projekt-KI, als Vorlage speichern, archivieren), Eskalation, Reporting, Mail-Ansichten, Papierkorb, Audit-Log.
 - **Plan:** Balken von Start bis Deadline, Punkt bei reiner Deadline, Sammelbalken je Teilprojekt, Meilensteine, Abhängigkeiten Ende → Anfang. Aufgaben stehen eingerückt unter ihrem AP. Balken ziehen verschiebt, die rechte Kante ändert die Deadline.
 - **Konflikte** (Deadline nach Teilprojekt-Ende, Start vor Ende des Vorgängers) werden markiert; nichts verschiebt sich automatisch. „Nachfolger verschieben“ zeigt eine Vorschau und informiert die Betroffenen.
 - **Termine ändern** dürfen die PL, wer „Projektplan ändern“ hat, und die zuständige Person.
@@ -149,7 +151,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - **Tagesbudget KI-Assistenz** je Projekt (Anfragen; Standard 200, 0 = keine) neben dem Tagesbudget je Agent.
 
 **Projekt-KI (Projekt › KI und Postfach)**
-- Mail zusammenfassen, Essenz einer Mail als Vorschlag für ein AP oder eine Seite; Vorschläge gibt frei, wer „KI-Vorschläge freigeben“ hat.
+- Mail zusammenfassen, Essenz einer Mail als Vorschlag für ein AP oder eine Seite; Vorschläge gibt frei, wer das Recht „Freigeben“ hat.
 - Frage ans Projekt: Antwort aus APs, Seiten und lesbaren Mails mit Quellenangabe (Stichwortsuche). Fragen dürfen auch Leser mit „KI nutzen“.
 - Statusbericht-Entwurf aus Kennzahlen, Risiken und Log.
 
@@ -209,7 +211,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 - **Benutzereinstellungen:** Name, Theme, Sprache, Mail-Benachrichtigungen (aus, sofort, täglich), Passwort, zweiter Faktor (Authenticator-App), Kalender-Abo und Kalender schreiben.
 - **Konfiguration:** Mail-Konten (persönlich, Projekt, Organisation; Microsoft 365 und Google per OAuth).
-- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Org-Recht „KI verwalten“, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, Außenprüfung (streng oder nur prüfen), eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten.
+- **Verwaltung (Org-Admin):** Benutzer einladen; globale Rolle und Org-Rechte (KI verwalten, Gruppen verwalten, Ressourcen-Pool) ändern, deaktivieren und reaktivieren (den eigenen Zugang deaktiviert man nicht selbst, der letzte aktive Org-Admin bleibt erhalten); Gruppen mit Verwaltern; Projekte mit verantwortlicher PL (neu bestimmen, die bisherige wird Stellvertretung); PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, Außenprüfung (streng oder nur prüfen), eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten, mit „Gruppen verwalten“ alle Gruppen, als Verwalter einer Gruppe nur diese und pflegt deren Mitglieder.
 - **Anmeldung:** Passwort mit optionalem zweiten Faktor oder Single Sign-on (OIDC), falls eingerichtet.
 
 ## 14. Persönliches Projekt (Assistent)

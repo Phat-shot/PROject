@@ -121,7 +121,8 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="section">Einstellungen</div>
         <NavLink to="/einstellungen/benutzer" data-tour="benutzer">Benutzereinstellungen</NavLink>
         <NavLink to="/einstellungen/konfiguration" data-tour="mailkonten">Konfiguration</NavLink>
-        {user && (user.globalRole === 'org_admin' || user.orgRights?.includes('ai_admin')) && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
+        {/* Verwaltung: Org-Admin; mit Org-Recht (KI, Gruppen) oder als Verwalter einer Gruppe nur die passenden Karten */}
+        {user && (user.globalRole === 'org_admin' || user.orgRights?.some((r) => r === 'ai_admin' || r === 'groups_admin') || user.managesGroups) && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>

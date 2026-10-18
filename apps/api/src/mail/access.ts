@@ -1,6 +1,6 @@
 import type { MailViewRights, User } from '@projekttool/shared';
 import type { Db } from '../db.js';
-import { getMembership, getViewRights } from '../rights.js';
+import { canSeeTask, getMembership, getViewRights } from '../rights.js';
 
 /** Leserecht an einer Mail über ihre Ansichten (oder über eine Kopie in einem Arbeitspaket); liefert die vereinigten Rechte. */
 export async function mailAccess(db: Db, user: User, mailId: string): Promise<{ ok: boolean; viewIds: string[]; rights: MailViewRights }> {
@@ -16,12 +16,10 @@ export async function mailAccess(db: Db, user: User, mailId: string): Promise<{ 
       }
     }
     if (readable.length) return { ok: true, viewIds: readable, rights: { ...merged, canRead: true } };
-    const copied = await db.query(
-      `select t.project_id from mail_task_links l join tasks t on t.id = l.task_id where l.mail_id = $1 and l.copied`,
-      [mailId]
-    );
+    // Kopie in einem Arbeitspaket: lesen darf, wer das Arbeitspaket sieht (auch dessen Teilprojekt)
+    const copied = await db.query(`select l.task_id from mail_task_links l where l.mail_id = $1 and l.copied`, [mailId]);
     for (const c of copied.rows) {
-      if (await getMembership(db, c.project_id, user.id)) return { ok: true, viewIds: [], rights: { ...merged, canRead: true } };
+      if (await canSeeTask(db, user, c.task_id)) return { ok: true, viewIds: [], rights: { ...merged, canRead: true } };
     }
     return { ok: false, viewIds: [], rights: merged };
   }

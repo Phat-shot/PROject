@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { AgentUser, AiDecision, AiPolicyRule, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
-import { AI_CATEGORIES, AI_FEATURES } from '@projekttool/shared';
+import type { AdminProject, AgentUser, AiDecision, AiPolicyRule, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
+import { AI_CATEGORIES, AI_FEATURES, ORG_RIGHTS } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
 import { api, downloadCsv, fmtDateTime } from '../lib/api';
@@ -14,20 +14,25 @@ const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_cr
 
 /**
  * Verwaltung: der Org-Admin sieht alle Karten; die KI-Verwaltung (Org-Recht ai_admin) nur die KI-Karten
- * (Freigaben und Notaus, Profile, eigene LLMs der Projekte, Agenten).
+ * (Freigaben und Notaus, Profile, eigene LLMs der Projekte, Agenten), die Gruppenverwaltung (groups_admin)
+ * und Verwalter einer Gruppe nur die Gruppen.
  */
 export function AdminPage() {
   const { user } = useAuth();
   const isAdmin = user?.globalRole === 'org_admin';
-  const users = useData<{ users: User[] }>('/users');
+  const aiAdmin = isAdmin || Boolean(user?.orgRights?.includes('ai_admin'));
+  const groupsAdmin = isAdmin || Boolean(user?.orgRights?.includes('groups_admin'));
+  const users = useData<{ users: User[] }>(isAdmin ? '/users?all=1' : '/users');
   const [create, setCreate] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const { error, run, busy } = useAsync();
-  const dialog = useDialog();
   if (!isAdmin) return (
     <>
-      <TopBar title="Verwaltung › KI" />
-      <div className="content"><AiPolicyCard /><AiCard /><ProjectLlmsCard /><AgentsCard /></div>
+      <TopBar title={aiAdmin && !groupsAdmin && !user?.managesGroups ? 'Verwaltung › KI' : 'Verwaltung'} />
+      <div className="content">
+        {(groupsAdmin || user?.managesGroups) && <GroupsCard users={users.data?.users ?? []} canAdmin={groupsAdmin} />}
+        {aiAdmin && <><AiPolicyCard /><AiCard /><ProjectLlmsCard /><AgentsCard /></>}
+      </div>
     </>
   );
   return (
@@ -35,16 +40,9 @@ export function AdminPage() {
       <TopBar title="Verwaltung"><button className="btn" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></TopBar>
       <div className="content">
         <InvitationsCard onAccepted={() => void users.reload()} />
-        <div className="card">
-          <h2>Benutzer</h2>
-          {error && <div className="error mb">{error}</div>}
-          <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th /></tr></thead><tbody>
-            {users.data?.users.map((u) => <tr key={u.id}><td>{u.name}</td><td>{u.email}</td><td><span className="badge">{globalLabel[u.globalRole]}</span>{u.totpEnabled && <span className="badge ok" style={{ marginLeft: 4 }} title="Zweiter Faktor aktiv">2FA</span>}</td>
-              <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : u.globalRole === 'org_admin' ? <span className="muted">alle</span> : <label className="check" title="Verwaltung › KI: Freigaben und Notaus, Profile, Agenten, Budgets; keine Benutzer, Gruppen oder Audit"><input type="checkbox" disabled={busy} checked={Boolean(u.orgRights?.includes('ai_admin'))} onChange={(e) => void run(async () => { const rest = (u.orgRights ?? []).filter((r) => r !== 'ai_admin'); await api.patch(`/users/${u.id}`, { orgRights: e.target.checked ? [...rest, 'ai_admin'] : rest }); await users.reload(); })} /> KI verwalten</label>}</td>
-              <td className="nowrap">{u.totpEnabled && <button className="btn sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => void dialog.confirm({ title: 'Zweiten Faktor zurücksetzen', text: `${u.name} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor neu einrichten.`, confirmLabel: 'Zurücksetzen' }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/totp/reset`); await users.reload(); }); })}>2FA zurücksetzen</button>}<button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Benutzer deaktivieren', text: `${u.name} deaktivieren? Der Login endet, persönliche Mail-Konten werden getrennt, Zuständigkeiten fallen auf die Vererbung zurück.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await users.reload(); }); })}>Deaktivieren</button></td></tr>)}
-          </tbody></table>
-        </div>
-        <GroupsCard users={users.data?.users ?? []} />
+        <UsersCard users={users.data?.users ?? []} reload={users.reload} />
+        <GroupsCard users={users.data?.users ?? []} canAdmin />
+        <ProjectLeadsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
         <AiPolicyCard />
         <AiCard />
@@ -57,6 +55,7 @@ export function AdminPage() {
             <button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Anzeigen (nur Metadaten, wird protokolliert)</button>
             <button className="btn primary" disabled={busy} onClick={() => void run(async () => { const e = (await api.get<{ entries: AuditEntry[] }>('/audit')).entries; downloadCsv(`audit-${new Date().toISOString().slice(0, 10)}.csv`, ['Zeit', 'Wer', 'Aktion', 'Objekttyp', 'Objekt', 'Projekt', 'Details'], e.map((x) => [x.createdAt, x.userName ?? 'Worker', x.action, x.objectType, x.objectId, x.projectId, JSON.stringify(x.details)])); })}>CSV herunterladen</button>
           </span></div>
+          {error && <div className="error mt">{error}</div>}
           {audit && <p className="muted small mt">{audit.length} Einträge, die ersten 300 angezeigt.</p>}
           {audit && <table className="table mt"><thead><tr><th>Zeit</th><th>Wer</th><th>Aktion</th><th>Objekt</th></tr></thead><tbody>
             {audit.slice(0, 300).map((e) => <tr key={e.id}><td className="nowrap small">{fmtDateTime(e.createdAt)}</td><td>{e.userName ?? 'Worker'}</td><td><code>{e.action}</code></td><td className="small muted">{e.objectType} {e.objectId?.slice(0, 8)}</td></tr>)}
@@ -65,6 +64,70 @@ export function AdminPage() {
       </div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await users.reload(); }} />}
     </>
+  );
+}
+
+const ORG_RIGHT_HINT: Record<string, string> = {
+  ai_admin: 'Verwaltung › KI: Freigaben und Notaus, Profile, Agenten, Budgets; keine Benutzer, Gruppen oder Audit',
+  groups_admin: 'Alle Gruppen anlegen und pflegen (Mitglieder, Verwalter)',
+  resources_admin: 'Pool-Ressourcen und Sperrzeiten im Pool'
+};
+
+/**
+ * Benutzer (Org-Admin): globale Rolle, Org-Rechte, deaktivieren und reaktivieren. Den eigenen Zugang deaktiviert man nicht selbst,
+ * der letzte aktive Org-Admin bleibt erhalten (prüft die API).
+ */
+export function UsersCard({ users, reload }: { users: User[]; reload: () => Promise<void> }) {
+  const { user: me } = useAuth();
+  const { error, run, busy } = useAsync();
+  const dialog = useDialog();
+  const patch = (u: User, body: Record<string, unknown>) => void run(async () => { await api.patch(`/users/${u.id}`, body); await reload(); });
+  return (
+    <div className="card">
+      <h2>Benutzer</h2>
+      {error && <div className="error mb">{error}</div>}
+      <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th /></tr></thead><tbody>
+        {users.map((u) => <tr key={u.id} className={u.active ? undefined : 'muted'}>
+          <td>{u.name}{!u.active && <span className="badge" style={{ marginLeft: 4 }}>deaktiviert</span>}</td><td>{u.email}</td>
+          <td>{u.kind === 'agent' ? <span className="badge">KI-Agent</span> : <select aria-label={`Globale Rolle ${u.name}`} value={u.globalRole} disabled={busy || !u.active} onChange={(e) => patch(u, { globalRole: e.target.value })} style={{ width: 'auto' }}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}{u.totpEnabled && <span className="badge ok" style={{ marginLeft: 4 }} title="Zweiter Faktor aktiv">2FA</span>}</td>
+          <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : u.globalRole === 'org_admin' ? <span className="muted">alle</span> : ORG_RIGHTS.map((r) => <label key={r.key} className="check" title={ORG_RIGHT_HINT[r.key]}><input type="checkbox" disabled={busy || !u.active} checked={Boolean(u.orgRights?.includes(r.key))} onChange={(e) => { const rest = (u.orgRights ?? []).filter((x) => x !== r.key); patch(u, { orgRights: e.target.checked ? [...rest, r.key] : rest }); }} /> {r.label}</label>)}</td>
+          <td className="nowrap">{u.totpEnabled && <button className="btn sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => void dialog.confirm({ title: 'Zweiten Faktor zurücksetzen', text: `${u.name} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor neu einrichten.`, confirmLabel: 'Zurücksetzen' }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/totp/reset`); await reload(); }); })}>2FA zurücksetzen</button>}
+            {u.kind !== 'agent' && !u.active && <button className="btn sm" disabled={busy} onClick={() => patch(u, { active: true })}>Reaktivieren</button>}
+            {u.kind !== 'agent' && u.active && u.id !== me?.id && <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Benutzer deaktivieren', text: `${u.name} deaktivieren? Der Login endet, persönliche Mail-Konten werden getrennt, Zuständigkeiten fallen auf die Vererbung zurück, Mitgliedschaften über Gruppen ruhen bis zur Reaktivierung.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await reload(); }); })}>Deaktivieren</button>}</td>
+        </tr>)}
+      </tbody></table>
+    </div>
+  );
+}
+
+/** Verantwortliche PL je Projekt (Org-Admin): neu bestimmen, ohne Projektinhalte zu sehen; die bisherige wird Stellvertretung. */
+function ProjectLeadsCard({ users }: { users: User[] }) {
+  const { data, reload } = useData<{ projects: AdminProject[] }>('/admin/projects');
+  const [edit, setEdit] = useState<AdminProject | null>(null);
+  const [f, setF] = useState({ userId: '', transferTasks: false });
+  const { busy, error, run } = useAsync();
+  const people = users.filter((u) => u.active && u.kind !== 'agent');
+  return (
+    <div className="card">
+      <h2>Projekte: verantwortliche PL</h2>
+      <p className="muted small">Nur Kennung, Name und PL, keine Inhalte. Neu bestimmen z. B., wenn die PL das Unternehmen verlässt; die bisherige PL bleibt Stellvertretung, bis die neue sie entfernt.</p>
+      {data && data.projects.length === 0 && <div className="empty">Keine Projekte.</div>}
+      {data && data.projects.length > 0 && <table className="table"><thead><tr><th>Projekt</th><th>Verantwortliche PL</th><th /></tr></thead><tbody>
+        {data.projects.map((p) => <tr key={p.id}><td><strong>{p.key}</strong> {p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 4 }}>archiviert</span>}</td>
+          <td>{p.lead ? <>{p.lead.name}{!p.lead.active && <span className="badge danger" style={{ marginLeft: 4 }}>deaktiviert</span>}</> : <span className="muted">–</span>}</td>
+          <td className="nowrap"><button className="btn sm link" onClick={() => { setEdit(p); setF({ userId: people.find((u) => u.id !== p.lead?.userId)?.id ?? '', transferTasks: false }); }}>PL neu bestimmen</button></td></tr>)}
+      </tbody></table>}
+      {error && <div className="error mt">{error}</div>}
+      {edit && (
+        <Modal title={`Verantwortliche PL: ${edit.key}`} onClose={() => setEdit(null)}>
+          <div className="form">
+            <label className="field"><span>Neue verantwortliche PL</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{people.filter((u) => u.id !== edit.lead?.userId).map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select></label>
+            <label className="check"><input type="checkbox" checked={f.transferTasks} onChange={(e) => setF({ ...f, transferTasks: e.target.checked })} /> direkt zugewiesene Arbeitspakete und Teilprojekte mit übertragen (geerbte wechseln immer)</label>
+            <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => { await api.put(`/admin/projects/${edit.id}/lead`, f); setEdit(null); await reload(); })}>Bestimmen</button></div>
+          </div>
+        </Modal>
+      )}
+    </div>
   );
 }
 
@@ -107,32 +170,51 @@ function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
   );
 }
 
-function GroupsCard({ users }: { users: User[] }) {
+/**
+ * Berechtigungsgruppen: Org-Admin und Gruppenverwaltung (groups_admin) pflegen alle Gruppen samt Verwaltern;
+ * Verwalter einer Gruppe sehen hier nur ihre Gruppen und pflegen deren Mitglieder. KI-Agenten sind nie Gruppenmitglied.
+ */
+export function GroupsCard({ users, canAdmin }: { users: User[]; canAdmin: boolean }) {
+  const { user: me } = useAuth();
   const { data, reload } = useData<{ groups: Group[] }>('/groups');
   const [edit, setEdit] = useState<Group | null>(null);
-  const [f, setF] = useState({ name: '', description: '', idpName: '', memberIds: [] as string[] });
+  const [f, setF] = useState({ name: '', description: '', idpName: '', memberIds: [] as string[], managerIds: [] as string[] });
   const { busy, error, run } = useAsync();
   const dialog = useDialog();
-  const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', idpName: g?.idpName ?? '', memberIds: g?.memberIds ?? [] }); };
+  const people = users.filter((u) => u.kind !== 'agent' && u.active);
+  const agentIds = new Set(users.filter((u) => u.kind === 'agent').map((u) => u.id));
+  const groups = (data?.groups ?? []).filter((g) => canAdmin || g.managerIds.includes(me?.id ?? ''));
+  const names = (ids: string[]) => ids.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ');
+  const open = (g: Group | null) => { setEdit(g ?? { id: '', name: '', description: '', memberIds: [], managerIds: [] }); setF({ name: g?.name ?? '', description: g?.description ?? '', idpName: g?.idpName ?? '', memberIds: (g?.memberIds ?? []).filter((id) => !agentIds.has(id)), managerIds: g?.managerIds ?? [] }); };
+  const toggle = (list: string[], id: string, on: boolean) => (on ? [...list.filter((x) => x !== id), id] : list.filter((x) => x !== id));
   return (
     <div className="card">
-      <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2><button className="btn sm" onClick={() => open(null)}>+ Gruppe</button></div>
-      <p className="muted small">Gruppen bündeln Benutzer für Sichtbarkeit und Rechte: eingeschränkte Teilprojekte und Mail-Ansichten lassen sich an Gruppen freigeben.</p>
-      {data && data.groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
-      {data && data.groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th /></tr></thead><tbody>
-        {data.groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge" style={{ marginLeft: 6 }} title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{g.memberIds.map((id) => users.find((u) => u.id === id)?.name).filter(Boolean).join(', ') || <span className="muted">–</span>}</td>
-          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button><button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })}>✕</button></td></tr>)}
+      <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2>{canAdmin && <button className="btn sm" onClick={() => open(null)}>+ Gruppe</button>}</div>
+      <p className="muted small">Gruppen bündeln Personen für Sichtbarkeit und Rechte: als Mitglied oder Leser eines Projekts (die PL nimmt sie unter Mitglieder auf), für eingeschränkte Teilprojekte, Mail-Ansichten und KI-Freigaben. Verwalter einer Gruppe pflegen deren Mitglieder.</p>
+      {data && groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
+      {groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th>Verwalter</th><th /></tr></thead><tbody>
+        {groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge" style={{ marginLeft: 6 }} title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{names(g.memberIds) || <span className="muted">–</span>}</td><td className="small">{names(g.managerIds) || <span className="muted">–</span>}</td>
+          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button>{canAdmin && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Projekte, Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })}>✕</button>}</td></tr>)}
       </tbody></table>}
       {error && <div className="error mt">{error}</div>}
       {edit && (
         <Modal title={edit.id ? `Gruppe: ${edit.name}` : 'Neue Gruppe'} onClose={() => setEdit(null)}>
           <div className="form">
-            <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
-            <label className="field"><span>Beschreibung</span><input type="text" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
-            <label className="field"><span>Gruppe beim Identitätsanbieter (SSO, optional)</span><input type="text" value={f.idpName} placeholder="z. B. PM-Team (Name aus dem Gruppen-Claim)" onChange={(e) => setF({ ...f, idpName: e.target.value })} /><span className="muted small">Bei jeder SSO-Anmeldung wird die Mitgliedschaft nach dieser Gruppe gesetzt oder entfernt.</span></label>
+            {canAdmin && <>
+              <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} autoFocus /></label>
+              <label className="field"><span>Beschreibung</span><input type="text" value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
+              <label className="field"><span>Gruppe beim Identitätsanbieter (SSO, optional)</span><input type="text" value={f.idpName} placeholder="z. B. PM-Team (Name aus dem Gruppen-Claim)" onChange={(e) => setF({ ...f, idpName: e.target.value })} /><span className="muted small">Bei jeder SSO-Anmeldung wird die Mitgliedschaft nach dieser Gruppe gesetzt oder entfernt.</span></label>
+            </>}
             <div className="field"><span>Mitglieder</span>
-              <div className="grid cols-2" style={{ gap: 2 }}>{users.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: e.target.checked ? [...f.memberIds, u.id] : f.memberIds.filter((x) => x !== u.id) })} /> {u.name}</label>)}</div></div>
-            <div><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { if (edit.id) await api.patch(`/groups/${edit.id}`, f); else await api.post('/groups', f); setEdit(null); await reload(); })}>Speichern</button></div>
+              <div className="grid cols-2" style={{ gap: 2 }}>{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" disabled={!canAdmin && f.managerIds.includes(u.id)} checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: toggle(f.memberIds, u.id, e.target.checked) })} /> {u.name}</label>)}</div></div>
+            {canAdmin && <div className="field"><span>Verwalter (pflegen die Mitglieder dieser Gruppe)</span>
+              <div className="grid cols-2" style={{ gap: 2 }}>{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" aria-label={`Verwalter ${u.name}`} checked={f.managerIds.includes(u.id)} onChange={(e) => setF({ ...f, managerIds: toggle(f.managerIds, u.id, e.target.checked), memberIds: e.target.checked ? toggle(f.memberIds, u.id, true) : f.memberIds })} /> {u.name}</label>)}</div></div>}
+            {!canAdmin && <p className="muted small">Als Verwalter pflegst du die Mitglieder; Verwalter, Name und SSO-Zuordnung ändert die Gruppenverwaltung.</p>}
+            <div><button className="btn primary" disabled={busy || (canAdmin && !f.name.trim())} onClick={() => void run(async () => {
+              const body = canAdmin ? f : { memberIds: f.memberIds };
+              if (edit.id) await api.patch(`/groups/${edit.id}`, body); else await api.post('/groups', body);
+              setEdit(null); await reload();
+            })}>Speichern</button></div>
           </div>
         </Modal>
       )}

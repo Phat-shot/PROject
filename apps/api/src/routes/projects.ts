@@ -1,9 +1,10 @@
 import type { FastifyInstance } from 'fastify';
-import type { ExternalProfile, Membership, Project, ProjectRole, User, ReminderPolicy } from '@projekttool/shared';
+import type { AdminProject, ExternalProfile, Membership, Project, ProjectGroup, ProjectRole, User, ReminderPolicy } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
+import { canSeeSubproject, getMembership, mapMembership, requireProject, syncProjectGroups, visibleSubprojectSql } from '../rights.js';
+import { notify } from '../notify.js';
 import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
@@ -119,6 +120,7 @@ export async function projectRoutes(app: FastifyInstance) {
       project: { ...mapProject(p), myRole: m.role, myMembership: m },
       labels: labels.rows.map(mapLabel),
       members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email, kind: r.kind === 'agent' ? 'agent' : 'person' })),
+      groups: await projectGroups(p.id),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
       milestones: milestones.rows.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
@@ -237,30 +239,22 @@ export async function projectRoutes(app: FastifyInstance) {
       // Die verantwortliche PL übergibt ihre Rolle nur selbst: eine Stellvertretung macht weder sich noch andere zur verantwortlichen PL und ändert deren Mitgliedschaft nicht
       const handover = b.role === 'pl' && !isDeputy && primary && primary.user_id !== req.params.userId;
       if (primary && primary.user_id !== user.id && (handover || primary.user_id === req.params.userId)) throw forbidden('Die verantwortliche PL übergibt ihre Rolle nur selbst');
-      let transferred = 0;
-      if (handover) {
-        await db.query(`update project_members set is_deputy = true where project_id = $1 and user_id = $2`, [req.params.id, primary.user_id]);
-        // Geerbte Zuständigkeiten folgen automatisch; direkt zugewiesene nur auf Wunsch
-        if (b.transferTasks) {
-          const t1 = await db.query(`update tasks set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 and archived_at is null returning id`, [req.params.id, primary.user_id, req.params.userId]);
-          const t2 = await db.query(`update subprojects set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 returning id`, [req.params.id, primary.user_id, req.params.userId]);
-          await db.query(`update checklist_items set responsible_user_id = $3 where responsible_user_id = $2 and task_id in (select id from tasks where project_id = $1)`, [req.params.id, primary.user_id, req.params.userId]);
-          transferred = t1.rows.length + t2.rows.length;
-        }
-      }
+      const transferred = handover ? await handOver(req.params.id, primary.user_id, req.params.userId, Boolean(b.transferTasks)) : 0;
       if (primary && primary.user_id === req.params.userId && (b.role !== 'pl' || isDeputy)) {
         // Nachfolge nur durch eine Person (Agenten sind nie verantwortliche PL)
         const other = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.user_id <> $2 and u.kind <> 'agent' and u.active order by m.created_at limit 1`, [req.params.id, req.params.userId]);
         if (!other) throw badRequest('Das Projekt braucht einen PL. Erst einen zweiten PL bestimmen.');
         await db.query(`update project_members set is_deputy = false where project_id = $1 and user_id = $2`, [req.params.id, other.user_id]);
       }
+      // Direkteintrag (Regel M): überschreibt eine Mitgliedschaft über Gruppen; „KI nutzen“ vorbelegt (Mitglied an, Leser aus)
+      const canUseAi = b.canUseAi === undefined ? b.role !== 'reader' : Boolean(b.canUseAi);
       const row = await db.one(
-        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail, origin)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,'direct')
          on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
-           can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail
+           can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail, origin = 'direct'
          returning *`,
-        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, b.role === 'pl' || Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
+        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, b.role === 'pl' || Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), canUseAi, isAgent ? b.agentCanMail !== false : true]
       );
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };
@@ -273,10 +267,81 @@ export async function projectRoutes(app: FastifyInstance) {
     const m = await getMembership(db, req.params.id, req.params.userId);
     if (!m) throw notFound('Mitglied nicht gefunden');
     if (m.role === 'pl' && !m.isDeputy) throw badRequest('Der verantwortliche PL kann nicht entfernt werden');
+    if (m.origin === 'group') throw badRequest('Mitglied über eine Gruppe des Projekts: in der Gruppe oder unter „Gruppen im Projekt“ entfernen');
     await db.query(`delete from project_members where project_id = $1 and user_id = $2`, [req.params.id, req.params.userId]);
-    await db.query(`delete from sessions where user_id = $1 and false`, [req.params.userId]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.remove', objectType: 'membership', objectId: req.params.userId });
+    // Ohne Direkteintrag gelten wieder die Gruppen (auch „Gruppenrechte übernehmen“)
+    await syncProjectGroups(db, { projectId: req.params.id, userId: req.params.userId });
+    const viaGroup = await getMembership(db, req.params.id, req.params.userId);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.remove', objectType: 'membership', objectId: req.params.userId, details: { viaGroup: viaGroup ? viaGroup.role : null } });
+    return { ok: true, membership: viaGroup };
+  });
+
+  // Gruppen als Projektmitglied (Regel M): Rolle Leser oder Mitglied plus Einzelrechte; PL und Stellvertretung bleiben einzelne Personen
+  app.put<{ Params: { id: string; groupId: string }; Body: { role: 'member' | 'reader'; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean } }>('/projects/:id/groups/:groupId', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    if ((await db.one(`select personal from projects where id = $1`, [req.params.id])).personal) throw forbidden('Persönliche Projekte nehmen keine Gruppen auf');
+    const g = await db.maybeOne(`select id, name from groups where id = $1 and org_id = $2`, [req.params.groupId, user.orgId]);
+    if (!g) throw notFound('Gruppe nicht gefunden');
+    const b = req.body ?? ({} as any);
+    if (!['member', 'reader'].includes(b.role)) throw badRequest('Rolle einer Gruppe: member oder reader (PL und Stellvertretung sind einzelne Personen)');
+    const member = b.role === 'member';
+    // Leser haben nur „KI nutzen“ (Fragen); vorbelegt wie bei Personen: Mitglied an, Leser aus
+    const flags = { canEditPlan: member && Boolean(b.canEditPlan), canApprove: member && Boolean(b.canApprove), canFinalize: member && Boolean(b.canFinalize), canUseAi: b.canUseAi === undefined ? member : Boolean(b.canUseAi) };
+    await db.query(
+      `insert into project_groups (project_id, group_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai, added_by) values ($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (project_id, group_id) do update set role = excluded.role, can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai`,
+      [req.params.id, g.id, b.role, flags.canEditPlan, flags.canApprove, flags.canFinalize, flags.canUseAi, user.id]
+    );
+    await syncProjectGroups(db, { projectId: req.params.id });
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'group.project.set', objectType: 'group', objectId: g.id, details: { name: g.name, role: b.role, ...flags } });
+    return { group: (await projectGroups(req.params.id)).find((x) => x.groupId === g.id)! };
+  });
+
+  app.delete<{ Params: { id: string; groupId: string } }>('/projects/:id/groups/:groupId', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const r = await db.maybeOne(`delete from project_groups where project_id = $1 and group_id = $2 returning group_id`, [req.params.id, req.params.groupId]);
+    if (!r) throw notFound('Gruppe ist nicht im Projekt');
+    await syncProjectGroups(db, { projectId: req.params.id });
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'group.project.remove', objectType: 'group', objectId: req.params.groupId });
     return { ok: true };
+  });
+
+  // Org-Admin: Projekte mit verantwortlicher PL, ohne Inhalte (nur Kennung, Name, PL); persönliche Projekte nicht
+  app.get('/admin/projects', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const rows = await db.query(
+      `select p.id, p.key, p.name, p.status, u.id as lead_id, u.name as lead_name, u.active as lead_active from projects p
+         left join project_members m on m.project_id = p.id and m.role = 'pl' and not m.is_deputy left join users u on u.id = m.user_id
+       where p.org_id = $1 and p.kind = 'project' and not p.personal order by p.status, p.key`,
+      [user.orgId]
+    );
+    return { projects: rows.rows.map((r: any): AdminProject => ({ id: r.id, key: r.key, name: r.name, status: r.status, lead: r.lead_id ? { userId: r.lead_id, name: r.lead_name, active: Boolean(r.lead_active) } : null })) };
+  });
+
+  // Org-Admin bestimmt die verantwortliche PL neu (z. B. wenn sie das Unternehmen verlässt), ohne selbst Mitglied zu werden;
+  // die bisherige wird Stellvertretung
+  app.put<{ Params: { id: string }; Body: { userId: string; transferTasks?: boolean } }>('/admin/projects/:id/lead', async (req) => {
+    const user = requireUser(req);
+    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    const p = await db.maybeOne(`select id, key, name, personal, kind from projects where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!p || p.kind !== 'project') throw notFound('Projekt nicht gefunden');
+    if (p.personal) throw forbidden('Persönliche Projekte gehören ihrem Ersteller');
+    const target = await db.maybeOne(`select id, name from users where id = $1 and org_id = $2 and active and kind = 'person'`, [req.body?.userId, user.orgId]);
+    if (!target) throw badRequest('Verantwortliche PL ist eine aktive Person des Mandanten');
+    const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [p.id]);
+    if (primary?.user_id === target.id) return { ok: true, transferred: 0 };
+    const transferred = primary ? await handOver(p.id, primary.user_id, target.id, Boolean(req.body?.transferTasks)) : 0;
+    await db.query(
+      `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, origin) values ($1,$2,'pl',false,true,true,true,true,'direct')
+       on conflict (project_id, user_id) do update set role = 'pl', is_deputy = false, can_edit_plan = true, can_approve = true, can_finalize = true, can_use_ai = true, origin = 'direct'`,
+      [p.id, target.id]
+    );
+    await notify(db, { userId: target.id, projectId: p.id, type: 'project.lead', title: `Du bist verantwortliche PL: ${p.key} ${p.name}`, body: `Bestimmt durch ${user.name} (Verwaltung)`, link: `/projekte/${p.id}` });
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.lead', objectType: 'project', objectId: p.id, details: { from: primary?.user_id ?? null, to: target.id, transferred } });
+    return { ok: true, transferred };
   });
 
   // Board-Spalten
@@ -501,6 +566,25 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Projektkontakte (Externe)
+
+  /** Übergabe der verantwortlichen PL: die bisherige wird Stellvertretung; direkt zugewiesene Arbeitspakete auf Wunsch mit (geerbte folgen ohnehin). */
+  async function handOver(projectId: string, fromUserId: string, toUserId: string, transferTasks: boolean): Promise<number> {
+    await db.query(`update project_members set is_deputy = true where project_id = $1 and user_id = $2`, [projectId, fromUserId]);
+    if (!transferTasks) return 0;
+    const t1 = await db.query(`update tasks set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 and archived_at is null returning id`, [projectId, fromUserId, toUserId]);
+    const t2 = await db.query(`update subprojects set responsible_user_id = $3 where project_id = $1 and responsible_user_id = $2 returning id`, [projectId, fromUserId, toUserId]);
+    await db.query(`update checklist_items set responsible_user_id = $3 where responsible_user_id = $2 and task_id in (select id from tasks where project_id = $1)`, [projectId, fromUserId, toUserId]);
+    return t1.rows.length + t2.rows.length;
+  }
+
+  async function projectGroups(projectId: string): Promise<ProjectGroup[]> {
+    const rows = await db.query(
+      `select pg.*, g.name, coalesce((select json_agg(gm.user_id) from group_members gm where gm.group_id = pg.group_id), '[]'::json) as member_ids
+       from project_groups pg join groups g on g.id = pg.group_id where pg.project_id = $1 order by g.name`,
+      [projectId]
+    );
+    return rows.rows.map((r: any) => ({ projectId: r.project_id, groupId: r.group_id, name: r.name, role: r.role, canEditPlan: r.can_edit_plan, canApprove: r.can_approve, canFinalize: r.can_finalize, canUseAi: r.can_use_ai, memberIds: (typeof r.member_ids === 'string' ? JSON.parse(r.member_ids) : r.member_ids) ?? [] }));
+  }
 
   async function loadSub(id: string) {
     return db.one(

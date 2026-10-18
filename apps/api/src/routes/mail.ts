@@ -3,7 +3,7 @@ import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailView
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject } from '../rights.js';
+import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject, requireTask } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
 import { aiConfigFor } from '../ai/client.js';
 import { aiAllowed, aiError } from '../ai/policy.js';
@@ -614,9 +614,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!mail) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, mail.id);
     if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
-    const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
-    if (!task) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, task.project_id, 'member');
+    const { task } = await requireTask(db, user, req.body?.taskId, 'member');
     if (!(await mailAllowedInProject(db, mail.id, task.project_id))) throw forbidden(PERSONAL_MAIL_ONLY);
     const copy = Boolean(req.body?.copy);
     if (copy) {

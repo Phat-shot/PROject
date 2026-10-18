@@ -153,8 +153,19 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   const g2 = (await t.api(admin).post('/groups', { name: 'Controlling', idpName: 'Controlling', memberIds: [t.ids.users.max] })).json().group;
   const g3 = (await t.api(admin).post('/groups', { name: 'Manuell', memberIds: [t.ids.users.max] })).json().group;
   assert.equal(g1.idpName, 'pm-team');
+  // Gruppen als Projektmitglied folgen dem Abgleich (Regel M)
+  const plc = await t.login('pl@demo.local');
+  const ssoProject = (await t.api(plc).post('/projects', { key: 'SSO', name: 'SSO-Projekt' })).json().project.id;
+  const ctlProject = (await t.api(plc).post('/projects', { key: 'CTL', name: 'Controlling-Projekt' })).json().project.id;
+  assert.equal((await t.api(plc).put(`/projects/${ssoProject}/groups/${g1.id}`, { role: 'reader' })).statusCode, 200);
+  assert.equal((await t.api(plc).put(`/projects/${ctlProject}/groups/${g2.id}`, { role: 'member' })).statusCode, 200);
+  const membership = (pid: string) => t.db.maybeOne(`select role, origin from project_members where project_id = $1 and user_id = $2`, [pid, t.ids.users.max]);
+  assert.deepEqual(await membership(ctlProject), { role: 'member', origin: 'group' });
+  assert.equal(await membership(ssoProject), null);
   const s1b = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
   await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${s1b}` });
+  assert.deepEqual(await membership(ssoProject), { role: 'reader', origin: 'group' }, 'über die SSO-Gruppe Leser im Projekt');
+  assert.equal(await membership(ctlProject), null, 'aus der Gruppe entfernt → Projektzugang über die Gruppe entfällt');
   const groups = (await t.api(admin).get('/groups')).json().groups;
   assert.ok(groups.find((g: any) => g.id === g1.id).memberIds.includes(t.ids.users.max), 'aus Claim hinzugefügt (Groß-/Kleinschreibung egal)');
   assert.ok(!groups.find((g: any) => g.id === g2.id).memberIds.includes(t.ids.users.max), 'nicht im Claim → entfernt');

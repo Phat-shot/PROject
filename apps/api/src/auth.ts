@@ -37,6 +37,12 @@ export function mapUser(row: any): User {
   };
 }
 
+/** Verwaltet die Person mindestens eine Gruppe (group_members.is_manager)? Für den Menüpunkt Verwaltung. */
+export async function withManagedGroups(db: Db, user: User): Promise<User> {
+  const r = await db.maybeOne(`select 1 from group_members where user_id = $1 and is_manager limit 1`, [user.id]);
+  return { ...user, managesGroups: Boolean(r) };
+}
+
 export async function createSession(db: Db, userId: string): Promise<string> {
   const token = randomBytes(32).toString('hex');
   const expires = new Date(Date.now() + SESSION_DAYS * 86400_000);

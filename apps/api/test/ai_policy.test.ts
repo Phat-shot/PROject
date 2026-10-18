@@ -205,7 +205,7 @@ test('Org-Recht ai_admin: Verwaltung › KI ohne Org-Admin; nur der Org-Admin ve
   assert.equal((await t.api(anna).patch(`/users/${t.ids.users.anna}`, { orgRights: ['ai_admin'] })).statusCode, 403, 'nur Org-Admin');
   assert.equal((await t.api(admin).patch(`/users/${t.ids.users.anna}`, { orgRights: ['root'] })).statusCode, 400);
   assert.equal((await t.api(admin).patch(`/users/${morton.id}`, { orgRights: ['ai_admin'] })).statusCode, 400, 'Agenten nie');
-  assert.equal((await t.api(admin).patch(`/users/${t.ids.users.anna}`, { globalRole: 'org_admin' })).statusCode, 400);
+  assert.equal((await t.api(admin).patch(`/users/${t.ids.users.anna}`, { globalRole: 'root' })).statusCode, 400, 'nur bekannte Rollen (Rolle ändern seit P3, groups.test.ts)');
   const u = await t.api(admin).patch(`/users/${t.ids.users.anna}`, { orgRights: ['ai_admin'] });
   assert.equal(u.statusCode, 200, u.body);
   assert.deepEqual(u.json().user.orgRights, ['ai_admin']);

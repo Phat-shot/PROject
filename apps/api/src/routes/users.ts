@@ -5,16 +5,17 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
-import type { Group, Invitation } from '@projekttool/shared';
+import type { Group, Invitation, User } from '@projekttool/shared';
 import { ORG_RIGHTS } from '@projekttool/shared';
-import { requireProject } from '../rights.js';
+import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
 
 export async function userRoutes(app: FastifyInstance) {
-  // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen).
-  app.get('/users', async (req) => {
+  // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen); ?all=1 mit Deaktivierten (Org-Admin, zum Reaktivieren)
+  app.get<{ Querystring: { all?: string } }>('/users', async (req) => {
     const user = requireUser(req);
-    const rows = await app.db.query(`select * from users where org_id = $1 and active order by name`, [user.orgId]);
+    const all = req.query.all === '1' && user.globalRole === 'org_admin';
+    const rows = await app.db.query(`select * from users where org_id = $1 ${all ? '' : 'and active'} order by active desc, name`, [user.orgId]);
     return { users: rows.rows.map(mapUser) };
   });
 
@@ -32,20 +33,76 @@ export async function userRoutes(app: FastifyInstance) {
     return { user: mapUser(row) };
   });
 
-  // Org-Admin: Org-Rechte einer Person (ai_admin, groups_admin, resources_admin); KI-Agenten haben keine
-  app.patch<{ Params: { id: string }; Body: { orgRights?: string[] } }>('/users/:id', async (req) => {
+  /**
+   * Schutz der Verwaltung: niemand deaktiviert den eigenen Zugang, und der letzte aktive Org-Admin bleibt erhalten
+   * (weder herabgestuft noch deaktiviert).
+   */
+  const assertKeepsAccess = async (user: User, target: any, next: { globalRole: string; active: boolean }) => {
+    if (target.id === user.id && !next.active) throw forbidden('Den eigenen Zugang deaktiviert man nicht selbst');
+    const losesAdmin = target.global_role === 'org_admin' && target.active && (next.globalRole !== 'org_admin' || !next.active);
+    if (!losesAdmin) return;
+    const others = await app.db.one(`select count(*)::int as c from users where org_id = $1 and id <> $2 and global_role = 'org_admin' and active and kind = 'person'`, [target.org_id, target.id]);
+    if (!others.c) throw badRequest('Der letzte aktive Org-Admin bleibt erhalten. Erst eine weitere Person zum Org-Admin machen.');
+  };
+
+  /** Deaktivieren: Login endet, persönliche Konten werden getrennt, Zuständigkeiten fallen zurück, Gruppenzeilen in Projekten entfallen. */
+  const deactivate = async (user: User, target: any) => {
+    const plOf = await app.db.query(
+      `select p.key from project_members m join projects p on p.id = m.project_id
+       where m.user_id = $1 and m.role = 'pl' and not m.is_deputy and p.status = 'active'`,
+      [target.id]
+    );
+    if (plOf.rows.length) throw badRequest(`Benutzer ist PL in: ${plOf.rows.map((r: any) => r.key).join(', ')}. Erst eine neue PL bestimmen (Verwaltung › Projekte).`);
+    await app.db.query(`update users set active = false where id = $1`, [target.id]);
+    await app.db.query(`delete from sessions where user_id = $1`, [target.id]);
+    // Persönliche Konten trennen: Ansichten verschwinden, Kopien in Arbeitspaketen bleiben.
+    await app.db.query(`delete from mail_accounts where owner_user_id = $1 and type = 'personal'`, [target.id]);
+    // Ausdrückliche Zuständigkeiten fallen zurück auf die Ebene darüber.
+    const tasks = await app.db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 returning id, project_id, title`, [target.id]);
+    await app.db.query(`update subprojects set responsible_user_id = null where responsible_user_id = $1`, [target.id]);
+    await app.db.query(`update checklist_items set responsible_user_id = null where responsible_user_id = $1`, [target.id]);
+    await syncProjectGroups(app.db, { userId: target.id });
+    await audit(app.db, {
+      orgId: user.orgId, userId: user.id, action: 'user.deactivate', objectType: 'user', objectId: target.id,
+      details: { releasedTasks: tasks.rows.map((t: any) => t.id) }
+    });
+    return tasks.rows;
+  };
+
+  // Org-Admin: globale Rolle, Org-Rechte (ai_admin, groups_admin, resources_admin) und Aktiv-Status (auch reaktivieren); KI-Agenten haben keine Org-Rechte
+  app.patch<{ Params: { id: string }; Body: { globalRole?: string; orgRights?: string[]; active?: boolean } }>('/users/:id', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
-    if (Object.keys(b).some((k) => k !== 'orgRights') || !Array.isArray(b.orgRights)) throw badRequest('Änderbar: orgRights');
-    const rights = [...new Set(b.orgRights.map(String))];
-    if (rights.some((r) => !ORG_RIGHTS.some((x) => x.key === r))) throw badRequest(`Org-Rechte: ${ORG_RIGHTS.map((x) => x.key).join(', ')}`);
+    const keys = Object.keys(b);
+    if (!keys.length || keys.some((k) => !['globalRole', 'orgRights', 'active'].includes(k))) throw badRequest('Änderbar: globalRole, orgRights, active');
     const target = await app.db.maybeOne(`select * from users where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!target) throw notFound('Benutzer nicht gefunden');
-    if (target.kind === 'agent' && rights.length) throw badRequest('KI-Agenten haben keine Org-Rechte');
-    const row = await app.db.one(`update users set org_rights = $2 where id = $1 returning *`, [target.id, rights]);
-    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.role', objectType: 'user', objectId: target.id, details: { orgRights: rights, before: target.org_rights ?? [] } });
-    return { user: mapUser(row) };
+    let rights: string[] | null = null;
+    if ('orgRights' in b) {
+      if (!Array.isArray(b.orgRights)) throw badRequest('Org-Rechte als Liste');
+      rights = [...new Set(b.orgRights.map(String))];
+      if (rights.some((r) => !ORG_RIGHTS.some((x) => x.key === r))) throw badRequest(`Org-Rechte: ${ORG_RIGHTS.map((x) => x.key).join(', ')}`);
+      if (target.kind === 'agent' && rights.length) throw badRequest('KI-Agenten haben keine Org-Rechte');
+    }
+    if ('globalRole' in b && !['org_admin', 'project_creator', 'user'].includes(String(b.globalRole))) throw badRequest('Globale Rolle: org_admin, project_creator oder user');
+    if ('active' in b && typeof b.active !== 'boolean') throw badRequest('active: true oder false');
+    if (target.kind === 'agent' && ('globalRole' in b || 'active' in b)) throw badRequest('KI-Agenten verwaltet man unter KI-Agenten');
+    const next = { globalRole: String(b.globalRole ?? target.global_role), active: b.active ?? target.active };
+    await assertKeepsAccess(user, target, next);
+    let releasedTasks: unknown[] = [];
+    if (next.active && !target.active) {
+      await app.db.query(`update users set active = true where id = $1`, [target.id]);
+      await syncProjectGroups(app.db, { userId: target.id });
+      await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.reactivate', objectType: 'user', objectId: target.id });
+    }
+    // Deaktivieren zuerst: scheitert es (verantwortliche PL), bleibt alles unverändert
+    if (!next.active && target.active) releasedTasks = await deactivate(user, target);
+    if (next.globalRole !== target.global_role || rights) {
+      await app.db.query(`update users set global_role = $2, org_rights = coalesce($3::text[], org_rights) where id = $1`, [target.id, next.globalRole, rights]);
+      await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.role', objectType: 'user', objectId: target.id, details: { globalRole: next.globalRole, orgRights: rights ?? target.org_rights ?? [], before: { globalRole: target.global_role, orgRights: target.org_rights ?? [] } } });
+    }
+    return { user: mapUser(await app.db.one(`select * from users where id = $1`, [target.id])), releasedTasks };
   });
 
   // Eigene Einstellungen: Name, Sprache, Theme, Passwort
@@ -222,8 +279,8 @@ export async function userRoutes(app: FastifyInstance) {
     await app.db.query(`update invitations set accepted_at = now(), user_id = $2 where id = $1`, [inv.id, row.id]);
     if (inv.project_id) {
       await app.db.query(
-        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,$3,false,false,false,false,true) on conflict (project_id, user_id) do nothing`,
-        [inv.project_id, row.id, inv.project_role ?? 'member']
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,$3,false,false,false,false,$4) on conflict (project_id, user_id) do nothing`,
+        [inv.project_id, row.id, inv.project_role ?? 'member', inv.project_role !== 'reader'] // „KI nutzen“ vorbelegt: Mitglied an, Leser aus
       );
       await audit(app.db, { orgId: inv.org_id, projectId: inv.project_id, userId: row.id, action: 'member.set', objectType: 'membership', objectId: row.id, details: { role: inv.project_role ?? 'member', viaInvitation: inv.id } });
     }
@@ -236,79 +293,83 @@ export async function userRoutes(app: FastifyInstance) {
   // ---- Berechtigungsgruppen des Mandanten
   const groupRows = async (orgId: string, id?: string) => {
     const rows = await app.db.query(
-      `select g.*, coalesce((select json_agg(m.user_id) from group_members m where m.group_id = g.id), '[]'::json) as member_ids from groups g where g.org_id = $1 ${id ? 'and g.id = $2' : ''} order by g.name`,
+      `select g.*, coalesce((select json_agg(m.user_id) from group_members m where m.group_id = g.id), '[]'::json) as member_ids,
+         coalesce((select json_agg(m.user_id) from group_members m where m.group_id = g.id and m.is_manager), '[]'::json) as manager_ids
+       from groups g where g.org_id = $1 ${id ? 'and g.id = $2' : ''} order by g.name`,
       id ? [orgId, id] : [orgId]
     );
-    return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, idpName: g.idp_name ?? null, memberIds: (typeof g.member_ids === 'string' ? JSON.parse(g.member_ids) : g.member_ids) ?? [] }));
+    const ids = (v: any): string[] => (typeof v === 'string' ? JSON.parse(v) : v) ?? [];
+    return rows.rows.map((g: any): Group => ({ id: g.id, name: g.name, description: g.description, idpName: g.idp_name ?? null, memberIds: ids(g.member_ids), managerIds: ids(g.manager_ids) }));
   };
-  const setMembers = async (orgId: string, groupId: string, ids: string[]) => {
+  /** Mitglieder setzen (nur Personen des Mandanten, nie KI-Agenten); Verwalter sind immer auch Mitglied. Ohne managerIds bleiben die bisherigen Verwalter. */
+  const setMembers = async (orgId: string, groupId: string, ids: string[], managerIds?: string[]) => {
+    const managers = new Set(managerIds ?? (await app.db.query(`select user_id from group_members where group_id = $1 and is_manager`, [groupId])).rows.map((r: any) => r.user_id as string));
+    const wanted = [...new Set([...ids, ...(managerIds ?? [])].map(String))];
+    const known = wanted.length ? (await app.db.query(`select id, kind from users where org_id = $1 and id = any($2::uuid[])`, [orgId, wanted])).rows : [];
+    if (known.some((u: any) => u.kind === 'agent')) throw badRequest('KI-Agenten werden nie Gruppenmitglied');
     await app.db.query(`delete from group_members where group_id = $1`, [groupId]);
-    for (const uid of new Set(ids)) {
-      const ok = await app.db.maybeOne(`select 1 from users where id = $1 and org_id = $2`, [uid, orgId]);
-      if (ok) await app.db.query(`insert into group_members (group_id, user_id) values ($1,$2)`, [groupId, uid]);
-    }
+    for (const u of known) await app.db.query(`insert into group_members (group_id, user_id, is_manager) values ($1,$2,$3)`, [groupId, u.id, managers.has(u.id)]);
   };
+  /** Gruppen pflegen der Org-Admin und das Org-Recht „Gruppen verwalten“; Verwalter einer Gruppe nur deren Mitglieder. */
+  const groupsAdmin = (user: User) => hasOrgRight(user, 'groups_admin');
 
-  // Alle angemeldeten Benutzer sehen Gruppen (PL wählt sie für Teilprojekte und Mail-Ansichten); pflegen darf der Org-Admin
+  // Alle angemeldeten Benutzer sehen Gruppen (PL wählt sie für Projekte, Teilprojekte und Mail-Ansichten)
   app.get('/groups', async (req) => {
     const user = requireUser(req);
     return { groups: await groupRows(user.orgId) };
   });
-  app.post<{ Body: { name: string; description?: string | null; memberIds?: string[]; idpName?: string | null } }>('/groups', async (req) => {
+  app.post<{ Body: { name: string; description?: string | null; memberIds?: string[]; managerIds?: string[]; idpName?: string | null } }>('/groups', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    if (!groupsAdmin(user)) throw forbidden('Gruppen legt der Org-Admin oder die Gruppenverwaltung an');
     const b = req.body ?? ({} as any);
     if (!b.name?.trim()) throw badRequest('Name erforderlich');
     if (await app.db.maybeOne(`select 1 from groups where org_id = $1 and lower(name) = lower($2)`, [user.orgId, b.name.trim()])) throw badRequest('Gruppe existiert bereits');
     const g = await app.db.one(`insert into groups (org_id, name, description, idp_name) values ($1,$2,$3,$4) returning id`, [user.orgId, b.name.trim(), b.description ?? null, b.idpName?.trim() || null]);
-    await setMembers(user.orgId, g.id, b.memberIds ?? []);
-    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.create', objectType: 'group', objectId: g.id, details: { name: b.name, members: b.memberIds } });
+    await setMembers(user.orgId, g.id, b.memberIds ?? [], b.managerIds ?? []);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.create', objectType: 'group', objectId: g.id, details: { name: b.name, members: b.memberIds, managers: b.managerIds } });
     return { group: (await groupRows(user.orgId, g.id))[0] };
   });
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string | null; memberIds?: string[]; idpName?: string | null } }>('/groups/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string | null; memberIds?: string[]; managerIds?: string[]; idpName?: string | null } }>('/groups/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const g = await app.db.maybeOne(`select * from groups where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!g) throw notFound('Gruppe nicht gefunden');
     const b = req.body ?? {};
+    if (!groupsAdmin(user)) {
+      const manager = await app.db.maybeOne(`select 1 from group_members where group_id = $1 and user_id = $2 and is_manager`, [g.id, user.id]);
+      if (!manager) throw forbidden('Gruppen pflegen der Org-Admin, die Gruppenverwaltung und die Verwalter der Gruppe');
+      if (Object.keys(b).some((k) => k !== 'memberIds') || !Array.isArray(b.memberIds)) throw forbidden('Als Verwalter der Gruppe pflegst du nur deren Mitglieder');
+      const managers = (await app.db.query(`select user_id from group_members where group_id = $1 and is_manager`, [g.id])).rows.map((r: any) => r.user_id);
+      if (managers.some((id: string) => !b.memberIds!.includes(id))) throw badRequest('Verwalter bleiben Mitglied der Gruppe; Verwalter ändert die Gruppenverwaltung');
+    }
     await app.db.query(`update groups set name = coalesce($2, name), description = case when $3 then $4 else description end, idp_name = case when $5 then $6 else idp_name end where id = $1`, [g.id, b.name?.trim() || null, 'description' in b, b.description ?? null, 'idpName' in b, b.idpName?.trim() || null]);
-    if (b.memberIds) await setMembers(user.orgId, g.id, b.memberIds);
+    if (b.memberIds || b.managerIds) {
+      const current = (await app.db.query(`select user_id from group_members where group_id = $1`, [g.id])).rows.map((r: any) => r.user_id as string);
+      await setMembers(user.orgId, g.id, b.memberIds ?? current, b.managerIds);
+      await syncProjectGroups(app.db, { groupId: g.id });
+    }
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.update', objectType: 'group', objectId: g.id, details: b });
     return { group: (await groupRows(user.orgId, g.id))[0] };
   });
   app.delete<{ Params: { id: string } }>('/groups/:id', async (req) => {
     const user = requireUser(req);
-    if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
+    if (!groupsAdmin(user)) throw forbidden('Gruppen löscht der Org-Admin oder die Gruppenverwaltung');
+    // Projekte der Gruppe vorher merken: nach dem Löschen fehlen die Verknüpfungen für den Abgleich
+    const projects = await app.db.query(`select pg.project_id from project_groups pg join groups g on g.id = pg.group_id where g.id = $1 and g.org_id = $2`, [req.params.id, user.orgId]);
     await app.db.query(`delete from groups where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    for (const p of projects.rows) await syncProjectGroups(app.db, { projectId: p.project_id });
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'group.delete', objectType: 'group', objectId: req.params.id });
     return { ok: true };
   });
 
-  // W10: Benutzer deaktivieren
+  // W10: Benutzer deaktivieren (eigener Zugang und letzter Org-Admin geschützt)
   app.post<{ Params: { id: string } }>('/users/:id/deactivate', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const target = await app.db.maybeOne(`select * from users where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!target) throw notFound('Benutzer nicht gefunden');
-    const plOf = await app.db.query(
-      `select p.key from project_members m join projects p on p.id = m.project_id
-       where m.user_id = $1 and m.role = 'pl' and not m.is_deputy and p.status = 'active'`,
-      [target.id]
-    );
-    if (plOf.rows.length) throw badRequest(`Benutzer ist PL in: ${plOf.rows.map((r: any) => r.key).join(', ')}. Erst neuen PL setzen.`);
-    await app.db.query(`update users set active = false where id = $1`, [target.id]);
-    await app.db.query(`delete from sessions where user_id = $1`, [target.id]);
-    // Persönliche Konten trennen: Ansichten verschwinden, Kopien in Arbeitspaketen bleiben.
-    await app.db.query(`delete from mail_accounts where owner_user_id = $1 and type = 'personal'`, [target.id]);
-    // Ausdrückliche Zuständigkeiten fallen zurück auf die Ebene darüber.
-    const tasks = await app.db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 returning id, project_id, title`, [target.id]);
-    await app.db.query(`update subprojects set responsible_user_id = null where responsible_user_id = $1`, [target.id]);
-    await app.db.query(`update checklist_items set responsible_user_id = null where responsible_user_id = $1`, [target.id]);
-    await audit(app.db, {
-      orgId: user.orgId, userId: user.id, action: 'user.deactivate', objectType: 'user', objectId: target.id,
-      details: { releasedTasks: tasks.rows.map((t: any) => t.id) }
-    });
-    return { ok: true, releasedTasks: tasks.rows };
+    await assertKeepsAccess(user, target, { globalRole: target.global_role, active: false });
+    const releasedTasks = target.active ? await deactivate(user, target) : [];
+    return { ok: true, releasedTasks };
   });
 
   // Mandanten-Einstellungen (PDF-Stil, Firmenname)

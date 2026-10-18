@@ -4,7 +4,7 @@ import { createSession, requireUser, setSessionCookie } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, publicRedirect, redirectUri } from '../oauth.js';
-import { requireProject } from '../rights.js';
+import { requireProject, syncProjectGroups } from '../rights.js';
 import { publicBase } from '../docs/share.js';
 import { seal } from '../secrets.js';
 
@@ -143,7 +143,11 @@ export async function oauthRoutes(app: FastifyInstance) {
           if (should && !is) { await db.query(`insert into group_members (group_id, user_id) values ($1,$2) on conflict do nothing`, [g.id, row.id]); changes.push({ group: g.idp_name, action: 'add' }); }
           if (!should && is) { await db.query(`delete from group_members where group_id = $1 and user_id = $2`, [g.id, row.id]); changes.push({ group: g.idp_name, action: 'remove' }); }
         }
-        if (changes.length) await audit(db, { orgId: row.org_id, userId: row.id, action: 'user.groups_synced', objectType: 'user', objectId: row.id, details: { changes } });
+        if (changes.length) {
+          // Gruppen als Projektmitglied folgen (Regel M)
+          await syncProjectGroups(db, { userId: row.id });
+          await audit(db, { orgId: row.org_id, userId: row.id, action: 'user.groups_synced', objectType: 'user', objectId: row.id, details: { changes } });
+        }
       }
       const token = await createSession(db, row.id);
       setSessionCookie(reply, token);

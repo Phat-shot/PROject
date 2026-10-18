@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { requireProject, requireTask } from '../rights.js';
 import { touchTask } from '../tasks/service.js';
 
 function mapEntry(r: any) {
@@ -87,9 +87,7 @@ export async function timeRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { id: string } }>('/tasks/:id/time', async (req) => {
     const user = requireUser(req);
-    const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
-    if (!t) throw notFound('Arbeitspaket nicht gefunden');
-    await requireProject(db, user, t.project_id);
+    await requireTask(db, user, req.params.id);
     const rows = await db.query(`select e.*, u.name as user_name from time_entries e join users u on u.id = e.user_id where e.task_id = $1 order by e.date desc, e.created_at desc`, [req.params.id]);
     return { entries: rows.rows.map(mapEntry), totalMinutes: rows.rows.reduce((a: number, r: any) => a + r.minutes, 0) };
   });

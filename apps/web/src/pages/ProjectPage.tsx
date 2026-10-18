@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
-import type { AiCapabilities, BoardColumn, Label, Membership, Project, Subproject, Task, User } from '@projekttool/shared';
+import type { AiCapabilities, BoardColumn, Label, Membership, Project, ProjectGroup, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { BoardView } from './project/BoardView';
@@ -29,6 +29,8 @@ export interface ProjectDetail {
   subprojects: Subproject[];
   milestones: Milestone[];
   labels: Label[];
+  /** Gruppen als Projektmitglied (Regel M) */
+  groups?: ProjectGroup[];
 }
 
 interface ProjectCtx {

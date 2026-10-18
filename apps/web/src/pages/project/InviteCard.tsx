@@ -5,7 +5,7 @@ import { useData } from '../../lib/useData';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
-/** PL lädt eine neue Person per Mail direkt ins Projekt ein (Mitglied oder Leser); offene Einladungen mit Link zum Kopieren. */
+/** PL lädt eine neue Person per Mail direkt ins Projekt ein (Mitglied oder Leser, „KI nutzen“ je Rolle vorbelegt); offene Einladungen mit Link zum Kopieren. */
 export function InviteCard() {
   const { detail } = useProject();
   const pid = detail.project.id;
@@ -29,6 +29,7 @@ export function InviteCard() {
         <label className="field"><span>Projektrolle</span><select value={f.projectRole} onChange={(e) => setF({ ...f, projectRole: e.target.value as 'member' | 'reader' })} style={{ width: 'auto' }}><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
         <button className="btn sm primary" disabled={busy || !f.name.trim() || !f.email.trim()}>Einladen</button>
       </form>
+      <p className="muted small">Nach der Annahme: Mitglieder mit „KI nutzen“, Leser ohne (einheitlich vorbelegt); weitere Einzelrechte danach unter „Rolle“. Ganze Teams nimmst du über „Gruppe hinzufügen“ auf.</p>
       {error && <div className="error mt small">{error}</div>}
       {msg && <div className={`mt small ${msg.ok ? 'muted' : ''}`} style={msg.ok ? undefined : { color: 'var(--warn)' }}>{msg.text}{msg.link && <> · <button className="btn sm link" onClick={() => void copy(msg.link!)}>Link kopieren</button></>}</div>}
       {inv.data && inv.data.invitations.length > 0 && (

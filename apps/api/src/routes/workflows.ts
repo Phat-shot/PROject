@@ -137,7 +137,7 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.post<{ Params: { rid: string } }>('/workflow-runs/:rid/approve', async (req) => {
     const user = requireUser(req);
     const { run, membership: m } = await runAccess(user, req.params.rid, 'member');
-    if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe erfordert die PL-Rolle oder das Recht „freigeben“');
+    if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe erfordert die PL-Rolle oder das Recht „Freigeben“');
     await approveRun(db, app.mail, run.id, user.id);
     await audit(db, { orgId: user.orgId, projectId: run.project_id, userId: user.id, action: 'workflow.approve', objectType: 'workflow_run', objectId: run.id });
     return { run: mapRun(await db.one(`${RUN_SELECT} where r.id = $1`, [run.id])) };

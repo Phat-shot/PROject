@@ -31,6 +31,8 @@ export interface User {
   kind?: 'person' | 'agent';
   /** Agent einer PL: nur in diesem Projekt einsetzbar */
   agentProjectId?: string;
+  /** Verwalter mindestens einer Gruppe (pflegt deren Mitglieder unter Verwaltung); nur in /auth/me und bei der Anmeldung */
+  managesGroups?: boolean;
 }
 
 export interface UserSettings {
@@ -53,6 +55,8 @@ export interface Membership {
   canUseAi: boolean;
   /** nur Agenten: darf Mails direkt senden (sonst Entwurf zur Freigabe) */
   agentCanMail?: boolean;
+  /** Herkunft (Regel M): Direkteintrag (überschreibt alle Gruppen) oder über Gruppen des Projekts (höchste Rolle, Einzelrechte ODER-verknüpft) */
+  origin?: 'direct' | 'group';
 }
 
 export interface Project {
@@ -310,6 +314,30 @@ export interface Group {
   /** Gruppenname beim Identitätsanbieter (SSO): Mitgliedschaft wird bei jeder Anmeldung abgeglichen */
   idpName?: string | null;
   memberIds: string[];
+  /** Gruppenverwalter: pflegen die Mitglieder dieser Gruppe (ohne Org-Recht „Gruppen verwalten“) */
+  managerIds: string[];
+}
+
+/** Gruppe als Projektmitglied: Rolle Leser oder Mitglied plus Einzelrechte; PL und Stellvertretung bleiben einzelne Personen. */
+export interface ProjectGroup {
+  projectId: string;
+  groupId: string;
+  name: string;
+  role: 'member' | 'reader';
+  canEditPlan: boolean;
+  canApprove: boolean;
+  canFinalize: boolean;
+  canUseAi: boolean;
+  memberIds: string[];
+}
+
+/** Projekt in der Verwaltung (Org-Admin): nur Kennung, Name und verantwortliche PL, keine Inhalte. */
+export interface AdminProject {
+  id: string;
+  key: string;
+  name: string;
+  status: 'active' | 'archived';
+  lead: { userId: string; name: string; active: boolean } | null;
 }
 
 export interface Invitation {

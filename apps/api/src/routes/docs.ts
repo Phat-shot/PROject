@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { requireProject, requireTask } from '../rights.js';
 import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion } from '../docs/service.js';
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
@@ -472,7 +472,8 @@ export async function docRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const { taskId, pageId } = req.query;
     let projectId: string | null = null;
-    if (taskId) projectId = (await db.maybeOne(`select project_id from tasks where id = $1`, [taskId]))?.project_id ?? null;
+    // Anhang an einem Arbeitspaket: auch dessen Teilprojekt muss sichtbar sein (eingeschränkte TPs)
+    if (taskId) projectId = (await requireTask(db, user, taskId, 'member')).task.project_id;
     else if (pageId) projectId = (await db.maybeOne(`select project_id from doc_pages where id = $1`, [pageId]))?.project_id ?? null;
     if (!projectId) throw badRequest('taskId oder pageId erforderlich');
     await requireProject(db, user, projectId, 'member');
@@ -498,7 +499,8 @@ export async function docRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.id]);
     if (!a) throw notFound('Anhang nicht gefunden');
-    await requireProject(db, user, a.project_id);
+    if (a.task_id) await requireTask(db, user, a.task_id);
+    else await requireProject(db, user, a.project_id);
     reply.header('content-type', a.mime);
     reply.header('content-disposition', `${dispositionFor(a.mime, a.filename)}; filename="${encodeURIComponent(a.filename)}"`);
     return reply.send(createReadStream(a.storage_path));
@@ -508,7 +510,8 @@ export async function docRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.id]);
     if (!a) throw notFound('Anhang nicht gefunden');
-    await requireProject(db, user, a.project_id, 'member');
+    if (a.task_id) await requireTask(db, user, a.task_id, 'member');
+    else await requireProject(db, user, a.project_id, 'member');
     if (a.page_id) {
       const pg = await db.maybeOne(`select status from doc_pages where id = $1`, [a.page_id]);
       if (pg?.status === 'final') throw badRequest('Anhänge einer finalen Seite bleiben erhalten');

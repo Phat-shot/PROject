@@ -1,7 +1,7 @@
 import type { Membership, OrgRight, ProjectRole, User, MailViewRights } from '@projekttool/shared';
 import { ROLE_RANK } from '@projekttool/shared';
 import type { Db } from './db.js';
-import { forbidden, notFound } from './errors.js';
+import { forbidden, HttpError, notFound } from './errors.js';
 
 export function mapMembership(row: any): Membership {
   return {
@@ -13,7 +13,8 @@ export function mapMembership(row: any): Membership {
     canApprove: row.can_approve,
     canFinalize: row.can_finalize,
     canUseAi: row.can_use_ai,
-    agentCanMail: row.agent_can_mail !== false
+    agentCanMail: row.agent_can_mail !== false,
+    origin: row.origin === 'group' ? 'group' : 'direct'
   };
 }
 
@@ -47,6 +48,29 @@ export async function effectiveMembership(db: Db, user: User, projectId: string,
   const vis = visibility ?? (await db.maybeOne(`select visibility from projects where id = $1 and org_id = $2`, [projectId, user.orgId]))?.visibility;
   if (vis === 'org' && user.active) return { projectId, userId: user.id, role: 'reader', isDeputy: false, canEditPlan: false, canApprove: false, canFinalize: false, canUseAi: false };
   return null;
+}
+
+/**
+ * Zugriff auf ein Arbeitspaket: Projektrolle (requireProject) und Sicht auf sein Teilprojekt (eingeschränkte TPs) zusammen.
+ * Liefert die Zeile des Arbeitspakets und die Mitgliedschaft.
+ */
+export async function requireTask(db: Db, user: User, taskId: string, min: ProjectRole = 'reader'): Promise<{ task: any; membership: Membership }> {
+  const task = await db.maybeOne(`select * from tasks where id = $1`, [taskId]);
+  if (!task) throw notFound('Arbeitspaket nicht gefunden');
+  const membership = await requireProject(db, user, task.project_id, min);
+  if (!(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+  return { task, membership };
+}
+
+/** Wie requireTask als Ja/Nein (z. B. Leserecht an einer Mail über ihre Kopie im Arbeitspaket). */
+export async function canSeeTask(db: Db, user: User, taskId: string): Promise<boolean> {
+  try {
+    await requireTask(db, user, taskId);
+    return true;
+  } catch (e) {
+    if (e instanceof HttpError) return false;
+    throw e;
+  }
 }
 
 export function requireFlag(m: Membership, flag: keyof Membership, message: string) {
@@ -107,4 +131,55 @@ export async function canSeeSubproject(db: Db, userId: string, subprojectId: str
     [subprojectId, userId]
   );
   return Boolean(r);
+}
+
+/**
+ * Regel M: Zeilen mit origin='group' in project_members nachziehen. Ein Direkteintrag überschreibt alle Gruppen;
+ * zwischen mehreren Gruppen gilt die höchste Rolle, die Einzelrechte werden ODER-verknüpft. Nur aktive Personen
+ * (Agenten nie), nie in persönlichen Projekten. Umfang: Projekt, Benutzer und/oder die Projekte einer Gruppe; ohne Angabe alles.
+ * Läuft bei Änderungen an project_groups und group_members, beim SSO-Abgleich, (De-)Aktivieren und Löschen eines Direkteintrags.
+ */
+export async function syncProjectGroups(db: Db, scope: { projectId?: string; userId?: string; groupId?: string } = {}): Promise<void> {
+  const params = [scope.projectId ?? null, scope.userId ?? null, scope.groupId ?? null];
+  const inScope = (p: string, u: string) =>
+    `($1::uuid is null or ${p} = $1::uuid) and ($2::uuid is null or ${u} = $2::uuid) and ($3::uuid is null or ${p} in (select project_id from project_groups where group_id = $3::uuid))`;
+  const wanted = `select pg.project_id, gm.user_id, max(case when pg.role = 'member' then 2 else 1 end) as role_rank,
+      bool_or(pg.can_edit_plan) as can_edit_plan, bool_or(pg.can_approve) as can_approve, bool_or(pg.can_finalize) as can_finalize, bool_or(pg.can_use_ai) as can_use_ai
+    from project_groups pg
+    join group_members gm on gm.group_id = pg.group_id
+    join users u on u.id = gm.user_id and u.active and u.kind = 'person'
+    join projects p on p.id = pg.project_id and not p.personal
+    where ${inScope('pg.project_id', 'gm.user_id')}
+    group by pg.project_id, gm.user_id`;
+  await db.query(
+    `delete from project_members pm where pm.origin = 'group' and ${inScope('pm.project_id', 'pm.user_id')}
+       and not exists (select 1 from (${wanted}) w where w.project_id = pm.project_id and w.user_id = pm.user_id)`,
+    params
+  );
+  // Direkteinträge bleiben unberührt (where origin = 'group' beim Konflikt)
+  await db.query(
+    `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, origin)
+     select project_id, user_id, case when role_rank = 2 then 'member' else 'reader' end, false, can_edit_plan, can_approve, can_finalize, can_use_ai, 'group' from (${wanted}) w
+     on conflict (project_id, user_id) do update set role = excluded.role, can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve,
+       can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai
+     where project_members.origin = 'group'`,
+    params
+  );
+}
+
+/**
+ * Empfänger aus einer Gruppe (für Benachrichtigungsregeln): aktive Personen der Gruppe mit Projektsicht
+ * (effektive Mitgliedschaft oder Sichtbarkeit „org“), bei einem Teilprojekt nur mit Sicht darauf (canSeeSubproject).
+ */
+export async function groupRecipients(db: Db, { groupId, projectId, subprojectId = null }: { groupId: string; projectId: string; subprojectId?: string | null }): Promise<string[]> {
+  const rows = await db.query(
+    `select u.id from group_members gm join users u on u.id = gm.user_id join projects p on p.id = $2 and p.org_id = u.org_id
+     where gm.group_id = $1 and u.active and u.kind = 'person'
+       and (p.visibility = 'org' or exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = u.id))
+     order by u.name`,
+    [groupId, projectId]
+  );
+  const out: string[] = [];
+  for (const r of rows.rows) if (await canSeeSubproject(db, r.id, subprojectId)) out.push(r.id);
+  return out;
 }

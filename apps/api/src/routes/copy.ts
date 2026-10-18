@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { getMembership, requireProject } from '../rights.js';
+import { getMembership, requireProject, requireTask } from '../rights.js';
 import { loadTask, mapSubproject, newMailCode, resolveProjectLead } from '../tasks/service.js';
 import { uploadDir } from '../docs/layout.js';
 
@@ -187,7 +187,7 @@ export async function copyRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: CopyBody }>('/tasks/:id/copy', async (req) => {
     const user = requireUser(req);
     const src = await loadSource(req.params.id);
-    await requireProject(db, user, src.project_id, 'member');
+    await requireTask(db, user, src.id, 'member');
     const b = req.body ?? {};
     const target = await targetOf(user, src.project_id, b, false);
     const parts = partsOf(b, TASK_PARTS);
@@ -206,7 +206,7 @@ export async function copyRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string }; Body: CopyBody }>('/tasks/:id/move-to-project', async (req) => {
     const user = requireUser(req);
     const src = await loadSource(req.params.id);
-    const sm = await requireProject(db, user, src.project_id, 'member');
+    const { membership: sm } = await requireTask(db, user, src.id, 'member');
     if (sm.role !== 'pl' && !sm.canEditPlan) throw forbidden('Verschieben in ein anderes Projekt erfordert das Recht „Projektplan ändern“');
     const b = req.body ?? {};
     if (!b.targetProjectId || b.targetProjectId === src.project_id) throw badRequest('Zielprojekt fehlt oder ist das Quellprojekt');
