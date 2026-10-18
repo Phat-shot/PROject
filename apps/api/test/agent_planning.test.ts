@@ -95,7 +95,7 @@ test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termin
   assert.match(run.error, /YYYY-MM-DD/);
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
   assert.match(log, /Aufgabe angelegt: WEB-\d+ „Leitungen planen“, Termin 2026-11-06/);
-  assert.match(log, /Termin im Kalender: „Besichtigung Elektriker“/);
+  assert.match(log, /Termin vorläufig im Kalender: „Besichtigung Elektriker“ .*verbindlich erst nach Bestätigung/);
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'task.assigned' and title like '%Leitungen planen%'`, [t.ids.users.anna]));
 });
 
@@ -161,12 +161,60 @@ test('Fragen per Chat: Eskalation und chat-Aktion kommen als Direktnachricht an,
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Per Chat an Anna Berger, Projektkanal:%'`, [ap.id]));
   // Antwort der PL im Chat: steht im Kontext des nächsten Laufs
   const dm = (await t.api(pl).post('/chat/dm', { userId: morton.id })).json().channelId;
-  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Budget sind 4.000 €.' });
   next = [A({ type: 'none', reason: 'x' })];
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Budget sind 4.000 €.' });
+  await flushAgentRuns();
+  // Rückmeldung auf die Frage zum Arbeitspaket steht im Log (Quelle Chat)
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and source = 'chat' and user_id = $2 and body = 'Rückmeldung per Chat an Morton: Budget sind 4.000 €.'`, [ap.id, t.ids.users.pl]));
   const before = calls.length;
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   const prompt = calls.slice(before).find((c) => c.response_format && !String(c.messages[0].content).includes('Man erreicht dich im Chat'));
   assert.match(prompt.messages[1].content, /Chat \(deine Direktnachrichten[\s\S]*Petra Lenz: Budget sind 4\.000 €/);
+  // Erste Antwort älter als zwei Stunden: neue Nachricht ist wieder normaler Chat, nicht Rückmeldung zum AP
+  await t.db.query(`update chat_messages set created_at = created_at - interval '3 hours' where channel_id = $1`, [dm]);
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Wie läuft es sonst?' });
+  await flushAgentRuns();
+  assert.equal(await t.db.maybeOne(`select 1 from task_comments where body like '%Wie läuft es sonst?%'`), null);
+});
+
+test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpartner und Belegt-Zeiten im Prompt; Versandstatus schreibt das System', async () => {
+  const pl = await t.login('pl@demo.local');
+  const leser = await t.login('leser@demo.local');
+  const ap = await t.db.one(`select id, number from tasks where title = 'Teilprojekt durchplanen'`);
+  const ev = (await t.api(pl).get(`/projects/${web()}/meetings`)).json().meetings.find((m: any) => m.title === 'Besichtigung Elektriker');
+  assert.equal(ev.tentative, true, 'von der KI angelegt: vorläufig');
+  const inv = await t.api(pl).post(`/meetings/${ev.id}/invite`);
+  assert.equal(inv.statusCode, 400);
+  assert.match(inv.body, /vorläufig/);
+  assert.match((await t.api(pl).get(`/meetings/${ev.id}/ics`)).body, /STATUS:TENTATIVE/);
+  assert.equal((await t.api(leser).post(`/meetings/${ev.id}/confirm`)).statusCode, 403);
+  next = [A({ type: 'none', reason: 'x' })];
+  const c = await t.api(pl).post(`/meetings/${ev.id}/confirm`);
+  assert.equal(c.statusCode, 200, c.body);
+  assert.equal(c.json().meeting.tentative, false);
+  assert.ok(c.json().meeting.confirmedAt);
+  await flushAgentRuns();
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Termin bestätigt: „Besichtigung Elektriker“%'`, [ap.id]));
+  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'task_changed'`, [ap.id]), 'Agent erfährt die Bestätigung');
+
+  // Prompt: Ansprechpartner (Teilprojekt-Verantwortung ist der Agent selbst → PL) und deren Belegt-Zeiten aus anderen Projekten ohne Titel
+  const soon = new Date(Date.now() + 7 * 86400_000);
+  await t.db.query(`insert into meetings (project_id, title, starts_at, ends_at, attendees, created_by) values ($1,'Lenkungskreis geheim',$2,$3,$4,$5)`, [t.ids.projects.erp, soon, new Date(soon.getTime() + 3600_000), JSON.stringify([{ email: 'pl@demo.local', name: 'Petra Lenz', userId: t.ids.users.pl }]), t.ids.users.anna]);
+  // Mail ohne Senderecht: Entwurf, das System schreibt „nicht gesendet“ ins Log; mit Senderecht: „gesendet“
+  await t.db.query(`update project_members set agent_can_mail = false where project_id = $1 and user_id = $2`, [web(), morton.id]);
+  next = [A({ type: 'mail', to: ['elektro@extern.de'], subject: 'Angebot Elektrik', text: 'Bitte um Angebot.' })];
+  const before = calls.length;
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const prompt = String(calls.slice(before).find((x) => x.response_format).messages[1].content);
+  assert.match(prompt, /Ansprechpartner für Rückfragen und Terminzusagen: Petra Lenz <pl@demo.local> \(Projektleitung\)/);
+  assert.match(prompt, /Belegt \(weitere Termine von Petra Lenz, ohne Details\): /);
+  assert.ok(!prompt.includes('Lenkungskreis geheim'), 'keine fremden Titel');
+  await t.db.query(`update project_members set agent_can_mail = true where project_id = $1 and user_id = $2`, [web(), morton.id]);
+  next = [A({ type: 'mail', to: ['elektro@extern.de'], subject: 'Angebot Elektrik 2', text: 'Bitte um Angebot.' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
+  assert.match(log, /Mail-Entwurf an elektro@extern\.de wartet auf Freigabe \(nicht gesendet\): „Angebot Elektrik“/);
+  assert.match(log, /Mail gesendet an elektro@extern\.de: „Angebot Elektrik 2“/);
 });
 
 test('Ereignisläufe halten das Tagesbudget ein', async () => {

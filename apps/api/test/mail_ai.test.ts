@@ -65,7 +65,7 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   assert.equal(task.origin, true);
   assert.equal(task.copied, true);
   assert.equal((await t.db.one(`select count(*)::int as c from checklist_items where task_id = $1`, [task.id])).c, 2);
-  assert.ok(await t.db.maybeOne(`select 1 from meetings m join meeting_tasks mt on mt.meeting_id = m.id where m.title = 'Besichtigung Elektro Kurz' and mt.task_id = $1`, [task.id]));
+  assert.ok(await t.db.maybeOne(`select 1 from meetings m join meeting_tasks mt on mt.meeting_id = m.id where m.title = 'Besichtigung Elektro Kurz' and mt.task_id = $1 and m.tentative`, [task.id]), 'Projekt-KI trägt nur vorläufig ein');
   const draft = await t.db.one(`select * from mail_drafts where in_reply_to = $1`, [mail.message_id]);
   assert.equal(draft.status, 'draft');
   assert.equal(draft.user_id, t.ids.users.pl);
@@ -111,7 +111,8 @@ test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den 
   mailNext = [
     M({ type: 'create_ap', title: 'Rückruf Kunde', responsible: agent.email }),
     M({ type: 'create_ap', title: 'Rechnung prüfen' }),
-    M({ type: 'reply_draft', text: 'Danke, wir melden uns.' })
+    M({ type: 'reply_draft', text: 'Danke, wir melden uns.' }),
+    M({ type: 'create_event', title: 'Rückruftermin', startsAt: '2026-11-06T09:00' })
   ];
   await inject({ subject: 'Bitte um Rückruf', text: 'Rufen Sie mich an.' });
   const mail = await t.db.one(`select * from mails where subject = 'Bitte um Rückruf'`);
@@ -127,7 +128,9 @@ test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den 
   assert.match(byMax.actions[0].result.error, /Agenten weist nur die Projektleitung zu/);
   await t.api(pl).post(`/mail/ai-runs/${run.id}/decide`, { index: 2, approve: false });
   const all = (await t.api(pl).post(`/mail/ai-runs/${run.id}/decide`, { index: 'all', approve: true })).json().runs[0];
-  assert.deepEqual(all.actions.map((a: any) => a.status), ['approved', 'approved', 'rejected'], 'PL darf den Agenten zuweisen');
+  assert.deepEqual(all.actions.map((a: any) => a.status), ['approved', 'approved', 'rejected', 'approved'], 'PL darf den Agenten zuweisen');
+  const ev = await t.db.one(`select tentative, confirmed_by from meetings where title = 'Rückruftermin'`);
+  assert.deepEqual([ev.tentative, ev.confirmed_by], [false, t.ids.users.pl], 'von einer Person angenommen: bestätigt');
   assert.ok(await t.db.maybeOne(`select 1 from tasks where title = 'Rückruf Kunde' and responsible_user_id = $1`, [agent.id]));
   const created = await t.db.one(`select t.created_by, l.origin, l.copied from tasks t join mail_task_links l on l.task_id = t.id where t.title = 'Rechnung prüfen'`);
   assert.equal(created.created_by, t.ids.users.pl);

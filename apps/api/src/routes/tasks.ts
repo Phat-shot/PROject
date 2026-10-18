@@ -145,12 +145,12 @@ export async function taskRoutes(app: FastifyInstance) {
       [user.id, user.orgId]
     );
     const meetings = await db.query(
-      `select m.id, m.title, m.starts_at, m.ends_at, m.project_id, p.key from meetings m join projects p on p.id = m.project_id
+      `select m.id, m.title, m.starts_at, m.ends_at, m.project_id, m.tentative, p.key from meetings m join projects p on p.id = m.project_id
        where p.org_id = $2 and p.status = 'active' and exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $1) order by m.starts_at`,
       [user.id, user.orgId]).catch(() => ({ rows: [] as any[] }));
     return {
       milestones: rows.rows.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), projectId: r.project_id, projectKey: r.key })),
-      meetings: meetings.rows.map((r: any) => ({ id: r.id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), projectId: r.project_id, projectKey: r.key }))
+      meetings: meetings.rows.map((r: any) => ({ id: r.id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), projectId: r.project_id, projectKey: r.key, tentative: Boolean(r.tentative) }))
     };
   });
 

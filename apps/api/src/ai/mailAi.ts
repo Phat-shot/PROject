@@ -249,7 +249,8 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
       const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + 3600_000) : null;
       if (!starts || !ends || ends <= starts) fail('Beginn oder Ende nicht lesbar');
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [project.id, title, starts])) fail(`„${title}“ steht schon im Kalender`);
-      const ev = await createPlannedEvent(db, pa, { projectId: project.id, title, startsAt: starts!, endsAt: ends!, location: a.location, description: a.text, taskId: state.taskId });
+      // Projekt-KI: vorläufig; Vorschlag des Agenten, den eine Person annimmt: bestätigt
+      const ev = await createPlannedEvent(db, pa, { projectId: project.id, title, startsAt: starts!, endsAt: ends!, location: a.location, description: a.text, taskId: state.taskId, confirmedBy: ctx.run.mode === 'triage' ? actor.id : null });
       return { meetingId: ev.id };
     }
     case 'reply_draft': {

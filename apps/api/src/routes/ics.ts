@@ -63,7 +63,7 @@ export async function icsRoutes(app: FastifyInstance) {
     const tstamp = (d: any) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
     const base = publicBase();
     const events = [
-      ...meetings.rows.map((m: any) => ({ uid: `meeting-${m.id}`, title: `${m.key} ${m.title}`, start: tstamp(m.starts_at), end: tstamp(m.ends_at), timed: true, location: m.location, desc: m.description ?? undefined, url: `${base}/projekte/${m.project_id}/besprechungen` })),
+      ...meetings.rows.map((m: any) => ({ uid: `meeting-${m.id}`, title: `${m.tentative ? '(vorläufig) ' : ''}${m.key} ${m.title}`, start: tstamp(m.starts_at), end: tstamp(m.ends_at), timed: true, location: m.location, desc: m.description ?? undefined, url: `${base}/projekte/${m.project_id}/besprechungen` })),
       ...tasks.filter((t) => !t.done).map((t) => { const k = keys.get(t.projectId); return { uid: `task-${t.id}`, title: `${k?.key ?? ''}-${t.number} ${t.title}`, start: t.startDate ?? t.dueDate!, end: t.dueDate!, desc: `${k?.name ?? ''} · zuständig ${t.responsible.name ?? t.responsible.email ?? '–'}`, url: `${base}/projekte/${t.projectId}/board?task=${t.id}` }; }),
       ...ms.rows.map((m: any) => ({ uid: `ms-${m.id}`, title: `◆ ${m.key} ${m.name}`, start: dateStr(m.date)!, end: dateStr(m.date)!, url: `${base}/projekte/${m.project_id}/plan` }))
     ];

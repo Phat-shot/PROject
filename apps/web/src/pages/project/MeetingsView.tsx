@@ -36,20 +36,22 @@ export function MeetingsView() {
   const refresh = async () => { await d.reload(); };
   const protocol = (m: Meeting) => run(async () => { const r = await api.post<{ page: { id: string } }>(`/meetings/${m.id}/protocol`); nav(`${base}/doku/${r.page.id}`); });
   const invite = (m: Meeting) => void dialog.confirm({ title: 'Einladung senden', text: `Einladung mit Kalendereintrag an ${m.attendees.length} Teilnehmer über das Projektkonto senden?${m.inviteSentAt ? ' Eine Aktualisierung ersetzt den bisherigen Eintrag.' : ''}`, confirmLabel: 'Senden' }).then((ok) => { if (ok) void run(async () => { await api.post(`/meetings/${m.id}/invite`); await refresh(); }); });
+  const confirm = (m: Meeting) => run(async () => { await api.post(`/meetings/${m.id}/confirm`); await refresh(); await reloadTasks(); });
   const Row = ({ m }: { m: Meeting }) => (
     <div className={`meeting ${open === m.id ? 'open' : ''}`}>
       <div className="row between" onClick={() => setOpen(open === m.id ? null : m.id)} style={{ cursor: 'pointer' }}>
         <div><strong>{m.title}</strong>{m.seriesPageTitle && <span className="badge" style={{ marginLeft: 6 }}>{m.seriesPageTitle}</span>}<div className="muted small">{fmtDateTime(m.startsAt)} – {fmtTime(m.endsAt)}{m.location ? ` · ${m.location}` : ''} · {m.attendees.length} Teilnehmer{m.tasks.length ? ` · ${m.tasks.filter((t) => !t.done).length}/${m.tasks.length} Aktionspunkte offen` : ''}</div></div>
-        <div className="row small">{m.pageId ? <Link className="badge ok" to={`${base}/doku/${m.pageId}`} onClick={(e) => e.stopPropagation()}>Protokoll</Link> : <span className="badge">kein Protokoll</span>}{m.inviteSentAt && <span className="badge" title={`gesendet ${fmtDateTime(m.inviteSentAt)}`}>eingeladen</span>}</div>
+        <div className="row small">{m.tentative && <span className="badge warn" title="Von der KI eingetragen: verbindlich erst nach Bestätigung durch eine Person">vorläufig</span>}{m.pageId ? <Link className="badge ok" to={`${base}/doku/${m.pageId}`} onClick={(e) => e.stopPropagation()}>Protokoll</Link> : <span className="badge">kein Protokoll</span>}{m.inviteSentAt && <span className="badge" title={`gesendet ${fmtDateTime(m.inviteSentAt)}`}>eingeladen</span>}</div>
       </div>
       {open === m.id && (
         <div className="mt">
           {m.description && <p className="small" style={{ whiteSpace: 'pre-wrap' }}>{m.description}</p>}
           <div className="small"><span className="muted">Teilnehmer:</span> {m.attendees.length ? m.attendees.map((a) => <span key={a.email} className="badge" style={{ marginRight: 4 }} title={a.email}>{a.name ?? a.email}{!a.userId && ' (extern)'}</span>) : '–'}</div>
+          {m.tentative && <div className="notice small mt">Vorläufig, von der KI eingetragen. Erst bestätigen, wenn der Termin geklärt ist; danach sind Einladung und Kalenderübernahme möglich. {detail.project.myMembership.role !== 'reader' && <button className="btn sm primary" disabled={busy} onClick={() => void confirm(m)}>Bestätigen</button>}</div>}
           <div className="row mt">
             <button className="btn sm primary" disabled={busy} onClick={() => void protocol(m)}>{m.pageId ? 'Protokoll öffnen' : 'Protokoll anlegen'}</button>
-            <button className="btn sm" disabled={busy || !m.attendees.length} onClick={() => invite(m)}>{m.inviteSentAt ? 'Einladung aktualisieren' : 'Einladung senden (ICS)'}</button>
-            {(targets.data?.targets ?? []).map((tg) => <button key={tg.key} className="btn sm" disabled={busy} title={`Termin in ${tg.label} anlegen oder aktualisieren`} onClick={() => void run(async () => { const r = await api.post<{ updated: boolean }>(`/meetings/${m.id}/push`, { target: tg.key }); setPushed(`${tg.label}: ${r.updated ? 'aktualisiert' : 'eingetragen'}.`); })}>→ {tg.label}</button>)}
+            <button className="btn sm" disabled={busy || !m.attendees.length || m.tentative} onClick={() => invite(m)}>{m.inviteSentAt ? 'Einladung aktualisieren' : 'Einladung senden (ICS)'}</button>
+            {(targets.data?.targets ?? []).map((tg) => <button key={tg.key} className="btn sm" disabled={busy || m.tentative} title={`Termin in ${tg.label} anlegen oder aktualisieren`} onClick={() => void run(async () => { const r = await api.post<{ updated: boolean }>(`/meetings/${m.id}/push`, { target: tg.key }); setPushed(`${tg.label}: ${r.updated ? 'aktualisiert' : 'eingetragen'}.`); })}>→ {tg.label}</button>)}
             <a className="btn sm" href={`/api/meetings/${m.id}/ics`} title="ICS-Datei für jeden Kalender">ICS-Datei</a>
             {(isPl || m.createdBy === detail.project.myMembership.userId) && <><button className="btn sm" onClick={() => setEdit(m)}>Bearbeiten</button><button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Besprechung löschen', text: `„${m.title}“ löschen? Protokoll und Arbeitspakete bleiben.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/meetings/${m.id}`); setOpen(null); await refresh(); }); })}>Löschen</button></>}
           </div>

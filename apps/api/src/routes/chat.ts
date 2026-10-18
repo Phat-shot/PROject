@@ -1,10 +1,10 @@
 import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { canSeeSubproject, requireProject } from '../rights.js';
 import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
-import { queueAgentChat } from '../ai/agentEvents.js';
+import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -27,6 +27,26 @@ export async function chatRoutes(app: FastifyInstance) {
       (select count(*)::int from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as reply_count,
       (select max(r.created_at) from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as last_reply_at
     from chat_messages m join users u on u.id = m.user_id`;
+
+  /**
+   * Arbeitspaket, zu dem der Agent gefragt hat: Thread-Start des Agenten bzw. seine letzte Direktnachricht („KEY-12 „Titel“: …“,
+   * höchstens 14 Tage alt), sofern die antwortende Person das Arbeitspaket sehen darf. In Direktnachrichten zählt die erste Antwort
+   * und was binnen zwei Stunden danach folgt; spätere Nachrichten sind wieder normaler Chat.
+   */
+  async function answeredTask(agentId: string, channelId: string, threadId: string | null, user: any, messageId: string) {
+    const last = threadId
+      ? await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
+      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.thread_id is null and m.deleted_at is null and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
+    const ref = last ? String(last.body).match(/^([A-Z0-9-]{2,12})-(\d+) „/) : null;
+    if (!ref) return null;
+    if (!threadId) {
+      const first = await db.maybeOne(`select min(created_at) as at from chat_messages where channel_id = $1 and user_id = $2 and thread_id is null and id <> $3 and created_at > $4 and deleted_at is null`, [channelId, user.id, messageId, last.created_at]);
+      if (first?.at && new Date(first.at).getTime() < Date.now() - 2 * 3600_000) return null;
+    }
+    const t = await db.maybeOne(`select t.id, t.project_id, t.subproject_id from tasks t join projects p on p.id = t.project_id where p.org_id = $1 and p.key = $2 and t.number = $3 and t.deleted_at is null`, [user.orgId, ref[1], Number(ref[2])]);
+    if (!t || !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [t.project_id, user.id])) || !(await canSeeSubproject(db, user.id, t.subproject_id))) return null;
+    return { ...t, agent_name: last.name };
+  }
 
   /** Projektkanal holen oder anlegen; Mitglied des Projekts nötig. */
   async function projectChannel(user: any, projectId: string) {
@@ -137,7 +157,14 @@ export async function chatRoutes(app: FastifyInstance) {
     } else {
       for (const to of recipients) await notify(db, { userId: to, projectId: null, type: 'chat.dm', title: `Nachricht von ${user.name}`, body: snippet, link: `/chat/${channel.id}` });
     }
-    for (const a of agents) queueAgentChat(a, channel.id, r.id);
+    for (const a of agents) {
+      // Antwort auf eine Frage des Agenten zu einem Arbeitspaket (Direktnachricht oder Thread, beginnt mit der Kennung): Rückmeldung ins Log, Lauf am Arbeitspaket statt Chat-Antwort
+      const t = channel.kind === 'dm' || threadId ? await answeredTask(a, channel.id, threadId, user, r.id) : null;
+      if (t) {
+        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${body}`]);
+        queueAgentRun(t.id, 'comment');
+      } else queueAgentChat(a, channel.id, r.id);
+    }
     return { message: mapMessage({ ...r, user_name: user.name, reply_count: 0 }) };
   });
 

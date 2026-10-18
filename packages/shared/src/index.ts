@@ -338,7 +338,7 @@ export interface TaskComment {
   userId: string;
   userName: string;
   body: string;
-  source?: 'user' | 'mail' | 'system' | 'ai';
+  source?: 'user' | 'mail' | 'system' | 'ai' | 'chat';
   mailId?: string | null;
   mentions?: string[];
   createdAt: string;
@@ -650,6 +650,9 @@ export interface Meeting {
   createdBy: string | null;
   tasks: { id: string; title: string; done: boolean; number?: number | null }[];
   createdAt: string;
+  /** Von KI eingetragen, verbindlich erst nach Bestätigung durch eine Person */
+  tentative?: boolean;
+  confirmedAt?: string | null;
 }
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }

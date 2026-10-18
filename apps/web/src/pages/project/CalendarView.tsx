@@ -21,7 +21,7 @@ export function CalendarView() {
   const items = useMemo<CalItem[]>(() => [
     ...tasks.filter((x) => x.dueDate).map((x) => ({ id: x.id, kind: 'task' as const, title: x.title, start: x.startDate, date: x.dueDate!, done: x.done, onOpen: () => openTask(x.id) })),
     ...detail.milestones.map((m) => ({ id: m.id, kind: 'ms' as const, title: m.name, start: null, date: m.date })),
-    ...(meetings.data?.meetings ?? []).map((m) => ({ id: m.id, kind: 'meeting' as const, title: m.title, start: null, date: localDate(m.startsAt), time: new Date(m.startsAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) }))
+    ...(meetings.data?.meetings ?? []).map((m) => ({ id: m.id, kind: 'meeting' as const, title: m.tentative ? `(vorläufig) ${m.title}` : m.title, start: null, date: localDate(m.startsAt), time: new Date(m.startsAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' }) }))
   ], [tasks, detail.milestones, meetings.data]);
   return (
     <div className="content">

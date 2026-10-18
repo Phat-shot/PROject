@@ -4,6 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 import * as L from '../docs/layout.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
@@ -19,10 +20,10 @@ const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d
 const icsEsc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
 
 /** ICS-Einladung (METHOD:REQUEST) zu einer Besprechung; Organisator = Projektkonto oder Ersteller. */
-export function meetingIcs(m: { id: string; title: string; starts_at: Date | string; ends_at: Date | string; location: string | null; description: string | null; attendees: MeetingAttendee[]; project_id: string }, organizer: { email: string; name: string }, sequence = 0): string {
+export function meetingIcs(m: { id: string; title: string; starts_at: Date | string; ends_at: Date | string; location: string | null; description: string | null; attendees: MeetingAttendee[]; project_id: string; tentative?: boolean }, organizer: { email: string; name: string }, sequence = 0): string {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PROject//Besprechung//DE', 'CALSCALE:GREGORIAN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
     `UID:meeting-${m.id}@project`, `DTSTAMP:${icsStamp(new Date())}`, `SEQUENCE:${sequence}`, `DTSTART:${icsStamp(new Date(m.starts_at))}`, `DTEND:${icsStamp(new Date(m.ends_at))}`,
-    `SUMMARY:${icsEsc(m.title)}`, `ORGANIZER;CN=${icsEsc(organizer.name)}:mailto:${organizer.email}`];
+    `SUMMARY:${icsEsc(m.title)}`, `ORGANIZER;CN=${icsEsc(organizer.name)}:mailto:${organizer.email}`, ...(m.tentative ? ['STATUS:TENTATIVE'] : [])];
   if (m.location) lines.push(`LOCATION:${icsEsc(m.location)}`);
   lines.push(`DESCRIPTION:${icsEsc(`${m.description ?? ''}\n${publicBase()}/projekte/${m.project_id}/besprechungen`.trim())}`);
   for (const a of m.attendees) lines.push(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE${a.name ? `;CN=${icsEsc(a.name)}` : ''}:mailto:${a.email}`);
@@ -31,7 +32,7 @@ export function meetingIcs(m: { id: string; title: string; starts_at: Date | str
 }
 
 function mapMeeting(r: any): Meeting {
-  return { id: r.id, projectId: r.project_id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), location: r.location, description: r.description, seriesPageId: r.series_page_id, seriesPageTitle: r.series_title ?? null, pageId: r.page_id, pageTitle: r.page_title ?? null, attendees: r.attendees ?? [], inviteSentAt: r.invite_sent_at, createdBy: r.created_by, tasks: r.tasks ?? [], createdAt: r.created_at };
+  return { id: r.id, projectId: r.project_id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), location: r.location, description: r.description, seriesPageId: r.series_page_id, seriesPageTitle: r.series_title ?? null, pageId: r.page_id, pageTitle: r.page_title ?? null, attendees: r.attendees ?? [], inviteSentAt: r.invite_sent_at, createdBy: r.created_by, tasks: r.tasks ?? [], createdAt: r.created_at, tentative: Boolean(r.tentative), confirmedAt: r.confirmed_at ?? null };
 }
 
 /**
@@ -170,12 +171,33 @@ export async function meetingRoutes(app: FastifyInstance) {
     return { meeting: mapMeeting(await load(cur.id)) };
   });
 
+  // Vorläufigen Termin (von KI eingetragen) bestätigen: verbindlich, Log an den verknüpften Arbeitspaketen, deren Agent läuft
+  app.post<{ Params: { id: string } }>('/meetings/:id/confirm', async (req) => {
+    const user = requireUser(req);
+    const cur = await db.maybeOne(`select * from meetings where id = $1`, [req.params.id]);
+    if (!cur) throw notFound('Besprechung nicht gefunden');
+    await requireProject(db, user, cur.project_id, 'member');
+    if (user.kind === 'agent') throw forbidden('Termine bestätigt eine Person');
+    if (cur.tentative) {
+      await db.query(`update meetings set tentative = false, confirmed_by = $2, confirmed_at = now(), updated_at = now() where id = $1`, [cur.id, user.id]);
+      const when = new Date(cur.starts_at).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
+      const linked = await db.query(`select task_id from meeting_tasks where meeting_id = $1`, [cur.id]);
+      for (const l of linked.rows) {
+        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [l.task_id, user.id, `Termin bestätigt: „${cur.title}“ ${when}`]);
+        queueAgentRun(l.task_id, 'task_changed');
+      }
+      await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.confirm', objectType: 'meeting', objectId: cur.id, details: { title: cur.title } });
+    }
+    return { meeting: mapMeeting(await load(cur.id)) };
+  });
+
   // Einladung per Mail mit ICS (METHOD:REQUEST) über das Projektkonto an alle Teilnehmer
   app.post<{ Params: { id: string }; Body: { text?: string } }>('/meetings/:id/invite', async (req) => {
     const user = requireUser(req);
     const cur = await db.maybeOne(`select * from meetings where id = $1`, [req.params.id]);
     if (!cur) throw notFound('Besprechung nicht gefunden');
     await requireProject(db, user, cur.project_id, 'member');
+    if (cur.tentative) throw badRequest('Termin ist vorläufig: erst bestätigen, dann einladen');
     const attendees = cur.attendees as MeetingAttendee[];
     if (!attendees.length) throw badRequest('Keine Teilnehmer');
     const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [cur.project_id]);
@@ -237,6 +259,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     const cur = await db.maybeOne(`select * from meetings where id = $1`, [req.params.id]);
     if (!cur) throw notFound('Besprechung nicht gefunden');
     await requireProject(db, user, cur.project_id);
+    if (cur.tentative) throw badRequest('Termin ist vorläufig: erst bestätigen, dann in den Kalender übernehmen');
     const target = req.body?.target;
     const t = (await targetsOf(user)).find((x) => x.key === target);
     if (!t) throw badRequest('Kalenderziel nicht eingerichtet (Benutzereinstellungen › Kalender bzw. Konfiguration › Mit Microsoft 365/Google verbinden)');

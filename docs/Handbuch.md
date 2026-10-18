@@ -104,6 +104,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - **Besprechung** (Arbeitspakete › Besprechungen): Termin, Ort, Agenda, Teilnehmer (Mitglieder, Kontakte, freie Adressen), Zuordnung zu einer Besprechungsreihe.
 - **Protokollseite** aus der Vorlage der Reihe; Aktionspunkte direkt als APs mit Zuständigem und Termin.
 - **Einladung** mit Kalendereintrag (ICS) über das Projektkonto; Änderungen werden nachgesendet.
+- **Vorläufige Termine** (von KI eingetragen) tragen das Kennzeichen „vorläufig“; ein Mitglied bestätigt sie mit „Bestätigen“, vorher keine Einladung und keine Kalenderübernahme.
 - **Kalender** je Projekt und global: Deadlines, Meilensteine, Besprechungen; ICS-Abo und Eintragen in Microsoft 365, Google oder CalDAV (Benutzereinstellungen).
 
 ## 9. Workflows
@@ -149,12 +150,15 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 **Was der Agent tut**
 - Liest das AP mit Beschreibung, Aufgaben, Tasks, Log, Mails, Doku-Seitenliste und Mitgliedern.
-- **Fragt per Chat:** Fragen an Projektbeteiligte stellt er als Direktnachricht (oder im Projektkanal), Eskalationen an die PL kommen zusätzlich zur Benachrichtigung per Chat. Antworten im Chat sieht er im nächsten Lauf und hält sie im Log fest.
+- **Fragt per Chat:** Fragen an Projektbeteiligte stellt er immer als Direktnachricht (oder im Projektkanal), nie per Mail; Eskalationen an die PL kommen zusätzlich zur Benachrichtigung per Chat. Die Frage steht im Log („Per Chat an …“). Wer direkt darauf antwortet (im Thread zur Frage; in der Direktnachricht die erste Antwort und was binnen zwei Stunden folgt), dessen Antwort landet automatisch als „Rückmeldung per Chat“ im Log des AP (Kennzeichen „aus Chat“), und der Agent läuft sofort am AP weiter.
+- **Ansprechpartner:** für Rückfragen und Terminzusagen die Zuständigen des übergeordneten AP, sonst die Verantwortung des Teilprojekts, sonst die verantwortliche PL (immer eine Person). Deren Termine aus anderen Projekten sieht er nur als „belegt“, ohne Titel.
 - Handelt: Log schreiben, Status setzen, Tasks abhaken, ergänzen oder umformulieren, Mails schreiben (höchstens drei je Lauf), Doku-Seiten lesen, anlegen, ändern und als PDF senden, Blockade melden, an die PL eskalieren.
-- **Plant:** Aufgaben unter seinem AP (bzw. in seinen Teilprojekten) und APs in seinen Teilprojekten anlegen, mit Start, Termin, Zuständigkeit und Tasks; zuweisen (Agenten nur als stellv. PL); Start/Termin bei eigener oder noch terminloser Arbeit setzen; Termine mit Uhrzeit in den Projektkalender. Als **stellvertretende PL** oder mit „Projektplan ändern“ im ganzen Projekt, dazu Teilprojekte und Meilensteine. Höchstens 15 Anlagen je Lauf, jede steht im Log. Mitglieder, Rechte und Einstellungen nie.
+- **Plant:** Aufgaben unter seinem AP (bzw. in seinen Teilprojekten) und APs in seinen Teilprojekten anlegen, mit Start, Termin, Zuständigkeit und Tasks; zuweisen (Agenten nur als stellv. PL); Start/Termin bei eigener oder noch terminloser Arbeit setzen; Termine mit Uhrzeit in den Projektkalender, aber nur **vorläufig** (siehe unten). Als **stellvertretende PL** oder mit „Projektplan ändern“ im ganzen Projekt, dazu Teilprojekte und Meilensteine. Höchstens 15 Anlagen je Lauf, jede steht im Log. Mitglieder, Rechte und Einstellungen nie.
 - **Ursprungsmail:** Ist sein AP aus einer Mail entstanden, beantwortet er sie zum Abschluss mit dem Ergebnis, aus dem Konto dieser Mail (Projektkonto direkt, wenn erlaubt; sonst Entwurf; persönliches Konto: nur der Eigentümer gibt frei). Ohne Projektkonto gehen seine Mails als Entwurf über das Konto einer Projektansicht.
 - **Wartet** auf Rückmeldung, Termin, Erledigung durch andere oder Information und setzt sich dafür eine Wiedervorlage. Bei Rückmeldungen fasst er nach Frist nach und eskaliert danach an die PL. Der Hintergrunddienst prüft das jede Minute.
 - Läuft erneut bei neuem Kommentar, neuer Mail, Änderungen durch Menschen, Wiedervorlage, naher Fälligkeit und spätestens alle drei Tage.
+- **Termine sagt er nie selbst zu.** Schlägt ein Externer einen Termin vor, prüft er Projektkalender, Belegt-Zeiten, Wochenenden und Sperrzeiten, fragt den Ansprechpartner per Chat und wartet; erst nach dessen Bestätigung sagt er dem Externen zu. Seine Kalendereinträge sind **vorläufig** (Kennzeichen in Besprechungen und Kalender, im ICS als „tentative“): Ein Mitglied bestätigt sie unter Besprechungen › Termin › **Bestätigen**; erst dann sind Einladung und Übernahme in Microsoft 365/Google/CalDAV möglich. Die Bestätigung steht im Log des AP, der Agent läuft daraufhin weiter. Termine aus der Projekt-KI („KI Bearbeiten“) sind ebenso vorläufig; nimmt eine Person den Terminvorschlag eines Agenten an, gilt er als bestätigt.
+- **Versandstatus schreibt das System:** Ob eine Mail gesendet wurde, als Entwurf auf Freigabe wartet oder nicht gesendet werden konnte (z. B. kein Mailkonto), steht als eigener Log-Eintrag unter seinem Namen; der Agent selbst behauptet keinen Versand.
 - Ändert bestehende Termine anderer nur, wenn er planen darf; erfindet keine Fakten, pflegt keine Risiken, Zeiten oder Einstellungen. Inhalte aus persönlichen Konten sieht er nur, wenn sie freigegeben sind (Kopie) oder nur der Eigentümer im Projekt ist.
 
 **Mit dem Agenten sprechen**
@@ -174,7 +178,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - Freigaben: Mail-Entwürfe des Agenten ohne Senderecht.
 - Audit-Log und Tagesbudget begrenzen und belegen alles.
 
-**Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen in den Kalender und sammelt Fragen in einer Eskalation an die PL.
+**Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen vorläufig in den Kalender (die PL bestätigt) und klärt Fragen per Chat mit der PL.
 
 ## 13. Einstellungen und Verwaltung
 
