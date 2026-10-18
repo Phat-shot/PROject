@@ -1,7 +1,9 @@
 import path from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import type { Db } from '../db.js';
 import type { PdfStyle } from './pdf.js';
-import type { PageLayout } from './pdfHtml.js';
+import { htmlToPdf, type PageLayout } from './pdfHtml.js';
 import { mdToHtml, renderTemplateHtml } from './html.js';
 
 export const uploadDir = path.resolve(process.env.DATA_DIR ?? '.data', 'uploads');
@@ -47,3 +49,18 @@ export const templateHtml = (t: any) => renderTemplateHtml(t.content_html ?? mdT
 
 export const folderName = async (db: Db, folderId: string | null) =>
   folderId ? (await db.maybeOne(`select name from doc_folders where id = $1`, [folderId]))?.name ?? null : null;
+
+/** PDF einer Seite als Mailanhang (Agent, angehaltener PDF-Versand), Dateiname Titel_vVersion.pdf. */
+export async function pagePdf(db: Db, page: any, author: string): Promise<{ filename: string; content: Buffer; contentType: string }> {
+  const project = await db.one(`select name from projects where id = $1`, [page.project_id]);
+  const content = await htmlToPdf(db, page.content_html ?? mdToHtml(page.content_md), { title: page.title, project: project.name, version: page.version, status: page.status, author, date: new Date(), folder: await folderName(db, page.folder_id) }, await layoutFor(db, page.id));
+  return { filename: `${String(page.title).replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${page.version}.pdf`, content, contentType: 'application/pdf' };
+}
+
+/** Versandte PDF an der Seite ablegen (nachvollziehbar, was hinausging). */
+export async function storePagePdf(db: Db, page: { id: string; project_id: string }, pdf: { filename: string; content: Buffer }, userId: string): Promise<void> {
+  await mkdir(uploadDir, { recursive: true });
+  const storage = path.join(uploadDir, `${randomUUID()}.pdf`);
+  await writeFile(storage, pdf.content);
+  await db.query(`insert into attachments (project_id, page_id, filename, mime, size, storage_path, uploaded_by) values ($1,$2,$3,'application/pdf',$4,$5,$6)`, [page.project_id, page.id, pdf.filename, pdf.content.length, storage, userId]);
+}

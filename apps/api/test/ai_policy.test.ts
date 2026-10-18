@@ -598,8 +598,10 @@ test('Einziger Weg zur KI: aiConfigForProject, aiConfigForAgent und profileConfi
     assert.ok(f.text.includes('aiConfigFor(') || /\bcfg: AiConfig\b/.test(f.text), `${f.rel} holt die KI-Konfiguration nicht über aiConfigFor`);
   }
   const viaParam = files.filter((x) => /\bcfg: AiConfig\b/.test(x.text) && /\bcomplete\(/.test(x.text) && !x.text.includes('aiConfigFor(')).map((f) => f.rel).sort();
-  assert.deepEqual(viaParam, ['ai/service.ts', 'mail/origin.ts']);
-  for (const fn of ['summarizeMail', 'essenceForTask', 'essenceForPage', 'statusReportDraft', 'askProject', 'aiFinalReply']) {
+  // outbound.ts: Neuformulierung nach außen (composeExternal) mit der Konfiguration des Agentenlaufs, nur über guardOutbound
+  assert.deepEqual(viaParam, ['ai/service.ts', 'mail/origin.ts', 'outbound.ts']);
+  assert.deepEqual(files.filter((x) => /\bcomposeExternal\(cfg/.test(x.text)).map((f) => f.rel), ['outbound.ts']);
+  for (const fn of ['summarizeMail', 'essenceForTask', 'essenceForPage', 'statusReportDraft', 'askProject', 'aiFinalReply', 'guardOutbound']) {
     for (const f of files.filter((x) => new RegExp(`await ${fn}\\(db`).test(x.text))) assert.ok(f.text.includes('aiConfigFor('), `${f.rel} ruft ${fn} ohne aiConfigFor`);
   }
 });

@@ -8,6 +8,7 @@ import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
+import { isInternal } from '../outbound.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -85,7 +86,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Eigene Arbeitspakete: im Projektkanal nur dieses Projekt und keine eingeschränkten Teilprojekte (alle Mitglieder lesen mit),
   // in Direktnachrichten nur Projekte und Teilprojekte, die die fragende Person sieht
   const tasks = await db.query(
-    `select t.id, t.project_id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
+    `select t.id, t.project_id, t.subproject_id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
        (select string_agg(x.body, ' | ' order by x.created_at desc) from (select body, created_at from task_comments where task_id = t.id order by created_at desc limit 3) x) as recent
      from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
      where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
@@ -94,13 +95,16 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
      order by t.due_date nulls last limit 25`,
     [agent.id, project ? project.id : msg.user_id]
   );
-  // Direktnachricht: nur Projekte, in denen Absender und Agent freigegeben sind (Projektregeln, Ausnahmen)
+  // Direktnachricht: nur Projekte, in denen Absender und Agent freigegeben sind (Projektregeln, Ausnahmen), und nur Arbeitspakete,
+  // für die der Absender intern ist (Regel E); Org-Benutzer ohne Projektzugriff (outside) bekommen nichts aus dem Projekt
   if (!project) {
     const ok = new Map<string, boolean>();
     for (const pid of new Set<string>(tasks.rows.map((t: any) => t.project_id))) {
       ok.set(pid, (await aiAllowed(db, { userId: msg.user_id, projectId: pid, feature: 'agent.chat' })).allowed && (await aiAllowed(db, { userId: agent.id, projectId: pid, feature: 'agent.chat', budget: false })).allowed);
     }
-    tasks.rows = tasks.rows.filter((t: any) => ok.get(t.project_id));
+    const inner: any[] = [];
+    for (const t of tasks.rows as any[]) if (ok.get(t.project_id) && (await isInternal(db, { projectId: t.project_id, subprojectId: t.subproject_id, userId: msg.user_id }))) inner.push(t);
+    tasks.rows = inner;
   }
   const known = new Map<string, any>(tasks.rows.map((t: any) => [t.id, t]));
   const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;

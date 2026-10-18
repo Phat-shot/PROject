@@ -40,6 +40,7 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 - **Gute Zuweisung:** klares Ziel in der Beschreibung, Termin, Tasks als Checkliste, externe Ansprechpartner als Kontakt.
 - **Informieren:** Kommentar ins Log oder Chat an den Agenten. Im Projektkanal mit `@Name`.
 - **Kontrolle:** Projekt › KI zeigt jeden Lauf mit Begründung und Aktionen; die PL kann den Agenten je AP pausieren. Mails ohne Senderecht landen als Entwurf in den Freigaben.
+- **Externe** erfahren vom Agenten nur, was zu ihrer Aufgabe gehört: Außenbeschreibung des AP, Log-Einträge „für Externe sichtbar“, freigegebene Seiten, externes Profil (Einstellungen › Außenkommunikation). Seine Mails nach außen formuliert das System damit neu und prüft sie; Auffälliges und der erste Kontakt zu einer neuen Adresse warten in Mail › Freigaben.
 
 ## Mail und KI
 

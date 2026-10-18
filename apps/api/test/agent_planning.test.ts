@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { testApp } from './helpers.js';
+import { composeEcho, testApp } from './helpers.js';
 import { runAgents } from '../src/ai/agent.js';
 import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
 
@@ -10,6 +10,8 @@ let next: any[] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
+  const echo = composeEcho(body);
+  if (echo) return echo;
   calls.push(body);
   const content = body.response_format ? JSON.stringify({ note: 'geplant', actions: next }) : 'bereit';
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
@@ -210,6 +212,9 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   assert.match(prompt, /Belegt \(weitere Termine von Petra Lenz, ohne Details\): /);
   assert.ok(!prompt.includes('Lenkungskreis geheim'), 'keine fremden Titel');
   await t.db.query(`update project_members set agent_can_mail = true where project_id = $1 and user_id = $2`, [web(), morton.id]);
+  // Der erste Kontakt (Adresse ohne Bezug zum AP) bleibt ein Entwurf, bis die PL ihn sendet; danach hat die Adresse Bezug (Mail am AP)
+  const first = await t.db.one(`select id from mail_drafts where task_id = $1 and subject = 'Angebot Elektrik'`, [ap.id]);
+  assert.equal((await t.api(pl).post(`/mail/drafts/${first.id}/send`)).statusCode, 200);
   next = [A({ type: 'mail', to: ['elektro@extern.de'], subject: 'Angebot Elektrik 2', text: 'Bitte um Angebot.' })];
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');

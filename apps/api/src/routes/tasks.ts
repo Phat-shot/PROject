@@ -37,6 +37,8 @@ interface TaskBody {
   blockedReason?: string | null;
   /** Aufgabe zu diesem Arbeitspaket anlegen (nur beim Anlegen) */
   parentId?: string | null;
+  /** Außenbeschreibung: was Externe zu diesem AP erfahren dürfen (PL bzw. „Projektplan ändern“) */
+  externalBrief?: string | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -260,7 +262,7 @@ export async function taskRoutes(app: FastifyInstance) {
       task,
       subtasks,
       meetings: meetings.rows.map((m: any) => ({ id: m.id, title: m.title, startsAt: new Date(m.starts_at).toISOString(), pageId: m.page_id })),
-      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
+      comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], visibility: c.visibility ?? 'internal', createdAt: c.created_at })),
       mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id, origin: Boolean(m.origin), answered: Boolean(m.answered) })),
       attachments: attachments.rows.map(mapAttachment)
     };
@@ -292,6 +294,7 @@ export async function taskRoutes(app: FastifyInstance) {
       // Mitglieder ohne Planrecht dürfen Termine nur an eigenen Arbeitspaketen ändern.
       throw forbidden('Termine ändern erfordert das Recht „Projektplan ändern“ oder die Zuständigkeit für die Arbeitspaket');
     }
+    if ('externalBrief' in b && m.role !== 'pl' && !m.canEditPlan) throw forbidden('Die Außenbeschreibung pflegt die PL oder wer „Projektplan ändern“ darf');
     await db.query(
       `update tasks set
          title = coalesce($2, title),
@@ -316,6 +319,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
     if ('estimateMinutes' in b) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [req.params.id, b.estimateMinutes && b.estimateMinutes > 0 ? Math.round(b.estimateMinutes) : null]);
+    if ('externalBrief' in b) await db.query(`update tasks set external_brief = $2 where id = $1`, [req.params.id, String(b.externalBrief ?? '').trim().slice(0, 4000) || null]);
     if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
       await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [req.params.id, user.id, b.blocked ? `Blockiert gemeldet${b.blockedReason ? `: ${b.blockedReason}` : ''}. Teilprojekt-Verantwortung wird informiert.` : 'Blockade aufgehoben.']);
@@ -352,7 +356,7 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.update', objectType: 'task', objectId: req.params.id, details: changed });
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id) queueAgentRun(req.params.id, 'assigned');
-    else if (user.kind !== 'agent' && ['title', 'description', 'dueDate', 'startDate', 'columnId', 'blocked'].some((k) => k in b)) queueAgentRun(req.params.id, 'task_changed');
+    else if (user.kind !== 'agent' && ['title', 'description', 'dueDate', 'startDate', 'columnId', 'blocked', 'externalBrief'].some((k) => k in b)) queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -516,7 +520,8 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // Kommentare
-  app.post<{ Params: { id: string }; Body: { body: string } }>('/tasks/:id/comments', async (req) => {
+  // Log-Eintrag; visibility external = für Externe sichtbar (eigener Eintrag), Teil des Außenkontexts der Agenten
+  app.post<{ Params: { id: string }; Body: { body: string; visibility?: 'internal' | 'external' } }>('/tasks/:id/comments', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select project_id from tasks where id = $1`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
@@ -524,7 +529,8 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
     const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);
     const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
-    const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions) values ($1,$2,$3,$4) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions)]);
+    const visibility = req.body.visibility === 'external' ? 'external' : 'internal';
+    const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions, visibility) values ($1,$2,$3,$4,$5) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions), visibility]);
     await touchTask(db, req.params.id);
     if (user.kind !== 'agent') queueAgentRun(req.params.id, 'comment');
     const task = (await loadTask(db, req.params.id))!;
@@ -536,7 +542,21 @@ export async function taskRoutes(app: FastifyInstance) {
     if (task.responsible.userId) targets.add(task.responsible.userId);
     for (const m of mentions) targets.delete(m);
     await notifyMany(db, targets, { projectId: t.project_id, type: 'task.comment', title: `Kommentar zu „${task.title}“`, body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link }, user.id);
-    return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, mentions, createdAt: c.created_at } };
+    return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, mentions, visibility: c.visibility, createdAt: c.created_at } };
+  });
+
+  /** Sichtbarkeit eines Log-Eintrags für Externe: PL, „Projektplan ändern“ oder die verfassende Person bei eigenen Einträgen. */
+  app.patch<{ Params: { id: string; cid: string }; Body: { visibility: 'internal' | 'external' } }>('/tasks/:id/comments/:cid', async (req) => {
+    const user = requireUser(req);
+    const c = await db.maybeOne(`select c.*, t.project_id, t.subproject_id from task_comments c join tasks t on t.id = c.task_id where c.id = $1 and c.task_id = $2`, [req.params.cid, req.params.id]);
+    if (!c) throw notFound('Log-Eintrag nicht gefunden');
+    const m = await requireProject(db, user, c.project_id, 'member');
+    if (!(await canSeeSubproject(db, user.id, c.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    if (!['internal', 'external'].includes(req.body?.visibility)) throw badRequest('visibility: internal oder external');
+    if (m.role !== 'pl' && !m.canEditPlan && c.user_id !== user.id) throw forbidden('Für Externe freigeben darf die PL, wer „Projektplan ändern“ darf, oder wer den Eintrag geschrieben hat');
+    await db.query(`update task_comments set visibility = $2 where id = $1`, [c.id, req.body.visibility]);
+    await audit(db, { orgId: user.orgId, projectId: c.project_id, userId: user.id, action: 'task.comment_visibility', objectType: 'task', objectId: c.task_id, details: { commentId: c.id, visibility: req.body.visibility } });
+    return { ok: true, visibility: req.body.visibility };
   });
 
   async function rememberContact(projectId: string, email: string) {

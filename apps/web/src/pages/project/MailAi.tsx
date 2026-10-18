@@ -49,6 +49,7 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
             {r.taskId && <button className="btn sm link" onClick={() => openTask(r.taskId!)}>{r.ref ?? 'öffnen'}</button>}
             {r.meetingId && <Link className="btn sm link" to={`${base}/besprechungen`}>Kalender</Link>}
             {r.draftId && <Link className="btn sm link" to={`${base}/mail/freigaben`}>Entwurf</Link>}
+            {r.draftId && r.hints ? <span className="small" style={{ color: 'var(--warn)' }} title="Der Entwurf nennt Inhalte, die Externe nicht erfahren sollen; Details unter Mail › Freigaben">{r.hints} {r.hints === 1 ? 'Hinweis' : 'Hinweise'} der Außenprüfung</span> : null}
             {r.error && <span className="muted small"> {r.error}</span>}
             {run.mode === 'triage' && (a.status === 'pending' || a.status === 'error') && <span className="row" style={{ display: 'inline-flex', gap: 4, marginLeft: 6 }}>
               <button className="btn sm primary" disabled={busy} onClick={() => void decide(i, true)}>Annehmen</button>

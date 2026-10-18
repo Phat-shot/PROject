@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { testApp } from './helpers.js';
+import { composeEcho, testApp } from './helpers.js';
 import { agentBudgetLeft, runAgents } from '../src/ai/agent.js';
 import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
 
@@ -14,6 +14,8 @@ let gate: Promise<void> | null = null;
 const fakeFetch: typeof fetch = async (input, init) => {
   const url = String(input);
   const body = init?.body ? JSON.parse(String(init.body)) : {};
+  const echo = composeEcho(body);
+  if (echo) return echo;
   calls.push({ url, body });
   if (url === 'http://llm.local:8000/v1/chat/completions') {
     if (body.model !== 'qwen3') return new Response(JSON.stringify({ error: { message: 'model not found' } }), { status: 404 });
@@ -135,8 +137,10 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   assert.equal(runs[0].inputTokens, 500);
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'agent.run' and user_id = $1`, [a.id]));
 
-  // Mit Mail-Recht: direkter Versand über das Projektkonto
+  // Mit Mail-Recht: direkter Versand über das Projektkonto, sobald die Adresse Bezug zum AP hat (hier externe Zuständigkeit für einen Task);
+  // der erste Kontakt zu einer Adresse ohne Bezug geht immer als Entwurf (external_scope.test.ts)
   await t.api(pl).put(`/projects/${pid}/members/${a.id}`, { role: 'member', agentCanMail: true });
+  assert.equal((await t.api(pl).patch(`/tasks/${taskId}/checklist/${itemId}`, { responsibleEmail: 'k.mueller@mueller-design.de' })).statusCode, 200);
   const before = t.mail.dev.sent.length;
   nextActions = [{ type: 'mail', to: ['k.mueller@mueller-design.de'], subject: 'Erinnerung', text: 'Kurze Erinnerung. Nachfasser (KI-Agent, Projekt WEB)' }];
   await t.api(pl).post(`/tasks/${taskId}/agent-run`);
@@ -195,6 +199,10 @@ test('Sofortlauf bei Zuweisung und Kommentar; Wartezustand mit Wiedervorlage, Na
   assert.ok(Math.abs(new Date(t1.agentWait.remindAt).getTime() - (since + 2 * 3600_000)) < 5000);
   assert.ok(Math.abs(new Date(t1.agentWait.escalateAt).getTime() - (since + 5 * 3600_000)) < 5000);
   assert.ok(Math.abs(new Date(t1.agentNextCheckAt).getTime() - (since + 1 * 3600_000)) < 5000, 'nächste Prüfung = frühester Termin');
+  // Erster Kontakt zum Lieferanten (ohne Bezug zum AP) wartet als Entwurf; die PL sendet ihn, danach hat die Adresse Bezug (Mail am AP)
+  const first = await t.db.one(`select id, status from mail_drafts where task_id = $1`, [taskId]);
+  assert.equal(first.status, 'pending_approval');
+  assert.equal((await t.api(pl).post(`/mail/drafts/${first.id}/send`)).statusCode, 200);
 
   // Nach 1 h: Wiedervorlage (check); Agent wartet weiter, Nachfass-/Eskalationsfristen bleiben
   nextActions = [{ type: 'wait', kind: 'reply', reason: 'Antwort des Lieferanten', checkAfterHours: 1, remindAfterHours: 2, escalateAfterHours: 5 }];

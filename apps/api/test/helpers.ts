@@ -31,3 +31,15 @@ export async function testApp(opts: { fetchFn?: typeof fetch } = {}) {
 
   return { app, db, mail, ids, login, api, close: async () => { await app.close(); await db.close(); } };
 }
+
+/**
+ * Fake-LLM (OpenAI-kompatibel): Neuformulierung nach außen (composeExternal, Schema mit withheld) erkennen und die Absicht
+ * unverändert zurückgeben, ohne Token; null bei allen anderen Aufrufen (die Fakes zählen und beantworten sie wie bisher).
+ */
+export function composeEcho(body: any): Response | null {
+  if (!body?.response_format?.json_schema?.schema?.properties?.withheld) return null;
+  const prompt = String(body.messages?.at(-1)?.content ?? '');
+  const intent = prompt.slice(prompt.lastIndexOf('Absicht des Agenten'));
+  const content = JSON.stringify({ subject: intent.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: intent.split(/^Text:\n/m)[1] ?? '', withheld: [] });
+  return new Response(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 0, completion_tokens: 0 } }), { status: 200 });
+}

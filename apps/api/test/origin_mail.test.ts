@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { testApp } from './helpers.js';
+import { composeEcho, testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM: Arbeitspaket-Läufe liefern `next`, freie Texte (finale Antwort) einen festen Text. */
@@ -9,6 +9,8 @@ let next: any[] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
+  const echo = composeEcho(body);
+  if (echo) return echo;
   calls.push(body);
   const content = body.response_format ? JSON.stringify({ note: 'Abschluss', actions: next }) : 'Guten Tag,\n\ndas Angebot ist geprüft und freigegeben.\n\nViele Grüße\nPetra Lenz';
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
@@ -110,6 +112,7 @@ test('Agent: Antwort auf die Ursprungsmail aus deren Konto (Projektkonto direkt,
   // Persönliches Konto der PL (Hosting-Ansicht): Entwurf über die Ansicht, nur die Eigentümerin gibt frei; Inhalt nicht im Prompt
   const host = (await mailsOf(pl, t.ids.views.hosting))[0];
   const t2 = (await t.api(pl).post(`/mail/mails/${host.id}/create-task`, { projectId: t.ids.projects.web, confirmed: true })).json().task;
+  next = [A({ type: 'reply_origin', text: 'Guten Tag,\n\ndie Verlängerung ist notiert.\n\nViele Grüße\nMorton' })];
   calls.length = 0;
   await t.api(pl).patch(`/tasks/${t2.id}`, { responsibleUserId: agent.id });
   await flushAgentRuns();

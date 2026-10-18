@@ -70,6 +70,9 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   assert.equal(draft.status, 'draft');
   assert.equal(draft.user_id, t.ids.users.pl);
   assert.equal(draft.task_id, task.id);
+  // Antwortentwurf an Externe: Außenprüfung als Hinweis protokolliert (Absender hat Bezug zum neuen AP: Ursprungsmail)
+  const check = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [draft.id]);
+  assert.deepEqual([check.channel, check.audience, check.result], ['draft', 'task_external', 'pass']);
   assert.equal((await t.db.one(`select folder from mails where id = $1`, [mail.id])).folder, 'In Arbeit');
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai'`, [t.ids.users.pl]));
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and agent_user_id = $2`, [task.id, agent.id]), 'Agent legt sofort los');

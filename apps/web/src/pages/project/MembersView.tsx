@@ -38,7 +38,7 @@ export function MembersView() {
   return (
     <div className="content settings">
       <nav className="section-nav">
-        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['aussen', 'Außenkommunikation'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
         <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
       </nav>
       <div className="card mb" id="allgemein">
@@ -115,6 +115,10 @@ export function MembersView() {
           <div className="card" id="mail">
             <h2>Mail-Ansichten und Filter</h2>
             <MailViewsCard />
+          </div>
+          <div className="card" id="aussen">
+            <h2>Außenkommunikation</h2>
+            <ExternalCard />
           </div>
           <div className="card" id="papierkorb">
             <h2>Papierkorb</h2>
@@ -214,6 +218,47 @@ function GeneralForm() {
       <p className="muted small">Sichtbarkeit „alle Benutzer“: Nicht-Mitglieder sehen Übersicht, Board, Plan und Doku lesend. Mail-Ansichten bleiben rechtegebunden, schreiben darf weiterhin nur, wer Mitglied ist.</p>
       {error && <div className="error">{error}</div>}
       <div><button className="btn primary sm" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility }); await reload(); })}>Speichern</button></div>
+    </div>
+  );
+}
+
+/**
+ * Außenkommunikation (Informationsgrenze für Externe): externes Profil, das Externe über das Projekt erfahren dürfen (Name
+ * nach außen, Adresse, Zufahrt, Ansprechpartner für Externe), und die Prüfstufe für Agenten-Mails an Nicht-Interne.
+ */
+function ExternalCard() {
+  const { detail, reload } = useProject();
+  const ai = useAiStatus();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const p = detail.project.externalProfile ?? {};
+  const init = () => ({ name: p.name ?? '', address: p.address ?? '', access: p.access ?? '', contacts: (p.contacts ?? []).map((c) => ({ name: c.name, email: c.email, role: c.role ?? '' })) });
+  const [f, setF] = useState(init);
+  const { busy, error, run } = useAsync();
+  const guard = ai?.externalGuard === 'check' ? 'nur prüfen (ohne Neuformulierung)' : 'neu formulieren und prüfen';
+  const intro = <p className="muted small">KI-Agenten schreiben Externen nur, was zu deren Aufgabe gehört: Außenbeschreibung des AP, Log-Einträge „für Externe sichtbar“, freigegebene Seiten und dieses Profil. Prüfstufe (Verwaltung › KI): <strong>{guard}</strong>. Der erste Kontakt zu einer Adresse ohne Bezug zum AP geht immer als Entwurf; Angehaltenes steht unter <Link to={`/projekte/${detail.project.id}/mail/freigaben`}>Mail › Freigaben</Link>.</p>;
+  if (!isPl) {
+    return <>{intro}<dl className="kv"><dt>Name nach außen</dt><dd>{p.name || '–'}</dd><dt>Adresse</dt><dd>{p.address || '–'}</dd><dt>Zufahrt, Hinweise</dt><dd>{p.access || '–'}</dd><dt>Ansprechpartner</dt><dd>{p.contacts?.length ? p.contacts.map((c) => `${c.name}${c.role ? ` (${c.role})` : ''}${c.email ? ` <${c.email}>` : ''}`).join('; ') : 'keiner (Verweis an „die Projektleitung“)'}</dd></dl></>;
+  }
+  const setContact = (i: number, k: 'name' | 'email' | 'role', v: string) => setF({ ...f, contacts: f.contacts.map((c, j) => (j === i ? { ...c, [k]: v } : c)) });
+  return (
+    <div className="form">
+      {intro}
+      <label className="field"><span>Name nach außen (statt des internen Projektnamens)</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. Neubau Firmensitz" /></label>
+      <label className="field"><span>Adresse</span><input type="text" value={f.address} onChange={(e) => setF({ ...f, address: e.target.value })} /></label>
+      <label className="field"><span>Zufahrt und Hinweise für Externe</span><textarea value={f.access} onChange={(e) => setF({ ...f, access: e.target.value })} /></label>
+      <div className="field"><span>Ansprechpartner für Externe (dürfen in Mails nach außen genannt werden; an sie verweist der Agent Fragen außerhalb der Aufgabe)</span>
+        {f.contacts.map((c, i) => (
+          <div key={i} className="row mb">
+            <input type="text" placeholder="Name" value={c.name} onChange={(e) => setContact(i, 'name', e.target.value)} style={{ flex: 1 }} />
+            <input type="email" placeholder="Mail" value={c.email} onChange={(e) => setContact(i, 'email', e.target.value)} style={{ flex: 1 }} />
+            <input type="text" placeholder="Rolle" value={c.role} onChange={(e) => setContact(i, 'role', e.target.value)} style={{ width: 120 }} />
+            <button className="btn sm link" onClick={() => setF({ ...f, contacts: f.contacts.filter((_, j) => j !== i) })}>✕</button>
+          </div>
+        ))}
+        <div><button className="btn sm" onClick={() => setF({ ...f, contacts: [...f.contacts, { name: '', email: '', role: '' }] })}>Ansprechpartner hinzufügen</button></div>
+      </div>
+      {error && <div className="error">{error}</div>}
+      <div><button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/external-profile`, f); await reload(); })}>Speichern</button></div>
     </div>
   );
 }

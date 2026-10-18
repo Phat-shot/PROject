@@ -79,6 +79,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - Rechte je Ansicht: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen. Aus persönlichen Konten sendet nur der Eigentümer.
 - Aktionen an einer Mail: mit AP verknüpfen oder kopieren, ins Log übernehmen, AP anpassen (Mail als Beleg), AP erstellen, in Doku ablegen oder an eine Seite anhängen.
 - Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie. Entwürfe aus persönlichen Konten sieht und sendet nur der Eigentümer. Entwürfe eines KI-Agenten am Projektkonto ändert, sendet oder lehnt ab, wer das Konto verwaltet (PL). Eine Ablehnung steht im Log des AP, und der Agent läuft daraufhin erneut.
+- **Außenprüfung angehalten** (oben in den Freigaben): Agenten-Mails an Externe, in denen die Prüfung Projektinternes gefunden hat, mit Fundstellen und dem, was die Neuformulierung zurückgehalten hat. „Bearbeiten und senden“, „Unverändert senden“ oder „Ablehnen“; eine genannte Seite lässt sich dabei für die Empfänger freigeben (nur lesen; PL oder „Final setzen / Versand“). Entwürfe der Mail-KI zeigen Fundstellen nur als Hinweis.
 - Postfach mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), synchron mit dem Mailserver.
 
 **Ursprungsmail**
@@ -173,6 +174,14 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 - **Versandstatus schreibt das System:** Ob eine Mail gesendet wurde, als Entwurf auf Freigabe wartet oder nicht gesendet werden konnte (z. B. kein Mailkonto), steht als eigener Log-Eintrag unter seinem Namen; der Agent selbst behauptet keinen Versand.
 - Ändert bestehende Termine anderer nur, wenn er planen darf; erfindet keine Fakten, pflegt keine Risiken, Zeiten oder Einstellungen. Inhalte aus persönlichen Konten sieht er nur, wenn sie freigegeben sind (Kopie) oder nur der Eigentümer im Projekt ist.
 
+**Externe: nur, was zu ihrer Aufgabe gehört**
+- **Empfänger:** intern (Projektmitglied, das das Teilprojekt sieht), Org-Benutzer ohne Zugriff, Extern mit Bezug zum AP (Zuständigkeit am AP, am Über-AP, an Aufgaben darunter oder an einem Task, Mails am AP, Teilnahme an einer verknüpften Besprechung) und Extern ohne Bezug. Für eine Mail gilt die strengste Klasse; ein externer Cc macht sie extern. Projektmitgliedern schreibt der Agent nie per Mail, sondern per Chat.
+- **Außenkontext:** Titel, Termine und Status des AP in Worten, die Tasks des Empfängers, die **Außenbeschreibung** des AP (im AP, pflegen PL und „Projektplan ändern“), die Beschreibung nur bei Zuweisung an diesen Externen, Mails mit ihm am AP, Log-Einträge **„für Externe sichtbar“**, freigegebene Seiten (Verteiler oder Freigabelink), verknüpfte Termine mit ihm und das **externe Profil** (Einstellungen › Außenkommunikation, PL: Name nach außen, Adresse, Zufahrt, Ansprechpartner für Externe). Andere APs, Teilprojekte, Mitglieder, Doku-Index, Meilensteine, Belegt-Zeiten, andere Mails und Preise gehören nie dazu.
+- **Neu formulieren und prüfen:** Mails und Antworten auf die Ursprungsmail an Nicht-Interne formuliert ein eigener kleiner KI-Aufruf neu, der nur diesen Außenkontext und die Absicht des Agenten kennt; Weggelassenes steht im Log („2 Inhalte zurückgehalten“). Danach prüft das System ohne KI auf fremde Kennungen, Titel anderer APs und Teilprojekte, nicht freigegebene Seiten, interne Adressen (außer Ansprechpartnern aus dem Profil), andere Projekte und Links ins Tool; beim PDF-Versand den Begleittext und den Anhang. Was schon im Außenkontext steht, ist kein Fund. Fund → Entwurf in „Außenprüfung angehalten“ und Meldung; Anhang nicht final oder nicht freigegeben → nicht gesendet. Die Stufe „nur prüfen“ (ohne Neuformulierung) stellt der Org-Admin unter Verwaltung › KI ein.
+- **Erster Kontakt** zu einer Adresse ohne Bezug zum AP ist immer ein Entwurf, auch mit „darf Mails senden“. Sendet eine Person ihn, hat die Adresse danach Bezug (Mail am AP).
+- **Fragen außerhalb der Aufgabe** gibt der Agent weiter (refer): Log-Eintrag, Meldung und Chat-Nachricht an den Ansprechpartner (Zuständige des Über-AP, Teilprojekt-Verantwortung, sonst PL); der Externe erfährt nur, an wen seine Frage geht (Ansprechpartner aus dem externen Profil, sonst „die Projektleitung“). Antwortet die Person im Chat mit „darf weitergegeben werden“, wird die Antwort ein Log-Eintrag „für Externe sichtbar“, und der Agent läuft weiter. Im Prompt stehen eingehende Mails mit ihrer Absenderklasse.
+- Jede Prüfung steht im Audit (`ai.outbound`). Entwürfe der Mail-KI und „Mit KI formulieren“ der Abschluss-Antwort werden nur geprüft: Fundstellen erscheinen als Hinweis, gesendet wird, was die Person freigibt. Systemmails ohne KI (Erinnerungen, Eskalationsmail, Einladungen) und Freigabelinks bleiben unverändert.
+
 **Mit dem Agenten sprechen**
 - Kommentar ins Log des AP: Der Agent liest ihn beim nächsten Lauf (sofort angestoßen).
 - Chat: Direktnachricht an den Agenten oder `@Name` im Projektkanal; er antwortet im Thread. Auskunft gibt er nur über eigene APs, die die fragende Person sehen darf. Informationen zu einem AP schreibt er dort ins Log.
@@ -181,14 +190,14 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 **Gute Arbeitspakete für Agenten**
 - Ziel und Ergebnis in der Beschreibung („Angebot bis 30.10. freigegeben, Lizenzfrage geklärt“), nicht nur ein Stichwort.
 - Termin setzen; Tasks als überprüfbare Schritte.
-- Externe Ansprechpartner als Projektkontakt mit Mail-Adresse; das Projektkonto muss angebunden sein.
+- Externe Ansprechpartner als Projektkontakt mit Mail-Adresse; das Projektkonto muss angebunden sein. Was ein Externer erfahren darf, gehört in die Außenbeschreibung des AP; Externe als Zuständige eines Tasks eintragen, dann haben sie Bezug zum AP.
 - Klare Grenzen: was der Agent nicht entscheiden soll, gehört in die Beschreibung („Preise nur nach Rücksprache mit der PL“).
 - Ein Agent je Thema; große Pakete in Aufgaben teilen und die Aufgaben zuweisen.
 
 **Kontrolle**
 - Projekt › KI › Agenten-Läufe: jeder Lauf mit Anlass, Begründung, Aktionen, Token und Fehlern.
 - Im AP: „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand mit nächster Prüfung, Nachfassen und Eskalation. Auch „Jetzt laufen lassen“ hält Pause und Tagesbudget ein.
-- Freigaben: Mail-Entwürfe des Agenten ohne Senderecht; Ablehnen steht im Log, der Agent läuft erneut.
+- Freigaben: Mail-Entwürfe des Agenten ohne Senderecht, erste Kontakte und von der Außenprüfung angehaltene Mails; Ablehnen steht im Log, der Agent läuft erneut.
 - Audit-Log und Tagesbudget begrenzen und belegen alles. Sperrt eine KI-Freigabe oder der Notaus den Agenten, steht der Lauf als „übersprungen“ mit Begründung in der Liste; im AP steht „Läuft nicht: …“.
 
 **Beispiel:** Teilprojekt „Elektrik“ dem Agenten geben, darin ein AP „Teilprojekt durchplanen, Fragen an die PL“. Der Agent legt Aufgaben mit Terminen an, weist Handwerksarbeit Personen zu, trägt Besichtigungen vorläufig in den Kalender (die PL bestätigt) und klärt Fragen per Chat mit der PL.
@@ -197,7 +206,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 - **Benutzereinstellungen:** Name, Theme, Sprache, Mail-Benachrichtigungen (aus, sofort, täglich), Passwort, zweiter Faktor (Authenticator-App), Kalender-Abo und Kalender schreiben.
 - **Konfiguration:** Mail-Konten (persönlich, Projekt, Organisation; Microsoft 365 und Google per OAuth).
-- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Org-Recht „KI verwalten“, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten.
+- **Verwaltung (Org-Admin):** Benutzer einladen und deaktivieren, Org-Recht „KI verwalten“, Gruppen, PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, Außenprüfung (streng oder nur prüfen), eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten.
 - **Anmeldung:** Passwort mit optionalem zweiten Faktor oder Single Sign-on (OIDC), falls eingerichtet.
 
 ## 14. Persönliches Projekt (Assistent)

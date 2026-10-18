@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import type { ResponsibleInfo, Subproject, Task } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { badRequest, forbidden } from '../errors.js';
+import { canSeeSubproject } from '../rights.js';
 
 /** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
 export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
@@ -158,6 +159,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     labelIds,
     archivedAt: r.archived_at,
     deletedAt: r.deleted_at ?? null,
+    externalBrief: r.external_brief ?? null,
     agentPaused: Boolean(r.agent_paused),
     agentWait: r.agent_wait ?? null,
     agentNextCheckAt: r.agent_next_check_at ? new Date(r.agent_next_check_at).toISOString() : null,
@@ -240,4 +242,27 @@ export async function createRecurrenceInstance(db: Db, source: any, nextDue: str
 /** Aktivität an einem Arbeitspaket vermerken (für die Regel „hängt seit n Tagen“). */
 export async function touchTask(db: Db, taskId: string) {
   await db.query(`update tasks set last_activity_at = now() where id = $1`, [taskId]);
+}
+
+export interface ChainPerson { id: string; name: string; email: string; why: string }
+
+/**
+ * Regel C (Grundform): Ansprechpartner eines Arbeitspakets bzw. einer Aufgabe in fester Reihenfolge: Zuständige(r) des
+ * Über-AP, Teilprojekt-Verantwortung, verantwortliche PL; nur aktive Personen (keine Agenten, keine Externen) mit Sicht auf
+ * das AP, exclude (z. B. der fragende Agent) übersprungen. Stufe 0 ist der erste Eintrag (Ansprechpartner der Agenten,
+ * Ziel von refer). Ab P5 kommen Auftraggeber, Stellvertretung, Eskalationskontakt und Projektkanal dazu.
+ */
+export async function contactChain(db: Db, task: { id: string; project_id: string; parent_id: string | null; subproject_id: string | null }, opts: { exclude?: string[] } = {}): Promise<ChainPerson[]> {
+  const t = await db.one(`select p.key, pt.number as parent_number, s.name as sp_name from tasks t join projects p on p.id = t.project_id left join tasks pt on pt.id = t.parent_id left join subprojects s on s.id = t.subproject_id where t.id = $1`, [task.id]);
+  // Zuständigkeit des Über-AP wie EFFECTIVE_RESPONSIBLE_SQL für ein Arbeitspaket: direkt, extern (keine Person) oder vom Teilprojekt geerbt
+  const parentResp = task.parent_id ? (await db.maybeOne(`select case when pt.responsible_user_id is not null then pt.responsible_user_id when pt.responsible_email is not null then null else s.responsible_user_id end as uid from tasks pt left join subprojects s on s.id = pt.subproject_id where pt.id = $1`, [task.parent_id]))?.uid : null;
+  const spResp = task.subproject_id ? (await db.maybeOne(`select responsible_user_id as uid from subprojects where id = $1`, [task.subproject_id]))?.uid : null;
+  const plId = (await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [task.project_id]))?.user_id;
+  const out: ChainPerson[] = [];
+  for (const [uid, why] of [[parentResp, `zuständig für ${t.key}-${t.parent_number}`], [spResp, `verantwortlich für Teilprojekt „${t.sp_name}“`], [plId, 'Projektleitung']] as [string | null, string][]) {
+    if (!uid || opts.exclude?.includes(uid) || out.some((x) => x.id === uid)) continue;
+    const u = await db.maybeOne(`select id, name, email from users where id = $1 and kind <> 'agent' and active`, [uid]);
+    if (u && (await canSeeSubproject(db, u.id, task.subproject_id))) out.push({ ...u, why });
+  }
+  return out;
 }

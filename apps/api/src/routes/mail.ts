@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailViewFilter, MailViewRights, ProjectRole, User } from '@projekttool/shared';
+import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailViewFilter, MailViewRights, OutboundCheck, ProjectRole, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -17,6 +17,9 @@ import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { notify, notifyMany } from '../notify.js';
+import { checkHint } from '../outbound.js';
+import { newShareToken } from '../docs/share.js';
+import { pagePdf, storePagePdf } from '../docs/layout.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -36,9 +39,24 @@ function mapSummary(r: any): MailSummary {
 }
 
 function mapDraft(r: any): MailDraft {
+  const c = r.outbound;
   return {
     id: r.id, accountId: r.account_id, viewId: r.view_id, taskId: r.task_id, userId: r.user_id, userName: r.user_name ?? '',
-    toAddrs: r.to_addrs ?? [], ccAddrs: r.cc_addrs ?? [], subject: r.subject, body: r.body, status: r.status, error: r.error, sentAt: r.sent_at, createdAt: r.created_at
+    toAddrs: r.to_addrs ?? [], ccAddrs: r.cc_addrs ?? [], subject: r.subject, body: r.body, status: r.status, error: r.error, sentAt: r.sent_at, createdAt: r.created_at,
+    pageId: r.page_id ?? null,
+    outbound: c ? { checkId: c.id, channel: c.channel, audience: c.audience, result: c.result, findings: c.findings ?? [], withheld: c.withheld ?? [], decided: Boolean(c.decided_at) } : null
+  };
+}
+
+/** Entwurf mit verfassender Person und letzter Außenprüfung. */
+const DRAFT_SELECT = `select d.*, u.name as user_name, (select row_to_json(c) from outbound_checks c where c.mail_draft_id = d.id order by c.created_at desc limit 1) as outbound from mail_drafts d join users u on u.id = d.user_id`;
+
+function mapCheck(r: any): OutboundCheck {
+  return {
+    id: r.id, projectId: r.project_id, taskId: r.task_id, taskRef: r.task_id && r.number ? `${r.key}-${r.number}` : null, taskTitle: r.task_title ?? null, channel: r.channel,
+    recipients: r.recipients ?? [], audience: r.audience, result: r.result, findings: r.findings ?? [], withheld: r.withheld ?? [], mailDraftId: r.mail_draft_id,
+    draft: r.mail_draft_id && r.subject !== null ? { subject: r.subject, body: r.body, toAddrs: r.to_addrs ?? [], ccAddrs: r.cc_addrs ?? [], userName: r.draft_user_name ?? '', status: r.draft_status, pageId: r.page_id ?? null, pageTitle: r.page_title ?? null } : null,
+    decidedBy: r.decided_by_name ?? null, decidedAt: r.decided_at, createdAt: r.created_at
   };
 }
 
@@ -811,14 +829,16 @@ export async function mailRoutes(app: FastifyInstance) {
       body = r.text || body;
       await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.final_reply', objectType: 'task', objectId: task.id, details: { mailId: mail.id, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     }
-    return { mailId: mail.id, viewId, to: [mail.from_addr], subject: reSubject(mail.subject), inReplyTo: mail.message_id ?? null, body, answered: Boolean(mail.answered), draftOpen: Boolean(mail.draft_open) };
+    // KI-Text an Nicht-Interne: Außenprüfung nur als Hinweis, die Person entscheidet selbst
+    const outbound = req.query.ai === '1' ? await checkHint(db, { orgId: user.orgId, projectId: task.project_id, taskId: task.id, recipients: [mail.from_addr], subject: reSubject(mail.subject), text: body, userId: user.id }) : null;
+    return { mailId: mail.id, viewId, to: [mail.from_addr], subject: reSubject(mail.subject), inReplyTo: mail.message_id ?? null, body, answered: Boolean(mail.answered), draftOpen: Boolean(mail.draft_open), outbound };
   });
 
   app.get<{ Params: { id: string } }>('/projects/:id/mail/drafts', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
     const rows = await db.query(
-      `select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.project_id = $1 order by d.created_at desc limit 200`,
+      `${DRAFT_SELECT} where d.project_id = $1 order by d.created_at desc limit 200`,
       [req.params.id]
     );
     const out: MailDraft[] = [];
@@ -868,7 +888,7 @@ export async function mailRoutes(app: FastifyInstance) {
         await notifyApprovers(b.viewId ?? null, b.projectId, user, b.subject);
       }
     }
-    const row = await db.one(`select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [d.id]);
+    const row = await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id]);
     return { draft: mapDraft(row) };
   });
 
@@ -884,7 +904,7 @@ export async function mailRoutes(app: FastifyInstance) {
       `update mail_drafts set to_addrs = coalesce($2::jsonb, to_addrs), cc_addrs = coalesce($3::jsonb, cc_addrs), subject = coalesce($4, subject), body = coalesce($5, body), updated_at = now() where id = $1`,
       [d.id, b.to ? JSON.stringify(b.to) : null, b.cc ? JSON.stringify(b.cc) : null, b.subject ?? null, b.body ?? null]
     );
-    const row = await db.one(`select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [d.id]);
+    const row = await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id]);
     return { draft: mapDraft(row) };
   });
 
@@ -899,13 +919,13 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!rights?.canSend) {
       if (d.user_id === user.id && rights?.canDraft) {
         await db.query(`update mail_drafts set status = 'pending_approval', updated_at = now() where id = $1`, [d.id]);
-        const row = await db.one(`select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [d.id]);
+        const row = await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id]);
         return { draft: mapDraft(row), submitted: true };
       }
       throw forbidden('Kein Senderecht an dieser Ansicht');
     }
     await doSend(d.id, user, account, null);
-    const row = await db.one(`select d.*, u.name as user_name from mail_drafts d join users u on u.id = d.user_id where d.id = $1`, [d.id]);
+    const row = await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id]);
     return { draft: mapDraft(row) };
   });
 
@@ -915,6 +935,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!d) throw notFound('Entwurf nicht gefunden');
     const m = await requireProject(db, user, d.project_id, 'member');
     if (!(await mayDecideDraft(d, user, m))) throw forbidden();
+    await db.query(`update outbound_checks set decided_by = $2, decided_at = now() where mail_draft_id = $1 and decided_at is null`, [d.id, user.id]);
     await db.query(`delete from mail_drafts where id = $1`, [d.id]);
     await audit(db, { orgId: user.orgId, projectId: d.project_id, userId: user.id, action: 'mail.draft_rejected', objectType: 'mail_draft', objectId: d.id, details: { subject: d.subject, by: user.id === d.user_id ? 'author' : 'approver' } });
     // Entwurf eines Agenten abgelehnt: steht im Log des Arbeitspakets, der Agent läuft daraufhin erneut
@@ -926,8 +947,85 @@ export async function mailRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Außenprüfung (Informationsgrenze): angehaltene Agenten-Mails mit Fundstellen; sehen und entscheiden darf, wer den Entwurf senden darf
+  app.get<{ Params: { id: string }; Querystring: { result?: string } }>('/projects/:id/outbound-checks', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    const result = ['pass', 'held', 'blocked'].includes(String(req.query.result)) ? String(req.query.result) : null;
+    const rows = await db.query(
+      `select c.*, t.number, t.title as task_title, t.subproject_id, p.key, d.subject, d.body, d.to_addrs, d.cc_addrs, d.status as draft_status, d.page_id, d.user_id as draft_user_id, d.view_id, d.account_id,
+         du.name as draft_user_name, pg.title as page_title, dby.name as decided_by_name
+       from outbound_checks c join projects p on p.id = c.project_id left join tasks t on t.id = c.task_id left join mail_drafts d on d.id = c.mail_draft_id
+         left join users du on du.id = d.user_id left join doc_pages pg on pg.id = d.page_id left join users dby on dby.id = c.decided_by
+       where c.project_id = $1 and ($2::text is null or c.result = $2) and ($2::text is distinct from 'held' or (c.decided_at is null and d.status in ('pending_approval','failed')))
+       order by c.created_at desc limit 100`, [req.params.id, result]);
+    const out: OutboundCheck[] = [];
+    for (const r of rows.rows as any[]) {
+      if (r.subproject_id && !(await canSeeSubproject(db, user.id, r.subproject_id))) continue;
+      if (r.mail_draft_id ? !(await mayDecideDraft({ user_id: r.draft_user_id, view_id: r.view_id, account_id: r.account_id }, user, m)) : m.role !== 'pl') continue;
+      out.push(mapCheck(r));
+    }
+    return { checks: out };
+  });
+
+  /**
+   * Angehaltene Mail entscheiden: release sendet unverändert, edit speichert Betreff und Text und sendet, block lehnt ab
+   * (Log, der Agent läuft erneut). sharePageIds gibt dabei Seiten aus den Fundstellen für die externen Empfänger frei
+   * (doc_shares, nur lesen; PL oder „Final setzen / Versand“). Menschen werden von Fundstellen nicht blockiert.
+   */
+  app.post<{ Params: { cid: string }; Body: { action: 'release' | 'edit' | 'block'; subject?: string; body?: string; sharePageIds?: string[] } }>('/outbound-checks/:cid/decide', async (req) => {
+    const user = requireUser(req);
+    const c = await db.maybeOne(`select * from outbound_checks where id = $1 and org_id = $2`, [req.params.cid, user.orgId]);
+    if (!c || !c.project_id) throw notFound('Prüfung nicht gefunden');
+    const m = await requireProject(db, user, c.project_id, 'member');
+    const t = c.task_id ? await db.maybeOne(`select t.id, t.number, t.subproject_id, p.key from tasks t join projects p on p.id = t.project_id where t.id = $1`, [c.task_id]) : null;
+    if (t && !(await canSeeSubproject(db, user.id, t.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const d = c.mail_draft_id ? await db.maybeOne(`select * from mail_drafts where id = $1`, [c.mail_draft_id]) : null;
+    if (!d || c.decided_at || d.status === 'sent') throw badRequest('Bereits entschieden oder ohne Entwurf');
+    if (!(await mayDecideDraft(d, user, m))) throw forbidden('Freigeben darf, wer den Entwurf senden darf (Senderecht der Ansicht bzw. PL)');
+    const b = req.body ?? ({} as any);
+    if (!['release', 'edit', 'block'].includes(b.action)) throw badRequest('action: release, edit oder block');
+    const author = await db.maybeOne(`select name, kind from users where id = $1`, [d.user_id]);
+    const to = (d.to_addrs ?? []).join(', ');
+    const log = (body: string) => d.task_id ? db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [d.task_id, user.id, body]) : null;
+    if (b.action === 'block') {
+      await db.query(`update outbound_checks set decided_by = $2, decided_at = now() where mail_draft_id = $1 and decided_at is null`, [d.id, user.id]);
+      await db.query(`delete from mail_drafts where id = $1`, [d.id]);
+      await audit(db, { orgId: user.orgId, projectId: c.project_id, userId: user.id, action: 'ai.outbound', objectType: 'mail_draft', objectId: d.id, details: { checkId: c.id, decision: 'block', subject: d.subject } });
+      await log(`Außenprüfung: Mail${author?.kind === 'agent' ? ` von ${author.name}` : ''} an ${to} abgelehnt (nicht gesendet): „${d.subject}“`);
+      if (author?.kind === 'agent' && d.task_id) queueAgentRun(d.task_id, 'rejected');
+      return { ok: true };
+    }
+    if (b.action === 'edit') {
+      if (!String(b.subject ?? d.subject).trim()) throw badRequest('Betreff erforderlich');
+      await db.query(`update mail_drafts set subject = coalesce($2, subject), body = coalesce($3, body), updated_at = now() where id = $1`, [d.id, b.subject?.trim() || null, b.body ?? null]);
+    }
+    // Seite in der Außenprüfung freigeben: Lesefreigabe für die externen Empfänger, danach Teil ihres Außenkontexts
+    const share = (Array.isArray(b.sharePageIds) ? b.sharePageIds : []).filter((pid: string) => (c.findings ?? []).some((f: any) => f.pageId === pid));
+    if (share.length) {
+      if (m.role !== 'pl' && !m.canFinalize) throw forbidden('Seiten gibt die PL frei oder wer „Final setzen / Versand“ darf');
+      const externals: string[] = (c.recipients ?? []).filter((r: any) => r.audience !== 'internal').map((r: any) => r.email);
+      for (const pid of share) {
+        const page = await db.maybeOne(`select id, title from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, c.project_id]);
+        if (!page) continue;
+        for (const email of externals) {
+          if (await db.maybeOne(`select 1 from doc_shares where page_id = $1 and lower(email) = $2 and revoked_at is null and (expires_at is null or expires_at > now())`, [page.id, email])) continue;
+          await db.query(`insert into doc_shares (page_id, project_id, token, email, mode, include_children, created_by) values ($1,$2,$3,$4,'read',false,$5)`, [page.id, c.project_id, newShareToken(), email, user.id]);
+          await audit(db, { orgId: user.orgId, projectId: c.project_id, userId: user.id, action: 'page.share', objectType: 'doc_page', objectId: page.id, details: { email, mode: 'read', via: 'outbound_check', checkId: c.id } });
+        }
+      }
+    }
+    const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [d.account_id]);
+    await doSend(d.id, user, account, null);
+    await audit(db, { orgId: user.orgId, projectId: c.project_id, userId: user.id, action: 'ai.outbound', objectType: 'mail_draft', objectId: d.id, details: { checkId: c.id, decision: b.action, shared: share } });
+    const sent = await db.one(`select subject from mail_drafts where id = $1`, [d.id]);
+    await log(`Nach außen an ${to} (Außenprüfung): von ${user.name} ${b.action === 'edit' ? 'bearbeitet und ' : ''}freigegeben, gesendet: „${sent.subject}“`);
+    const row = await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id]);
+    return { ok: true, draft: mapDraft(row) };
+  });
+
   /** Entwurf ändern, senden oder ablehnen: die verfassende Person, an einer Ansicht wer dort senden darf, ohne Ansicht (Entwürfe von Agenten am Projektkonto) wer das Konto verwaltet. */
-  async function mayDecideDraft(d: any, user: User, m: Awaited<ReturnType<typeof requireProject>>): Promise<boolean> {
+  async function mayDecideDraft(d: { user_id: string; view_id: string | null; account_id: string }, user: User, m: Awaited<ReturnType<typeof requireProject>>): Promise<boolean> {
     if (d.user_id === user.id) return true;
     if (d.view_id) return (await getViewRights(db, d.view_id, user, m)).canSend;
     return canManageAccount(user, await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [d.account_id]));
@@ -948,11 +1046,17 @@ export async function mailRoutes(app: FastifyInstance) {
 
   async function doSend(draftId: string, user: User, account: AccountRow, references: string | null) {
     const d = await db.one(`select * from mail_drafts where id = $1`, [draftId]);
+    // Angehaltener PDF-Versand: das PDF der Seite wird beim Senden erzeugt, nur solange die Seite final ist
+    const page = d.page_id ? await db.maybeOne(`select * from doc_pages where id = $1 and deleted_at is null`, [d.page_id]) : null;
+    if (d.page_id && page?.status !== 'final') throw badRequest('Die Seite des PDF-Anhangs ist nicht mehr final: Seite final setzen oder Entwurf ablehnen');
     try {
+      const pdf = page ? await pagePdf(db, page, (await db.one(`select name from users where id = $1`, [d.user_id])).name) : null;
       const res = await app.mail.sendFromAccount(account, {
-        to: d.to_addrs, cc: d.cc_addrs, subject: d.subject, text: d.body, taskId: d.task_id, checklistItemId: d.checklist_item_id ?? null, inReplyTo: d.in_reply_to, references, userId: user.id, projectId: d.project_id
+        to: d.to_addrs, cc: d.cc_addrs, subject: d.subject, text: d.body, taskId: d.task_id, checklistItemId: d.checklist_item_id ?? null, inReplyTo: d.in_reply_to, references, userId: user.id, projectId: d.project_id, ...(pdf ? { attachments: [pdf] } : {})
       });
+      if (page && pdf) await storePagePdf(db, page, pdf, user.id);
       await db.query(`update mail_drafts set status = 'sent', sent_at = now(), sent_by = $2, error = null, updated_at = now() where id = $1`, [draftId, user.id]);
+      await db.query(`update outbound_checks set decided_by = $2, decided_at = now() where mail_draft_id = $1 and decided_at is null`, [draftId, user.id]);
       return res;
     } catch (e: any) {
       await db.query(`update mail_drafts set status = 'failed', error = $2, updated_at = now() where id = $1`, [draftId, String(e?.message ?? e)]);

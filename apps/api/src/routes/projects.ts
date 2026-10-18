@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { Membership, Project, ProjectRole, User, ReminderPolicy } from '@projekttool/shared';
+import type { ExternalProfile, Membership, Project, ProjectRole, User, ReminderPolicy } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
@@ -14,6 +14,7 @@ import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
 import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
+import { profileOf } from '../outbound.js';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
@@ -27,6 +28,7 @@ export function mapProject(r: any): Project {
     mailAddress: r.mail_address,
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     aiProfileId: r.ai_profile_id ?? null,
+    externalProfile: profileOf(r.external_profile),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
     escalation: policyOf(r.escalation),
     reporting: reportingOf(r.reporting),
@@ -184,6 +186,17 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Reporting manuell auslösen (PL): erzeugt den Bericht sofort nach den eingestellten Regeln
+  // Externes Profil (Informationsgrenze): was Externe über das Projekt erfahren; Teil des Außenkontexts, Kontakte dürfen in Mails nach außen stehen
+  app.put<{ Params: { id: string }; Body: ExternalProfile }>('/projects/:id/external-profile', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const profile = profileOf(req.body ?? {});
+    if (profile.contacts?.some((c) => c.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email))) throw badRequest('Ansprechpartner: gültige Mail-Adresse oder leer');
+    await db.query(`update projects set external_profile = $2 where id = $1`, [req.params.id, JSON.stringify(profile)]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.external_profile', objectType: 'project', objectId: req.params.id, details: { ...profile } });
+    return { externalProfile: profile };
+  });
+
   app.post<{ Params: { id: string } }>('/projects/:id/reporting/run', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');

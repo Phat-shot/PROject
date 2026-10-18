@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { AiFeature, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
+import type { AiFeature, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail, OutboundCheck, OutboundFinding, AudienceClass } from '@projekttool/shared';
+import { AUDIENCE_LABEL } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
@@ -440,6 +441,8 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   // Abschluss-Antwort auf die Ursprungsmail eines Arbeitspakets (aufbereitetes Ergebnis, optional mit KI)
   const final = params.get('final') === '1';
   const [finalInfo, setFinalInfo] = useState<string | null>(final ? 'Antwort wird vorbereitet …' : null);
+  // KI-Text an Externe: Fundstellen der Außenprüfung nur als Hinweis
+  const [hints, setHints] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
   const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   const { busy, error, run } = useAsync();
@@ -447,7 +450,8 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
   useEffect(() => { if (!f.viewId && writable[0]) setF((x) => ({ ...x, viewId: writable[0].id })); }, [writable.length]);
   useEffect(() => {
     if (final && taskParam) {
-      api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? '?ai=1' : ''}`).then(async (r) => {
+      api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean; outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? '?ai=1' : ''}`).then(async (r) => {
+        setHints(r.outbound?.findings.length ? r.outbound : null);
         const { mail } = await api.get<{ mail: MailDetail }>(`/mail/mails/${r.mailId}`);
         setF((x) => ({ ...x, viewId: r.viewId ?? x.viewId, to: r.to.join(', '), subject: r.subject, inReplyTo: r.inReplyTo, taskId: taskParam,
           body: `${r.body}\n\n---\nAm ${fmtDateTime(mail.date)} schrieb ${mail.fromName ?? mail.fromAddr}:\n${(mail.textBody ?? '').split('\n').map((l) => `> ${l}`).join('\n')}` }));
@@ -471,6 +475,7 @@ function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => void }) {
       <h2>{final ? 'Antwort auf die Ursprungsmail' : replyTo ? 'Antwort' : 'Neue Mail'}</h2>
       {final && <p className="muted small">Aufbereitetes Ergebnis für den Absender, bitte prüfen und ergänzen. Die Mail hängt danach am Arbeitspaket, ein Log-Eintrag entsteht nicht.</p>}
       {finalInfo && <div className="notice small mb">{finalInfo}</div>}
+      {hints && <div className="notice small mb"><strong>Hinweise der Außenprüfung</strong> ({AUDIENCE_LABEL[hints.audience]}): Der KI-Text nennt Inhalte, die Externe nicht erfahren sollen. Bitte prüfen; gesendet wird nur, was du freigibst.<Findings findings={hints.findings} /></div>}
       <div className="form">
         <label className="field"><span>Senden über Ansicht / Konto</span>
           <select value={f.viewId} onChange={(e) => setF({ ...f, viewId: e.target.value })}>{writable.map((v) => <option key={v.id} value={v.id}>{v.name} – {v.accountAddress}{v.myRights.canSend ? '' : ' (nur Entwurf, Versand nach Freigabe)'}</option>)}</select></label>
@@ -497,13 +502,16 @@ function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Pr
   const { error, run } = useAsync();
   const [edit, setEdit] = useState<MailDraft | null>(null);
   const groups: [string, string][] = [['pending_approval', 'Wartet auf Freigabe'], ['draft', 'Entwürfe'], ['failed', 'Fehlgeschlagen'], ['sent', 'Gesendet']];
+  // Von der Außenprüfung angehaltene Entwürfe stehen oben mit ihren Fundstellen
+  const held = (d: MailDraft) => d.outbound?.result === 'held' && !d.outbound.decided && d.outbound.channel !== 'draft';
   return (
     <div className="mail-detail">
       <h2>Entwürfe und Freigaben</h2>
       <p className="muted small">Vorschläge und Entwürfe ohne Senderecht landen hier. Freigeben darf, wer an der Ansicht das Senderecht hat. Der Worker versendet; alles steht im Audit-Log.</p>
       {error && <div className="error mb">{error}</div>}
+      <OutboundHeld onChanged={reload} />
       {groups.map(([status, label]) => {
-        const rows = drafts.filter((d) => d.status === status);
+        const rows = drafts.filter((d) => d.status === status && !(status !== 'sent' && held(d)));
         if (!rows.length) return null;
         return (
           <div key={status} className="card mb">
@@ -511,7 +519,7 @@ function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Pr
             <table className="table"><tbody>
               {rows.map((d) => (
                 <tr key={d.id}>
-                  <td><strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}</td>
+                  <td><strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}{status !== 'sent' && (d.outbound?.findings.length ?? 0) > 0 && <div className="small mt" style={{ color: 'var(--warn)' }} title={d.outbound!.findings.map((f) => f.text).join('\n')}>Hinweise der Außenprüfung: {d.outbound!.findings.length}</div>}</td>
                   <td className="nowrap">
                     {status !== 'sent' && <button className="btn sm" onClick={() => setEdit(d)}>Ansehen</button>}{' '}
                     {(status === 'pending_approval' || status === 'draft' || status === 'failed') && <button className="btn sm primary" onClick={() => void run(async () => { await api.post(`/mail/drafts/${d.id}/send`); await reload(); })}>{status === 'pending_approval' ? 'Freigeben und senden' : 'Senden'}</button>}{' '}
@@ -527,9 +535,76 @@ function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Pr
       {edit && (
         <Modal title={edit.subject} onClose={() => setEdit(null)}>
           <div className="hdr small muted">An: {edit.toAddrs.join(', ')}{edit.ccAddrs.length > 0 && <> · Cc: {edit.ccAddrs.join(', ')}</>}</div>
+          {(edit.outbound?.findings.length ?? 0) > 0 && <div className="notice small mb"><strong>Hinweise der Außenprüfung</strong> ({AUDIENCE_LABEL[edit.outbound!.audience]}): bitte vor dem Senden prüfen.<Findings findings={edit.outbound!.findings} withheld={edit.outbound!.withheld} /></div>}
           <EditDraft draft={edit} onSaved={async () => { setEdit(null); await reload(); }} />
         </Modal>
       )}
+    </div>
+  );
+}
+
+/** Fundstellen der Außenprüfung und, bei Agenten-Mails, was die Neuformulierung zurückgehalten hat. */
+function Findings({ findings, withheld }: { findings: OutboundFinding[]; withheld?: string[] }) {
+  return <>
+    {findings.length > 0 && <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{findings.map((f, i) => <li key={i}>{f.text}</li>)}</ul>}
+    {(withheld?.length ?? 0) > 0 && <div className="muted">Zurückgehalten: {withheld!.join('; ')}</div>}
+  </>;
+}
+
+const CHANNEL_LABEL: Record<string, string> = { mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail', pdf: 'PDF-Versand', draft: 'Entwurf', chat: 'Chat' };
+
+/**
+ * Außenprüfung angehalten: Mails von KI-Agenten an Externe mit Fundstellen. Bearbeiten und senden, unverändert senden
+ * (Menschen werden von Fundstellen nicht blockiert) oder ablehnen; genannte Seiten lassen sich dabei für die Empfänger
+ * freigeben (PL oder „Final setzen / Versand“).
+ */
+export function OutboundHeld({ onChanged }: { onChanged: () => Promise<void> }) {
+  const { detail } = useProject();
+  const me = detail.project.myMembership;
+  const held = useData<{ checks: OutboundCheck[] }>(`/projects/${detail.project.id}/outbound-checks?result=held`);
+  const rows = held.data?.checks ?? [];
+  if (!rows.length) return null;
+  return (
+    <div className="card mb">
+      <h3>Außenprüfung angehalten <span className="badge warn">{rows.length}</span></h3>
+      <p className="muted small">Agenten-Mails an Nicht-Interne, in denen die Prüfung Projektinternes gefunden hat (andere Arbeitspakete, Teilprojekte, nicht freigegebene Seiten, interne Adressen, Links ins Tool). Nichts ist gesendet.</p>
+      {rows.map((c) => <HeldCheck key={c.id} check={c} canShare={me.role === 'pl' || me.canFinalize} onDone={async () => { await held.reload(); await onChanged(); }} />)}
+    </div>
+  );
+}
+
+function HeldCheck({ check, canShare, onDone }: { check: OutboundCheck; canShare: boolean; onDone: () => Promise<void> }) {
+  const d = check.draft!;
+  const [editing, setEditing] = useState(false);
+  const [subject, setSubject] = useState(d.subject);
+  const [body, setBody] = useState(d.body);
+  const [share, setShare] = useState<string[]>([]);
+  const { busy, error, run } = useAsync();
+  const pages = check.findings.filter((f) => f.kind === 'page' && f.pageId);
+  const externals = check.recipients.filter((r) => r.audience !== 'internal').map((r) => r.email).join(', ');
+  const decide = (action: 'release' | 'edit' | 'block') => run(async () => { await api.post(`/outbound-checks/${check.id}/decide`, { action, ...(action === 'edit' ? { subject, body } : {}), sharePageIds: action === 'block' ? [] : share }); await onDone(); });
+  return (
+    <div className="mb" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+      <div><strong>{d.subject}</strong> <span className="badge">{CHANNEL_LABEL[check.channel] ?? check.channel}</span> <span className="badge">{AUDIENCE_LABEL[check.audience]}</span></div>
+      <div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName}{check.taskRef ? ` · ${check.taskRef} „${check.taskTitle}“` : ''} · {fmtDateTime(check.createdAt)}{d.pageTitle ? ` · Anhang „${d.pageTitle}“ (PDF)` : ''}</div>
+      <div className="notice small mt"><strong>Fundstellen</strong><Findings findings={check.findings} withheld={check.withheld} /></div>
+      {canShare && pages.map((f) => (
+        <label key={f.pageId} className="check small"><input type="checkbox" checked={share.includes(f.pageId!)} onChange={(e) => setShare(e.target.checked ? [...share, f.pageId!] : share.filter((x) => x !== f.pageId))} /> Seite „{f.match}“ für {externals} freigeben (nur lesen)</label>
+      ))}
+      {editing ? (
+        <div className="form mt">
+          <label className="field"><span>Betreff</span><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} /></label>
+          <label className="field"><span>Text</span><textarea style={{ minHeight: 180 }} value={body} onChange={(e) => setBody(e.target.value)} /></label>
+        </div>
+      ) : <div className="small mt" style={{ whiteSpace: 'pre-wrap' }}>{d.body}</div>}
+      {error && <div className="error small mt">{error}</div>}
+      <div className="row mt">
+        {editing
+          ? <button className="btn sm primary" disabled={busy || !subject.trim()} onClick={() => void decide('edit')}>Senden</button>
+          : <button className="btn sm primary" disabled={busy} onClick={() => setEditing(true)}>Bearbeiten und senden</button>}
+        {!editing && <button className="btn sm" disabled={busy} title="Die Fundstellen sind geprüft und dürfen hinaus" onClick={() => void decide('release')}>Unverändert senden</button>}
+        <button className="btn sm danger" disabled={busy} onClick={() => void decide('block')}>Ablehnen</button>
+      </div>
     </div>
   );
 }

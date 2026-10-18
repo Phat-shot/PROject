@@ -11,6 +11,7 @@ import { AGENT_SHEET, MAIL_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
+import { checkHint } from '../outbound.js';
 
 /**
  * Mail-KI an einer Ansicht.
@@ -24,7 +25,7 @@ import { queueAgentRun, queueMailAi } from './agentEvents.js';
  * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
  */
 export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; folder?: string | null; reason?: string | null };
-export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string }; decidedBy?: string | null };
+export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number }; decidedBy?: string | null };
 
 const TYPES = ['create_ap', 'create_aufgabe', 'link', 'create_event', 'reply_draft', 'move', 'none'];
 const SCHEMA = {
@@ -258,7 +259,9 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
       if (!text) fail('Antworttext fehlt');
       const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'draft') returning id`,
         [mail.account_id, view.id, state.taskId, project.id, actor.id, JSON.stringify([mail.from_addr]), reSubject(mail.subject), text, mail.message_id ?? null]);
-      return { draftId: d.id };
+      // Außenprüfung nur als Hinweis: die Person sieht die Fundstellen am Entwurf und sendet selbst
+      const hint = await checkHint(db, { orgId: project.org_id, projectId: project.id, taskId: state.taskId, recipients: [mail.from_addr], subject: reSubject(mail.subject), text, mailDraftId: d.id, userId: actor.id });
+      return { draftId: d.id, ...(hint?.findings.length ? { hints: hint.findings.length } : {}) };
     }
     case 'move': {
       if (!rights.canDraft && !rights.canSend) fail('Verschieben erfordert Entwurfs- oder Senderecht an der Ansicht');

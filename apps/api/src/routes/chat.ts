@@ -5,6 +5,7 @@ import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
 import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
+import { RELEASE_PHRASE, REFER_MARK } from '../outbound.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -45,7 +46,8 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const t = await db.maybeOne(`select t.id, t.project_id, t.subproject_id from tasks t join projects p on p.id = t.project_id where p.org_id = $1 and p.key = $2 and t.number = $3 and t.deleted_at is null`, [user.orgId, ref[1], Number(ref[2])]);
     if (!t || !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [t.project_id, user.id])) || !(await canSeeSubproject(db, user.id, t.subproject_id))) return null;
-    return { ...t, agent_name: last.name };
+    // Antwort auf eine Rückfrage von extern (refer): mit „darf weitergegeben werden“ für Externe sichtbar
+    return { ...t, agent_name: last.name, refer: String(last.body).includes(REFER_MARK) };
   }
 
   /** Projektkanal holen oder anlegen; Mitglied des Projekts nötig. */
@@ -166,7 +168,8 @@ export async function chatRoutes(app: FastifyInstance) {
       // Antwort auf eine Frage des Agenten zu einem Arbeitspaket (Direktnachricht oder Thread, beginnt mit der Kennung): Rückmeldung ins Log, Lauf am Arbeitspaket statt Chat-Antwort
       const t = channel.kind === 'dm' || threadId ? await answeredTask(a, channel.id, threadId, user, r.id) : null;
       if (t) {
-        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${body}`]);
+        const release = t.refer && RELEASE_PHRASE.test(body);
+        await db.query(`insert into task_comments (task_id, user_id, body, source, visibility) values ($1,$2,$3,'chat',$4)`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${release ? body.replace(RELEASE_PHRASE, '').trim() : body}`, release ? 'external' : 'internal']);
         queueAgentRun(t.id, 'comment');
       } else queueAgentChat(a, channel.id, r.id, channel.kind === 'project' ? threadId ?? r.id : '');
     }

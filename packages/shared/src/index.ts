@@ -75,6 +75,8 @@ export interface Project {
   health?: ProjectHealth;
   /** KI-Profil für die Projekt-KI (Zusammenfassen, Essenz, Fragen, Statusbericht); null = aus */
   aiProfileId?: string | null;
+  /** Externes Profil (Informationsgrenze): was Externe über das Projekt erfahren dürfen; pflegt die PL */
+  externalProfile?: ExternalProfile;
   myRole?: ProjectRole;
   myMembership?: Membership;
   /** Kennzahlen für Projektkarten (nur in der Projektliste) */
@@ -133,7 +135,7 @@ export interface OrgSettings {
   /** Alle Benutzer dürfen ein persönliches Projekt (Assistent) anlegen */
   personalProjects?: boolean;
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
-  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number } };
+  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check' };
 }
 
 /**
@@ -357,6 +359,8 @@ export interface Task {
   archivedAt: string | null;
   /** Im Papierkorb seit; zählt nirgends mehr mit, bis es wiederhergestellt wird */
   deletedAt: string | null;
+  /** Außenbeschreibung: was Externe zu diesem AP erfahren dürfen (Außenkontext der Agenten) */
+  externalBrief?: string | null;
   /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
   agentPaused?: boolean;
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
@@ -434,6 +438,8 @@ export interface TaskComment {
   source?: 'user' | 'mail' | 'system' | 'ai' | 'chat';
   mailId?: string | null;
   mentions?: string[];
+  /** external: für Externe sichtbar (Teil des Außenkontexts der Aufgabe) */
+  visibility?: 'internal' | 'external';
   createdAt: string;
 }
 
@@ -518,7 +524,7 @@ export interface MailAiRun {
   actorName: string | null;
   createdAt: string;
   mail?: { id: string; subject: string; fromAddr: string; fromName: string | null; date: string };
-  actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string } }[];
+  actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number } }[];
 }
 
 export interface MailSummary {
@@ -573,7 +579,45 @@ export interface MailDraft {
   error: string | null;
   sentAt: string | null;
   createdAt: string;
+  /** Angehaltener PDF-Versand: PDF dieser Seite wird beim Senden angehängt */
+  pageId?: string | null;
+  /** Letzte Außenprüfung des Entwurfs (Fundstellen als Hinweis bzw. Grund des Anhaltens) */
+  outbound?: { checkId: string; channel: OutboundChannel; audience: AudienceClass; result: OutboundResult; findings: OutboundFinding[]; withheld: string[]; decided: boolean } | null;
 }
+
+/**
+ * Informationsgrenze für Externe (Regel E): internal = Projektmitglied mit Sicht auf das Teilprojekt, outside = Org-Benutzer
+ * ohne Projektzugriff oder ohne Sicht auf das Teilprojekt, task_external = Adresse mit Bezug zum AP, unknown_external = alle
+ * übrigen (erster Kontakt immer als Entwurf). Für eine Nachricht gilt die strengste Klasse unter ihren Empfängern.
+ */
+export type AudienceClass = 'internal' | 'outside' | 'task_external' | 'unknown_external';
+export const AUDIENCE_LABEL: Record<AudienceClass, string> = { internal: 'intern', outside: 'Org-Benutzer ohne Zugriff', task_external: 'Extern mit Aufgabenbezug', unknown_external: 'Extern ohne Bezug (erster Kontakt)' };
+export type OutboundChannel = 'mail' | 'reply_origin' | 'pdf' | 'draft' | 'chat';
+/** pass = wird gesendet, held = Entwurf zur Freigabe mit Fundstellen, blocked = nicht gesendet (Anhang nicht final oder nicht freigegeben) */
+export type OutboundResult = 'pass' | 'held' | 'blocked';
+/** Fundstelle der Außenprüfung (checkOutbound); compose = Neuformulierung fehlgeschlagen */
+export interface OutboundFinding { kind: 'ref' | 'task' | 'subproject' | 'page' | 'project' | 'address' | 'link' | 'attachment' | 'compose'; match: string; text: string; pageId?: string }
+/** Prüfung nach außen mit dem angehaltenen Entwurf (Mail › Freigaben „Außenprüfung angehalten“). */
+export interface OutboundCheck {
+  id: string;
+  projectId: string;
+  taskId: string | null;
+  taskRef: string | null;
+  taskTitle: string | null;
+  channel: OutboundChannel;
+  recipients: { email: string; audience: AudienceClass }[];
+  audience: AudienceClass;
+  result: OutboundResult;
+  findings: OutboundFinding[];
+  withheld: string[];
+  mailDraftId: string | null;
+  draft: { subject: string; body: string; toAddrs: string[]; ccAddrs: string[]; userName: string; status: DraftStatus; pageId: string | null; pageTitle: string | null } | null;
+  decidedBy: string | null;
+  decidedAt: string | null;
+  createdAt: string;
+}
+/** Externes Profil eines Projekts: Name nach außen, Adresse, Zufahrt, Ansprechpartner für Externe. */
+export interface ExternalProfile { name?: string; address?: string; access?: string; contacts?: { name: string; email: string; role?: string }[] }
 
 export interface DocFolder {
   id: string;

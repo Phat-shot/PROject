@@ -34,6 +34,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [d, setD] = useState<TaskDetail | null>(null);
   const [shift, setShift] = useState<{ changes: any[] } | null>(null);
   const [comment, setComment] = useState('');
+  const [external, setExternal] = useState(false);
   const [item, setItem] = useState('');
   const [saved, setSaved] = useState(false);
   const [more, setMore] = useState(false);
@@ -144,6 +145,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       </div>
 
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
+      <TextArea label="Außenbeschreibung (für Externe)" value={t.externalBrief ?? ''} canEdit={canEdit && canPlan} empty="Keine. KI-Agenten schreiben Externen nur, was hier, in Log-Einträgen „für Externe sichtbar“ und in freigegebenen Seiten steht; die Beschreibung oben nur, wenn das AP dem Externen zugewiesen ist." onSave={(v) => patch({ externalBrief: v || null })} />
 
       <button className="btn sm link mt" onClick={() => setMore(!more)}>{more ? '▾' : '▸'} {t.parentId ? 'Vorgänger' : 'Vorgänger, Wiederholung'}</button>
       {more && (
@@ -193,10 +195,11 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
       <h3 className="mt">Log und Kommentare</h3>
-      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.source === 'ai' && <span className="badge" style={{ marginLeft: 6 }} title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge" style={{ marginLeft: 6 }} title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
+      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.source === 'ai' && <span className="badge" style={{ marginLeft: 6 }} title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge" style={{ marginLeft: 6 }} title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.visibility === 'external' && <span className="badge ok" style={{ marginLeft: 6 }} title="Teil des Außenkontexts: KI-Agenten dürfen das Externen zu diesem AP mitteilen">für Externe sichtbar</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}{canEdit && (canPlan || c.userId === me.userId) && <button className="btn sm link" title={c.visibility === 'external' ? 'Wieder nur intern' : 'Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)'} onClick={() => void run(async () => { await api.patch(`/tasks/${t.id}/comments/${c.id}`, { visibility: c.visibility === 'external' ? 'internal' : 'external' }); await load(); })}>{c.visibility === 'external' ? 'nur intern' : 'für Externe freigeben'}</button>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
       {canEdit && <div className="stack mt">
-        <MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar … (@Name erwähnt eine Person, Strg+Enter sendet)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} />
-        <div><button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Kommentieren</button></div>
+        <MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar … (@Name erwähnt eine Person, Strg+Enter sendet)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment, visibility: external ? 'external' : 'internal' }); setComment(''); setExternal(false); await load(); }); }} />
+        <div className="row"><button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment, visibility: external ? 'external' : 'internal' }); setComment(''); setExternal(false); await load(); })}>Kommentieren</button>
+          <label className="check small" title="Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)"><input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} /> für Externe sichtbar</label></div>
       </div>}
 
       {ask?.kind === 'taskEmail' && <PromptModal title="Externe Zuständigkeit für diesen Task" label="Mail-Adresse" type="email" value={ask.value} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAsk(null)}
@@ -356,7 +359,7 @@ function TextField({ label, value, canEdit, onSave, type = 'text', placeholder, 
   );
 }
 
-function TextArea({ label, value, canEdit, onSave }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void> }) {
+function TextArea({ label, value, canEdit, onSave, empty = 'Keine Beschreibung.' }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; empty?: string }) {
   const [v, setV] = useState(value);
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
@@ -366,7 +369,7 @@ function TextArea({ label, value, canEdit, onSave }: { label: string; value: str
     return (
       <div className="mt desc-view" onClick={() => canEdit && setEditing(true)} title={canEdit ? 'Klicken zum Bearbeiten' : undefined}>
         <span className="muted small">{label}{canEdit && ' · klicken zum Bearbeiten'}</span>
-        {value ? <Markdown md={value} /> : <p className="muted small">Keine Beschreibung.</p>}
+        {value ? <Markdown md={value} /> : <p className="muted small">{empty}</p>}
       </div>
     );
   }

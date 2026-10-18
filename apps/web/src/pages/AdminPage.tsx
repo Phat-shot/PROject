@@ -262,6 +262,11 @@ function AiCard() {
       </tbody></table>}
       <div className="row small"><span className="muted" title="0 = Agenten laufen nicht; gezählt werden ausgeführte Läufe (auch mit Fehler)">Tagesbudget je Agent (Läufe, 0 = keine):</span><input type="number" min={0} max={1000} value={budget ?? st.agentDailyBudget} onChange={(e) => setBudget(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || budget == null} onClick={() => void run(async () => { await api.put('/ai/settings', { agentDailyBudget: budget }); setBudget(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
       <div className="row small mt"><span className="muted" title="Zusammenfassen, Essenz, Statusbericht, Frage ans Projekt, Abschluss-Antwort; 0 = keine">Tagesbudget KI-Assistenz je Projekt (Anfragen, 0 = keine):</span><input type="number" min={0} max={10000} value={assist ?? st.assistDailyBudget ?? 200} onChange={(e) => setAssist(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || assist == null} onClick={() => void run(async () => { await api.put('/ai/settings', { assistDailyBudget: assist }); setAssist(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
+      <div className="row small mt"><span className="muted" title="Gilt für Mails, Antworten auf Ursprungsmails und PDF-Versand der KI-Agenten an Nicht-Interne; Entwürfe der Mail-KI und die Abschluss-Antwort mit KI werden nur geprüft (Hinweise)">Außenprüfung für Agenten-Mails an Nicht-Interne:</span>
+        <select value={st.externalGuard ?? 'strict'} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put('/ai/settings', { externalGuard: e.target.value }); await invalidateAi(); setMsg('Außenprüfung gespeichert.'); })}>
+          <option value="strict">streng: mit Außenkontext neu formulieren, dann prüfen (ein Zusatzaufruf je Mail)</option>
+          <option value="check">nur prüfen</option>
+        </select></div>
       <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
       {edit && (
         <Modal title={edit === 'new' ? 'KI-Profil anlegen' : `Profil: ${edit.name}`} onClose={() => setEdit(null)}>

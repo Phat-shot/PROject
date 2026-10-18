@@ -3,26 +3,25 @@ import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
-import { dateStr, touchTask } from '../tasks/service.js';
+import { contactChain, dateStr, touchTask } from '../tasks/service.js';
 import { aiConfigFor, complete, parseJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
-import { htmlToPdf } from '../docs/pdfHtml.js';
 import * as L from '../docs/layout.js';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
-import { randomUUID, createHash } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
 import { originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
+import { audienceOf, audienceText, guardOutbound, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
  * Mitgliedschaft (Mitglied mit Stellvertretung). Je Lauf bekommt das Modell den Kontext (Arbeitspaket, Log, Tasks,
  * Mails, Projekt) und liefert Aktionen als JSON: Log-Eintrag, Status, Task abhaken, Mail (direkt oder als Entwurf
- * zur Freigabe, je nach „darf Mails senden“), Blockade melden, Eskalation an die PL. Jeder Lauf wird mit Begründung,
+ * zur Freigabe, je nach „darf Mails senden“; an Nicht-Interne über die Außengrenze in outbound.ts), Blockade melden,
+ * Eskalation an die PL, Rückfragen Externer außerhalb ihrer Aufgabe weitergeben (refer). Jeder Lauf wird mit Begründung,
  * Aktionen und Token gespeichert und steht im Audit; die PL kann den Agenten je Arbeitspaket pausieren.
  */
 export type AgentAction =
@@ -34,6 +33,7 @@ export type AgentAction =
   | { type: 'chat'; to: string[] | null; text: string }
   | { type: 'blocked'; reason: string }
   | { type: 'escalate'; text: string }
+  | { type: 'refer'; text: string; subject?: string | null; to?: string[] | null }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
   | { type: 'add_item'; text: string }
   | { type: 'update_item'; itemId: string; text: string }
@@ -84,8 +84,8 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'wait', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; chat: Chat-Nachricht; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'refer', 'wait', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; chat: Chat-Nachricht; escalate: Text an die PL; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
@@ -101,8 +101,8 @@ const SCHEMA = {
         endsAt: { type: 'string', description: 'create_event: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         location: { type: 'string', description: 'create_event: Ort; sonst leer' },
         folder: { type: 'string', description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst leer' },
-        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
-        subject: { type: 'string', description: 'mail: Betreff; sonst leer' },
+        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen (nur Nicht-Interne); refer: Adresse des Externen, leer = Absender der letzten Mail; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
+        subject: { type: 'string', description: 'mail: Betreff; refer: Thema der Frage in Worten des Externen; sonst leer' },
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
         kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; sonst leer' },
         checkAfterHours: { type: 'number', description: 'wait: Stunden bis zur nächsten Prüfung; sonst leer' },
@@ -138,10 +138,18 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
-  const comments = await db.query(`select c.body, c.source, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
+  const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
   const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing, l.origin, l.copied, a.type as account_type, a.owner_user_id,
       exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
     from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id where l.task_id = $1 order by l.origin desc, m.date desc limit 6`, [task.id]);
+  // Eingehende Mails nach Absenderklasse (Regel E): Externe erfahren nur, was zu ihrer Aufgabe gehört
+  const code = `${task.project_key}-${task.number}`;
+  const senderClass = new Map<string, string>();
+  for (const x of mails.rows as any[]) {
+    if (x.outgoing || senderClass.has(x.from_addr)) continue;
+    const a = (await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [x.from_addr] })).audience;
+    senderClass.set(x.from_addr, a === 'internal' ? 'intern' : a === 'outside' ? `Org-Benutzer ohne Zugriff (outside), Scope ${code}` : a === 'task_external' ? `Extern (task_external), Scope ${code}` : 'Extern ohne Bezug zum AP (unknown_external)');
+  }
   const members = await db.query(`select m.user_id, u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
   const folders = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
   const pages = await db.query(`select p.id, p.title, p.status, p.updated_at, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 40`, [task.project_id]);
@@ -171,16 +179,8 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
      order by (t.subproject_id is not distinct from $4) desc, s.position nulls last, t.position limit 40`, [task.project_id, apScope, agent.id, task.subproject_id]);
   const milestones = canPlan || myTps.length ? await db.query(`select m.name, m.date, s.name as sp from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 order by m.date limit 20`, [task.project_id]) : { rows: [] as any[] };
   const events = await db.query(`select title, starts_at, location, tentative from meetings where project_id = $1 and starts_at >= $2 and starts_at < $3 order by starts_at limit 15`, [task.project_id, new Date(now.getTime() - 86400_000), new Date(now.getTime() + 45 * 86400_000)]);
-  // Ansprechpartner für Rückfragen und Zusagen: Zuständige des übergeordneten Elements (AP bzw. Teilprojekt), sonst die verantwortliche PL; immer eine Person
-  const parentResp = task.parent_id ? (await db.maybeOne(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as uid from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.parent_id]))?.uid : null;
-  const spResp = task.subproject_id ? (await db.maybeOne(`select responsible_user_id as uid from subprojects where id = $1`, [task.subproject_id]))?.uid : null;
-  const plId = (await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [task.project_id]))?.user_id;
-  let contact: any = null;
-  for (const [uid, why] of [[parentResp, `zuständig für ${task.project_key}-${task.parent_number}`], [spResp, `verantwortlich für Teilprojekt „${task.subproject_name}“`], [plId, 'Projektleitung']] as [string | null, string][]) {
-    if (!uid || uid === agent.id) continue;
-    const u = await db.maybeOne(`select id, name, email from users where id = $1 and kind <> 'agent' and active`, [uid]);
-    if (u) { contact = { ...u, why }; break; }
-  }
+  // Ansprechpartner für Rückfragen und Zusagen: Stufe 0 der Kette (Zuständige des Über-AP, Teilprojekt-Verantwortung, verantwortliche PL)
+  const contact: any = (await contactChain(db, task, { exclude: [agent.id] }))[0] ?? null;
   // Belegt-Zeiten des Ansprechpartners aus anderen Projekten (Termine, an denen er teilnimmt oder die er angelegt hat; ohne Titel), damit Terminvorschläge geprüft werden können
   const busy = contact ? await db.query(`select m.starts_at, m.ends_at from meetings m where m.project_id <> $2 and (m.created_by = $1 or m.attendees @> jsonb_build_array(jsonb_build_object('userId', $1::text))) and m.starts_at >= now() and m.starts_at < now() + interval '45 days' order by m.starts_at limit 20`, [contact.id, task.project_id]) : { rows: [] as any[] };
   // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
@@ -197,13 +197,13 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const prompt = `Heute: ${today}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
-Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
+${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
 ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
 ${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}
 Log (neueste zuerst):
-${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
+${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
 ${dms.rows.length ? `Chat (deine Direktnachrichten mit Projektmitgliedern, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}\n` : ''}Mails zum Arbeitspaket:
-${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
+${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
 Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (neueste zuerst):
 ${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
@@ -254,10 +254,55 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const plan = planner(db, { agent, m, task, canPlan, myTps, now });
     /** Tatsächlicher Versandstatus ins Log (der Agent selbst behauptet keinen Versand). */
     const logSys = (body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, body]);
-    /** Entwurf wartet: persönliches Konto → Eigentümer, sonst die PL. */
-    const notifyDraft = async (acc: AccountRow, subject: string) => {
+    /** Entwurf wartet: persönliches Konto → Eigentümer, sonst die PL; von der Außenprüfung angehalten mit den ersten Fundstellen. */
+    const notifyDraft = async (acc: AccountRow, subject: string, g: GuardResult | null = null) => {
       const targets = acc.type === 'personal' && acc.owner_user_id ? [acc.owner_user_id] : pls.map((p: any) => p.user_id);
-      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, type: 'draft.review', title: `Mail-Entwurf von ${agent.name} zur Freigabe`, body: subject, link: `/projekte/${task.project_id}/mail/freigaben` });
+      const held = g?.result === 'held';
+      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben` });
+    };
+    // Informationsgrenze: Mails an Nicht-Interne laufen über outbound.ts (Neuformulierung, Prüfung, Protokoll)
+    const checkIds: string[] = [];
+    const guard = async (q: { aud: Audience; subject: string; text: string; compose: boolean; keepSubject?: boolean; pageIds?: string[] }) => {
+      const g = await guardOutbound(db, c, fetchFn, { projectId: task.project_id, taskId: task.id, ...q });
+      inputTokens += g.inputTokens; outputTokens += g.outputTokens;
+      return g;
+    };
+    const record = async (channel: 'mail' | 'reply_origin' | 'pdf', aud: Audience, g: GuardResult, draftId: string | null) => {
+      checkIds.push(await recordCheck(db, { orgId: agent.org_id, projectId: task.project_id, taskId: task.id, channel, aud, result: g.result, findings: g.findings, withheld: g.withheld, mailDraftId: draftId, userId: agent.id }));
+    };
+    /** Zusatz im Versandstatus: Empfängerklasse, Zurückgehaltenes und warum es ein Entwurf ist. */
+    const outNote = (aud: Audience, g: GuardResult | null, draft: boolean) => {
+      if (!g) return '';
+      const parts = [`nach außen (${audienceText(aud.audience, code)})`];
+      if (g.withheld.length) parts.push(`${g.withheld.length} ${g.withheld.length === 1 ? 'Inhalt' : 'Inhalte'} zurückgehalten`);
+      if (draft && g.result === 'held') parts.push(`Außenprüfung angehalten: ${g.findings.length} ${g.findings.length === 1 ? 'Fundstelle' : 'Fundstellen'}`);
+      else if (draft && aud.audience === 'unknown_external') parts.push('erster Kontakt geht als Entwurf');
+      return ` · ${parts.join(', ')}`;
+    };
+    /**
+     * Mail an Nicht-Interne: direkt über das Projektkonto nur mit „darf Mails senden“, Prüfergebnis pass und nicht beim ersten
+     * Kontakt (unknown_external); sonst Entwurf zur Freigabe (ohne Projektkonto über die Ansicht).
+     */
+    const deliverMail = async (aud: Audience, g: GuardResult, to: string[], reply: { inReplyTo?: string | null; references?: string | null } = {}): Promise<'sent' | 'draft' | 'failed'> => {
+      if (account && canMail && g.result === 'pass' && aud.audience !== 'unknown_external') {
+        try {
+          await mail.sendFromAccount(account, { to, subject: g.subject, text: g.text, taskId: task.id, inReplyTo: reply.inReplyTo ?? null, references: reply.references ?? null, userId: agent.id, projectId: task.project_id });
+          await record('mail', aud, g, null);
+          await logSys(`Mail gesendet an ${to.join(', ')}: „${g.subject}“${outNote(aud, g, false)}`);
+          return 'sent';
+        } catch (e: any) {
+          const msg = `Mail an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
+          errors.push(msg);
+          await logSys(msg);
+          return 'failed';
+        }
+      }
+      const acc = account ?? viewAccount!;
+      const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, account ? null : viewAccount!.view_id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null]);
+      await record('mail', aud, g, d.id);
+      await notifyDraft(acc, g.subject, g);
+      await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${g.subject}“${outNote(aud, g, true)}`);
+      return 'draft';
     };
     for (const a of actions) {
       if (a.type === 'comment' && a.text?.trim()) {
@@ -368,53 +413,51 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         else if (!canMail) errors.push('PDF-Versand nicht erlaubt: Agent darf keine Mails senden');
         else if (mailsSent >= 3) errors.push('PDF-Versand verworfen: mehr als drei Mails im Lauf');
         else {
-          try {
-            const pdf = await htmlToPdf(db, page.content_html ?? mdToHtml(page.content_md), { title: page.title, project: task.project_name, version: page.version, status: page.status, author: agent.name, date: new Date(), folder: await L.folderName(db, page.folder_id) }, await L.layoutFor(db, page.id));
-            const filename = `${String(page.title).replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${page.version}.pdf`;
-            await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text ?? `Anbei „${page.title}“ als PDF.`, taskId: task.id, userId: agent.id, projectId: task.project_id, attachments: [{ filename, content: pdf, contentType: 'application/pdf' }] });
-            await mkdir(L.uploadDir, { recursive: true });
-            const storage = path.join(L.uploadDir, `${randomUUID()}.pdf`);
-            await writeFile(storage, pdf);
-            await db.query(`insert into attachments (project_id, page_id, filename, mime, size, storage_path, uploaded_by) values ($1,$2,$3,'application/pdf',$4,$5,$6)`, [task.project_id, page.id, filename, pdf.length, storage, agent.id]);
+          // An Nicht-Interne: Begleittext und Anhang prüfen (keine Neuformulierung); nicht final oder nicht freigegeben → nicht gesendet,
+          // Fundstellen im Begleittext → Entwurf mit der Seite zur Freigabe
+          const text = a.text || `Anbei „${page.title}“ als PDF.`;
+          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to });
+          const g = aud.audience === 'internal' ? null : await guard({ aud, subject: a.subject, text, compose: false, pageIds: [page.id] });
+          if (g?.result === 'blocked') {
+            await record('pdf', aud, g, null);
+            errors.push(`PDF von „${page.title}“ nicht gesendet (Außenprüfung): ${g.findings.filter((f) => f.kind === 'attachment').map((f) => f.text).join('; ')}`);
+          } else if (g?.result === 'held') {
             mailsSent++;
-            await logSys(`PDF „${page.title}“ gesendet an ${to.join(', ')}`);
-            applied.push({ ...a, to });
-          } catch (e: any) {
-            const msg = `PDF von „${page.title}“ an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
-            errors.push(msg);
-            await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, msg]);
+            const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status, page_id) values ($1,$2,$3,$4,$5,'[]',$6,$7,'pending_approval',$8) returning id`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, text, page.id]);
+            await record('pdf', aud, g, d.id);
+            await notifyDraft(account, a.subject, g);
+            await logSys(`PDF „${page.title}“ an ${to.join(', ')} wartet als Entwurf auf Freigabe (nicht gesendet)${outNote(aud, g, true)}`);
+            applied.push({ ...a, to, text: `[Entwurf zur Freigabe] ${text}` });
+          } else {
+            try {
+              const pdf = await L.pagePdf(db, page, agent.name);
+              await mail.sendFromAccount(account, { to, subject: a.subject, text, taskId: task.id, userId: agent.id, projectId: task.project_id, attachments: [pdf] });
+              await L.storePagePdf(db, page, pdf, agent.id);
+              mailsSent++;
+              if (g) await record('pdf', aud, g, null);
+              await logSys(`PDF „${page.title}“ gesendet an ${to.join(', ')}${outNote(aud, g, false)}`);
+              applied.push({ ...a, to });
+            } catch (e: any) {
+              const msg = `PDF von „${page.title}“ an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
+              errors.push(msg);
+              await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, msg]);
+            }
           }
         }
       } else if (a.type === 'mail' && (!Array.isArray(a.to) || !a.to.length || !a.subject || !a.text)) errors.push('Mail verworfen: Empfänger, Betreff oder Text fehlt');
       else if (a.type === 'mail' && mailsSent >= 3) errors.push('Mail verworfen: mehr als drei Mails im Lauf');
       else if (a.type === 'mail') {
         const to = a.to.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
-        if (!to.length) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
+        const aud = to.length ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to }) : null;
+        if (!to.length || !aud) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
+        else if (aud.audience === 'internal') errors.push(`Mail an ${to.join(', ')} verworfen: Projektmitglieder erreichst du per chat, nicht per Mail`);
         else if (!account && !viewAccount) { errors.push('Mail nicht gesendet: kein Mailkonto im Projekt'); await logSys(`Mail an ${to.join(', ')} nicht gesendet: kein Mailkonto im Projekt („${a.subject}“)`); }
-        else if (!account && viewAccount) {
+        else {
+          // Stufe strict: das System formuliert mit nur dem Außenkontext neu und prüft danach deterministisch
           mailsSent++;
-          await db.query(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,'pending_approval')`, [viewAccount.id, viewAccount.view_id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, a.text]);
-          await notifyDraft(viewAccount, a.subject);
-          await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${a.subject}“`);
-          applied.push({ type: 'mail', to, subject: a.subject, text: `[Entwurf zur Freigabe] ${a.text}` });
-        } else if (account) {
-          mailsSent++;
-          if (canMail) {
-            try {
-              await mail.sendFromAccount(account, { to, subject: a.subject, text: a.text, taskId: task.id, userId: agent.id, projectId: task.project_id });
-              await logSys(`Mail gesendet an ${to.join(', ')}: „${a.subject}“`);
-              applied.push({ type: 'mail', to, subject: a.subject, text: a.text });
-            } catch (e: any) {
-              const msg = `Mail an ${to.join(', ')} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`;
-              errors.push(msg);
-              await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, msg]);
-            }
-          } else {
-            await db.query(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status) values ($1,$2,$3,$4,$5,'[]',$6,$7,'pending_approval')`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, a.text]);
-            await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${a.subject}“`);
-            for (const pl of pls) await notify(db, { userId: pl.user_id ?? (await db.one(`select id from users where email = $1`, [pl.email])).id, projectId: task.project_id, type: 'draft.review', title: `Mail-Entwurf von ${agent.name} zur Freigabe`, body: a.subject, link: `/projekte/${task.project_id}/mail/freigaben` });
-            applied.push({ type: 'mail', to, subject: a.subject, text: `[Entwurf zur Freigabe] ${a.text}` });
-          }
+          const g = await guard({ aud, subject: a.subject, text: a.text, compose: true });
+          const r = await deliverMail(aud, g, to);
+          if (r !== 'failed') applied.push({ type: 'mail', to, subject: g.subject, text: r === 'draft' ? `[Entwurf zur Freigabe] ${g.text}` : g.text });
         }
       } else if (a.type === 'reply_origin') {
         const text = String(a.text ?? '').trim();
@@ -428,19 +471,25 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           const acc = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [o.account_id]);
           const view = await db.maybeOne(`select v.id from mail_view_matches x join mail_views v on v.id = x.view_id where x.mail_id = $1 and v.project_id = $2 order by v.created_at limit 1`, [o.id, task.project_id]);
           const subject = reSubject(o.subject);
+          // An Nicht-Interne (Absender ohne Projektzugriff): Neuformulierung mit dem Außenkontext, Betreff bleibt für den Verlauf
+          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [o.from_addr] });
+          const g = aud.audience === 'internal' ? null : await guard({ aud, subject, text, compose: true, keepSubject: true });
+          const body = g?.text ?? text;
           mailsSent++;
-          if (acc.type === 'project' && acc.project_id === task.project_id && m.agent_can_mail) {
+          if (acc.type === 'project' && acc.project_id === task.project_id && m.agent_can_mail && (!g || (g.result === 'pass' && aud.audience !== 'unknown_external'))) {
             try {
-              await mail.sendFromAccount(acc, { to: [o.from_addr], subject, text, taskId: task.id, inReplyTo: o.message_id, references: [o.references_header, o.message_id].filter(Boolean).join(' ') || null, userId: agent.id, projectId: task.project_id });
-              await logSys(`Antwort auf die Ursprungsmail gesendet an ${o.from_addr}: „${subject}“`);
-              applied.push({ type: 'reply_origin', text } as any);
+              await mail.sendFromAccount(acc, { to: [o.from_addr], subject, text: body, taskId: task.id, inReplyTo: o.message_id, references: [o.references_header, o.message_id].filter(Boolean).join(' ') || null, userId: agent.id, projectId: task.project_id });
+              if (g) await record('reply_origin', aud, g, null);
+              await logSys(`Antwort auf die Ursprungsmail gesendet an ${o.from_addr}: „${subject}“${outNote(aud, g, false)}`);
+              applied.push({ type: 'reply_origin', text: body } as any);
             } catch (e: any) { errors.push(`Antwort an ${o.from_addr} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`); }
           } else if (acc.type === 'personal' && !view) errors.push('reply_origin: persönliches Konto ohne Ansicht im Projekt, der Eigentümer kann nicht freigeben');
           else {
-            await db.query(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval')`, [acc.id, view?.id ?? null, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, text, o.message_id ?? null]);
-            await notifyDraft(acc, subject);
-            await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“`);
-            applied.push({ type: 'reply_origin', text: `[Entwurf zur Freigabe] ${text}` } as any);
+            const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, view?.id ?? null, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null]);
+            if (g) await record('reply_origin', aud, g, d.id);
+            await notifyDraft(acc, subject, g);
+            await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“${outNote(aud, g, true)}`);
+            applied.push({ type: 'reply_origin', text: `[Entwurf zur Freigabe] ${body}` } as any);
           }
         }
       } else if (a.type === 'blocked' && a.reason) {
@@ -456,6 +505,25 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           await agentChatMessage(db, agent, { userId: pl.user_id }, `${task.project_key}-${task.number} „${task.title}“: ${a.text}`, task.project_id);
         }
         applied.push(a);
+      } else if (a.type === 'refer') {
+        // Frage eines Externen außerhalb seiner Aufgabe: an den nächsten Menschen der Kette; der Externe bekommt nur den Verweis
+        const q = String(a.text ?? '').trim();
+        const named = (Array.isArray(a.to) ? a.to : []).map(normAddr).find((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)) ?? null;
+        const last = await db.maybeOne(`select m.from_addr, m.subject, m.message_id, m.references_header from mail_task_links l join mails m on m.id = l.mail_id where l.task_id = $1 and not m.outgoing and ($2::text is null or lower(m.from_addr) = $2) order by m.date desc limit 1`, [task.id, named]);
+        const ext = named ?? (last ? normAddr(last.from_addr) : null);
+        const r = q ? await referToChain(db, { task, agent, question: q, from: ext }) : { error: 'refer ohne text verworfen' };
+        if ('error' in r) errors.push(r.error);
+        else {
+          applied.push({ type: 'refer', text: q, to: [r.contact.email] });
+          const aud = ext ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [ext] }) : null;
+          if (aud && aud.audience !== 'internal' && (account || viewAccount) && mailsSent < 3) {
+            mailsSent++;
+            const topic = String(a.subject ?? '').trim();
+            const text = `Guten Tag,\n\nIhre Frage${topic ? ` zu „${topic}“` : ''} gebe ich an ${r.referral} weiter.\n\n${signature || `${agent.name} (KI-Agent, Projekt ${task.project_key})`}`;
+            const g = await guard({ aud, subject: last ? reSubject(last.subject) : `Ihre Frage${topic ? `: ${topic}` : ''}`, text, compose: false });
+            await deliverMail(aud, g, [ext!], last ? { inReplyTo: last.message_id, references: [last.references_header, last.message_id].filter(Boolean).join(' ') || null } : {});
+          }
+        }
       } else if (a.type === 'chat') {
         // An Projektmitglieder (Menschen) per Direktnachricht, leer = verantwortliche PL, „projekt“ = Projektkanal
         const text = String(a.text ?? '').trim();
@@ -506,6 +574,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
+    if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model, inputTokens, outputTokens } });
     return { runId: run.id, taskId: task.id, status: errors.length ? 'error' : 'ok', actions: applied, error: errors.length ? errors.join(' | ') : undefined };
   } catch (e: any) {
