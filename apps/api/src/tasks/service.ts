@@ -56,6 +56,18 @@ export function newMailCode(): string {
   return randomBytes(4).toString('hex');
 }
 
+/** Arbeitspaket oder Aufgabe anlegen (Position am Ende der Spalte, eigene Antwortadresse); Prüfungen macht der Aufrufer. */
+export async function insertTask(db: Db, p: { projectId: string; subprojectId?: string | null; columnId?: string | null; title: string; description?: string | null; priority?: string | null; startDate?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; createdBy: string; parentId?: string | null }): Promise<{ id: string; number: number }> {
+  const columnId = p.columnId ?? (await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [p.projectId])).id;
+  const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1 and parent_id is not distinct from $2`, [columnId, p.parentId ?? null]);
+  return db.one(
+    `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, parent_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id, number`,
+    [p.projectId, p.subprojectId ?? null, columnId, p.title, p.description ?? null, p.priority ?? 'normal', p.startDate ?? null, p.dueDate ?? null,
+      p.responsibleUserId ?? null, p.responsibleEmail ?? null, pos.p, newMailCode(), p.createdBy, p.parentId ?? null]
+  );
+}
+
 const TASK_SELECT = `
   select t.*, c.is_done,
     ru.name as responsible_name, ru.email as responsible_user_email, pc.name as responsible_contact_name,

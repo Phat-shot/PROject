@@ -6,6 +6,7 @@ import { aiConfigForAgent, complete, orgAiSettings, parseJson } from './client.j
 import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -65,8 +66,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const tasks = await db.query(
     `select t.id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
        (select string_agg(x.body, ' | ' order by x.created_at desc) from (select body, created_at from task_comments where task_id = t.id order by created_at desc limit 3) x) as recent
-     from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join tasks pt on pt.id = t.parent_id
-     where t.responsible_user_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
+     from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
+     where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
        and ${project ? `t.project_id = $2 and (t.subproject_id is null or not exists (select 1 from subprojects s where s.id = t.subproject_id and s.restricted))`
                      : `exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $2) and ${visibleSubprojectSql(2)}`}
      order by t.due_date nulls last limit 25`,

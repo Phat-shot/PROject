@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject } from '../rights.js';
-import { runAgentOnTask } from '../ai/agent.js';
+import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
@@ -87,8 +87,8 @@ export async function agentRoutes(app: FastifyInstance) {
     const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'pl');
-    const agent = t.responsible_user_id ? await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]) : null;
-    if (!agent) throw badRequest('Dem Arbeitspaket ist kein Agent zugewiesen');
+    const agent = await agentForTask(db, t.id);
+    if (!agent) throw badRequest('Für das Arbeitspaket ist kein Agent zuständig (direkt oder geerbt)');
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
     if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');

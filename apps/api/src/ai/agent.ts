@@ -3,7 +3,7 @@ import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
 import { notify, notifyMany, usersWithRight } from '../notify.js';
-import { touchTask } from '../tasks/service.js';
+import { dateStr, touchTask } from '../tasks/service.js';
 import { aiConfigForAgent, complete, orgAiSettings, parseJson, type AiConfig } from './client.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { htmlToPdf } from '../docs/pdfHtml.js';
@@ -13,6 +13,8 @@ import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
+import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -39,6 +41,13 @@ export type AgentAction =
   | { type: 'doc_move'; pageId: string; folder: string }
   | { type: 'folder_create'; folder: string }
   | { type: 'doc_send_pdf'; pageId: string; to: string[] | null; subject: string; text: string }
+  | { type: 'create_aufgabe'; title: string; text?: string | null; ref?: string | null; startDate?: string | null; dueDate?: string | null; responsible?: string | null; items?: string[] | null }
+  | { type: 'create_ap'; title: string; text?: string | null; subproject?: string | null; startDate?: string | null; dueDate?: string | null; responsible?: string | null; items?: string[] | null }
+  | { type: 'assign'; ref: string; responsible: string | null }
+  | { type: 'set_dates'; ref?: string | null; startDate?: string | null; dueDate?: string | null }
+  | { type: 'create_subproject'; title: string; responsible?: string | null; startDate?: string | null; dueDate?: string | null }
+  | { type: 'create_milestone'; title: string; dueDate: string; subproject?: string | null }
+  | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null }
   | { type: 'none'; reason?: string };
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean }
@@ -56,8 +65,10 @@ function parseUntil(v: unknown, now: Date): Date | null {
     const d = new Date(Date.UTC(local.getUTCFullYear(), local.getUTCMonth(), local.getUTCDate(), Number(hm[1]), Number(hm[2])) - berlinOffsetMin(now) * 60_000);
     return d.getTime() <= now.getTime() ? new Date(d.getTime() + 86400_000) : d;
   }
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return new Date(new Date(s + 'T09:00:00Z').getTime() - berlinOffsetMin(now) * 60_000);
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) { const d = new Date(s + 'Z'); return isNaN(d.getTime()) ? null : new Date(d.getTime() - berlinOffsetMin(now) * 60_000); }
+  // Ortszeit ohne Zone: Versatz zum Zieldatum (Sommer-/Winterzeit), nicht zum aktuellen Zeitpunkt
+  const local = (d: Date) => new Date(d.getTime() - berlinOffsetMin(new Date(d.getTime() - berlinOffsetMin(d) * 60_000)) * 60_000);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return local(new Date(s + 'T09:00:00Z'));
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s) && !/[Zz]|[+-]\d{2}:?\d{2}$/.test(s)) { const d = new Date(s.slice(0, 16) + ':00Z'); return isNaN(d.getTime()) ? null : local(d); }
   const d = new Date(s);
   return isNaN(d.getTime()) ? null : d;
 }
@@ -67,15 +78,24 @@ const SCHEMA = {
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'blocked', 'escalate', 'wait', 'none'] },
-        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); sonst null' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'wait', 'none'] },
+        text: { type: ['string', 'null'], description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; escalate: Text an die PL; add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst null' },
         column: { type: ['string', 'null'], description: 'set_status: Zielstatus (exakt aus der Liste); sonst null' },
         itemId: { type: ['string', 'null'], description: 'check_item/update_item: itemId aus der Task-Liste; sonst null' },
         pageId: { type: ['string', 'null'], description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst null' },
         status: { type: ['string', 'null'], description: 'doc_status: draft, review oder final; sonst null' },
-        title: { type: ['string', 'null'], description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); sonst null' },
+        title: { type: ['string', 'null'], description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; sonst null' },
+        ref: { type: ['string', 'null'], description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates null = dieses; create_aufgabe: Kennung des Arbeitspakets, null = dieses; sonst null' },
+        responsible: { type: ['string', 'null'], description: 'create_aufgabe/create_ap/create_subproject/assign: E-Mail eines Projektmitglieds (oder externe Adresse), null = keine direkte Zuweisung; sonst null' },
+        startDate: { type: ['string', 'null'], description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; sonst null' },
+        dueDate: { type: ['string', 'null'], description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; sonst null' },
+        subproject: { type: ['string', 'null'], description: 'create_ap/create_milestone: Name des Teilprojekts, null = dieses bzw. keins; sonst null' },
+        items: { type: ['array', 'null'], items: { type: 'string' }, description: 'create_aufgabe/create_ap: Tasks (Checkliste); sonst null' },
+        startsAt: { type: ['string', 'null'], description: 'create_event: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); sonst null' },
+        endsAt: { type: ['string', 'null'], description: 'create_event: Ende als YYYY-MM-DDTHH:MM, null = eine Stunde; sonst null' },
+        location: { type: ['string', 'null'], description: 'create_event: Ort; sonst null' },
         folder: { type: ['string', 'null'], description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst null' },
         to: { type: ['array', 'null'], items: { type: 'string' }, description: 'mail: Empfängeradressen; doc_send_pdf: Empfänger oder null für den Verteiler des Ordners (nur finale Seiten); sonst null' },
         subject: { type: ['string', 'null'], description: 'mail: Betreff; sonst null' },
@@ -119,8 +139,26 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
+  // Zuständigkeit (direkt oder geerbt) und Planungsrahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt, Teilprojekt-Verantwortung in ihren Teilprojekten
+  const eff = await db.one(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as eff, pt.responsible_user_id as parent_resp, s.name as sp_name from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.id]);
+  const basis = task.responsible_user_id === agent.id ? 'direkt zugewiesen' : eff.eff === agent.id ? (eff.parent_resp === agent.id ? `geerbt vom Arbeitspaket ${task.project_key}-${task.parent_number}` : `geerbt vom Teilprojekt „${eff.sp_name}“, für das du verantwortlich bist`) : 'nicht deine Zuständigkeit (Lauf von Hand gestartet)';
+  const isPl = m.role === 'pl';
+  const canPlan = isPl || Boolean(m.can_edit_plan);
+  const myTps: string[] = (await db.query(`select id from subprojects where project_id = $1 and responsible_user_id = $2`, [task.project_id, agent.id])).rows.map((r: any) => r.id);
+  const subprojects = await db.query(`select s.id, s.name, s.start_date, s.end_date, u.name as resp from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 and (not s.restricted or s.responsible_user_id = $2 or $3) order by s.position, s.created_at`, [task.project_id, agent.id, isPl]);
+  const apScope = canPlan ? null : task.subproject_id;
+  const aps = await db.query(
+    `select t.number, t.title, t.start_date, t.due_date, c.name as column_name, c.is_done, t.responsible_user_id, t.responsible_email, eu.name as eff_name, s.name as sp_name,
+       (select count(*)::int from tasks x where x.parent_id = t.id and x.deleted_at is null) as subs
+     from tasks t join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS} left join users eu on eu.id = (${EFFECTIVE_RESPONSIBLE_SQL})
+     where t.project_id = $1 and t.parent_id is null and t.deleted_at is null and t.archived_at is null and ($2::uuid is null or t.subproject_id = $2) and ${visibleSubprojectSql(3)}
+     order by (t.subproject_id is not distinct from $4) desc, s.position nulls last, t.position limit 40`, [task.project_id, apScope, agent.id, task.subproject_id]);
+  const milestones = canPlan || myTps.length ? await db.query(`select m.name, m.date, s.name as sp from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 order by m.date limit 20`, [task.project_id]) : { rows: [] as any[] };
+  const events = await db.query(`select title, starts_at, location from meetings where project_id = $1 and starts_at >= $2 and starts_at < $3 order by starts_at limit 15`, [task.project_id, new Date(now.getTime() - 86400_000), new Date(now.getTime() + 45 * 86400_000)]);
+  const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
+  const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
-  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} zugewiesen; du treibst es voran wie eine zuständige Person. Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. ${styleText(agent.persona)}`;
+  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. ${styleText(agent.persona)}`;
   const prompt = `Heute: ${today}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -135,7 +173,13 @@ Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (neueste zuerst):
 ${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
 Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
+Deine Zuständigkeit: ${basis}.
+Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}
+Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
+${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
+${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}`).join(', ') || '–'}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : ' (kein Projektkonto)'}; Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer Seite per Mail senden (doc_send_pdf${m.can_finalize ? ', auch an den Verteiler des Ordners' : ''}); Log schreiben; Blockade melden; an PL eskalieren.
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 ${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
 Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
@@ -151,7 +195,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
       j = parseJson(r.text);
-      actions = Array.isArray(j.actions) ? j.actions.slice(0, 8) : [];
+      actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
       if (!reads.length) break;
       if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page'); break; }
@@ -170,6 +214,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const applied: AgentAction[] = [];
     let mailsSent = 0;
     let waited = false;
+    const plan = planner(db, { agent, m, task, canPlan, myTps, now });
     for (const a of actions) {
       if (a.type === 'comment' && a.text?.trim()) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, a.text.trim()]);
@@ -341,6 +386,10 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         await db.query(`update tasks set agent_wait = $2, agent_next_check_at = $3 where id = $1`, [task.id, JSON.stringify(w), nextCheck]);
         applied.push({ ...a, reason: w.reason });
         waited = true;
+      } else if (PLAN_TYPES.includes(a.type)) {
+        const r = await plan(a);
+        if ('error' in r) errors.push(r.error);
+        else if (r.applied) applied.push(r.applied);
       } else if (a.type === 'none') applied.push(a);
     }
     if (!waited) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
@@ -356,6 +405,122 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run_failed', objectType: 'task', objectId: task.id, details: { runId: er.id, trigger, error: msg } });
     return { runId: er.id, taskId: task.id, status: 'error', actions: [], error: msg };
   }
+}
+
+const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event'];
+const MAX_CREATE = 15;
+
+/**
+ * Planungsaktionen eines Agenten. Rahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt;
+ * sonst nur im eigenen Bereich (dieses AP und seine Aufgaben, eigene Zuständigkeit, eigene Teilprojekte). Agenten
+ * weist nur eine PL zu; bestehende Termine anderer ändert nur, wer planen darf.
+ */
+function planner(db: Db, c: { agent: { id: string; name: string; org_id: string }; m: any; task: any; canPlan: boolean; myTps: string[]; now: Date }) {
+  const { agent, m, task, canPlan, myTps, now } = c;
+  const actor: PlanActor = { id: agent.id, name: agent.name, orgId: agent.org_id, role: m.role, label: `${agent.name} (KI-Agent)`, isAgent: true };
+  const code = (n: number) => `${task.project_key}-${n}`;
+  const inScope = (t: any) => canPlan || t.id === task.id || t.parent_id === task.id || t.id === task.parent_id || t.eff_responsible === agent.id || Boolean(t.subproject_id && myTps.includes(t.subproject_id));
+  const log = (taskId: string, body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [taskId, agent.id, body]);
+  const subprojectByName = (name: unknown) => db.maybeOne(`select id, name from subprojects where project_id = $1 and lower(name) = lower($2)`, [task.project_id, String(name ?? '').trim()]);
+  let created = 0;
+  return async (a: any): Promise<{ applied: any } | { error: string }> => {
+    const title = String(a.title ?? '').trim().slice(0, 200);
+    const start = ymd(a.startDate);
+    const due = ymd(a.dueDate);
+    if (start === undefined || due === undefined) return { error: `${a.type}: Datum nicht als YYYY-MM-DD (${[a.startDate, a.dueDate].filter(Boolean).join(', ')})` };
+    if (start && due && start > due) return { error: `${a.type}: Start ${start} liegt nach dem Termin ${due}` };
+    if (a.type.startsWith('create_') && created >= MAX_CREATE) return { error: `${a.type} „${title}“ verworfen: mehr als ${MAX_CREATE} Anlagen je Lauf` };
+    if (a.type.startsWith('create_') && !title) return { error: `${a.type}: Titel fehlt` };
+
+    if (a.type === 'create_aufgabe' || a.type === 'create_ap') {
+      const who = await resolvePerson(db, task.project_id, actor, a.responsible);
+      if ('error' in who) return { error: `${a.type} „${title}“: ${who.error}` };
+      let parentId: string | null = null;
+      let subprojectId: string | null = null;
+      if (a.type === 'create_aufgabe') {
+        const parent = await findTaskByRef(db, task.project_id, a.ref || (task.parent_id ? task.parent_number : task.number));
+        if (!parent) return { error: `create_aufgabe „${title}“: Arbeitspaket ${a.ref} nicht gefunden` };
+        if (parent.parent_id) return { error: `create_aufgabe „${title}“: ${code(parent.number)} ist eine Aufgabe; Aufgaben haben keine eigenen Aufgaben` };
+        if (!inScope(parent) || !(await canSeeSubproject(db, agent.id, parent.subproject_id))) return { error: `create_aufgabe „${title}“: ${code(parent.number)} liegt außerhalb deines Bereichs` };
+        parentId = parent.id;
+        subprojectId = parent.subproject_id;
+      } else {
+        const sp = a.subproject ? await subprojectByName(a.subproject) : null;
+        if (a.subproject && !sp) return { error: `create_ap „${title}“: Teilprojekt „${a.subproject}“ gibt es nicht` };
+        subprojectId = sp?.id ?? task.subproject_id ?? null;
+        if (!canPlan && !(subprojectId && myTps.includes(subprojectId))) return { error: `create_ap „${title}“: Arbeitspakete legst du nur als stellvertretende PL, mit Recht „Projektplan ändern“ oder in deinen Teilprojekten an` };
+        if (!(await canSeeSubproject(db, agent.id, subprojectId))) return { error: `create_ap „${title}“: Teilprojekt ist für dich nicht sichtbar` };
+      }
+      const dup = await db.maybeOne(`select number from tasks where project_id = $1 and deleted_at is null and archived_at is null and lower(title) = lower($2) and parent_id is not distinct from $3::uuid and ($3::uuid is not null or subproject_id is not distinct from $4::uuid)`, [task.project_id, title, parentId, subprojectId]);
+      if (dup) return { error: `${a.type}: „${title}“ gibt es schon (${code(dup.number)})` };
+      const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: a.items, logTaskId: task.id });
+      created++;
+      return { applied: { type: a.type, ref: code(t.number), title: t.title, responsible: who.name ?? who.email, startDate: start, dueDate: due } };
+    }
+
+    if (a.type === 'assign' || a.type === 'set_dates') {
+      const t = await findTaskByRef(db, task.project_id, a.ref || (a.type === 'set_dates' ? task.number : ''));
+      if (!t) return { error: `${a.type}: ${a.ref || 'Kennung fehlt'} nicht gefunden` };
+      if (!inScope(t) || !(await canSeeSubproject(db, agent.id, t.subproject_id))) return { error: `${a.type}: ${code(t.number)} liegt außerhalb deines Bereichs` };
+      if (a.type === 'assign') {
+        const who = await resolvePerson(db, task.project_id, actor, a.responsible);
+        if ('error' in who) return { error: `assign ${code(t.number)}: ${who.error}` };
+        if ((t.responsible_user_id ?? null) === who.userId && (t.responsible_email ?? null) === who.email) return { applied: null };
+        await db.query(`update tasks set responsible_user_id = $2, responsible_email = $3 where id = $1`, [t.id, who.userId, who.email]);
+        await log(t.id, `Zuständig: ${who.name ?? who.email ?? 'wieder geerbt'} (zugewiesen von ${agent.name})`);
+        await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'task.update', objectType: 'task', objectId: t.id, details: { responsibleUserId: who.userId, responsibleEmail: who.email } });
+        await afterAssign(db, actor, task.project_id, t.id, t.title, who.userId, who.kind);
+        return { applied: { type: 'assign', ref: code(t.number), responsible: who.name ?? who.email } };
+      }
+      if (!start && !due) return { error: `set_dates ${code(t.number)}: kein Datum angegeben` };
+      if (!canPlan && t.created_by !== agent.id && t.due_date) return { error: `set_dates ${code(t.number)}: bestehende Termine anderer ändert nur die PL oder wer „Projektplan ändern“ darf; Konflikt ins Log oder an die PL` };
+      const ns = start ?? dateStr(t.start_date);
+      const nd = due ?? dateStr(t.due_date);
+      if (ns && nd && ns > nd) return { error: `set_dates ${code(t.number)}: Start ${ns} liegt nach dem Termin ${nd}` };
+      await db.query(`update tasks set start_date = $2, due_date = $3 where id = $1`, [t.id, ns, nd]);
+      await log(t.id, `Termin: ${ns ?? '–'} bis ${nd ?? '–'} (gesetzt von ${agent.name})`);
+      await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'task.update', objectType: 'task', objectId: t.id, details: { startDate: ns, dueDate: nd } });
+      return { applied: { type: 'set_dates', ref: code(t.number), startDate: ns, dueDate: nd } };
+    }
+
+    if (a.type === 'create_subproject' || a.type === 'create_milestone') {
+      if (!canPlan) return { error: `${a.type} „${title}“: nur als stellvertretende PL oder mit Recht „Projektplan ändern“` };
+      if (a.type === 'create_subproject') {
+        if (await subprojectByName(title)) return { error: `create_subproject: „${title}“ gibt es schon` };
+        const who = await resolvePerson(db, task.project_id, actor, a.responsible);
+        if ('error' in who) return { error: `create_subproject „${title}“: ${who.error}` };
+        if (who.email) return { error: `create_subproject „${title}“: verantwortlich kann nur ein Projektmitglied sein` };
+        const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from subprojects where project_id = $1`, [task.project_id]);
+        const r = await db.one(`insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning id`, [task.project_id, title, who.userId, start, due, pos.p]);
+        await log(task.id, `Teilprojekt angelegt: „${title}“${who.name ? `, verantwortlich ${who.name}` : ''}`);
+        await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'subproject.create', objectType: 'subproject', objectId: r.id, details: { name: title } });
+        created++;
+        return { applied: { type: 'create_subproject', title, responsible: who.name, startDate: start, dueDate: due } };
+      }
+      if (!due) return { error: `create_milestone „${title}“: Datum fehlt` };
+      const sp = a.subproject ? await subprojectByName(a.subproject) : null;
+      if (a.subproject && !sp) return { error: `create_milestone „${title}“: Teilprojekt „${a.subproject}“ gibt es nicht` };
+      const r = await db.one(`insert into milestones (project_id, subproject_id, name, date) values ($1,$2,$3,$4) returning id`, [task.project_id, sp?.id ?? null, title, due]);
+      await log(task.id, `Meilenstein angelegt: „${title}“ am ${due}`);
+      await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: { name: title, date: due } });
+      created++;
+      return { applied: { type: 'create_milestone', title, dueDate: due, subproject: sp?.name ?? null } };
+    }
+
+    if (a.type === 'create_event') {
+      const raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) return { error: `create_event „${title}“: Beginn als YYYY-MM-DDTHH:MM angeben` };
+      const starts = parseUntil(raw, now);
+      const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + H) : null;
+      if (!starts || !ends || ends <= starts) return { error: `create_event „${title}“: Beginn oder Ende nicht lesbar` };
+      if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [task.project_id, title, starts])) return { error: `create_event: „${title}“ steht schon im Kalender` };
+      await createPlannedEvent(db, actor, { projectId: task.project_id, title, startsAt: starts, endsAt: ends, location: a.location, description: a.text, taskId: task.id });
+      await log(task.id, `Termin im Kalender: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''}`);
+      created++;
+      return { applied: { type: 'create_event', title, startsAt: starts.toISOString(), endsAt: ends.toISOString(), location: a.location ?? null } };
+    }
+    return { error: `${a.type}: unbekannte Aktion` };
+  };
 }
 
 const fmt = (iso: string | null | undefined) => (iso ? new Date(iso).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' }) : '–');
@@ -383,12 +548,26 @@ function triggerText(trigger: string, task: any): string {
   }
 }
 
-/** Ereignislauf: der dem Arbeitspaket zugewiesene Agent läuft sofort (von Routen über queueAgentRun ausgelöst). */
+/** Zuständiger Agent eines Arbeitspakets (direkt oder geerbt vom Arbeitspaket bzw. Teilprojekt), sofern aktiv und Mitglied. */
+export async function agentForTask(db: Db, taskId: string): Promise<{ id: string; name: string; org_id: string; persona: string | null } | null> {
+  return db.maybeOne(
+    `select u.id, u.name, u.org_id, u.persona from tasks t ${EFFECTIVE_JOINS} join users u on u.id = (${EFFECTIVE_RESPONSIBLE_SQL})
+     where t.id = $1 and u.kind = 'agent' and u.active and exists (select 1 from project_members m where m.project_id = t.project_id and m.user_id = u.id)`, [taskId]);
+}
+
+/** Läufe, die einem Agenten heute noch zustehen (Tagesbudget des Mandanten; Läufe an Arbeitspaketen und im Chat zählen). */
+export async function agentBudgetLeft(db: Db, agent: { id: string; org_id: string }, now = new Date()): Promise<number> {
+  const settings = await orgAiSettings(db, agent.org_id);
+  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
+  return Math.max(0, settings.agentDailyBudget - used.c);
+}
+
+/** Ereignislauf: der zuständige Agent läuft sofort (von Routen über queueAgentRun ausgelöst), solange sein Tagesbudget reicht. */
 export async function runForTask(db: Db, mail: MailService, fetchFn: typeof fetch, taskId: string, trigger: string): Promise<AgentRunResult | null> {
-  const t = await db.maybeOne(`select t.responsible_user_id, t.agent_paused, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
-  if (!t || t.agent_paused || t.is_done || !t.responsible_user_id) return null;
-  const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]);
-  if (!agent) return null;
+  const t = await db.maybeOne(`select t.agent_paused, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
+  if (!t || t.agent_paused || t.is_done) return null;
+  const agent = await agentForTask(db, taskId);
+  if (!agent || (await agentBudgetLeft(db, agent)) <= 0) return null;
   return runAgentOnTask(db, mail, fetchFn, agent, taskId, trigger);
 }
 
@@ -411,12 +590,12 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
   for (const agent of agents.rows as any[]) {
     const cfg = await aiConfigForAgent(db, agent.id);
     if (!cfg) continue;
-    const settings = await orgAiSettings(db, agent.org_id);
-    const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
-    let budget = Math.max(0, settings.agentDailyBudget - used.c);
+    let budget = await agentBudgetLeft(db, agent, now);
+    // Direkt zugewiesen oder geerbt (Aufgabe vom Arbeitspaket, Arbeitspaket vom Teilprojekt); nur in Projekten, in denen der Agent Mitglied ist
     const tasks = await db.query(
-      `select t.id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id
-       where t.responsible_user_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active' order by t.due_date nulls last`, [agent.id]);
+      `select t.id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
+       where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active'
+         and exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $1) order by t.due_date nulls last`, [agent.id]);
     for (const t of tasks.rows as any[]) {
       if (budget <= 0) break;
       const last = await db.maybeOne(`select created_at, fingerprint from agent_runs where task_id = $1 and agent_user_id = $2 order by created_at desc limit 1`, [t.id, agent.id]);

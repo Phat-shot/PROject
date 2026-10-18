@@ -4,7 +4,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, visibleSubprojectSql } from '../rights.js';
-import { dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
+import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
@@ -199,9 +199,9 @@ export async function projectRoutes(app: FastifyInstance) {
       if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
       const target = await db.maybeOne(`select id, kind from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
-      // KI-Agent: nur Mitglied mit Stellvertretung, nie PL; Rechte wie ein Mitglied (auch „Final setzen“ zuweisbar), Mailversand abschaltbar, keine KI-Freigabe
+      // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar, keine KI-Freigabe
       const isAgent = target.kind === 'agent';
-      if (isAgent) { b.role = 'member'; b.canUseAi = true; }
+      if (isAgent) { if (b.role !== 'pl') b.role = 'member'; b.isDeputy = true; b.canUseAi = true; }
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;
       const primary = await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [req.params.id]);
@@ -227,7 +227,7 @@ export async function projectRoutes(app: FastifyInstance) {
          on conflict (project_id, user_id) do update set role = excluded.role, is_deputy = excluded.is_deputy,
            can_edit_plan = excluded.can_edit_plan, can_approve = excluded.can_approve, can_finalize = excluded.can_finalize, can_use_ai = excluded.can_use_ai, agent_can_mail = excluded.agent_can_mail
          returning *`,
-        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
+        [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, b.role === 'pl' || Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), Boolean(b.canUseAi), isAgent ? b.agentCanMail !== false : true]
       );
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };
@@ -304,6 +304,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Teilprojekte anlegen erfordert das Recht „Projektplan ändern“');
     const b = req.body ?? ({} as any);
     if (!b.name) throw badRequest('Name erforderlich');
+    await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from subprojects where project_id = $1`, [req.params.id]);
     const r = await db.one(
       `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning *`,
@@ -320,6 +321,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     if (!(await canSeeSubproject(db, user.id, req.params.sid))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
+    if ('responsibleUserId' in b) await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     await setAccess(user, req.params.id, req.params.sid, b, m);
     const before = await db.maybeOne(`select responsible_user_id from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
     const r = await db.maybeOne(
