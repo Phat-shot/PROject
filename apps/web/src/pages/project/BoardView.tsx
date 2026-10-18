@@ -69,18 +69,22 @@ export function BoardView() {
     return () => window.removeEventListener('keydown', h);
   }, [canEdit, detail.columns]);
 
-  const source = f.archived ? archived ?? [] : tasks;
+  // Board zeigt Arbeitspakete; Aufgaben stehen im Arbeitspaket. Personenfilter treffen ein Arbeitspaket auch über seine offenen Aufgaben.
+  const all = f.archived ? archived ?? [] : tasks;
+  const source = useMemo(() => all.filter((x) => !x.parentId), [all]);
+  const kidsOf = useMemo(() => { const m = new Map<string, Task[]>(); for (const x of all) if (x.parentId && !x.done) m.set(x.parentId, [...(m.get(x.parentId) ?? []), x]); return m; }, [all]);
+  const respIs = (x: Task, uid: string) => x.responsible.userId === uid || (kidsOf.get(x.id) ?? []).some((k) => k.responsible.userId === uid);
   const filtered = useMemo(() => source.filter((x) => {
     if (f.q && !(x.title + ' ' + (x.description ?? '')).toLowerCase().includes(f.q.toLowerCase())) return false;
-    if (f.member === 'none' ? x.responsible.userId : f.member && x.responsible.userId !== f.member) return false;
+    if (f.member === 'none' ? x.responsible.userId : f.member && !respIs(x, f.member)) return false;
     if (f.label && !x.labelIds.includes(f.label)) return false;
-    if (f.mine && x.responsible.userId !== user?.id) return false;
+    if (f.mine && !respIs(x, user?.id ?? '')) return false;
     if (f.overdue && !(x.dueDate && x.dueDate < t && !x.done)) return false;
     if (f.conflicts && x.conflicts.length === 0) return false;
     if (f.escalated && !x.blocked && x.escalationLevel === 0) return false;
     if (f.prio && x.priority !== f.prio) return false;
     return true;
-  }), [source, f, t, user?.id]);
+  }), [source, kidsOf, f, t, user?.id]);
 
   const groups = useMemo(() => {
     if (!lanes) return [{ key: 'all', name: null as string | null, tasks: filtered }];
@@ -89,7 +93,7 @@ export function BoardView() {
     return out.filter((g) => g.tasks.length > 0 || !active);
   }, [filtered, lanes, detail.subprojects, active]);
 
-  const columnCount = (colId: string) => tasks.filter((x) => x.columnId === colId).length;
+  const columnCount = (colId: string) => tasks.filter((x) => x.columnId === colId && !x.parentId).length;
 
   const onDrop = async (laneKey: string, colId: string) => {
     if (!drag) return;
@@ -97,7 +101,7 @@ export function BoardView() {
     setDrag(null); setDrop(null);
     if (!task) return;
     // Zielindex innerhalb der Spalte bestimmen (Swimlane → Position im Gesamt der Spalte)
-    const colTasks = tasks.filter((x) => x.columnId === colId && x.id !== task.id).sort((a, b) => a.position - b.position);
+    const colTasks = tasks.filter((x) => x.columnId === colId && x.id !== task.id && !x.parentId).sort((a, b) => a.position - b.position);
     const laneTasks = colTasks.filter((x) => laneKey === 'all' ? true : laneKey === 'none' ? !x.subprojectId : x.subprojectId === laneKey);
     const idxInLane = drop && drop.col === colId && drop.lane === laneKey ? drop.index : laneTasks.length;
     const anchor = laneTasks[idxInLane];
@@ -246,8 +250,9 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.commentCount > 0 && <span title="Kommentare">💬 {x.commentCount}</span>}
         {x.attachmentCount > 0 && <span title="Anhänge">📎 {x.attachmentCount}</span>}
         {x.mailCount > 0 && <span title="Verknüpfte Mails">✉ {x.mailCount}</span>}
+        {x.subtaskTotal > 0 && <span title="Aufgaben erledigt / gesamt" className={x.subtaskDone === x.subtaskTotal ? 'ok' : ''}>▤ {x.subtaskDone}/{x.subtaskTotal}</span>}
         {x.checklistTotal > 0 && <span title="Checkliste" className={x.checklistDone === x.checklistTotal ? 'ok' : ''}>☑ {x.checklistDone}/{x.checklistTotal}</span>}
-        <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
+        <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
           {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : x.responsible.name ? <span className="avatar-wrap external" title={`${x.responsible.name} (extern)`}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
         </span>
       </div>

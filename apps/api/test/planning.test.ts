@@ -31,7 +31,7 @@ test('Labels, Sortierung per Move, WIP-Limit in Spalten', async () => {
   const offen = detail.columns.find((c: any) => c.name === 'Offen');
   const mv = await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/move`, { columnId: offen.id, index: 0 });
   assert.equal(mv.statusCode, 200, mv.body);
-  const tasks = (await t.api(pl).get(`/projects/${t.ids.projects.web}/tasks`)).json().tasks.filter((x: any) => x.columnId === offen.id).sort((a: any, b: any) => a.position - b.position);
+  const tasks = (await t.api(pl).get(`/projects/${t.ids.projects.web}/tasks`)).json().tasks.filter((x: any) => x.columnId === offen.id && !x.parentId).sort((a: any, b: any) => a.position - b.position);
   assert.equal(tasks[0].id, t.ids.tasks.t2);
   assert.deepEqual(tasks.map((x: any) => x.position), tasks.map((_: any, i: number) => i));
   const leser = await t.login('leser@demo.local');

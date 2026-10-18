@@ -27,3 +27,15 @@ describe('Meine Arbeit (geklammerte Sicht)', () => {
     expect(buildWorkTree([project('other', [])], me, false)).toHaveLength(0);
   });
 });
+
+describe('Meine Arbeit mit Aufgaben', () => {
+  it('Aufgabe hängt unter ihrem Arbeitspaket; Arbeitspaket erscheint auch, wenn nur die Aufgabe meine ist', () => {
+    const ap = task('ap', null, 'other', false);
+    const sub = { ...task('a1', null, 'me', false), parentId: 'ap' };
+    const foreign = { ...task('a2', null, 'other', false), parentId: 'ap' };
+    const items = buildWorkTree([project('other', [ap, sub, foreign])], me, false)[0].lanes[0].items;
+    expect(items.map((i) => i.ap.id)).toEqual(['ap']);
+    expect(items[0].mine).toBe(false);
+    expect(items[0].subs.map((s) => s.ap.id)).toEqual(['a1']);
+  });
+});

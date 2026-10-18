@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
@@ -88,10 +89,13 @@ export function PlanView() {
     return out;
   }, [range]);
 
-  const rows: { kind: 'sub' | 'task' | 'ms'; id: string; label: string; start: string | null; end: string | null; done?: boolean; conflict?: boolean; resp?: string | null }[] = [];
+  const rows: { kind: 'sub' | 'task' | 'ms'; id: string; label: string; start: string | null; end: string | null; done?: boolean; conflict?: boolean; resp?: string | null; child?: boolean }[] = [];
+  const taskRow = (t: Task, child: boolean) => rows.push({ kind: 'task', id: t.id, label: t.title, start: t.startDate, end: t.dueDate, done: t.done, conflict: t.conflicts.length > 0, resp: t.responsible.name ?? t.responsible.email, child });
+  // Arbeitspakete, darunter eingerückt ihre Aufgaben
   const spRows = (spId: string | null) => {
-    for (const t of tasks.filter((t) => t.subprojectId === spId)) {
-      rows.push({ kind: 'task', id: t.id, label: t.title, start: t.startDate, end: t.dueDate, done: t.done, conflict: t.conflicts.length > 0, resp: t.responsible.name ?? t.responsible.email });
+    for (const t of tasks.filter((t) => t.subprojectId === spId && !t.parentId)) {
+      taskRow(t, false);
+      for (const c of tasks.filter((c) => c.parentId === t.id)) taskRow(c, true);
     }
     for (const m of detail.milestones.filter((m) => m.subprojectId === spId)) rows.push({ kind: 'ms', id: m.id, label: m.name, start: m.date, end: m.date });
   };
@@ -133,7 +137,7 @@ export function PlanView() {
         <span className="muted small">Balken ziehen verschiebt Start und Deadline, rechte Kante ändert die Deadline, Meilensteine lassen sich ziehen. Linien = Vorgänger → Nachfolger, rot bei Konflikt. Nichts verschiebt sich automatisch.{save.busy && ' · speichert …'}</span>
         {save.error && <span className="error small">{save.error}</span>}
         <span className="row right" style={{ gap: 2 }}>{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
-        <button className="btn" title="Plan als CSV (Excel)" onClick={() => downloadCsv(`plan_${detail.project.key}.csv`, ['Art', 'Bezeichnung', 'Start', 'Ende', 'Zuständig', 'Erledigt', 'Konflikt'], rows.map((r) => [r.kind === 'sub' ? 'Teilprojekt' : r.kind === 'ms' ? 'Meilenstein' : 'Arbeitspaket', r.label, r.start, r.end, r.resp ?? '', r.done ? 'ja' : '', r.conflict ? 'ja' : '']))}>CSV</button>
+        <button className="btn" title="Plan als CSV (Excel)" onClick={() => downloadCsv(`plan_${detail.project.key}.csv`, ['Art', 'Bezeichnung', 'Start', 'Ende', 'Zuständig', 'Erledigt', 'Konflikt'], rows.map((r) => [r.kind === 'sub' ? 'Teilprojekt' : r.kind === 'ms' ? 'Meilenstein' : r.child ? 'Aufgabe' : 'Arbeitspaket', r.label, r.start, r.end, r.resp ?? '', r.done ? 'ja' : '', r.conflict ? 'ja' : '']))}>CSV</button>
         {canPlan && <><button className="btn" onClick={() => setNewSp(true)}>Teilprojekt</button><button className="btn" onClick={() => setNewMs(true)}>Meilenstein</button></>}
       </div>
       <div className={`card gantt ${drag ? 'dragging' : ''}`} style={{ padding: 0 }} ref={scrollRef}>
@@ -151,7 +155,7 @@ export function PlanView() {
             {rows.map((r) => (
               <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
                 <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' ? 'pointer' : undefined }} onClick={() => r.kind === 'task' && openTask(r.id)}>
-                  {r.kind === 'task' && <span style={{ paddingLeft: 10 }} />}{r.kind === 'ms' && '◆ '}{r.label}
+                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && '◆ '}{r.label}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
                 </td>
                 <td className="bars" style={{ width }}>

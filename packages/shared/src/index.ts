@@ -27,6 +27,8 @@ export interface UserSettings {
   theme?: 'light' | 'dark' | 'system';
   /** Meldungen per Mail über das Org-Postfach: aus, sofort (gesammelt je Worker-Lauf) oder täglich als Digest (Standard) */
   mailNotifications?: 'off' | 'immediate' | 'daily';
+  /** In der Seitenleiste angeheftete Projekte (höchstens 5, in dieser Reihenfolge) */
+  pinnedProjects?: string[];
 }
 
 export interface Membership {
@@ -277,6 +279,12 @@ export interface Task {
   checklistDone: number;
   checklistTotal: number;
   checklist?: ChecklistItem[];
+  /** Aufgabe: gehört zu diesem Arbeitspaket (eine Ebene tief); null = Arbeitspaket */
+  parentId: string | null;
+  parent: { id: string; number: number; title: string } | null;
+  /** Aufgaben eines Arbeitspakets: erledigt / gesamt */
+  subtaskDone: number;
+  subtaskTotal: number;
   predecessorIds?: string[];
   createdAt: string;
   updatedAt: string;

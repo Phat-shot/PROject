@@ -46,6 +46,12 @@ export async function userRoutes(app: FastifyInstance) {
     if (settings.theme && !['light', 'dark', 'system'].includes(String(settings.theme))) throw badRequest('Theme: light, dark oder system');
     if (settings.language && !['de', 'en'].includes(String(settings.language))) throw badRequest('Sprache: de oder en');
     if (settings.mailNotifications && !['off', 'immediate', 'daily'].includes(String(settings.mailNotifications))) throw badRequest('Mail-Benachrichtigung: off, immediate oder daily');
+    if (settings.pinnedProjects !== undefined) {
+      const ids = settings.pinnedProjects;
+      if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !/^[0-9a-f-]{36}$/.test(x))) throw badRequest('Angeheftete Projekte: Liste von Projekt-IDs');
+      if (new Set(ids).size > 5) throw badRequest('Höchstens 5 Projekte anheften');
+      settings.pinnedProjects = [...new Set(ids as string[])];
+    }
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     return { user: mapUser(r) };

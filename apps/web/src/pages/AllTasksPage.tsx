@@ -67,7 +67,7 @@ export function AllTasksPage() {
                     </td>
                     <td><span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span></td>
                     <td className="nowrap" style={{ color: !x.done && x.dueDate && x.dueDate < t ? 'var(--danger)' : undefined }}>{fmtDate(x.dueDate)}</td>
-                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.inherited && <span className="muted"> (geerbt{x.responsible.inheritedFrom === 'subproject' ? ' vom Teilprojekt' : ' vom PL'})</span>}{x.responsible.userId === user?.id && <span className="badge" style={{ marginLeft: 6 }}>ich</span>}</td>
+                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.inherited && <span className="muted"> (geerbt{x.responsible.inheritedFrom === 'task' ? ' vom Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? ' vom Teilprojekt' : ' vom PL'})</span>}{x.responsible.userId === user?.id && <span className="badge" style={{ marginLeft: 6 }}>ich</span>}</td>
                     <td className="small muted">{x.done ? 'erledigt' : 'offen'}</td>
                   </tr>
                 ))}
