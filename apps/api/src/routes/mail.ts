@@ -9,7 +9,7 @@ import { aiConfigFor } from '../ai/client.js';
 import { aiAllowed, aiError } from '../ai/policy.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
-import { mailAccess } from '../mail/access.js';
+import { PERSONAL_MAIL_ONLY, accountAllowedInProject, mailAccess, mailAllowedInProject } from '../mail/access.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
 import { decideProposals } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
@@ -239,6 +239,8 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Konto nicht gefunden');
     if (a.type === 'personal' && a.owner_user_id !== user.id) throw forbidden('Persönliche Konten teilt nur der Eigentümer');
     if (a.type === 'project' && (a.project_id !== req.params.id || m.role !== 'pl')) throw forbidden('Projektkonten verwaltet der PL des Projekts');
+    if (!(await accountAllowedInProject(db, a, req.params.id))) throw forbidden(PERSONAL_MAIL_ONLY);
+    if (a.type === 'org' && !(await canManageAccount(user, a))) throw forbidden('Das Organisationspostfach teilt nur der Org-Admin');
     const v = await db.one(
       `insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,$3,$4,$5) returning *`,
       [a.id, req.params.id, b.name, JSON.stringify(normalizeFilter(b.filter)), user.id]
@@ -337,6 +339,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
     if (mail.outgoing) throw badRequest('Gesendete Mails bearbeitet die KI nicht');
     const m = await requireProject(db, user, req.body?.projectId, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, m.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     const v = await db.maybeOne(`select * from mail_views where project_id = $1 and account_id = $2 and ai_process order by created_at limit 1`, [m.projectId, mail.account_id]);
     if (!v) throw badRequest('Für dieses Konto gibt es im Projekt keinen Ordner „KI Bearbeiten“ (Einstellungen › Mail)');
     const rights = await getViewRights(db, v.id, user, m);
@@ -614,6 +617,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.project_id, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, task.project_id))) throw forbidden(PERSONAL_MAIL_ONLY);
     const copy = Boolean(req.body?.copy);
     if (copy) {
       if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Aus persönlichen Konten kopiert nur der Eigentümer');
@@ -639,6 +643,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
     const b = req.body ?? ({} as any);
     const pm = await requireProject(db, user, b.projectId, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, b.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     await assertResponsible(db, b.projectId, pm, b.responsibleUserId);
     if (b.subprojectId) {
       const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, b.projectId]);
@@ -679,6 +684,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.project_id, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, task.project_id))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (!(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     if (!req.body?.confirmed) {
       const willSee = await newlyExposed(task.project_id, mail.id, user.id);
@@ -702,6 +708,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Aus persönlichen Konten legt nur der Eigentümer ab');
     const b = req.body ?? ({} as any);
     await requireProject(db, user, b.projectId, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, b.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (!b.confirmed) {
       const members = await db.query(`select u.name, m.role from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by u.name`, [b.projectId]);
       return { needsConfirmation: true, willSee: members.rows.map((x: any) => ({ name: x.name, role: x.role })) };
@@ -734,6 +741,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const page = await db.maybeOne(`select * from doc_pages where id = $1`, [req.body?.pageId]);
     if (!page) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, page.project_id, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, page.project_id))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
     if (!req.body?.confirmed) {
       const members = await db.query(`select u.name, m.role from project_members m join users u on u.id = m.user_id where m.project_id = $1 order by u.name`, [page.project_id]);
@@ -883,6 +891,7 @@ export async function mailRoutes(app: FastifyInstance) {
       const manage = await canManageAccount(user, account);
       rights = manage ? ALL_RIGHTS : { canRead: false, canDraft: false, canSend: false, canAi: false, canCreateTask: false };
     } else throw badRequest('viewId oder accountId erforderlich');
+    if (!(await accountAllowedInProject(db, account!, b.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (!rights.canDraft && !rights.canSend) throw forbidden('Kein Entwurfsrecht an dieser Ansicht');
     if (b.taskId) {
       const t = await db.maybeOne(`select project_id from tasks where id = $1`, [b.taskId]);

@@ -1,6 +1,7 @@
 import type { MailViewFilter } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
+import { accountAllowedInProject } from './access.js';
 import { DevMailProvider } from './devProvider.js';
 import { ImapMailProvider } from './imapProvider.js';
 import { GraphMailProvider } from './graphProvider.js';
@@ -128,6 +129,8 @@ export class MailService {
       );
       if (t) { taskId = taskId ?? t.task_id; if (t.task_id === taskId) itemId = t.checklist_item_id ?? null; }
     }
+    // Persönliche Projekte nehmen nur Mails aus eigenen Postfächern auf
+    if (taskId && !(await accountAllowedInProject(this.db, account, (await this.db.one(`select project_id from tasks where id = $1`, [taskId])).project_id))) taskId = null;
     if (taskId) {
       await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, checklist_item_id) values ($1,$2,false,$3) on conflict do nothing`, [mailId, taskId, itemId]);
       await audit(this.db, { orgId: account.org_id, projectId: account.project_id, action: 'mail.auto_linked', objectType: 'mail', objectId: mailId, details: { taskId, via: code ? 'plus-address' : 'in-reply-to' } });
