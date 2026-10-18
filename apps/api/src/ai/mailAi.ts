@@ -195,6 +195,8 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
   // Inhalt ins Projekt: im Ordner-Modus hat der Auftraggeber zugestimmt (Kopie), sonst nur verknüpft
   const copied = ctx.run.mode === 'process';
   const linkMail = (taskId: string, origin: boolean) => db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by, origin) values ($1,$2,$3,$4,$5) on conflict (mail_id, task_id) do update set origin = mail_task_links.origin or excluded.origin, copied = mail_task_links.copied or excluded.copied`, [mail.id, taskId, copied, actor.id, origin]);
+  // Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an (Inhalt würde sonst ins Projekt gelangen)
+  if (ctx.run.mode === 'triage' && mail.account_type === 'personal' && mail.owner_user_id !== actor.id && a.type !== 'none') fail('Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an');
   const title = String(a.title ?? '').trim().slice(0, 200);
   const start = ymd(a.startDate); const due = ymd(a.dueDate);
   if (start === undefined || due === undefined) fail('Datum nicht als YYYY-MM-DD');

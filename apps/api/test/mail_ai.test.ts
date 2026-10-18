@@ -134,6 +134,17 @@ test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den 
   await inject({ subject: 'Re: Stand', text: 'Erledigt.', to: [`projekt-web+t${t4.mail_code}@demo.local`] });
   const auto = await t.db.one(`select id from mails where subject = 'Re: Stand'`);
   assert.equal(await t.db.maybeOne(`select 1 from mail_ai_runs where mail_id = $1`, [auto.id]), null);
+  // Persönliches Konto (Hosting-Ansicht der PL, Max liest mit): Vorschläge nimmt nur die Eigentümerin an
+  assert.equal((await t.api(max).patch(`/mail/views/${t.ids.views.hosting}`, { agentUserId: agent.id })).statusCode, 403);
+  assert.equal((await t.api(pl).patch(`/mail/views/${t.ids.views.hosting}`, { agentUserId: agent.id })).statusCode, 200);
+  mailNext = [M({ type: 'create_ap', title: 'Hosting kündigen prüfen' })];
+  t.mail.dev.inject(t.ids.accounts.personal, { from: { address: 'support@hosting-partner.de', name: 'Hosting' }, to: ['pl@demo.local'], subject: 'Kündigungsfrist', text: 'Vertrag endet am 31.12.' } as any);
+  await t.mail.syncAccount(t.ids.accounts.personal);
+  await flushAgentRuns();
+  const hr = await t.db.one(`select r.id from mail_ai_runs r join mails m on m.id = r.mail_id where m.subject = 'Kündigungsfrist'`);
+  const byMax2 = (await t.api(max).post(`/mail/ai-runs/${hr.id}/decide`, { index: 0, approve: true })).json().runs[0];
+  assert.match(byMax2.actions[0].result.error, /nur der Eigentümer/);
+  assert.equal((await t.api(pl).post(`/mail/ai-runs/${hr.id}/decide`, { index: 0, approve: true })).json().runs[0].actions[0].status, 'approved');
   // Liste im Projekt: Leser sieht nur Läufe zu Mails, die er lesen darf
   assert.ok((await t.api(pl).get(`/projects/${web()}/mail-ai`)).json().runs.length >= 3);
 });
