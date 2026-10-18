@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import type { MailAccount, MailDraft, MailSummary, MailView, MailViewFilter, MailViewRights, ProjectRole, User } from '@projekttool/shared';
+import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailViewFilter, MailViewRights, ProjectRole, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -10,8 +10,9 @@ import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
+import { decideProposals } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
-import { queueAgentRun } from '../ai/agentEvents.js';
+import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { notify, notifyMany } from '../notify.js';
@@ -28,7 +29,7 @@ function mapAccount(r: any): MailAccount {
 function mapSummary(r: any): MailSummary {
   return {
     id: r.id, accountId: r.account_id, folder: r.folder, messageId: r.message_id, fromAddr: r.from_addr, fromName: r.from_name,
-    toJson: r.to_json ?? [], subject: r.subject, date: r.date, snippet: r.snippet, hasAttachments: r.has_attachments,
+    toJson: r.to_json ?? [], subject: r.subject, date: r.date, snippet: r.snippet, hasAttachments: r.has_attachments, outgoing: Boolean(r.outgoing),
     linkedTaskIds: (typeof r.linked_task_ids === 'string' ? JSON.parse(r.linked_task_ids) : r.linked_task_ids) ?? []
   };
 }
@@ -55,13 +56,13 @@ export async function mailRoutes(app: FastifyInstance) {
 
   async function loadView(viewId: string) {
     return db.maybeOne(
-      `select v.*, a.name as account_name, a.address as account_address, a.type as account_type, a.owner_user_id from mail_views v join mail_accounts a on a.id = v.account_id where v.id = $1`,
+      `select v.*, a.name as account_name, a.address as account_address, a.type as account_type, a.owner_user_id, (select name from users where id = v.agent_user_id) as agent_name from mail_views v join mail_accounts a on a.id = v.account_id where v.id = $1`,
       [viewId]
     );
   }
 
   function mapView(v: any, rights: MailViewRights): MailView {
-    return { id: v.id, accountId: v.account_id, accountName: v.account_name, accountAddress: v.account_address, accountType: v.account_type, projectId: v.project_id, name: v.name, filter: v.filter ?? {}, myRights: rights };
+    return { id: v.id, accountId: v.account_id, accountName: v.account_name, accountAddress: v.account_address, accountType: v.account_type, projectId: v.project_id, name: v.name, filter: v.filter ?? {}, myRights: rights, aiProcess: Boolean(v.ai_process), agentUserId: v.agent_user_id ?? null, agentName: v.agent_name ?? null };
   }
 
   /** Darf der Benutzer diese Mail lesen? Über eine Ansicht mit Leserecht oder als Kopie in einer lesbaren Arbeitspaket. */
@@ -196,7 +197,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
     const rows = await db.query(
-      `select v.*, a.name as account_name, a.address as account_address, a.type as account_type, a.owner_user_id from mail_views v join mail_accounts a on a.id = v.account_id where v.project_id = $1 order by a.type desc, v.name`,
+      `select v.*, a.name as account_name, a.address as account_address, a.type as account_type, a.owner_user_id, (select name from users where id = v.agent_user_id) as agent_name from mail_views v join mail_accounts a on a.id = v.account_id where v.project_id = $1 order by a.type desc, v.name`,
       [req.params.id]
     );
     const views: MailView[] = [];
@@ -237,13 +238,14 @@ export async function mailRoutes(app: FastifyInstance) {
     return { view: mapView(full, await getViewRights(db, v.id, user, m)) };
   });
 
-  app.patch<{ Params: { vid: string }; Body: { name?: string; filter?: MailViewFilter } }>('/mail/views/:vid', async (req) => {
+  app.patch<{ Params: { vid: string }; Body: { name?: string; filter?: MailViewFilter; aiProcess?: boolean; agentUserId?: string | null } }>('/mail/views/:vid', async (req) => {
     const user = requireUser(req);
     const v = await loadView(req.params.vid);
     if (!v) throw notFound('Ansicht nicht gefunden');
     const a = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [v.account_id]);
     if (!(await canManageAccount(user, a))) throw forbidden();
     const b = req.body ?? {};
+    if ('aiProcess' in b || 'agentUserId' in b) await setViewAi(user, v, a, b);
     await db.query(`update mail_views set name = coalesce($2, name), filter = coalesce($3::jsonb, filter) where id = $1`, [v.id, b.name ?? null, b.filter ? JSON.stringify(normalizeFilter(b.filter)) : null]);
     if (b.filter) {
       // Filter geändert: bestehende Treffer neu bewerten, Cursor zurücksetzen und neu laden.
@@ -255,6 +257,108 @@ export async function mailRoutes(app: FastifyInstance) {
     await audit(db, { orgId: user.orgId, projectId: v.project_id, userId: user.id, action: 'mail_view.update', objectType: 'mail_view', objectId: v.id, details: b });
     const full = await loadView(v.id);
     return { view: mapView(full, await getViewRights(db, v.id, user, await getMembership(db, v.project_id, user.id))) };
+  });
+
+  /**
+   * Mail-KI an einer Ansicht: einschalten darf, wer sie inhaltlich verantwortet (persönliches Konto: Eigentümer;
+   * Projekt-/Organisationskonto: PL des Projekts, nicht der Org-Admin allein). Die Projekt-KI handelt dann im Auftrag
+   * dieser Person; der Agent muss Mitglied des Projekts sein.
+   */
+  async function setViewAi(user: User, v: any, a: AccountRow, b: { aiProcess?: boolean; agentUserId?: string | null }) {
+    const m = await getMembership(db, v.project_id, user.id);
+    const owner = a.type === 'personal' ? a.owner_user_id === user.id && Boolean(m) : m?.role === 'pl';
+    if (!owner) throw forbidden(a.type === 'personal' ? 'Mail-KI am persönlichen Konto schaltet nur der Eigentümer (als Projektmitglied)' : 'Mail-KI an Projekt- und Organisationskonten schaltet die PL des Projekts');
+    if (b.aiProcess && !(await aiConfigForProject(db, v.project_id))) throw badRequest('KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)');
+    if (b.agentUserId && !(await db.maybeOne(`select 1 from project_members pm join users u on u.id = pm.user_id where pm.project_id = $1 and pm.user_id = $2 and u.kind = 'agent' and u.active`, [v.project_id, b.agentUserId]))) throw badRequest('Agent ist kein aktives Mitglied des Projekts');
+    if ('aiProcess' in b) await db.query(`update mail_views set ai_process = $2, ai_process_by = case when $2 then $3::uuid else null end where id = $1`, [v.id, Boolean(b.aiProcess), user.id]);
+    if ('agentUserId' in b) await db.query(`update mail_views set agent_user_id = $2 where id = $1`, [v.id, b.agentUserId || null]);
+    await audit(db, { orgId: user.orgId, projectId: v.project_id, userId: user.id, action: 'mail_view.ai', objectType: 'mail_view', objectId: v.id, details: { aiProcess: b.aiProcess, agentUserId: b.agentUserId } });
+  }
+
+  // Ordner „KI Bearbeiten“ einrichten: Ordner im Konto, Ansicht darauf, Projekt-KI bearbeitet direkt im Auftrag der einrichtenden Person
+  app.post<{ Params: { id: string }; Body: { accountId: string } }>('/projects/:id/mail/ai-folder', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.body?.accountId, user.orgId]);
+    if (!a) throw notFound('Konto nicht gefunden');
+    if (a.type === 'personal' ? a.owner_user_id !== user.id : !(a.type === 'project' && a.project_id === req.params.id && m.role === 'pl')) throw forbidden('Einrichten darf der Eigentümer des persönlichen Kontos oder die PL für das Projektkonto');
+    if (!(await aiConfigForProject(db, req.params.id))) throw badRequest('KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)');
+    const p = app.mail.providerFor(a);
+    const list = await p.listFolders(a);
+    const folder = list.find((f) => f.name.toLowerCase() === 'ki bearbeiten')?.path ?? (await p.createFolder(a, 'KI Bearbeiten')).path;
+    const existing = await db.maybeOne(`select id from mail_views where project_id = $1 and account_id = $2 and filter->'folders' = $3::jsonb`, [req.params.id, a.id, JSON.stringify([folder])]);
+    const vid = existing?.id ?? (await db.one(`insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,'KI Bearbeiten',$3,$4) returning id`, [a.id, req.params.id, JSON.stringify(normalizeFilter({ folders: [folder] })), user.id])).id;
+    if (!existing) await db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,$3,true,true)`, [vid, user.id, a.type === 'project']);
+    await db.query(`update mail_views set ai_process = true, ai_process_by = $2 where id = $1`, [vid, user.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'mail_view.ai_folder', objectType: 'mail_view', objectId: vid, details: { account: a.address, folder } });
+    await app.mail.syncAccount(a.id);
+    return { view: mapView(await loadView(vid), await getViewRights(db, vid, user, m)), folder };
+  });
+
+  // „KI bearbeiten“ an einer Mail: in den KI-Ordner des Kontos legen und sofort bearbeiten (im eigenen Auftrag)
+  app.post<{ Params: { mid: string }; Body: { projectId: string } }>('/mail/mails/:mid/ai-process', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
+    if (mail.outgoing) throw badRequest('Gesendete Mails bearbeitet die KI nicht');
+    const m = await requireProject(db, user, req.body?.projectId, 'member');
+    const v = await db.maybeOne(`select * from mail_views where project_id = $1 and account_id = $2 and ai_process order by created_at limit 1`, [m.projectId, mail.account_id]);
+    if (!v) throw badRequest('Für dieses Konto gibt es im Projekt keinen Ordner „KI Bearbeiten“ (Einstellungen › Mail)');
+    const rights = await getViewRights(db, v.id, user, m);
+    if (!rights.canCreateTask || !(rights.canDraft || rights.canSend)) throw forbidden('Erfordert an der KI-Ansicht die Rechte „Arbeitspaket erzeugen“ und Entwurf');
+    if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
+    const target = (v.filter?.folders ?? [])[0];
+    if (target && String(mail.folder).toLowerCase() !== String(target).toLowerCase()) {
+      const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [mail.account_id]);
+      const moved = await app.mail.providerFor(account).move(account, { folder: mail.folder, uid: mail.uid }, target);
+      await db.query(`update mails set folder = $2, uid = coalesce($3, uid) where id = $1`, [mail.id, target, moved.uid]);
+    }
+    await db.query(`insert into mail_view_matches (mail_id, view_id) values ($1,$2) on conflict do nothing`, [mail.id, v.id]);
+    const run = await db.maybeOne(`insert into mail_ai_runs (org_id, project_id, view_id, mail_id, mode, actor_user_id) values ($1,$2,$3,$4,'process',$5) on conflict do nothing returning id`, [user.orgId, m.projectId, v.id, mail.id, user.id]);
+    if (!run) throw badRequest('Diese Mail hat die KI im Projekt schon bearbeitet');
+    await audit(db, { orgId: user.orgId, projectId: m.projectId, userId: user.id, action: 'mail.ai_request', objectType: 'mail', objectId: mail.id, details: { runId: run.id } });
+    queueMailAi(run.id);
+    return { runId: run.id };
+  });
+
+  /** Läufe der Mail-KI für Ausgabe: nur in Projekten, in denen man Mitglied ist, und zu Mails, die man lesen darf. */
+  async function mapAiRuns(user: User, rows: any[]): Promise<MailAiRun[]> {
+    const out: MailAiRun[] = [];
+    const readable = new Map<string, boolean>();
+    for (const r of rows) {
+      if (!(await getMembership(db, r.project_id, user.id))) continue;
+      if (!readable.has(r.mail_id)) readable.set(r.mail_id, (await mailReadable(user, r.mail_id)).ok);
+      if (!readable.get(r.mail_id)) continue;
+      out.push({ id: r.id, mode: r.mode, status: r.status, summary: r.summary, error: r.error, agentName: r.agent_name ?? null, actorName: r.actor_name ?? null, createdAt: r.created_at, actions: r.actions ?? [],
+        ...(r.subject !== undefined ? { mail: { id: r.mail_id, subject: r.subject, fromAddr: r.from_addr, fromName: r.from_name, date: r.date } } : {}) });
+    }
+    return out;
+  }
+  const AI_RUN_SELECT = `select r.*, ua.name as agent_name, uc.name as actor_name from mail_ai_runs r left join users ua on ua.id = r.agent_user_id left join users uc on uc.id = r.actor_user_id`;
+  app.get<{ Params: { mid: string } }>('/mail/mails/:mid/ai', async (req) => {
+    const user = requireUser(req);
+    const rows = await db.query(`${AI_RUN_SELECT} where r.mail_id = $1 order by r.created_at desc`, [req.params.mid]);
+    return { runs: await mapAiRuns(user, rows.rows) };
+  });
+  app.get<{ Params: { id: string } }>('/projects/:id/mail-ai', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id);
+    const rows = await db.query(`select r.*, ua.name as agent_name, uc.name as actor_name, m.subject, m.from_addr, m.from_name, m.date from mail_ai_runs r join mails m on m.id = r.mail_id left join users ua on ua.id = r.agent_user_id left join users uc on uc.id = r.actor_user_id
+      where r.project_id = $1 order by (r.mode = 'triage' and exists (select 1 from jsonb_array_elements(r.actions) x where x->>'status' = 'pending')) desc, r.created_at desc limit 60`, [req.params.id]);
+    return { runs: await mapAiRuns(user, rows.rows) };
+  });
+  app.post<{ Params: { id: string }; Body: { index: number | 'all'; approve: boolean } }>('/mail/ai-runs/:id/decide', async (req) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select * from mail_ai_runs where id = $1 and mode = 'triage'`, [req.params.id]);
+    if (!r) throw notFound('Vorschläge nicht gefunden');
+    await requireProject(db, user, r.project_id, 'member');
+    if (!(await mailReadable(user, r.mail_id)).ok) throw forbidden('Kein Leserecht an dieser Mail');
+    const index = req.body?.index === 'all' ? 'all' : Number(req.body?.index);
+    if (index !== 'all' && !Number.isInteger(index)) throw badRequest('index: Nummer oder all');
+    await decideProposals(db, app.mail, r.id, user, index, Boolean(req.body?.approve));
+    return { runs: await mapAiRuns(user, (await db.query(`${AI_RUN_SELECT} where r.id = $1`, [r.id])).rows) };
   });
 
   app.delete<{ Params: { vid: string } }>('/mail/views/:vid', async (req) => {

@@ -16,6 +16,7 @@ import { useProject, type MemberRow } from '../ProjectPage';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
+import { AiFolderDialog } from './MailAi';
 import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
@@ -267,18 +268,32 @@ function MailViewsCard() {
   const [newView, setNewView] = useState(false);
   const [rightsFor, setRightsFor] = useState<ViewRow | null>(null);
   const [filterFor, setFilterFor] = useState<ViewRow | null>(null);
+  const [aiFolder, setAiFolder] = useState(false);
+  const { busy, error, run } = useAsync();
+  const agents = detail.members.filter((m) => m.kind === 'agent');
+  const setAi = (v: ViewRow, body: { aiProcess?: boolean; agentUserId?: string | null }) => run(async () => { await api.patch(`/mail/views/${v.id}`, body); await views.reload(); });
   const f = (v: ViewRow) => { const x = v.filter; return [x.folders?.length && `Ordner ${x.folders.join(', ')}`, x.from?.length && `Von ${x.from.join(', ')}`, x.to?.length && `An ${x.to.join(', ')}`, x.subject?.length && `Betreff ${x.subject.join(', ')}`, x.keyword?.length && `Stichwort ${x.keyword.join(', ')}`, x.since && `ab ${x.since}`].filter(Boolean).join(' · ') || 'alle Mails des Kontos'; };
   return (
     <div>
       <p className="muted small">Eine Ansicht ist ein Filter auf ein Konto. Nur Treffer werden gespeichert. Rechte (Lesen, Entwurf, Senden, Arbeitspaket erzeugen) hängen an der Ansicht: je Person, Rolle oder Gruppe.</p>
       {views.data && views.data.views.length === 0 && <div className="empty">Noch keine Ansicht. Ohne Ansicht werden keine Mails geladen.</div>}
-      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th /></tr></thead><tbody>
+      {error && <div className="error small">{error}</div>}
+      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th title="Projekt-KI bearbeitet neue Mails direkt; ein Agent betreut die Ansicht und schlägt vor">KI</th><th /></tr></thead><tbody>
         {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
+          <td className="small">{(() => {
+            const may = v.canManage && (v.accountType === 'personal' || isPl);
+            if (!may) return <span className="muted">{v.aiProcess ? 'Projekt-KI bearbeitet' : v.agentName ? `${v.agentName} schlägt vor` : '–'}</span>;
+            return <>
+              <label className="check" title={detail.project.aiProfileId ? 'Jede neue Mail dieser Ansicht bearbeitet die Projekt-KI sofort in deinem Auftrag' : 'Projekt-KI ist aus'}><input type="checkbox" checked={Boolean(v.aiProcess)} disabled={busy || (!v.aiProcess && !detail.project.aiProfileId)} onChange={(e) => void setAi(v, { aiProcess: e.target.checked })} /> Projekt-KI bearbeitet direkt</label>
+              {!v.aiProcess && <select value={v.agentUserId ?? ''} disabled={busy} style={{ width: 'auto', marginTop: 4 }} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">– kein Agent schlägt vor –</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name} schlägt vor</option>)}</select>}
+            </>;
+          })()}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
       {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button>{oauth.data?.providers.map((p) => <button key={p.key} className="btn sm" style={{ marginLeft: 6 }} onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}</>}</p>}
       {oauthStart && <OAuthStartDialog provider={oauthStart} projects={[detail.project]} fixedProject={detail.project} onClose={() => setOauthStart(null)} />}
-      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><button className="btn sm" disabled={!detail.project.aiProfileId} title={detail.project.aiProfileId ? 'Ordner im Konto, dessen Mails die Projekt-KI direkt bearbeitet' : 'Erst unter Projekt eine Projekt-KI zuweisen'} onClick={() => setAiFolder(true)}>Ordner „KI Bearbeiten“ einrichten</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      {aiFolder && <AiFolderDialog onClose={() => setAiFolder(false)} onDone={() => { setAiFolder(false); void views.reload(); }} />}
       {account && <AccountForm projects={[detail.project]} fixedProject={detail.project} onClose={() => setAccount(false)} onSaved={async () => { setAccount(false); await reload(); await views.reload(); }} />}
       {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
       {rightsFor && <RightsEditor view={rightsFor} onClose={() => setRightsFor(null)} onChanged={() => void views.reload()} />}

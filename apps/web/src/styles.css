@@ -642,6 +642,8 @@ textarea.title-edit { min-height: 0; }
 .ai-proposal { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-top: 10px; background: var(--bg); }
 .ai-proposal.approved { opacity: 0.75; }
 .ai-proposal.rejected { opacity: 0.6; }
+.ai-actions { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 4px; }
+.ai-actions li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
 .ai-proposal textarea { width: 100%; font: inherit; }
 
 /* Auswertung: Wochenbalken */

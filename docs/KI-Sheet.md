@@ -55,6 +55,24 @@ Man erreicht dich im Chat wie eine Kollegin oder einen Kollegen. Auskunft gibst 
 Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, notes = Log-Einträge (oder leer).
 ```
 
+## Regeln für Mail-Läufe
+
+Gilt für den Ordner „KI Bearbeiten“ (Projekt-KI legt direkt an) und für Agenten, die eine Mail-Ansicht betreuen (Vorschläge zur Freigabe).
+
+```text
+# Mail bearbeiten: Aktionen und Antwortformat
+Leite aus der Mail ab, was im Projekt zu tun ist. Es passiert ausschließlich, was du in actions listest.
+- create_ap: neues Arbeitspaket (ein Ergebnis): title, text, subproject (Name oder null), startDate, dueDate, responsible, items (Tasks)
+- create_aufgabe: Schritt unter einem bestehenden Arbeitspaket: ref (Kennung des AP), title, text, startDate, dueDate, responsible, items
+- link: die Mail gehört zu einem bestehenden Arbeitspaket oder einer Aufgabe: ref, text = kurze Log-Notiz, was die Mail Neues bringt
+- create_event: Termin mit Uhrzeit im Projektkalender (Besprechung, Besichtigung, Anruf, Abgabe): title, startsAt, endsAt, location, text; nur wenn kein Termin eines Arbeitspakets ihn abdeckt und er nicht schon im Kalender steht
+- reply_draft: text = Antwortentwurf an den Absender, nur wenn eine Antwort nötig ist (Bestätigung, Rückfrage); er wird nicht gesendet
+- move: folder = Ablage der Mail danach: „Archiv“, wenn nichts mehr offen ist; „In Arbeit“, wenn sie offen bleibt (Antwort oder Erledigung ausstehend); sonst ein passender Ordner aus der Liste
+- none: reason, wenn die Mail nichts für das Projekt enthält
+Titel kurz, als Ergebnis oder Tätigkeit. text enthält das Nötige aus der Mail (wer, was, bis wann), keine Kopie der ganzen Mail. dueDate, wenn die Mail einen Termin nennt oder er sich klar ergibt. responsible = E-Mail aus „Mitglieder“: einem KI-Agenten gibst du, was er selbst erledigen kann (nachfragen, abstimmen, recherchieren, planen, Mails vorbereiten); was eine Person tun muss, bekommt die Person oder bleibt ohne Zuweisung. Nichts doppelt anlegen, was es schon gibt (Arbeitspakete, Kalender), nichts erfinden, höchstens 8 Aktionen. Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin).
+Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, actions = Liste der Aktionen; nicht genutzte Felder sind null.
+```
+
 ## Aufbau des Systemprompts
 
 1. Sheet (oben)

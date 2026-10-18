@@ -401,6 +401,25 @@ export interface MailView {
   name: string;
   filter: MailViewFilter;
   myRights: MailViewRights;
+  /** Projekt-KI bearbeitet neue Mails dieser Ansicht direkt (Ordner „KI Bearbeiten“) */
+  aiProcess?: boolean;
+  /** Agent, der die Ansicht betreut und Vorschläge macht */
+  agentUserId?: string | null;
+  agentName?: string | null;
+}
+
+/** Lauf der Mail-KI an einer Mail: Projekt-KI (ausgeführt) oder Agent (Vorschläge) */
+export interface MailAiRun {
+  id: string;
+  mode: 'process' | 'triage';
+  status: 'queued' | 'running' | 'ok' | 'error' | 'skipped';
+  summary: string | null;
+  error: string | null;
+  agentName: string | null;
+  actorName: string | null;
+  createdAt: string;
+  mail?: { id: string; subject: string; fromAddr: string; fromName: string | null; date: string };
+  actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string } }[];
 }
 
 export interface MailSummary {
@@ -416,6 +435,8 @@ export interface MailSummary {
   snippet: string;
   hasAttachments: boolean;
   linkedTaskIds: string[];
+  /** gesendet über das Tool oder aus dem Ordner „Gesendet“ */
+  outgoing?: boolean;
 }
 
 export interface MailFolder {
