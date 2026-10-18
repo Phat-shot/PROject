@@ -55,11 +55,35 @@ test('Agent-Persona: eine Zeile, nur Org-Admin, steht als Schreibstil im Prompt 
   const dm = (await t.api(max).post('/chat/dm', { userId: a.id })).json().channelId;
   await t.api(max).post(`/chat/channels/${dm}/messages`, { body: 'Moin Fred, wie läuft es?' });
   await flushAgentRuns();
-  assert.match(calls.at(-1).messages[0].content, /Man erreicht dich im Chat.*norddeutsch knapp/);
+  assert.match(calls.at(-1).messages[0].content, /Man erreicht dich im Chat[\s\S]*norddeutsch knapp/);
 
   // Persona leeren: Standardstil
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { persona: '  ' })).json().agent.persona, null);
   await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
   assert.match(calls.at(-1).messages[0].content, /Du schreibst sachlich, kurz und auf Deutsch\./);
   assert.doesNotMatch(calls.at(-1).messages[0].content, /norddeutsch/);
+});
+
+test('Denkmodus je Agent: überschreibt das Profil (an/aus), null = wie Profil', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const a = (await t.api(admin).get('/agents')).json().agents.find((x: any) => x.name === 'Fred');
+  assert.equal(a.thinkingMode, null);
+  assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'vielleicht' })).statusCode, 400);
+  // Profil: Denkmodus aus; Agent: an → ausdrücklich enable_thinking = true und mehr Ausgabe-Spielraum
+  assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'on' })).json().agent.thinkingMode, 'on');
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  assert.deepEqual(calls.at(-1).chat_template_kwargs, { enable_thinking: true });
+  assert.equal(calls.at(-1).max_tokens, 6500);
+  // Profil an (Modellstandard), Agent aus
+  const prof = (await t.api(admin).get('/ai/status')).json().defaultProfileId;
+  await t.api(admin).patch(`/ai/profiles/${prof}`, { thinkingOff: false });
+  await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'off' });
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  assert.deepEqual(calls.at(-1).chat_template_kwargs, { enable_thinking: false });
+  assert.equal(calls.at(-1).max_tokens, 2500);
+  // wie Profil: Profil ohne Schalter → kein Feld, Modellstandard
+  await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: null });
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  assert.equal(calls.at(-1).chat_template_kwargs, undefined);
 });

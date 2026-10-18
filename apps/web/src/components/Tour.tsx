@@ -34,6 +34,7 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
     { title: 'Benutzereinstellungen', text: 'Name, Theme (hell/dunkel), Sprache und Passwort.', target: '[data-tour="benutzer"]' },
     { title: 'Konfiguration', text: 'Mail-Konten anbinden: persönlich, je Projekt oder für die Organisation. Geteilt werden nie ganze Konten, sondern nur gefilterte Ansichten.', target: '[data-tour="mailkonten"]' },
     ...(isAdmin ? [{ title: 'Verwaltung', text: 'Benutzer einladen, Gruppen pflegen, KI-Agenten, PDF-Stil und Vorlagen des Mandanten, Audit-Export.', target: '[data-tour="verwaltung"]' }] : []),
+    { title: 'Hilfe', text: 'Kurzanleitung, Handbuch und das KI-Sheet der Agenten stehen unter „Hilfe“ unten links, immer passend zur installierten Version.', target: '[data-tour="hilfe"]' },
     { title: 'Fertig', text: 'Viel Erfolg. Das Tutorial lässt sich jederzeit unten links neu starten.' }
   ];
   const step = steps[Math.min(i, steps.length - 1)];

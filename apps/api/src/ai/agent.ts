@@ -12,6 +12,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
+import { AGENT_SHEET, TASK_RULES } from './sheet.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -118,7 +119,8 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const today = now.toISOString().slice(0, 10);
   const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [task.project_id]);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ein Arbeitspaket zugewiesen; du treibst es im Rahmen deiner Rechte voran wie eine zuständige Person: nachfragen, Stand festhalten, Tasks abhaken, Status setzen, Blockaden melden, an die Projektleitung eskalieren. Du erfindest keine Fakten, versprichst nichts im Namen anderer und änderst keine Termine. Wichtig: Es passiert ausschließlich, was du als Aktion in actions listest; die Notiz allein bewirkt nichts und darf nichts als erledigt bezeichnen, was nicht als Aktion dabei ist. Eine Mail braucht to, subject und text; ein Status braucht column; Task-Abhaken/Umformulieren braucht itemId; Doku: read_page liest eine Seite (pageId); lies eine Seite immer, bevor du sie änderst oder ihren Inhalt brauchst, und gib erst danach die ändernden Aktionen an. doc_create braucht title und text (Markdown), doc_update pageId und text (ersetzt den Inhalt), doc_append pageId und text (hängt an), doc_status pageId und status (draft → review → final; final sperrt), doc_move pageId und folder, folder_create folder, doc_send_pdf pageId, subject, text und to (oder to null = Verteiler des Ordners bei finaler Seite). Ein wait braucht kind und reason. Antworte ausschließlich mit JSON nach dem vorgegebenen Schema: note = kurze Protokollnotiz (ein bis zwei Sätze, was du veranlasst hast und warum), actions = Liste der Aktionen. Wenn du auf etwas wartest, setze immer eine Aktion wait: kind reply (Rückmeldung einer Person), date (Termin, dann until als Datum), task (Erledigung durch andere) oder info; checkAfterHours = wann du das Arbeitspaket wieder prüfst. Bei kind reply zusätzlich remindAfterHours (wann du nachfasst, z. B. 48) und escalateAfterHours (wann du an die Projektleitung eskalierst, z. B. 120). Wenn nichts zu tun ist und nichts erwartet wird, gib none mit kurzem reason. Jede Nachricht nach außen hat Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. ${styleText(agent.persona)}`;
+  // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
+  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und Mitglied des Projekts ${task.project_key} „${task.project_name}“. Dir ist ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} zugewiesen; du treibst es voran wie eine zuständige Person. Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. ${styleText(agent.persona)}`;
   const prompt = `Heute: ${today}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
@@ -145,7 +147,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let actions: AgentAction[] = [];
     // Leserunden: read_page liefert Seiteninhalte, danach entscheidet das Modell erneut (max. zwei Leserunden)
     for (let round = 0; round < 3; round++) {
-      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: 2500, schema: SCHEMA });
+      // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum
+      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
       j = parseJson(r.text);
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 8) : [];

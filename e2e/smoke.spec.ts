@@ -2,6 +2,8 @@ import { test, expect, type Page } from '@playwright/test';
 
 async function login(page: Page, email = 'pl@demo.local') {
   await page.goto('/');
+  // Die Anmeldeseite belegt im Demo-Modus die Felder nach /setup/status vor; erst danach ausfüllen
+  await page.waitForLoadState('networkidle');
   await page.getByLabel('E-Mail').fill(email);
   await page.getByLabel('Passwort').fill('demo1234');
   await page.getByRole('button', { name: 'Anmelden' }).click();

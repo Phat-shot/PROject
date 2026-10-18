@@ -5,6 +5,7 @@ import { visibleSubprojectSql } from '../rights.js';
 import { aiConfigForAgent, complete, orgAiSettings, parseJson } from './client.js';
 import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
+import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -72,7 +73,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     [agent.id, project ? project.id : msg.user_id]
   );
   const known = new Map<string, any>(tasks.rows.map((t: any) => [t.id, t]));
-  const system = `Du bist „${agent.name}“, ein KI-Agent im Projekttool. Man erreicht dich im Chat wie eine Kollegin oder einen Kollegen. ${styleText(agent.persona)} Antworten im Chat sind kurz. Auskunft gibst du nur aus dem Kontext unten (deine Arbeitspakete, ihr Stand, ihr Log); du erfindest nichts und versprichst nichts im Namen anderer. Neue Arbeit übernimmst du nicht selbst: Zuweisungen macht die Projektleitung über ein Arbeitspaket. Enthält die Nachricht eine Information zu einem deiner Arbeitspakete (z. B. Freigabe erteilt, Termin bestätigt, Antwort eines Externen), halte sie mit notes als Log-Eintrag fest (taskId exakt aus der Liste); du prüfst das Arbeitspaket danach ohnehin neu. Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, notes = Log-Einträge (oder leer).`;
+  const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Deine offenen Arbeitspakete${project ? ` in ${project.key}` : ''}:
@@ -82,7 +83,7 @@ ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.uid ===
 
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
-    const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: 1200, schema: SCHEMA });
+    const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
     const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[] }>(r.text);
     const reply = String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.';
     const notes = (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);

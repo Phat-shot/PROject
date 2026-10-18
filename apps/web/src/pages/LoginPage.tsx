@@ -24,7 +24,7 @@ export function LoginPage() {
   const [forgot, setForgot] = useState(false);
   const [sent, setSent] = useState<string | null>(null);
   useEffect(() => {
-    api.get<{ demo?: boolean; oidc?: { label: string } | null }>('/setup/status').then((r) => { if (r.demo) { setDemo(true); setEmail('pl@demo.local'); setPassword('demo1234'); } setOidc(r.oidc ?? null); }).catch(() => undefined);
+    api.get<{ demo?: boolean; oidc?: { label: string } | null }>('/setup/status').then((r) => { if (r.demo) { setDemo(true); /* nur vorbelegen, solange noch nichts eingegeben ist */ setEmail((e) => e || 'pl@demo.local'); setPassword((p) => p || 'demo1234'); } setOidc(r.oidc ?? null); }).catch(() => undefined);
     const err = new URLSearchParams(window.location.search).get('oauthError');
     if (err) setError(err);
   }, []);

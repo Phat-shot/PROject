@@ -1,0 +1,42 @@
+# Kurzanleitung
+
+PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell. Diese Seite reicht für den Einstieg; Details stehen im Handbuch.
+
+## Begriffe
+
+- **Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task**
+- **Arbeitspaket (AP):** ein Ergebnis mit Termin und Zuständigkeit, Kennung wie `WEB-12`.
+- **Aufgabe:** zuweisbarer Schritt eines AP mit eigenem Status, Termin und Log.
+- **Task:** Punkt der Checkliste eines AP oder einer Aufgabe.
+- **Zuständigkeit** wird vererbt: Aufgabe → AP → Teilprojekt → Projektleitung (PL). „Geerbt“ steht dabei.
+- **Rollen im Projekt:** PL, Mitglied, Leser; dazu Einzelrechte wie „Projektplan ändern“ oder „Final setzen“.
+
+## Navigation
+
+- **PROject** (oben links) öffnet das **Dashboard**: Meine Arbeit, Projekte, Alle Arbeitspakete. Oben nach einem Projekt filtern, dann zeigt es das Dashboard dieses Projekts.
+- Darunter bis zu **fünf angeheftete Projekte** (☆ anheften, ★ lösen); **Alle Projekte** klappt die übrigen aus.
+- Ein Klick auf ein Projekt öffnet die **Arbeitspakete**; darunter Postfach, Doku, Risiken, KI und für die PL die Einstellungen.
+- Global: **Postfach**, **Kalender**, **Workflows**, **Chat**.
+- Oben in jeder Seite: Suche (auch nach Kennung wie `WEB-12`) und die Glocke mit Benachrichtigungen.
+
+## Täglich arbeiten
+
+1. **Dashboard › Meine Arbeit** zeigt alles, was dir zugewiesen oder vererbt ist, und was auf dich wartet.
+2. **Board:** Karte ziehen = Status ändern. `n` neues AP, `f` filtern, `q` nur meine, `x` Filter löschen.
+3. **Karte öffnen:** Felder direkt ändern, Aufgaben und Tasks anlegen, Log schreiben (`@Name` erwähnt jemanden).
+4. **Blockiert?** „Als blockiert melden“ mit Grund; die Teilprojekt-Verantwortung wird informiert.
+5. **Stand festhalten:** jede Entscheidung und Rückmeldung ins Log des AP. Das Log ist die gemeinsame Quelle.
+
+## Kommunikation
+
+- **Intern: Chat.** Knopf unten rechts (mobil: Chat in der Leiste). Projektkanal je Projekt mit Threads, Direktnachrichten mit Personen und KI-Agenten, Suche oben.
+- **Extern: Mail** über das Projektkonto. „Stand nachfragen“ im AP schreibt eine vorbelegte Mail; die Antwort landet über die Antwortadresse automatisch im AP.
+- **Doku:** Protokolle, Konzepte, Berichte als Seiten. Status Entwurf → In Prüfung → Final; finale Seiten lassen sich als PDF an den Verteiler des Ordners senden.
+
+## Mit KI-Agenten arbeiten
+
+- Ein **Agent** ist ein Benutzer ohne Login. Der Org-Admin legt ihn an (mit KI-Profil und Persona), die PL nimmt ihn ins Projekt auf und **weist ihm Arbeitspakete oder Aufgaben zu**.
+- Der Agent arbeitet sofort los: Log schreiben, nachfragen, Tasks abhaken, Status setzen, warten und nachfassen, an die PL eskalieren.
+- **Gute Zuweisung:** klares Ziel in der Beschreibung, Termin, Tasks als Checkliste, externe Ansprechpartner als Kontakt.
+- **Informieren:** Kommentar ins Log oder Chat an den Agenten. Im Projektkanal mit `@Name`.
+- **Kontrolle:** Projekt › KI zeigt jeden Lauf mit Begründung und Aktionen; die PL kann den Agenten je AP pausieren. Mails ohne Senderecht landen als Entwurf in den Freigaben.
