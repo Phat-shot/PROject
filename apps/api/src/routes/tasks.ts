@@ -6,14 +6,9 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 
-/** Arbeitspakete, Tasks und Teilprojekte bekommen einen KI-Agenten nur von der PL. */
-async function assertAgentAssignment(db: any, m: { role: string }, userId: string | null | undefined) {
-  if (!userId) return;
-  const u = await db.maybeOne(`select kind from users where id = $1`, [userId]);
-  if (u?.kind === 'agent' && m.role !== 'pl') throw forbidden('KI-Agenten weist nur die Projektleitung zu');
-}
 import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
-import { createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, moveTask, newMailCode, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { mailAccess } from '../mail/access.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { notify, notifyMany } from '../notify.js';
@@ -40,6 +35,8 @@ interface TaskBody {
   estimateMinutes?: number | null;
   blocked?: boolean;
   blockedReason?: string | null;
+  /** Aufgabe zu diesem Arbeitspaket anlegen (nur beim Anlegen) */
+  parentId?: string | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -100,7 +97,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
     if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
-    await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1`, [existing.id]);
+    await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1 or (parent_id = $1 and archived_at is null)`, [existing.id]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.archive', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
     return { ok: true };
   });
@@ -109,14 +106,15 @@ export async function taskRoutes(app: FastifyInstance) {
     const existing = await db.maybeOne(`select * from tasks where id = $1`, [req.params.id]);
     if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
-    await db.query(`update tasks set archived_at = null, updated_at = now() where id = $1`, [existing.id]);
+    await db.query(`update tasks set archived_at = null, updated_at = now() where id = $1 or (parent_id = $1 and deleted_at is null)`, [existing.id]);
     return { task: await loadTask(db, existing.id) };
   });
   // Alle erledigten Arbeitspakete einer Spalte archivieren
   app.post<{ Params: { id: string; cid: string } }>('/projects/:id/columns/:cid/archive-done', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'member');
-    const r = await db.query(`update tasks set archived_at = now() where project_id = $1 and column_id = $2 and archived_at is null returning id`, [req.params.id, req.params.cid]);
+    const r = await db.query(`update tasks set archived_at = now() where project_id = $1 and column_id = $2 and archived_at is null and parent_id is null returning id`, [req.params.id, req.params.cid]);
+    if (r.rows.length) await db.query(`update tasks set archived_at = now() where parent_id = any($1::uuid[]) and archived_at is null`, [r.rows.map((x: any) => x.id)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.archive_column', objectType: 'board_column', objectId: req.params.cid, details: { count: r.rows.length } });
     return { archived: r.rows.length };
   });
@@ -209,7 +207,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
-    await assertAgentAssignment(db, m, b.responsibleUserId);
+    await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     let columnId = b.columnId;
     if (!columnId) {
       const c = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [req.params.id]);
@@ -223,12 +221,21 @@ export async function taskRoutes(app: FastifyInstance) {
       const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]);
       if (!s) throw badRequest('Teilprojekt gehört nicht zum Projekt');
     }
-    const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [columnId]);
+    // Aufgabe: hängt an einem Arbeitspaket desselben Projekts (eine Ebene), Teilprojekt folgt dem Arbeitspaket
+    let subprojectId = b.subprojectId ?? null;
+    if (b.parentId) {
+      const parent = await db.maybeOne(`select id, parent_id, subproject_id from tasks where id = $1 and project_id = $2 and deleted_at is null`, [b.parentId, req.params.id]);
+      if (!parent) throw badRequest('Arbeitspaket gehört nicht zum Projekt');
+      if (parent.parent_id) throw badRequest('Aufgaben haben keine eigenen Aufgaben');
+      if (!(await canSeeSubproject(db, user.id, parent.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+      subprojectId = parent.subproject_id;
+    }
+    const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1 and parent_id is not distinct from $2`, [columnId, b.parentId ?? null]);
     const r = await db.one(
-      `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
-      [req.params.id, b.subprojectId ?? null, columnId, b.title.trim(), b.description ?? null, b.priority ?? 'normal', b.startDate ?? null, b.dueDate ?? null,
-        b.responsibleUserId ?? null, b.responsibleEmail?.trim() || null, pos.p, newMailCode(), user.id]
+      `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, parent_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
+      [req.params.id, subprojectId, columnId, b.title.trim(), b.description ?? null, b.priority ?? 'normal', b.startDate ?? null, b.dueDate ?? null,
+        b.responsibleUserId ?? null, b.responsibleEmail?.trim() || null, pos.p, newMailCode(), user.id, b.parentId ?? null]
     );
     if (b.responsibleEmail) await rememberContact(req.params.id, b.responsibleEmail);
     if (b.predecessorIds) await setPredecessors(r.id, req.params.id, b.predecessorIds);
@@ -236,7 +243,8 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.labelIds) await setLabels(r.id, req.params.id, b.labelIds);
     if (b.recurrence) await db.query(`update tasks set recurrence = $2 where id = $1`, [r.id, JSON.stringify(b.recurrence)]);
     if (b.estimateMinutes) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [r.id, Math.round(b.estimateMinutes)]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.create', objectType: 'task', objectId: r.id, details: { title: b.title } });
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.create', objectType: 'task', objectId: r.id, details: { title: b.title, ...(b.parentId ? { parentId: b.parentId } : {}) } });
+    if (b.parentId) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [b.parentId, user.id, `Aufgabe angelegt: ${b.title.trim()}`]);
     if (b.responsibleUserId) await notify(db, { userId: b.responsibleUserId, projectId: req.params.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}/board?task=${r.id}`, dedupeKey: null });
     return { task: await loadTask(db, r.id) };
   });
@@ -257,8 +265,10 @@ export async function taskRoutes(app: FastifyInstance) {
     );
     const attachments = await db.query(`select * from attachments where task_id = $1 order by created_at`, [task.id]);
     const meetings = await db.query(`select m.id, m.title, m.starts_at, m.page_id from meeting_tasks mt join meetings m on m.id = mt.meeting_id where mt.task_id = $1 order by m.starts_at desc`, [task.id]);
+    const subtasks = task.parentId ? [] : await loadTasks(db, `t.parent_id = $1 and t.deleted_at is null`, [task.id]);
     return {
       task,
+      subtasks,
       meetings: meetings.rows.map((m: any) => ({ id: m.id, title: m.title, startsAt: new Date(m.starts_at).toISOString(), pageId: m.page_id })),
       comments: comments.rows.map((c: any) => ({ id: c.id, taskId: c.task_id, userId: c.user_id, userName: c.user_name, body: c.body, source: c.source, mailId: c.mail_id, mentions: c.mentions ?? [], createdAt: c.created_at })),
       mails: mails.rows.map((m: any) => ({ id: m.id, subject: m.subject, fromAddr: m.from_addr, fromName: m.from_name, to: m.to_json ?? [], date: m.date, snippet: m.snippet, outgoing: Boolean(m.outgoing), copied: m.copied, checklistItemId: m.checklist_item_id ?? null, accountId: m.account_id })),
@@ -273,7 +283,10 @@ export async function taskRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, existing.project_id, 'member');
     if (!(await canSeeSubproject(db, user.id, existing.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     const b = req.body ?? {};
-    if ('responsibleUserId' in b) await assertAgentAssignment(db, m, b.responsibleUserId);
+    if (existing.parent_id) delete b.subprojectId;
+    if ('responsibleUserId' in b) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
+    // Mail als Beleg: nur eine Mail, die man selbst lesen darf
+    if (b.sourceMailId && !(await mailAccess(db, user, b.sourceMailId)).ok) throw forbidden('Kein Leserecht an dieser Mail');
     if (b.priority && !PRIORITIES.includes(b.priority)) throw badRequest('Ungültige Priorität');
     if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
     if (b.columnId) {
@@ -308,6 +321,7 @@ export async function taskRoutes(app: FastifyInstance) {
         'responsibleEmail' in b, b.responsibleEmail?.trim() || null, b.position ?? null]
     );
     if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
+    if ('subprojectId' in b) await db.query(`update tasks set subproject_id = $2 where parent_id = $1`, [req.params.id, b.subprojectId ?? null]);
     if (b.predecessorIds) await setPredecessors(req.params.id, existing.project_id, b.predecessorIds);
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
@@ -364,7 +378,7 @@ export async function taskRoutes(app: FastifyInstance) {
       return { ok: true };
     }
     if (!existing.deleted_at) {
-      await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), updated_at = now() where id = $1`, [existing.id]);
+      await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), updated_at = now() where id = $1 or (parent_id = $1 and deleted_at is null)`, [existing.id]);
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.trash', objectType: 'task', objectId: req.params.id, details: { title: existing.title } });
     }
     return { ok: true, trashed: true };
@@ -376,7 +390,8 @@ export async function taskRoutes(app: FastifyInstance) {
     if (!existing) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, existing.project_id, 'member');
     if (existing.deleted_at) {
-      await db.query(`update tasks set deleted_at = null, archived_at = case when deleted_was_archived then archived_at else null end, deleted_was_archived = false, updated_at = now() where id = $1`, [existing.id]);
+      // Aufgaben, die mit dem Arbeitspaket in den Papierkorb gingen, kommen mit zurück
+      await db.query(`update tasks set deleted_at = null, archived_at = case when deleted_was_archived then archived_at else null end, deleted_was_archived = false, updated_at = now() where id = $1 or (parent_id = $1 and deleted_at = $2)`, [existing.id, existing.deleted_at]);
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.restore', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
     }
     return { task: await loadTask(db, existing.id) };
@@ -387,7 +402,8 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
     const lead = await resolveProjectLead(db, req.params.id);
-    const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is not null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
+    // Aufgaben, deren Arbeitspaket selbst im Papierkorb liegt, kommen mit diesem zurück und stehen nicht einzeln da
+    const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is not null and (pt.id is null or pt.deleted_at is null) and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
     const pages = await db.query(`select id, title, status, deleted_at, folder_id from doc_pages where project_id = $1 and deleted_at is not null order by deleted_at desc`, [req.params.id]);
     return { tasks, pages: pages.rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, deletedAt: p.deleted_at, folderId: p.folder_id })), purgeAfterDays: 30 };
   });

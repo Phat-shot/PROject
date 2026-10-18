@@ -3,8 +3,9 @@ import type { MailAccount, MailDraft, MailSummary, MailView, MailViewFilter, Mai
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { ALL_RIGHTS, getMembership, getViewRights, requireProject } from '../rights.js';
-import { loadTask, newMailCode } from '../tasks/service.js';
+import { ALL_RIGHTS, canSeeSubproject, getMembership, getViewRights, requireProject } from '../rights.js';
+import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
+import { aiConfigForProject } from '../ai/client.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { mailAccess } from '../mail/access.js';
@@ -12,7 +13,7 @@ import { seal } from '../secrets.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
-import { notifyMany } from '../notify.js';
+import { notify, notifyMany } from '../notify.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -64,6 +65,17 @@ export async function mailRoutes(app: FastifyInstance) {
 
   /** Darf der Benutzer diese Mail lesen? Über eine Ansicht mit Leserecht oder als Kopie in einer lesbaren Arbeitspaket. */
   const mailReadable = (user: User, mailId: string) => mailAccess(db, user, mailId);
+
+  /**
+   * Wer im Projekt sieht den Mailinhalt erst durch diese Aktion? Mitglieder ohne Leserecht an der Mail (Personen, ohne
+   * den Handelnden). Aktionen, die Inhalt ins Projekt kopieren (Log-Zitat, Beschreibung, Kopie), fragen dann nach.
+   */
+  async function newlyExposed(projectId: string, mailId: string, actorId: string) {
+    const members = await db.query(`select m.user_id, m.role, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'person' and u.active and m.user_id <> $2 order by u.name`, [projectId, actorId]);
+    const out: { name: string; role: string }[] = [];
+    for (const m of members.rows) if (!(await mailAccess(db, { id: m.user_id } as User, mailId)).ok) out.push({ name: m.name, role: m.role });
+    return out;
+  }
 
   // Konten
   app.get('/mail/accounts', async (req) => {
@@ -475,44 +487,64 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   // W3: Mail → Arbeitspaket (vorbefüllt, ohne KI)
-  app.post<{ Params: { mid: string }; Body: { projectId: string; title?: string; subprojectId?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; copy?: boolean } }>('/mail/mails/:mid/create-task', async (req) => {
+  app.post<{ Params: { mid: string }; Body: { projectId: string; title?: string; subprojectId?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; copy?: boolean; confirmed?: boolean } }>('/mail/mails/:mid/create-task', async (req) => {
     const user = requireUser(req);
     const mail = await db.maybeOne(`select m.*, a.type as account_type, a.owner_user_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [req.params.mid]);
     if (!mail) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, mail.id);
     if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
     const b = req.body ?? ({} as any);
-    await requireProject(db, user, b.projectId, 'member');
+    const pm = await requireProject(db, user, b.projectId, 'member');
+    await assertResponsible(db, b.projectId, pm, b.responsibleUserId);
+    if (b.subprojectId) {
+      const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, b.projectId]);
+      if (!s) throw badRequest('Teilprojekt gehört nicht zum Projekt');
+      if (!(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    }
+    // Inhalt aus persönlichen Konten übernimmt nur der Eigentümer; sonst nur Absender, Datum und Betreff
+    const ownContent = !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
+    const copy = Boolean(b.copy) && ownContent;
+    if (ownContent && !b.confirmed) {
+      const willSee = await newlyExposed(b.projectId, mail.id, user.id);
+      if (willSee.length) return { needsConfirmation: true, willSee };
+    }
     const col = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [b.projectId]);
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [col.id]);
-    const desc = `Aus Mail von ${mail.from_name ?? mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')}):\n\n${(mail.text_body ?? mail.snippet ?? '').slice(0, 4000)}`;
+    const desc = `Aus Mail von ${mail.from_name ?? mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')}):\n\n${ownContent ? (mail.text_body ?? mail.snippet ?? '').slice(0, 4000) : `Betreff: ${mail.subject ?? '–'} (Inhalt aus einem persönlichen Konto, nur für den Kontoinhaber sichtbar)`}`;
     const t = await db.one(
       `insert into tasks (project_id, subproject_id, column_id, title, description, due_date, responsible_user_id, responsible_email, position, mail_code, created_by)
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
       [b.projectId, b.subprojectId ?? null, col.id, (b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200), desc, b.dueDate ?? null, b.responsibleUserId ?? null, b.responsibleEmail ?? null, pos.p, newMailCode(), user.id]
     );
-    const copy = Boolean(b.copy) && !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4)`, [mail.id, t.id, copy, user.id]);
+    if (b.responsibleEmail) await db.query(`insert into project_contacts (project_id, email) values ($1, lower($2)) on conflict do nothing`, [b.projectId, String(b.responsibleEmail).trim()]);
     queueAgentRun(t.id, 'mail');
-    await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy } });
+    await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy, confirmed: Boolean(b.confirmed) } });
+    if (b.responsibleUserId && b.responsibleUserId !== user.id) await notify(db, { userId: b.responsibleUserId, projectId: b.projectId, type: 'task.assigned', title: `Dir zugewiesen: ${(b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200)}`, body: `von ${user.name} (aus Mail)`, link: `/projekte/${b.projectId}/board?task=${t.id}` });
     return { task: await loadTask(db, t.id) };
   });
 
   // Mail → Arbeitspaket-Log (1:1-Zitat als Log-Eintrag, ohne KI)
-  app.post<{ Params: { mid: string }; Body: { taskId: string; note?: string } }>('/mail/mails/:mid/to-task-log', async (req) => {
+  app.post<{ Params: { mid: string }; Body: { taskId: string; note?: string; confirmed?: boolean } }>('/mail/mails/:mid/to-task-log', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
     if (!mail) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, mail.id);
-    if (!access.ok) throw forbidden('Kein Leserecht an dieser Mail');
+    if (!access.ok || !access.rights.canCreateTask) throw forbidden('Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht');
+    if (mail.account_type === 'personal' && mail.owner_user_id !== user.id) throw forbidden('Aus persönlichen Konten übernimmt nur der Eigentümer');
     const task = await db.maybeOne(`select * from tasks where id = $1`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, task.project_id, 'member');
+    if (!(await canSeeSubproject(db, user.id, task.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    if (!req.body?.confirmed) {
+      const willSee = await newlyExposed(task.project_id, mail.id, user.id);
+      if (willSee.length) return { needsConfirmation: true, willSee };
+    }
     const body = (req.body?.note?.trim() ? req.body.note.trim() + '\n\n' : '') + mailToLogEntry(mail);
     const c = await db.one(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4) returning *`, [task.id, user.id, body, mail.id]);
     await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, task.id, user.id]);
     queueAgentRun(task.id, 'mail');
-    await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'mail.to_task_log', objectType: 'task', objectId: task.id, details: { mailId: mail.id, subject: mail.subject } });
+    await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'mail.to_task_log', objectType: 'task', objectId: task.id, details: { mailId: mail.id, subject: mail.subject, confirmed: Boolean(req.body?.confirmed) } });
     return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at } };
   });
 
@@ -581,17 +613,30 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!access.ok) throw forbidden();
     const canCopy = !(mail.account_type === 'personal' && mail.owner_user_id !== user.id);
     const pages = await db.query(`select l.page_id, l.kind, p.title, p.project_id from mail_page_links l join doc_pages p on p.id = l.page_id where l.mail_id = $1`, [mail.id]);
+    // Schreibende Aktionen brauchen eine Mitgliedschaft über Leser hinaus im Projekt der Ansicht (bzw. der Kopie)
+    const projectIds = access.viewIds.length
+      ? (await db.query(`select distinct project_id from mail_views where id = any($1::uuid[])`, [access.viewIds])).rows.map((r: any) => r.project_id as string)
+      : (await db.query(`select distinct t.project_id from mail_task_links l join tasks t on t.id = l.task_id where l.mail_id = $1 and l.copied`, [mail.id])).rows.map((r: any) => r.project_id as string);
+    let writer = false; let aiUse = false; let aiOn = false;
+    for (const pid of projectIds) {
+      const m = await getMembership(db, pid, user.id);
+      if (m && m.role !== 'reader') writer = true;
+      if (m && (m.role === 'pl' || m.canUseAi)) aiUse = true;
+      if (await aiConfigForProject(db, pid)) aiOn = true;
+    }
+    const noWrite = writer ? undefined : 'Leser dürfen keine Arbeitspakete ändern';
+    const aiReason = !aiOn ? 'KI im Projekt nicht aktiv (Einstellungen › Projekt › Projekt-KI)' : !access.rights.canAi ? 'Kein KI-Recht in dieser Ansicht' : !aiUse ? 'Kein KI-Recht im Projekt („KI nutzen“)' : undefined;
     return {
       rule: [
-        { key: 'link_task', target: 'task', label: 'Mit Arbeitspaket verknüpfen', enabled: access.rights.canCreateTask },
-        { key: 'copy_task', target: 'task', label: 'In Arbeitspaket kopieren', enabled: access.rights.canCreateTask && canCopy },
-        { key: 'task_log', target: 'task', label: 'Ins Arbeitspaket-Log übernehmen', enabled: true },
-        { key: 'task_adjust', target: 'task', label: 'Arbeitspaket anpassen (Mail als Beleg)', enabled: true },
-        { key: 'create_task', target: 'task', label: 'Arbeitspaket erstellen', enabled: access.rights.canCreateTask },
-        { key: 'to_page', target: 'doc', label: 'In Doku ablegen (eigene Seite)', enabled: canCopy },
-        { key: 'append_page', target: 'doc', label: 'An Seite anhängen (Protokoll, Report)', enabled: canCopy }
+        { key: 'link_task', target: 'task', label: 'Mit Arbeitspaket verknüpfen', enabled: writer && access.rights.canCreateTask },
+        { key: 'copy_task', target: 'task', label: 'In Arbeitspaket kopieren', enabled: writer && access.rights.canCreateTask && canCopy },
+        { key: 'task_log', target: 'task', label: 'Ins Arbeitspaket-Log übernehmen', enabled: writer && access.rights.canCreateTask && canCopy, reason: noWrite ?? (!canCopy ? 'Aus persönlichen Konten übernimmt nur der Eigentümer' : !access.rights.canCreateTask ? 'Erfordert das Recht „Arbeitspaket erzeugen“ an der Ansicht' : undefined) },
+        { key: 'task_adjust', target: 'task', label: 'Arbeitspaket anpassen (Mail als Beleg)', enabled: writer, reason: noWrite },
+        { key: 'create_task', target: 'task', label: 'Arbeitspaket erstellen', enabled: writer && access.rights.canCreateTask },
+        { key: 'to_page', target: 'doc', label: 'In Doku ablegen (eigene Seite)', enabled: writer && canCopy, reason: noWrite ?? (!canCopy ? 'Aus persönlichen Konten legt nur der Eigentümer ab' : undefined) },
+        { key: 'append_page', target: 'doc', label: 'An Seite anhängen (Protokoll, Report)', enabled: writer && canCopy, reason: noWrite ?? (!canCopy ? 'Aus persönlichen Konten legt nur der Eigentümer ab' : undefined) }
       ],
-      ai: AI_ACTIONS.map((a) => ({ ...a, enabled: false, reason: 'KI ist das letzte Modul; läuft später als Vorschlag in der Freigabe-Liste.' })),
+      ai: AI_ACTIONS.map((a) => ({ ...a, enabled: !aiReason, reason: aiReason })),
       pages: pages.rows.map((p: any) => ({ pageId: p.page_id, kind: p.kind, title: p.title, projectId: p.project_id }))
     };
   });

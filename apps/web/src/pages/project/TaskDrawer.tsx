@@ -19,13 +19,14 @@ interface TaskMail { id: string; subject: string; fromAddr: string; fromName: st
 
 interface TaskDetail {
   task: Task;
+  subtasks?: Task[];
   comments: TaskComment[];
   mails: TaskMail[];
   attachments: { id: string; filename: string; size: number }[];
   meetings?: { id: string; title: string; startsAt: string; pageId: string | null }[];
 }
 
-/** Arbeitspaket: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
+/** Arbeitspaket oder Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
   const { detail, users, tasks, reloadTasks, openTask } = useProject();
   const { timeTracking } = useAuth();
@@ -46,6 +47,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   useEffect(() => { void load(); }, [taskId]);
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
   const t = d.task;
+  const kind = t.parentId ? 'Aufgabe' : 'Arbeitspaket';
   const me = detail.project.myMembership;
   const canEdit = me.role !== 'reader' && !t.archivedAt && !t.deletedAt;
   const canPlan = me.role === 'pl' || me.canEditPlan;
@@ -57,7 +59,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
   const respAgent = users.find((u) => u.id === t.responsibleUserId && u.kind === 'agent');
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
-  const inheritedFrom = t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
+  const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
   return (
     <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
@@ -71,6 +73,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         {me.role === 'pl' && !t.deletedAt && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${t.title}“ in den Papierkorb legen? Dort bleibt es 30 Tage und lässt sich in den Projekteinstellungen wiederherstellen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
+      {t.parent && <p className="small mb" style={{ marginTop: 0 }}><span className="muted">Aufgabe im Arbeitspaket</span> <button className="btn sm link" onClick={() => openTask(t.parent!.id)}><span className="tkey">{detail.project.key}-{t.parent.number}</span> {t.parent.title}</button></p>}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
       {(t.blocked || t.escalationLevel > 0) && (
@@ -96,7 +99,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <label className="field"><span>Status</span>
           <select value={t.columnId} disabled={!canEdit} onChange={(e) => void patch({ columnId: e.target.value })}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
         <label className="field"><span>Teilprojekt</span>
-          <select value={t.subprojectId ?? ''} disabled={!canEdit} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
+          <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
         <label className="field"><span>Zuständig</span>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
@@ -124,13 +127,15 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
 
-      <button className="btn sm link mt" onClick={() => setMore(!more)}>{more ? '▾' : '▸'} Vorgänger, Wiederholung</button>
+      <button className="btn sm link mt" onClick={() => setMore(!more)}>{more ? '▾' : '▸'} {t.parentId ? 'Vorgänger' : 'Vorgänger, Wiederholung'}</button>
       {more && (
         <div className="form cols-2 mt">
           <PredecessorPicker task={t} all={tasks} projectKey={detail.project.key} canEdit={canEdit && canPlan} onChange={(ids) => patch({ predecessorIds: ids })} />
-          <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />
+          {!t.parentId && <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />}
         </div>
       )}
+
+      {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
       <h3 className="mt">Tasks {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
       <ul className="checklist">
@@ -154,12 +159,12 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         <input type="text" placeholder="Neuer Task … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
-      <h3 className="mt">Mails zum Arbeitspaket</h3>
+      <h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
       {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} />
       )}
       {canEdit && <div className="row mt">
-        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus Arbeitspaket schreiben</Link>
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?task=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
       </div>}
 
@@ -195,6 +200,57 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </Modal>
       )}
     </Drawer>
+  );
+}
+
+/**
+ * Aufgaben eines Arbeitspakets: eigene Zuständigkeit, Status, Termin und Log (Klick öffnet die Aufgabe).
+ * Häkchen setzt auf die Erledigt-Spalte bzw. zurück auf die erste aktive Spalte.
+ */
+function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { parent: Task; subtasks: Task[]; canEdit: boolean; members: { id: string; name: string; kind?: string }[]; onChanged: () => Promise<void> }) {
+  const { detail, openTask } = useProject();
+  const [title, setTitle] = useState('');
+  const [resp, setResp] = useState('');
+  const { busy, error, run } = useAsync();
+  const doneCol = detail.columns.find((c) => c.kind === 'done') ?? detail.columns.find((c) => c.isDone);
+  const openCol = detail.columns.find((c) => c.kind === 'active') ?? detail.columns.find((c) => !c.isDone);
+  const t0 = today();
+  const toggle = (x: Task) => run(async () => { const col = x.done ? openCol : doneCol; if (col) await api.patch(`/tasks/${x.id}`, { columnId: col.id }); await onChanged(); });
+  const add = () => run(async () => {
+    if (!title.trim()) return;
+    await api.post(`/projects/${detail.project.id}/tasks`, { title, parentId: parent.id, responsibleUserId: resp || null });
+    setTitle(''); setResp(''); await onChanged();
+  });
+  return (
+    <>
+      <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
+      {subtasks.length === 0 && <p className="muted small" style={{ margin: '0 0 6px' }}>Keine. Aufgaben teilen das Arbeitspaket in zuweisbare Schritte mit eigenem Log und Termin; Tasks bleiben die Checkliste.</p>}
+      <ul className="subtasks">
+        {subtasks.map((x) => {
+          const col = detail.columns.find((c) => c.id === x.columnId);
+          return (
+            <li key={x.id} className={x.done ? 'done' : ''}>
+              <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void toggle(x)} />
+              <button className="btn sm link st-title" onClick={() => openTask(x.id)}><span className="tkey">{detail.project.key}-{x.number}</span> {x.title}</button>
+              {col && !x.done && <span className="badge">{col.name}</span>}
+              {x.blocked && <span className="badge blocked">blockiert</span>}
+              {x.dueDate && <span className="small nowrap" style={!x.done && x.dueDate < t0 ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(x.dueDate)}</span>}
+              <span className="muted small ell">{x.responsible.name ?? x.responsible.email ?? '–'}{x.responsible.inherited ? ' (geerbt)' : ''}</span>
+              {x.commentCount > 0 && <span className="muted small" title="Log-Einträge">✎ {x.commentCount}</span>}
+            </li>
+          );
+        })}
+      </ul>
+      {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); void add(); }}>
+        <input type="text" placeholder="Neue Aufgabe … (Enter)" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1 }} />
+        <select value={resp} onChange={(e) => setResp(e.target.value)} style={{ width: 'auto' }} title="Zuständig">
+          <option value="">zuständig: geerbt</option>
+          {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
+        </select>
+        <button className="btn sm" disabled={busy || !title.trim()}>Hinzufügen</button>
+      </form>}
+      {error && <div className="error mt">{error}</div>}
+    </>
   );
 }
 

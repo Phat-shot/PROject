@@ -17,23 +17,24 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
   const base = first ? `/projekte/${first.id}` : null;
   const steps: Step[] = [
     { title: 'Willkommen bei PROject', text: 'In zwei Minuten durch die wichtigsten Bereiche. Du kannst jederzeit überspringen und das Tutorial später über „Tutorial“ unten links neu starten.' },
-    { title: 'Dashboard', text: 'Soll und Ist deiner Arbeit über alle Projekte: offen, überfällig, fällig, blockiert. Darunter alles, was dir zugewiesen oder vererbt ist, geklammert als Projekt › Teilprojekt › Arbeitspaket › Task.', target: '[data-tour="dashboard"]', go: '/dashboard' },
-    { title: 'Postfach', text: 'Das gemeinsame Postfach zeigt die Mails aller Ansichten, für die du Leserecht hast. Aus jeder Mail lassen sich Arbeitspakete und Doku-Seiten erzeugen.', target: '[data-tour="postfach"]', go: '/postfach' },
-    { title: 'Kalender', text: 'Deadlines, Starts und Meilensteine aller Projekte als Monat, Woche oder Agenda.', target: '[data-tour="kalender"]', go: '/kalender' },
-    { title: 'Portfolio', text: 'Alle Projekte mit Ampel, Fortschritt, Verzug, nächstem Meilenstein und Budget; darunter die Auslastung je Person über alle Projekte.', target: '[data-tour="portfolio"]', go: '/portfolio' },
-    { title: 'Projekte', text: 'Alle aktiven Projekte mit Fortschritt und nächstem Meilenstein. Ein Klick öffnet die Bereiche des Projekts. „Alle Arbeitspakete“ darunter listet die Arbeitspakete aller Projekte.', target: '[data-tour="projekte"]', go: '/projekte' },
+    { title: 'Dashboard', text: 'Ein Klick auf „PROject“ öffnet das Dashboard: Meine Arbeit (Soll/Ist, Termine, was auf dich wartet, geklammert als Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task), Projekte (Ampel, Fortschritt, Auslastung) und Alle Arbeitspakete. Oben lässt es sich nach einem Projekt filtern; gefiltert ist es das Dashboard des Projekts.', target: '[data-tour="dashboard"]', go: '/dashboard' },
+    { title: 'Projekte', text: 'Bis zu fünf angeheftete Projekte stehen immer in der Leiste (☆ anheften, ★ lösen). „Alle Projekte“ klappt die übrigen untereinander aus.', target: '[data-tour="projekte"]' },
     ...(base ? [
-      { title: 'Ein Projekt', text: 'Ein Klick auf das Projekt öffnet seine Bereiche: Übersicht, Arbeitspakete, Postfach, Doku und, für die Projektleitung, Einstellungen.', target: '[data-tour="projekt"]', go: base },
-      { title: 'Übersicht', text: 'Kennzahlen, Warnungen und Eskalationen des Projekts auf einen Blick.', target: '[data-tour="p-uebersicht"]', go: base },
-      { title: 'Arbeitspakete', text: 'Board mit Spalten, Swimlanes je Teilprojekt, Labels und WIP-Limits. Darüber die Reiter Plan (Gantt), Kalender und Zeiten. Tastatur: n neues Arbeitspaket, f filtern, q nur meine.', target: '[data-tour="p-aufgaben"]', go: `${base}/board` },
-      { title: 'Postfach des Projekts', text: 'Mail-Ansichten des Projektkontos und freigegebene persönliche Ansichten. Rechte hängen an der Ansicht.', target: '[data-tour="p-postfach"]', go: `${base}/mail` },
+      { title: 'Ein Projekt', text: 'Ein Klick auf das Projekt öffnet seine Bereiche: oben Arbeitspakete, dann Postfach, Doku, Risiken und für die Projektleitung Einstellungen.', target: '[data-tour="projekt"]', go: `${base}/board` },
+      { title: 'Arbeitspakete', text: 'Board mit Spalten, Swimlanes je Teilprojekt, Labels und WIP-Limits; darüber Plan (Gantt), Kalender, Besprechungen, Zeiten und Auswertung. Ein Arbeitspaket teilt sich in Aufgaben (zuweisbar, mit eigenem Log und Termin) und Tasks (Checkliste). Tastatur: n neues Arbeitspaket, f filtern, q nur meine.', target: '[data-tour="p-aufgaben"]', go: `${base}/board` },
+      { title: 'Postfach des Projekts', text: 'Mail-Ansichten des Projektkontos und freigegebene persönliche Ansichten. Rechte hängen an der Ansicht. Mail ist vor allem der Weg nach außen.', target: '[data-tour="p-postfach"]', go: `${base}/mail` },
       { title: 'Doku', text: 'Seiten mit Unterseiten wie in einem Wiki: Protokolle, Berichte, Konzepte. Oberseiten geben Vorlage und PDF-Layout vor. Seiten lassen sich per Link freigeben und als PDF versenden.', target: '[data-tour="p-doku"]', go: `${base}/doku` },
       { title: 'Risiken', text: 'RAID-Register: Risiken mit Wahrscheinlichkeit und Auswirkung, Annahmen, Issues und Entscheidungen mit Verantwortlichen und Terminen.', target: '[data-tour="p-raid"]', go: `${base}/raid` }
     ] : []),
+    { title: 'Postfach', text: 'Das gemeinsame Postfach zeigt die Mails aller Ansichten, für die du Leserecht hast. Aus jeder Mail lassen sich Arbeitspakete und Doku-Seiten erzeugen.', target: '[data-tour="postfach"]', go: '/postfach' },
+    { title: 'Kalender', text: 'Deadlines, Starts, Meilensteine und Besprechungen aller Projekte als Monat, Woche oder Agenda.', target: '[data-tour="kalender"]', go: '/kalender' },
+    { title: 'Workflows', text: 'Vorlagen für feste Abläufe, mandantenweit. Läufe starten isoliert oder in einem Projekt; der Projektfilter zeigt die Läufe eines Projekts.', target: '[data-tour="workflows"]', go: '/workflows' },
+    { title: 'Chat', text: 'Der reguläre Weg zwischen Projektbeteiligten: Projektkanäle mit Threads und Direktnachrichten, auch mit KI-Agenten (im Projektkanal per @Name). Am Desktop öffnet der Knopf unten rechts den Messenger mit Suche oben, Gesprächen links und Verlauf rechts.', target: '[data-tour="chat"]' },
     { title: 'Suche und Benachrichtigungen', text: 'Die Suche findet Arbeitspakete, Seiten und Mails. Die Glocke sammelt Zuweisungen, Erwähnungen, Fristen und Eskalationen.', target: '.topbar .search-box' },
     { title: 'Benutzereinstellungen', text: 'Name, Theme (hell/dunkel), Sprache und Passwort.', target: '[data-tour="benutzer"]' },
     { title: 'Konfiguration', text: 'Mail-Konten anbinden: persönlich, je Projekt oder für die Organisation. Geteilt werden nie ganze Konten, sondern nur gefilterte Ansichten.', target: '[data-tour="mailkonten"]' },
-    ...(isAdmin ? [{ title: 'Verwaltung', text: 'Benutzer einladen, Gruppen pflegen, PDF-Stil und Vorlagen des Mandanten, Audit-Export.', target: '[data-tour="verwaltung"]' }] : []),
+    ...(isAdmin ? [{ title: 'Verwaltung', text: 'Benutzer einladen, Gruppen pflegen, KI-Agenten, PDF-Stil und Vorlagen des Mandanten, Audit-Export.', target: '[data-tour="verwaltung"]' }] : []),
+    { title: 'Hilfe', text: 'Kurzanleitung, Handbuch und das KI-Sheet der Agenten stehen unter „Hilfe“ unten links, immer passend zur installierten Version.', target: '[data-tour="hilfe"]' },
     { title: 'Fertig', text: 'Viel Erfolg. Das Tutorial lässt sich jederzeit unten links neu starten.' }
   ];
   const step = steps[Math.min(i, steps.length - 1)];

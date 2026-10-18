@@ -38,9 +38,9 @@ export async function loadMailRow(db: Db, mailId: string) {
  * KI-Aktionen sind vorgesehen, aber nicht angebunden (KI ist das letzte Modul).
  * Jede läuft später als Vorschlag in der Freigabe-Liste; Ausführung durch den Worker.
  */
+/** KI-Aktionen an einer Mail (Endpunkte unter /mail/mails/:mid/ai/…); Vorschläge werden erst nach Freigabe angewendet. */
 export const AI_ACTIONS = [
-  { key: 'task_update_from_mail', target: 'task', label: 'Essenz übernehmen: Arbeitspaket und Log aktualisieren', mode: 'proposal' },
-  { key: 'doc_merge_jf', target: 'doc', label: 'Essenz in Jour-fixe-Protokoll einpflegen', mode: 'proposal' },
-  { key: 'doc_merge_report', target: 'doc', label: 'Essenz in Report einpflegen', mode: 'proposal' },
-  { key: 'summarize', target: 'mail', label: 'Zusammenfassen', mode: 'direct' }
+  { key: 'summarize', target: 'mail', label: 'Zusammenfassen', mode: 'direct' },
+  { key: 'essence_task', target: 'task', label: 'Essenz → Arbeitspaket (Vorschlag)', mode: 'proposal' },
+  { key: 'essence_page', target: 'doc', label: 'Essenz → Seite (Vorschlag)', mode: 'proposal' }
 ] as const;

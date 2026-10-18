@@ -8,13 +8,22 @@ import { runAgentOnTask } from '../ai/agent.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
+/** Persona: eine Zeile, die den Schreibstil des Agenten beschreibt (Log, Mails, Doku, Chat); Zeilenumbrüche werden zu Leerzeichen. */
+const PERSONA_MAX = 300;
+function cleanPersona(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  const s = String(v).replace(/\s+/g, ' ').trim();
+  if (s.length > PERSONA_MAX) throw badRequest(`Persona höchstens ${PERSONA_MAX} Zeichen`);
+  return s || null;
+}
+
 /**
- * KI-Agenten verwaltet der Org-Admin (Anlage, Name, Deaktivierung). Ein Agent ist ein Benutzer ohne Login,
+ * KI-Agenten verwaltet der Org-Admin (Anlage, Name, Persona, Deaktivierung). Ein Agent ist ein Benutzer ohne Login,
  * nie Org-Admin, in Projekten nur Mitglied mit Stellvertretung; Arbeitspakete weist ihm nur die PL zu.
  */
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
-  const mapAgent = (r: any) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null });
+  const mapAgent = (r: any) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, persona: r.persona ?? null, thinkingMode: r.thinking_mode ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null });
 
   app.get('/agents', async (req) => {
     const user = requireUser(req);
@@ -25,7 +34,7 @@ export async function agentRoutes(app: FastifyInstance) {
     return { agents: rows.rows.map(mapAgent) };
   });
 
-  app.post<{ Body: { name: string; aiProfileId?: string | null } }>('/agents', async (req) => {
+  app.post<{ Body: { name: string; aiProfileId?: string | null; persona?: string | null } }>('/agents', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin legt Agenten an');
     const name = req.body?.name?.trim();
@@ -33,19 +42,23 @@ export async function agentRoutes(app: FastifyInstance) {
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
     const profileId = req.body?.aiProfileId ?? (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai?.defaultProfileId ?? null;
     if (profileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [profileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
-    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id) values ($1,$2,$3,'','user','agent',$4) returning *`, [user.orgId, email, name, profileId]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name } });
+    const persona = cleanPersona(req.body?.persona);
+    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona) values ($1,$2,$3,'','user','agent',$4,$5) returning *`, [user.orgId, email, name, profileId, persona]);
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, persona } });
     return { agent: mapAgent(r) };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null } }>('/agents/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null; persona?: string | null; thinkingMode?: 'off' | 'on' | null } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const a = await db.maybeOne(`select * from users where id = $1 and org_id = $2 and kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
     const b = req.body ?? {};
     if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
-    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active), ai_profile_id = case when $4 then $5::uuid else ai_profile_id end where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null, 'aiProfileId' in b, b.aiProfileId ?? null]);
+    const persona = 'persona' in b ? cleanPersona(b.persona) : null;
+    if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
+    if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, b.thinkingMode ?? null]);
+    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active), ai_profile_id = case when $4 then $5::uuid else ai_profile_id end, persona = case when $6 then $7 else persona end where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null, 'aiProfileId' in b, b.aiProfileId ?? null, 'persona' in b, persona]);
     if (b.active === false) await db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 and archived_at is null`, [a.id]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.update', objectType: 'user', objectId: a.id, details: b });
     return { agent: mapAgent(await db.one(`select * from users where id = $1`, [a.id])) };
@@ -74,7 +87,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
     await requireProject(db, user, t.project_id, 'pl');
-    const agent = t.responsible_user_id ? await db.maybeOne(`select id, name, org_id from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]) : null;
+    const agent = t.responsible_user_id ? await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [t.responsible_user_id]) : null;
     if (!agent) throw badRequest('Dem Arbeitspaket ist kein Agent zugewiesen');
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');

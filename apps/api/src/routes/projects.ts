@@ -43,9 +43,9 @@ export async function projectRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const rows = await db.query(
       `select p.*, coalesce(m.role, 'reader') as my_role,
-         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and not c.is_done)::int as open_count,
-         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and not c.is_done and t.due_date < $3)::int as overdue_count,
-         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.archived_at is null and c.is_done)::int as done_count,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.parent_id is null and t.archived_at is null and not c.is_done)::int as open_count,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.parent_id is null and t.archived_at is null and not c.is_done and t.due_date < $3)::int as overdue_count,
+         (select count(*) from tasks t join board_columns c on c.id = t.column_id where t.project_id = p.id and t.parent_id is null and t.archived_at is null and c.is_done)::int as done_count,
          (select ms.name from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_name,
          (select ms.date from milestones ms where ms.project_id = p.id and ms.date >= $3 order by ms.date limit 1) as next_ms_date
        from projects p left join project_members m on m.project_id = p.id and m.user_id = $1
@@ -409,12 +409,12 @@ export async function projectRoutes(app: FastifyInstance) {
               count(*) filter (where not c.is_done and t.due_date < $2)::int as overdue,
               count(*) filter (where not c.is_done and t.due_date >= $2 and t.due_date <= $3)::int as due_week,
               count(*) filter (where not c.is_done and t.due_date is null)::int as no_due
-       from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.archived_at is null`,
+       from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.parent_id is null and t.archived_at is null`,
       [pid, today, week]
     );
     const perSub = await db.query(
       `select s.id, s.name, count(t.id)::int as total, count(t.id) filter (where c.is_done)::int as done, count(t.id) filter (where not c.is_done and t.due_date < $2)::int as overdue
-       from subprojects s left join tasks t on t.subproject_id = s.id and t.archived_at is null left join board_columns c on c.id = t.column_id
+       from subprojects s left join tasks t on t.subproject_id = s.id and t.parent_id is null and t.archived_at is null left join board_columns c on c.id = t.column_id
        where s.project_id = $1 group by s.id, s.name, s.position order by s.position`,
       [pid, today]
     );

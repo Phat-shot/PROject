@@ -13,7 +13,7 @@ import { uploadDir } from '../docs/layout.js';
  * Kopieren und Verschieben von Arbeitspaketen und Teilprojekten, auch in andere Projekte.
  * parts = Liste der Bestandteile, die mitgenommen werden (vom Client aus „Alles / Alles außer / Nichts außer“ aufgelöst).
  */
-export const TASK_PARTS = ['checklist', 'comments', 'attachments', 'mails', 'labels', 'dependencies', 'responsible', 'dates', 'time'] as const;
+export const TASK_PARTS = ['subtasks', 'checklist', 'comments', 'attachments', 'mails', 'labels', 'dependencies', 'responsible', 'dates', 'time'] as const;
 export const SUBPROJECT_PARTS = ['tasks', 'milestones', 'access', ...TASK_PARTS] as const;
 type Part = (typeof SUBPROJECT_PARTS)[number];
 
@@ -89,18 +89,19 @@ export async function copyRoutes(app: FastifyInstance) {
   }
 
   /** Ein Arbeitspaket kopieren; gibt die neue ID zurück. Abhängigkeiten werden vom Aufrufer über idMap nachgezogen. */
-  async function copyTask(src: any, target: { id: string }, opts: { columnId: string; subprojectId: string | null; parts: Set<Part>; userId: string; title?: string | null; sourceProjectId: string }): Promise<string> {
+  async function copyTask(src: any, target: { id: string }, opts: { columnId: string; subprojectId: string | null; parts: Set<Part>; userId: string; title?: string | null; sourceProjectId: string; parentId?: string | null; idMap?: Map<string, string> }): Promise<string> {
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [opts.columnId]);
     const keepResp = opts.parts.has('responsible');
     const keepDates = opts.parts.has('dates');
     const r = await db.one(
-      `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, estimate_minutes, recurrence)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning id`,
+      `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, estimate_minutes, recurrence, parent_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning id`,
       [target.id, opts.subprojectId, opts.columnId, (opts.title?.trim() || src.title).slice(0, 300), src.description, src.priority,
         keepDates ? src.start_date : null, keepDates ? src.due_date : null,
         keepResp ? await responsibleFor(target.id, opts.sourceProjectId, src.responsible_user_id) : null, keepResp ? src.responsible_email : null,
-        pos.p, newMailCode(), opts.userId, src.estimate_minutes, src.recurrence ? JSON.stringify(src.recurrence) : null]
+        pos.p, newMailCode(), opts.userId, src.estimate_minutes, src.recurrence ? JSON.stringify(src.recurrence) : null, opts.parentId ?? null]
     );
+    opts.idMap?.set(src.id, r.id);
     if (opts.parts.has('checklist')) {
       const items = await db.query(`select title, responsible_user_id, responsible_email, position from checklist_items where task_id = $1 order by position`, [src.id]);
       for (const i of items.rows) {
@@ -115,6 +116,14 @@ export async function copyRoutes(app: FastifyInstance) {
     }
     if (opts.parts.has('mails')) await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) select mail_id, $1, copied, $3 from mail_task_links where task_id = $2`, [r.id, src.id, opts.userId]);
     if (opts.parts.has('attachments')) await copyAttachments(src.id, r.id, target.id, opts.userId);
+    // Aufgaben des Arbeitspakets mitkopieren (Status bleibt, Teilprojekt folgt dem Arbeitspaket)
+    if (!src.parent_id && opts.parts.has('subtasks')) {
+      const subs = await db.query(`select * from tasks where parent_id = $1 and deleted_at is null and archived_at is null order by position, created_at`, [src.id]);
+      for (const c of subs.rows) {
+        const columnId = await columnFor(target.id, target.id === opts.sourceProjectId ? null : c.column_id, target.id === opts.sourceProjectId ? c.column_id : null);
+        await copyTask(c, target, { ...opts, columnId, title: null, parentId: r.id });
+      }
+    }
     return r.id;
   }
 
@@ -130,15 +139,19 @@ export async function copyRoutes(app: FastifyInstance) {
   }
 
   /** Ein Arbeitspaket in ein anderes Projekt verschieben (Nummer neu, Spalte/Labels/Zuständigkeit abgeglichen). */
-  async function moveTaskToProject(src: any, target: { id: string }, opts: { columnId: string; subprojectId: string | null; parts: Set<Part>; keepDeps: Set<string> }) {
+  async function moveTaskToProject(src: any, target: { id: string }, opts: { columnId: string; subprojectId: string | null; parts: Set<Part>; keepDeps: Set<string>; keepParent?: boolean }) {
     const resp = opts.parts.has('responsible') ? await responsibleFor(target.id, src.project_id, src.responsible_user_id) : null;
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [opts.columnId]);
+    // Aufgaben gehen immer mit ihrem Arbeitspaket; eine einzeln verschobene Aufgabe wird im Ziel zum Arbeitspaket
+    const children = src.parent_id ? [] : (await db.query(`select * from tasks where parent_id = $1`, [src.id])).rows;
+    const keepDeps = new Set([...opts.keepDeps, src.id, ...children.map((c: any) => c.id as string)]);
     await db.query(
       `update tasks set project_id = $2, column_id = $3, subproject_id = $4, position = $5, responsible_user_id = $6, responsible_email = $7,
          start_date = case when $8 then start_date end, due_date = case when $8 then due_date end,
+         parent_id = case when $9 then parent_id end,
          number = (select coalesce(max(number), 0) + 1 from tasks x where x.project_id = $2), updated_at = now(), agent_wait = null, agent_next_check_at = null
        where id = $1`,
-      [src.id, target.id, opts.columnId, opts.subprojectId, pos.p, resp, opts.parts.has('responsible') ? src.responsible_email : null, opts.parts.has('dates')]
+      [src.id, target.id, opts.columnId, opts.subprojectId, pos.p, resp, opts.parts.has('responsible') ? src.responsible_email : null, opts.parts.has('dates'), Boolean(opts.keepParent)]
     );
     if (!opts.parts.has('checklist')) await db.query(`delete from checklist_items where task_id = $1`, [src.id]);
     else await db.query(`update checklist_items set responsible_user_id = null where task_id = $1 and responsible_user_id is not null and not exists (select 1 from project_members pm where pm.project_id = $2 and pm.user_id = checklist_items.responsible_user_id)`, [src.id, target.id]);
@@ -154,11 +167,14 @@ export async function copyRoutes(app: FastifyInstance) {
     if (opts.parts.has('time')) await db.query(`update time_entries set project_id = $2 where task_id = $1`, [src.id, target.id]);
     else await db.query(`update time_entries set task_id = null where task_id = $1`, [src.id]);
     // Abhängigkeiten nur innerhalb der verschobenen Menge behalten
-    await db.query(`delete from task_dependencies where (successor_id = $1 and predecessor_id <> all($2::uuid[])) or (predecessor_id = $1 and successor_id <> all($2::uuid[]))`, [src.id, [...opts.keepDeps]]);
+    await db.query(`delete from task_dependencies where (successor_id = $1 and predecessor_id <> all($2::uuid[])) or (predecessor_id = $1 and successor_id <> all($2::uuid[]))`, [src.id, [...keepDeps]]);
     if (!opts.parts.has('dependencies')) await db.query(`delete from task_dependencies where successor_id = $1 or predecessor_id = $1`, [src.id]);
     await db.query(`delete from meeting_tasks where task_id = $1`, [src.id]);
     await db.query(`update mail_drafts set project_id = $2 where task_id = $1`, [src.id, target.id]);
     await db.query(`update agent_runs set project_id = $2 where task_id = $1`, [src.id, target.id]);
+    for (const c of children) {
+      await moveTaskToProject(c, target, { ...opts, columnId: await columnFor(target.id, c.column_id, null), keepDeps, keepParent: true });
+    }
   }
 
   async function loadSource(taskId: string) {
@@ -177,8 +193,11 @@ export async function copyRoutes(app: FastifyInstance) {
     const parts = partsOf(b, TASK_PARTS);
     const columnId = await columnFor(target.id, target.id === src.project_id ? null : src.column_id, b.columnId);
     const subprojectId = target.id === src.project_id && b.subprojectId === undefined ? src.subproject_id : await subprojectFor(target.id, b.subprojectId);
-    const newId = await copyTask(src, target, { columnId, subprojectId, parts, userId: user.id, title: b.title ?? (target.id === src.project_id ? `${src.title} (Kopie)` : null), sourceProjectId: src.project_id });
-    if (parts.has('dependencies')) await copyDependencies(new Map([[src.id, newId]]), target.id === src.project_id);
+    // Eine Aufgabe bleibt als Kopie beim selben Arbeitspaket; in einem anderen Projekt wird sie zum Arbeitspaket
+    const parentId = src.parent_id && target.id === src.project_id ? src.parent_id : null;
+    const idMap = new Map<string, string>();
+    const newId = await copyTask(src, target, { columnId, subprojectId, parts, userId: user.id, title: b.title ?? (target.id === src.project_id ? `${src.title} (Kopie)` : null), sourceProjectId: src.project_id, parentId, idMap });
+    if (parts.has('dependencies')) await copyDependencies(idMap, target.id === src.project_id);
     await audit(db, { orgId: user.orgId, projectId: target.id, userId: user.id, action: 'task.copy', objectType: 'task', objectId: newId, details: { from: src.id, fromProject: src.project_id, parts: [...parts] } });
     return { task: await loadTask(db, newId), projectId: target.id, projectKey: target.key };
   });
@@ -210,7 +229,7 @@ export async function copyRoutes(app: FastifyInstance) {
   }
 
   async function subTasks(sid: string, taskIds: string[] | undefined) {
-    const rows = await db.query(`select * from tasks where subproject_id = $1 and deleted_at is null and archived_at is null order by position, created_at`, [sid]);
+    const rows = await db.query(`select * from tasks where subproject_id = $1 and parent_id is null and deleted_at is null and archived_at is null order by position, created_at`, [sid]);
     return Array.isArray(taskIds) ? rows.rows.filter((t: any) => taskIds.includes(t.id)) : rows.rows;
   }
 
@@ -235,7 +254,7 @@ export async function copyRoutes(app: FastifyInstance) {
     if (parts.has('tasks')) {
       for (const t of await subTasks(src.id, b.taskIds)) {
         const columnId = await columnFor(target.id, target.id === req.params.id ? null : t.column_id, null);
-        idMap.set(t.id, await copyTask(t, target, { columnId, subprojectId: ns.id, parts, userId: user.id, sourceProjectId: req.params.id }));
+        await copyTask(t, target, { columnId, subprojectId: ns.id, parts, userId: user.id, sourceProjectId: req.params.id, idMap });
       }
       if (parts.has('dependencies')) await copyDependencies(idMap, target.id === req.params.id);
     }
@@ -259,10 +278,10 @@ export async function copyRoutes(app: FastifyInstance) {
     await db.query(`update subprojects set project_id = $2, position = $3, responsible_user_id = $4, start_date = case when $5 then start_date end, end_date = case when $5 then end_date end, restricted = $6 where id = $1`, [src.id, target.id, pos.p, resp, parts.has('dates'), parts.has('access') ? src.restricted : false]);
     if (parts.has('access')) await db.query(`delete from subproject_access where subproject_id = $1 and user_id is not null and not exists (select 1 from project_members pm where pm.project_id = $2 and pm.user_id = subproject_access.user_id)`, [src.id, target.id]);
     else await db.query(`delete from subproject_access where subproject_id = $1`, [src.id]);
-    const all = await db.query(`select * from tasks where subproject_id = $1 and deleted_at is null`, [src.id]);
+    const all = await db.query(`select * from tasks where subproject_id = $1 and parent_id is null and deleted_at is null`, [src.id]);
     const chosen = new Set<string>((parts.has('tasks') ? (Array.isArray(b.taskIds) ? all.rows.filter((t: any) => b.taskIds!.includes(t.id)) : all.rows) : []).map((t: any) => t.id as string));
-    // Nicht mitgenommene Arbeitspakete bleiben im Quellprojekt ohne Teilprojekt
-    await db.query(`update tasks set subproject_id = null where subproject_id = $1 and id <> all($2::uuid[])`, [src.id, [...chosen]]);
+    // Nicht mitgenommene Arbeitspakete (samt ihren Aufgaben) bleiben im Quellprojekt ohne Teilprojekt
+    await db.query(`update tasks set subproject_id = null where subproject_id = $1 and id <> all($2::uuid[]) and (parent_id is null or parent_id <> all($2::uuid[]))`, [src.id, [...chosen]]);
     for (const t of all.rows.filter((x: any) => chosen.has(x.id))) {
       const columnId = await columnFor(target.id, t.column_id, null);
       await moveTaskToProject(t, target, { columnId, subprojectId: src.id, parts, keepDeps: chosen });

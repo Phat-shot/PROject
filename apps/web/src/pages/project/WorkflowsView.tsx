@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import type { Task } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
@@ -28,48 +28,6 @@ export function stepSummary(s: WorkflowStep): string {
   if (s.type === 'timer') return `${(s.days ?? 0) > 0 ? `${s.days} Tage ` : ''}${(s.hours ?? 0) > 0 ? `${s.hours} Std.` : ''}`.trim() || 'Timer';
   if (s.type === 'wait') return s.waitKind === 'mail' ? `Mail${s.mailSubject ? ` „${s.mailSubject}“` : ''}${s.mailFrom ? ` von ${s.mailFrom}` : ''}` : 'Freigabe durch die PL';
   return `${s.subject ?? ''} → ${[...(s.to ?? []), s.toStarter && 'Starter', s.toPl && 'PL', s.toPrevious && 'Zuständige des vorigen AP'].filter(Boolean).join(', ')}`;
-}
-
-/** Im Projekt: Vorlagen (mandantenweit, gebaut unter „Workflows“) starten und die Läufe dieses Projekts sehen. */
-export function WorkflowsView() {
-  const { runId } = useParams<{ runId?: string }>();
-  const { detail } = useProject();
-  if (runId) return <RunDetail runId={runId} backTo={`/projekte/${detail.project.id}/workflows`} />;
-  return <WorkflowList />;
-}
-
-function WorkflowList() {
-  const { detail, reloadTasks } = useProject();
-  const pid = detail.project.id;
-  const me = detail.project.myMembership;
-  const d = useData<{ definitions: WorkflowDef[]; runs: WorkflowRun[] }>(`/projects/${pid}/workflows`, [pid]);
-  const [start, setStart] = useState<WorkflowDef | null>(null);
-  const nav = useNavigate();
-  if (d.error) return <div className="content"><div className="error">{d.error}</div></div>;
-  if (!d.data) return <div className="content muted">Lade …</div>;
-  const active = d.data.runs.filter((r) => r.status === 'active');
-  const finished = d.data.runs.filter((r) => r.status !== 'active');
-  return (
-    <div className="content">
-      <p className="muted small" style={{ marginTop: 0 }}>Läufe von Workflow-Vorlagen in diesem Projekt. Die Arbeitspakete eines Laufs landen im Board (Spalte und Teilprojekt beim Start wählbar). Vorlagen werden im Bereich <Link to="/workflows">Workflows</Link> gebaut; dort lassen sich Instanzen auch isoliert starten.</p>
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Vorlagen</h2></div>
-      {d.data.definitions.length === 0 && <div className="card muted small">Noch keine Vorlagen. Unter <Link to="/workflows">Workflows</Link> anlegen.</div>}
-      {d.data.definitions.map((w) => (
-        <div key={w.id} className="card">
-          <div className="row between">
-            <div><strong>{w.name}</strong>{w.description && <div className="muted small">{w.description}</div>}</div>
-            <div className="row" style={{ gap: 6 }}>{me.role !== 'reader' && <button className="btn sm primary" title="Im Projekt starten: Arbeitspakete landen im Board" onClick={() => setStart(w)}>Starten</button>}</div>
-          </div>
-          <ol className="wf-steps small">{w.steps.map((s, i) => <li key={s.key}><strong>{i + 1}.</strong> {STEP_LABEL[s.type]}: {stepSummary(s)}</li>)}</ol>
-        </div>
-      ))}
-      <h2 className="mt">Aktive Läufe {active.length > 0 && <span className="badge">{active.length}</span>}</h2>
-      {active.length === 0 && <div className="muted small">Keine aktiven Läufe in diesem Projekt.</div>}
-      {active.map((r) => <RunRow key={r.id} r={r} onOpen={() => nav(`/projekte/${pid}/workflows/${r.id}`)} />)}
-      {finished.length > 0 && <><h2 className="mt">Abgeschlossen</h2>{finished.slice(0, 30).map((r) => <RunRow key={r.id} r={r} onOpen={() => nav(`/projekte/${pid}/workflows/${r.id}`)} />)}</>}
-      {start && <StartRunDialog def={start} columnId={null} subprojectId={null} onClose={() => setStart(null)} onStarted={async (r) => { setStart(null); await d.reload(); await reloadTasks(); nav(`/projekte/${pid}/workflows/${r.id}`); }} />}
-    </div>
-  );
 }
 
 export function RunRow({ r, onOpen, showProject }: { r: WorkflowRun; onOpen: () => void; showProject?: boolean }) {

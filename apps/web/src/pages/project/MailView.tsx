@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import DOMPurify from 'dompurify';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
@@ -181,6 +182,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const refresh = async () => { await d.reload(); await actions.reload(); await reloadTasks(); onChanged(); };
   const folderAction = (call: () => Promise<unknown>) => run(async () => { await call(); onGone(); });
   const enabled = (key: string) => actions.data?.rule.find((a) => a.key === key)?.enabled ?? false;
+  const reason = (key: string) => actions.data?.rule.find((a) => a.key === key)?.reason ?? '';
 
   /** Führt eine Aktion aus, die eine Bestätigung verlangen kann (Kopie wird für Mitglieder sichtbar). */
   const withConfirm = async (call: (confirmed: boolean) => Promise<any>, after: (res: any) => Promise<void>) => {
@@ -227,17 +229,17 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         <span className="muted small">Arbeitspaket:</span>
         {enabled('create_task') && <button className="btn sm" onClick={() => setDialog('createTask')}>Erstellen</button>}
         {enabled('link_task') && <button className="btn sm" onClick={() => setDialog('link')}>Verknüpfen / Kopieren</button>}
-        <button className="btn sm" onClick={() => setDialog('log')}>Ins Log übernehmen</button>
-        <button className="btn sm" onClick={() => setDialog('adjust')}>Anpassen (Mail als Beleg)</button>
+        <button className="btn sm" disabled={!enabled('task_log')} title={reason('task_log')} onClick={() => setDialog('log')}>Ins Log übernehmen</button>
+        <button className="btn sm" disabled={!enabled('task_adjust')} title={reason('task_adjust')} onClick={() => setDialog('adjust')}>Anpassen (Mail als Beleg)</button>
         <span className="muted small" style={{ marginLeft: 8 }}>Doku:</span>
-        <button className="btn sm" disabled={!enabled('to_page')} title={enabled('to_page') ? '' : 'Aus persönlichen Konten legt nur der Eigentümer ab'} onClick={() => setDialog('toPage')}>Ablegen</button>
-        <button className="btn sm" disabled={!enabled('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
+        <button className="btn sm" disabled={!enabled('to_page')} title={reason('to_page')} onClick={() => setDialog('toPage')}>Ablegen</button>
+        <button className="btn sm" disabled={!enabled('append_page')} title={reason('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
       </div>
       <div className="row mb small">
         <span className="muted">KI:</span>
         {ai?.enabled && detail.project.aiProfileId ? (
           <>
-            <button className="btn sm" disabled={!r.canAi} title={r.canAi ? 'Kurzfassung der Mail (wird gespeichert)' : 'Kein KI-Recht in dieser Ansicht'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
+            <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
             <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
             <button className="btn sm" disabled={!r.canAi || !canUseAi} title={!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : !canUseAi ? 'Kein KI-Recht im Projekt („KI nutzen“)' : 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
             <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
@@ -253,7 +255,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         </p>
       )}
       {error && <div className="error mb">{error}</div>}
-      {m.textBody ? <pre>{m.textBody}</pre> : m.htmlBody ? <div className="prose" dangerouslySetInnerHTML={{ __html: m.htmlBody.replace(/<script[\s\S]*?<\/script>/gi, '') }} /> : <p className="muted">Kein Inhalt</p>}
+      {m.textBody ? <pre>{m.textBody}</pre> : m.htmlBody ? <MailHtml html={m.htmlBody} /> : <p className="muted">Kein Inhalt</p>}
 
       {newFolder && <PromptModal title="Neuer Unterordner" label="Name" placeholder="z. B. Lieferanten" submitLabel="Anlegen und verschieben" onClose={() => setNewFolder(false)}
         onSubmit={(name) => { if (name) folderAction(async () => { const f = await api.post<{ folder: MailFolder }>(`/mail/accounts/${m.accountId}/folders`, { name }); await api.post(`/mail/mails/${m.id}/move`, { folder: f.folder.path }); }); }} />}
@@ -266,7 +268,10 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         </Modal>
       )}
       {dialog === 'log' && <PickTaskDialog title="Ins Arbeitspaket-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an das Arbeitspaket gehängt und verknüpft. Für eine Essenz: „KI: Essenz → Arbeitspaket“." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
-        onPick={async (taskId, note) => { await run(async () => { await api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note }); setDialog(null); await refresh(); openTask(taskId); }); }} />}
+        onPick={(taskId, note) => withConfirm(
+          (confirmed) => api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note, confirmed }),
+          async () => { setDialog(null); await refresh(); openTask(taskId); }
+        )} />}
       {dialog === 'aiEssence' && <PickTaskDialog title="Essenz → Arbeitspaket (KI-Vorschlag)" hint="Die KI schlägt einen Log-Eintrag vor und erkennt, ob die Mail einen neuen Status oder Termin belegt. Angewendet wird erst nach Freigabe durch PL oder Personen mit Freigaberecht." onClose={() => setDialog(null)}
         onPick={async (taskId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/essence`, { taskId }); setDialog(null); setAiMsg('Vorschlag angelegt.'); }); }} />}
       {dialog === 'aiMerge' && <AppendPageDialog ai onClose={() => setDialog(null)} onSubmit={async (pageId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/merge-page`, { pageId }); setDialog(null); setAiMsg('Vorschlag für die Seite angelegt.'); }); }} />}
@@ -286,8 +291,26 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
           <div className="row"><button className="btn primary" onClick={() => void run(confirmCopy.run)}>Bestätigen und protokollieren</button><button className="btn" onClick={() => setConfirmCopy(null)}>Abbrechen</button></div>
         </Modal>
       )}
-      {dialog === 'createTask' && <CreateTaskFromMail mail={m} onClose={() => setDialog(null)} onCreated={async (id) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}/board?task=${id}`); }} />}
+      {dialog === 'createTask' && <CreateTaskFromMail mail={m} askConfirm={(willSee, go) => setConfirmCopy({ willSee, run: async () => { await go(); setConfirmCopy(null); } })} onClose={() => setDialog(null)} onCreated={async (id) => { setDialog(null); await refresh(); nav(`/projekte/${detail.project.id}/board?task=${id}`); }} />}
     </div>
+  );
+}
+
+/**
+ * HTML-Mail isoliert anzeigen: bereinigt (DOMPurify) in einem Sandbox-iframe ohne Skripte und mit eigener Herkunft;
+ * eine Content-Security-Policy im Dokument blockt externe Bilder (Tracking-Pixel), bis man sie zulässt.
+ */
+export function MailHtml({ html }: { html: string }) {
+  const [images, setImages] = useState(false);
+  const clean = useMemo(() => DOMPurify.sanitize(html, { WHOLE_DOCUMENT: false, FORBID_TAGS: ['form', 'input', 'button', 'textarea', 'select', 'iframe', 'frame', 'object', 'embed', 'base', 'meta', 'link'] }), [html]);
+  const remote = /\bsrc\s*=\s*["']?\s*(https?:)?\/\//i.test(clean) || /url\(\s*["']?\s*(https?:)?\/\//i.test(clean);
+  const csp = `default-src 'none'; img-src data: cid:${images ? ' https: http:' : ''}; style-src 'unsafe-inline'; font-src data:`;
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><base target="_blank"><style>html{background:#fff;color:#1f2937}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;font-size:14px;line-height:1.5;margin:8px;word-break:break-word}img{max-width:100%;height:auto}</style></head><body>${clean}</body></html>`;
+  return (
+    <>
+      {remote && !images && <div className="notice small mb">Externe Bilder sind blockiert (Schutz vor Tracking). <button className="btn sm link" onClick={() => setImages(true)}>Bilder laden</button></div>}
+      <iframe className="mail-html" title="Mailinhalt" sandbox="allow-popups allow-popups-to-escape-sandbox" referrerPolicy="no-referrer" srcDoc={doc} />
+    </>
   );
 }
 
@@ -377,11 +400,13 @@ function AppendPageDialog({ onClose, onSubmit, ai = false }: { onClose: () => vo
   );
 }
 
-function CreateTaskFromMail({ mail, onClose, onCreated }: { mail: MailDetail; onClose: () => void; onCreated: (id: string) => Promise<void> }) {
+/** Arbeitspaket aus einer Mail; fragt nach, wenn der Mailinhalt dadurch für Mitglieder ohne Leserecht sichtbar wird. */
+function CreateTaskFromMail({ mail, askConfirm, onClose, onCreated }: { mail: MailDetail; askConfirm: (willSee: { name: string; role: string }[], go: () => Promise<void>) => void; onClose: () => void; onCreated: (id: string) => Promise<void> }) {
   const { detail, users } = useProject();
   const [f, setF] = useState({ title: mail.subject.replace(/^(re|aw|fwd|wg):\s*/i, ''), subprojectId: '', dueDate: '', responsibleUserId: '', responsibleEmail: '', copy: false });
   const { busy, error, run } = useAsync();
-  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
+  const isPl = detail.project.myMembership.role === 'pl';
+  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPl));
   return (
     <Modal title="Arbeitspaket aus Mail" onClose={onClose}>
       <div className="form cols-2">
@@ -394,8 +419,10 @@ function CreateTaskFromMail({ mail, onClose, onCreated }: { mail: MailDetail; on
         <p className="muted small full">Beschreibung wird aus dem Mailtext vorbefüllt.</p>
         {error && <div className="error full">{error}</div>}
         <div className="row full"><button className="btn primary" disabled={busy} onClick={() => void run(async () => {
-          const r = await api.post<{ task: { id: string } }>(`/mail/mails/${mail.id}/create-task`, { projectId: detail.project.id, title: f.title, subprojectId: f.subprojectId || null, dueDate: f.dueDate || null, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null, copy: f.copy });
-          await onCreated(r.task.id);
+          const body = { projectId: detail.project.id, title: f.title, subprojectId: f.subprojectId || null, dueDate: f.dueDate || null, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null, copy: f.copy };
+          const r = await api.post<{ task?: { id: string }; needsConfirmation?: boolean; willSee?: { name: string; role: string }[] }>(`/mail/mails/${mail.id}/create-task`, body);
+          if (r.needsConfirmation) { askConfirm(r.willSee ?? [], async () => { const r2 = await api.post<{ task: { id: string } }>(`/mail/mails/${mail.id}/create-task`, { ...body, confirmed: true }); await onCreated(r2.task.id); }); return; }
+          await onCreated(r.task!.id);
         })}>Arbeitspaket anlegen</button></div>
       </div>
     </Modal>

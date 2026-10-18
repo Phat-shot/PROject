@@ -311,6 +311,14 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
     [erp.id, erpCols[0], pl, newMailCode(), anna, max, newMailCode(), erpCols[1], newMailCode()]
   );
 
+  // Aufgaben (Zwischenebene): CMS-Auswahl in zuweisbare Schritte mit eigenem Log geteilt
+  const aufgabe = async (title: string, col: string, resp: string | null, due: string, pos: number) =>
+    (await db.one(`insert into tasks (project_id, subproject_id, column_id, title, priority, due_date, responsible_user_id, position, mail_code, created_by, parent_id) values ($1,$2,$3,$4,'normal',$5,$6,$7,$8,$9,$10) returning id`,
+      [web.id, umsetzung, cols[col], title, due, resp, pos, newMailCode(), pl, t5.id])).id as string;
+  const a1 = await aufgabe('Anforderungen der Fachbereiche sammeln', 'In Arbeit', anna, '2026-11-04', 0);
+  await aufgabe('Demos von drei Anbietern', 'Offen', null, '2026-11-08', 1);
+  await db.query(`insert into task_comments (task_id, user_id, body) values ($1,$2,'Marketing und Vertrieb befragt, Einkauf folgt am Montag.')`, [a1, anna]);
+
   await db.query(`insert into audit_log (org_id, project_id, user_id, action, object_type, object_id, details) values ($1,$2,$3,'seed','system',null,'{"note":"Demodaten angelegt"}')`, [org.id, web.id, admin]);
 
   return { org: org.id, users: { admin, pl, anna, max, leser }, projects: { web: web.id, erp: erp.id }, accounts: { project: projAcc.id, personal: persAcc.id }, views: { project: projView.id, agentur: agenturView.id, hosting: hostingView.id }, tasks: { t4: t4.id, t4Code: t4.mail_code, t2: t2.id } };

@@ -75,7 +75,7 @@ function SubRow({ s, canPlan }: { s: Subproject; canPlan: boolean }) {
         {me.role === 'pl' && <button className="btn sm link" title="Sichtbarkeit, Zugriff" onClick={() => setEdit(true)}>Sichtbarkeit</button>}
         <button className="btn sm link" title="Teilprojekt mit Arbeitspaketen kopieren, hier oder in ein anderes Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>
         <button className="btn sm link" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>
-        {copyMove && <CopyMoveDialog kind="subproject" op={copyMove} detail={detail} subproject={s} tasks={tasks.filter((x) => x.subprojectId === s.id && !x.archivedAt && !x.deletedAt)} onClose={() => setCopyMove(null)} onDone={async () => { await reload(); await reloadTasks(); }} />}
+        {copyMove && <CopyMoveDialog kind="subproject" op={copyMove} detail={detail} subproject={s} tasks={tasks.filter((x) => x.subprojectId === s.id && !x.parentId && !x.archivedAt && !x.deletedAt)} onClose={() => setCopyMove(null)} onDone={async () => { await reload(); await reloadTasks(); }} />}
         {me.role === 'pl' && <button className="btn sm link" title="Teilprojekt löschen" onClick={() => void dialog.confirm({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Die Arbeitspakete bleiben erhalten und stehen danach unter „Ohne Teilprojekt“.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void api.del(`/projects/${detail.project.id}/subprojects/${s.id}`).then(async () => { await reload(); await reloadTasks(); }); })}>✕</button>}
         {edit && <SubprojectForm existing={s} onClose={() => setEdit(false)} />}
       </td>

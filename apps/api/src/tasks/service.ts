@@ -1,6 +1,15 @@
 import { randomBytes } from 'node:crypto';
 import type { ResponsibleInfo, Subproject, Task } from '@projekttool/shared';
 import type { Db } from '../db.js';
+import { badRequest, forbidden } from '../errors.js';
+
+/** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
+export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
+  if (!userId) return;
+  const r = await db.maybeOne(`select u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.user_id = $2 and u.active`, [projectId, userId]);
+  if (!r) throw badRequest('Zuständige Person ist kein aktives Mitglied des Projekts');
+  if (r.kind === 'agent' && membership.role !== 'pl') throw forbidden('KI-Agenten weist nur die Projektleitung zu');
+}
 
 export interface LeadInfo {
   userId: string | null;
@@ -52,6 +61,11 @@ const TASK_SELECT = `
     ru.name as responsible_name, ru.email as responsible_user_email, pc.name as responsible_contact_name,
     s.responsible_user_id as sp_responsible_user_id, su.name as sp_responsible_name, su.email as sp_responsible_email,
     s.end_date as sp_end_date,
+    pt.title as parent_title, pt.number as parent_number,
+    pt.responsible_user_id as parent_responsible_user_id, pu.name as parent_responsible_name, pu.email as parent_responsible_user_email,
+    pt.responsible_email as parent_responsible_email, ppc.name as parent_responsible_contact_name,
+    (select count(*)::int from tasks x join board_columns xc on xc.id = x.column_id where x.parent_id = t.id and x.deleted_at is null and xc.is_done) as subtask_done,
+    (select count(*)::int from tasks x where x.parent_id = t.id and x.deleted_at is null) as subtask_total,
     coalesce((select json_agg(d.predecessor_id) from task_dependencies d where d.successor_id = t.id), '[]'::json) as predecessor_ids,
     coalesce((select json_agg(tl.label_id) from task_labels tl where tl.task_id = t.id), '[]'::json) as label_ids,
     (select count(*)::int from task_comments x where x.task_id = t.id) as comment_count,
@@ -66,7 +80,10 @@ const TASK_SELECT = `
   left join users ru on ru.id = t.responsible_user_id
   left join project_contacts pc on pc.project_id = t.project_id and pc.email = t.responsible_email
   left join subprojects s on s.id = t.subproject_id
-  left join users su on su.id = s.responsible_user_id`;
+  left join users su on su.id = s.responsible_user_id
+  left join tasks pt on pt.id = t.parent_id
+  left join users pu on pu.id = pt.responsible_user_id
+  left join project_contacts ppc on ppc.project_id = pt.project_id and ppc.email = pt.responsible_email`;
 
 export async function loadTasks(db: Db, where: string, params: unknown[], lead?: LeadInfo): Promise<Task[]> {
   const rows = await db.query(`${TASK_SELECT} where ${where} order by t.position, t.created_at`, params);
@@ -95,13 +112,17 @@ export async function loadTask(db: Db, id: string): Promise<Task | null> {
   return task;
 }
 
-/** Vererbung: Arbeitspaket → Teilprojekt → PL. Konflikte: Deadline nach Teilprojekt-Ende, Start vor Vorgänger-Ende. */
+/** Vererbung: Aufgabe → Arbeitspaket → Teilprojekt → PL. Konflikte: Deadline nach Teilprojekt-Ende, Start vor Vorgänger-Ende. */
 export function mapTask(r: any, lead: LeadInfo): Task {
   let responsible: ResponsibleInfo;
   if (r.responsible_user_id) {
     responsible = { userId: r.responsible_user_id, email: r.responsible_user_email, name: r.responsible_name, inherited: false, inheritedFrom: null };
   } else if (r.responsible_email) {
     responsible = { userId: null, email: r.responsible_email, name: r.responsible_contact_name ?? null, inherited: false, inheritedFrom: null };
+  } else if (r.parent_responsible_user_id) {
+    responsible = { userId: r.parent_responsible_user_id, email: r.parent_responsible_user_email, name: r.parent_responsible_name, inherited: true, inheritedFrom: 'task' };
+  } else if (r.parent_responsible_email) {
+    responsible = { userId: null, email: r.parent_responsible_email, name: r.parent_responsible_contact_name ?? null, inherited: true, inheritedFrom: 'task' };
   } else if (r.sp_responsible_user_id) {
     responsible = { userId: r.sp_responsible_user_id, email: r.sp_responsible_email, name: r.sp_responsible_name, inherited: true, inheritedFrom: 'subproject' };
   } else {
@@ -142,6 +163,10 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     mailCount: r.mail_count ?? 0,
     checklistDone: r.checklist_done ?? 0,
     checklistTotal: r.checklist_total ?? 0,
+    parentId: r.parent_id ?? null,
+    parent: r.parent_id ? { id: r.parent_id, number: r.parent_number ?? 0, title: r.parent_title ?? '' } : null,
+    subtaskDone: r.subtask_done ?? 0,
+    subtaskTotal: r.subtask_total ?? 0,
     id: r.id,
     projectId: r.project_id,
     subprojectId: r.subproject_id,
@@ -165,9 +190,12 @@ export function mapTask(r: any, lead: LeadInfo): Task {
 }
 
 
-/** Reiht ein Arbeitspaket in einer Spalte an Position index ein und nummeriert die Spalte neu. */
+/** Reiht ein Arbeitspaket in einer Spalte an Position index ein und nummeriert die Spalte neu (nur Geschwister derselben Ebene). */
 export async function moveTask(db: Db, taskId: string, columnId: string, index: number | null) {
-  const others = await db.query(`select id from tasks where column_id = $1 and id <> $2 and archived_at is null order by position, created_at`, [columnId, taskId]);
+  const others = await db.query(
+    `select id from tasks where column_id = $1 and id <> $2 and archived_at is null and parent_id is not distinct from (select parent_id from tasks where id = $2) order by position, created_at`,
+    [columnId, taskId]
+  );
   const ids = others.rows.map((r: any) => r.id as string);
   const at = index === null || index < 0 || index > ids.length ? ids.length : index;
   ids.splice(at, 0, taskId);

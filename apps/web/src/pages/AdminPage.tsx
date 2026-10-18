@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentUser, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
@@ -220,13 +220,13 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 function AiCard() {
   const st = useAiStatus();
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
-  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '' });
+  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false });
   const [budget, setBudget] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '' } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '' }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff }); };
   return (
     <div className="card">
       <div className="row between"><h2 style={{ margin: 0 }}>KI-Profile</h2><button className="btn primary sm" onClick={() => open('new')}>Profil anlegen</button></div>
@@ -235,7 +235,7 @@ function AiCard() {
       {msg && <div className="success mb small">{msg}</div>}
       {st.profiles.length === 0 && <div className="empty mb">Noch kein Profil. Ohne Profil ist KI für den Mandanten aus.</div>}
       {st.profiles.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Anbieter</th><th>Modell</th><th>Status</th><th /></tr></thead><tbody>
-        {st.profiles.map((p) => <tr key={p.id} style={p.active ? undefined : { opacity: 0.6 }}><td>{p.name}{st.defaultProfileId === p.id && <span className="badge ok" style={{ marginLeft: 6 }} title="Vorbelegung für neue Agenten">Standard</span>}</td><td className="small">{p.provider === 'local' ? <>Lokales LLM<div className="muted">{p.baseUrl}</div></> : 'Anthropic'}</td><td className="small">{p.model}</td><td className="small">{!p.active ? <span className="badge">inaktiv</span> : p.provider === 'anthropic' && !p.hasKey ? <span className="badge warn">Schlüssel fehlt</span> : <span className="badge ok">bereit</span>}</td>
+        {st.profiles.map((p) => <tr key={p.id} style={p.active ? undefined : { opacity: 0.6 }}><td>{p.name}{st.defaultProfileId === p.id && <span className="badge ok" style={{ marginLeft: 6 }} title="Vorbelegung für neue Agenten">Standard</span>}</td><td className="small">{p.provider === 'local' ? <>Lokales LLM<div className="muted">{p.baseUrl}</div></> : 'Anthropic'}</td><td className="small">{p.model}{p.provider === 'local' && p.thinkingOff && <div><span className="badge" title="Denkmodus aus: enable_thinking = false">Denkmodus aus</span></div>}</td><td className="small">{!p.active ? <span className="badge">inaktiv</span> : p.provider === 'anthropic' && !p.hasKey ? <span className="badge warn">Schlüssel fehlt</span> : <span className="badge ok">bereit</span>}</td>
           <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>(`/ai/profiles/${p.id}/test`); setMsg(`${p.name}: ${r.model} antwortet „${r.reply}“.`); })}>Testen</button>{' '}
             <button className="btn sm" onClick={() => open(p)}>Bearbeiten</button>{' '}
             {st.defaultProfileId !== p.id && <><button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { defaultProfileId: p.id }); await invalidateAi(); })}>Als Standard</button>{' '}</>}
@@ -254,9 +254,13 @@ function AiCard() {
               ? <input type="text" value={f.model} placeholder="Name wie in vLLM/Ollama, z. B. Qwen/Qwen3-32B" onChange={(e) => setF({ ...f, model: e.target.value })} />
               : <select value={f.model || st.models[0]} onChange={(e) => setF({ ...f, model: e.target.value })}>{st.models.map((m) => <option key={m} value={m}>{m}</option>)}</select>}</label>
             {f.provider === 'local' && <label className="field"><span>Schlüssel (optional, Bearer)</span><input type="password" value={f.apiKey} autoComplete="new-password" placeholder="leer, wenn der Server keinen verlangt" onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>}
+            {f.provider === 'local' && <div className="full stack" style={{ gap: 4 }}>
+              <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus</label>
+              <span className="muted small">Für Modelle mit Thinking (z. B. Qwen): schneller, weniger Token, keine abgeschnittenen Antworten. Sendet <code>chat_template_kwargs.enable_thinking = false</code> (vLLM, llama.cpp).</span>
+            </div>}
             {error && <div className="error full">{error}</div>}
             <div className="full row">
-              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined }; if (edit === 'new') await api.post('/ai/profiles', body); else await api.patch(`/ai/profiles/${edit.id}`, body); setEdit(null); await invalidateAi(); })}>{edit === 'new' ? 'Anlegen' : 'Speichern'}</button>
+              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.provider === 'local' && f.thinkingOff }; if (edit === 'new') await api.post('/ai/profiles', body); else await api.patch(`/ai/profiles/${edit.id}`, body); setEdit(null); await invalidateAi(); })}>{edit === 'new' ? 'Anlegen' : 'Speichern'}</button>
               {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { await api.patch(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await invalidateAi(); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
               <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
             </div>
@@ -267,26 +271,51 @@ function AiCard() {
   );
 }
 
+/** Denkmodus je Agent: wie Profil, aus oder an; wirkt nur bei lokalen Modellen. */
+function ThinkingSelect({ agent, profile, disabled, onChange }: { agent: AgentUser; profile: AiProfile | null; disabled: boolean; onChange: (v: 'off' | 'on' | null) => void }) {
+  const local = profile?.provider === 'local';
+  return (
+    <select className="mt" style={{ display: 'block' }} value={agent.thinkingMode ?? ''} disabled={disabled || !local} title={local ? 'Denkmodus des Modells für diesen Agenten' : 'Nur bei lokalen Modellen'} onChange={(e) => onChange((e.target.value || null) as 'off' | 'on' | null)}>
+      <option value="">Denken: wie Profil ({profile?.thinkingOff ? 'aus' : 'Standard'})</option>
+      <option value="off">Denken: aus</option>
+      <option value="on">Denken: an</option>
+    </select>
+  );
+}
+
+/** Persona eines Agenten: eine Zeile, Speichern beim Verlassen oder mit Enter, Escape verwirft. */
+function PersonaField({ value, disabled, onSave }: { value: string; disabled: boolean; onSave: (v: string) => void }) {
+  const [v, setV] = useState(value);
+  useEffect(() => setV(value), [value]);
+  return <input type="text" maxLength={300} value={v} disabled={disabled} style={{ width: '100%' }} placeholder="z. B. freundlich, knapp, duzt das Team" title="Persona: beschreibt den Schreibstil des Agenten (Log, Mails, Doku, Chat)"
+    onChange={(e) => setV(e.target.value)} onBlur={() => { if (v.trim() !== value) onSave(v.trim()); }}
+    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />;
+}
+
 /** KI-Agenten: Benutzer ohne Login, vom Org-Admin benannt; in Projekten nur Mitglied mit Stellvertretung, Arbeitspakete weist die PL zu. */
 function AgentsCard() {
   const d = useData<{ agents: AgentUser[] }>('/agents');
   const st = useAiStatus();
   const [name, setName] = useState('');
+  const [persona, setPersona] = useState('');
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   return (
     <div className="card">
       <h2>KI-Agenten</h2>
-      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie PL oder Org-Admin. Die PL nimmt ihn als Mitglied mit Stellvertretung ins Projekt (dort auch „darf Mails senden“) und weist ihm Arbeitspakete zu. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Nachfragen per Mail, Blockade melden, Eskalation an die PL. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
+      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie PL oder Org-Admin. Die PL nimmt ihn als Mitglied mit Stellvertretung ins Projekt (dort auch „darf Mails senden“) und weist ihm Arbeitspakete zu. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Nachfragen per Mail, Blockade melden, Eskalation an die PL; im Chat ist er direkt erreichbar. Die Persona beschreibt in einer Zeile seinen Schreibstil (Log, Mails, Doku, Chat); Fakten- und Rechteregeln gehen ihr vor. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
       {error && <div className="error mb">{error}</div>}
-      {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>KI-Profil</th><th>Projekte</th><th>Läufe</th><th>Letzter Lauf</th><th /></tr></thead><tbody>
+      {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Persona (Schreibstil)</th><th>KI-Profil</th><th>Projekte</th><th>Läufe</th><th>Letzter Lauf</th><th /></tr></thead><tbody>
         {d.data.agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.email}</div></td>
-          <td><select value={a.aiProfileId ?? ''} disabled={busy} onChange={(e) => void run(async () => { await api.patch(`/agents/${a.id}`, { aiProfileId: e.target.value || null }); await d.reload(); })}><option value="">– Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ': keines'} –</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select></td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}{a.projects.length === 0 && <span className="muted">–</span>}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
+          <td style={{ minWidth: 240 }}><PersonaField value={a.persona ?? ''} disabled={busy} onSave={(persona) => void run(async () => { await api.patch(`/agents/${a.id}`, { persona: persona || null }); await d.reload(); })} /></td>
+          <td><select value={a.aiProfileId ?? ''} disabled={busy} onChange={(e) => void run(async () => { await api.patch(`/agents/${a.id}`, { aiProfileId: e.target.value || null }); await d.reload(); })}><option value="">– Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ': keines'} –</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>
+            <ThinkingSelect agent={a} profile={st?.profiles.find((p) => p.id === (a.aiProfileId ?? st?.defaultProfileId)) ?? null} disabled={busy} onChange={(thinkingMode) => void run(async () => { await api.patch(`/agents/${a.id}`, { thinkingMode }); await d.reload(); })} /></td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}{a.projects.length === 0 && <span className="muted">–</span>}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
           <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => { const n = window.prompt('Neuer Name', a.name); if (n?.trim()) void run(async () => { await api.patch(`/agents/${a.id}`, { name: n.trim() }); await d.reload(); }); }}>Umbenennen</button>{' '}
             {a.active ? <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Agent deaktivieren', text: `${a.name} deaktivieren? Zuweisungen werden entfernt, Mitgliedschaften und Historie bleiben.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.patch(`/agents/${a.id}`, { active: false }); await d.reload(); }); })}>Deaktivieren</button> : <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: true }); await d.reload(); })}>Aktivieren</button>}</td></tr>)}
       </tbody></table>}
-      <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post('/agents', { name }); setName(''); await d.reload(); }); }}>
+      <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post('/agents', { name, persona: persona.trim() || null }); setName(''); setPersona(''); await d.reload(); }); }}>
         <input type="text" placeholder="Name des Agenten, z. B. Nachfasser" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 280 }} />
+        <input type="text" placeholder="Persona (optional): Schreibstil, z. B. freundlich, knapp, duzt das Team" maxLength={300} value={persona} onChange={(e) => setPersona(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
         <button className="btn primary sm" disabled={busy || !name.trim()}>Agent anlegen</button>
       </form>
     </div>

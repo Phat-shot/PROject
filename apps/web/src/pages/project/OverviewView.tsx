@@ -50,16 +50,17 @@ function SetupChecklist({ taskCount }: { taskCount: number }) {
   );
 }
 
+/** Projekt-Dashboard (Dashboard mit Projektfilter): Kennzahlen, Warnungen, Eskalationen, Meilensteine, Auslastung, Aktivität. */
 export function OverviewView() {
   const { detail, openTask, tasks } = useProject();
   const { data: o, error } = useData<Overview>(`/projects/${detail.project.id}/overview`);
   const base = `/projekte/${detail.project.id}`;
-  if (error) return <div className="content"><div className="error">{error}</div></div>;
-  if (!o) return <div className="content muted">Lade …</div>;
+  if (error) return <div className="error">{error}</div>;
+  if (!o) return <div className="muted">Lade …</div>;
   const total = o.counts.open + o.counts.done;
   const pct = total ? Math.round((o.counts.done / total) * 100) : 0;
   return (
-    <div className="content">
+    <div className="overview">
       <div className="row mb" style={{ alignItems: 'flex-start' }}>
         {detail.project.health?.color && <span className={`notice ${detail.project.health.color === 'red' ? 'danger' : detail.project.health.color === 'green' ? 'ok' : ''}`} style={{ padding: '4px 10px' }}><span className={`ampel small ${detail.project.health.color}`} /> Status {{ green: 'grün', yellow: 'gelb', red: 'rot' }[detail.project.health.color]}{detail.project.health.note ? `: ${detail.project.health.note}` : ''}<span className="muted small"> · {detail.project.health.updatedBy}</span></span>}
         {detail.project.description && <p className="muted" style={{ margin: 0 }}>{detail.project.description}</p>}

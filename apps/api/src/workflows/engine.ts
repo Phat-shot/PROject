@@ -152,7 +152,7 @@ export async function advanceRun(db: Db, mail: MailService, runId: string, now =
           await save({ status: 'active', startedAt: now.toISOString() }, false);
           if (step.waitKind === 'approval') {
             const pls = await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [run.project_id]);
-            await notifyMany(db, pls.rows.map((r: any) => r.user_id), { projectId: run.project_id, type: 'workflow.approval', title: `Workflow wartet auf Freigabe: ${run.name}`, body: step.title, link: `/projekte/${run.project_id}/workflows/${run.id}` });
+            await notifyMany(db, pls.rows.map((r: any) => r.user_id), { projectId: run.project_id, type: 'workflow.approval', title: `Workflow wartet auf Freigabe: ${run.name}`, body: step.title, link: `/workflows/laeufe/${run.id}` });
           }
           return run;
         }

@@ -3,13 +3,12 @@ import { useAuth } from './lib/auth';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
-import { AllTasksPage } from './pages/AllTasksPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { UserSettingsPage } from './pages/UserSettingsPage';
 import { InboxPage } from './pages/InboxPage';
 import { CalendarPage } from './pages/CalendarPage';
-import { PortfolioPage } from './pages/PortfolioPage';
 import { ChatPage } from './pages/ChatPage';
+import { HelpPage } from './pages/HelpPage';
 import { WorkflowsPage, WorkflowRunPage } from './pages/WorkflowsPage';
 import { ProjectPage } from './pages/ProjectPage';
 import { MailAccountsPage } from './pages/MailAccountsPage';
@@ -19,7 +18,14 @@ import { SetupPage } from './pages/SetupPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
 import { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { api } from './lib/api';
+
+/** Weiterleitung mit Erhalt der Filter (?…), z. B. alte Links auf „Alle Arbeitspakete“. */
+function KeepQuery({ to }: { to: string }) {
+  const loc = useLocation();
+  return <Navigate to={`${to}${loc.search}`} replace />;
+}
 
 export default function App() {
   const { user, loading } = useAuth();
@@ -44,17 +50,18 @@ export default function App() {
     <Layout>
       <Routes>
         <Route path="/" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/dashboard" element={<DashboardPage />} />
+        <Route path="/dashboard/*" element={<DashboardPage />} />
         <Route path="/postfach/*" element={<InboxPage />} />
         <Route path="/kalender" element={<CalendarPage />} />
-        <Route path="/portfolio" element={<PortfolioPage />} />
+        <Route path="/portfolio" element={<Navigate to="/dashboard/projekte" replace />} />
         <Route path="/chat/:cid?" element={<ChatPage />} />
+        <Route path="/hilfe/:doc?" element={<HelpPage />} />
         <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/workflows/laeufe/:rid" element={<WorkflowRunPage />} />
         <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
         <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />
-        <Route path="/projekte/aufgaben" element={<AllTasksPage />} />
+        <Route path="/projekte/aufgaben" element={<KeepQuery to="/dashboard/arbeitspakete" />} />
         <Route path="/projekte/postfach" element={<Navigate to="/postfach" replace />} />
         <Route path="/meine-aufgaben" element={<Navigate to="/dashboard" replace />} />
         <Route path="/einstellungen/mail-konten" element={<Navigate to="/einstellungen/konfiguration" replace />} />

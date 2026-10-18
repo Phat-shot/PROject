@@ -15,8 +15,8 @@ const timeLabel = (iso: string) => new Date(iso).toLocaleTimeString('de-DE', { h
  * Kanalansicht: Nachrichten (nach Tag gruppiert), Thread rechts, Eingabe mit @Erwähnung.
  * Holt alle 5 s neue Nachrichten; „Ältere laden“ blättert zurück.
  */
-export function ChatPane({ channelId, members, canModerate, placeholder, initialThread, onThreadChange, emptyText, threads = true }: {
-  channelId: string; members: Member[]; canModerate?: boolean; placeholder?: string; initialThread?: string | null; onThreadChange?: (id: string | null) => void; emptyText?: string; threads?: boolean;
+export function ChatPane({ channelId, members, canModerate, placeholder, initialThread, onThreadChange, onSent, emptyText, threads = true }: {
+  channelId: string; members: Member[]; canModerate?: boolean; placeholder?: string; initialThread?: string | null; onThreadChange?: (id: string | null) => void; onSent?: () => void; emptyText?: string; threads?: boolean;
 }) {
   const { user } = useAuth();
   const dialog = useDialog();
@@ -43,6 +43,8 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   };
   useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (thread) void loadThread(thread); }, 5000); return () => clearInterval(h); }, [channelId]);
   useEffect(() => { if (thread) void loadThread(thread); else setReplies([]); onThreadChange?.(thread); }, [thread]);
+  // Thread von außen öffnen (z. B. Suchtreffer im Messenger), ohne den Kanal neu zu laden
+  useEffect(() => { if (initialThread !== undefined && (initialThread ?? null) !== thread) setThread(initialThread ?? null); }, [initialThread]);
   useEffect(() => { const el = listRef.current; if (el && stickBottom.current) el.scrollTop = el.scrollHeight; }, [msgs.length]);
   const onScroll = () => { const el = listRef.current; if (!el) return; stickBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; };
   const older = async () => {
@@ -58,6 +60,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       await api.post(base, { body: body.trim(), threadId });
       if (threadId) { setReply(''); await loadThread(threadId); } else { setText(''); stickBottom.current = true; }
       await load();
+      onSent?.();
     } catch (e) { setError((e as Error).message); }
   };
   const remove = async (m: ChatMessage) => {
