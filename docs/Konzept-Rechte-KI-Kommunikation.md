@@ -19,6 +19,10 @@
 
 Alle Entscheidungen folgen der Empfehlung; 1–6, 10, 11 wurden ausdrücklich gewählt, 7, 8, 9 und 12 sind als Standard übernommen. P11 (Externe Konten) entfällt vorerst.
 
+> **Hinweis zu Migrationsnummern (19.10.2026):** Seit `045_personal_no_org_mail.sql` sind die Nummern in Abschnitt 12 und im Umsetzungsplan um eins verschoben (tatsächlich: 046_groups_rights, 047_notification_rules). Nummern werden bei der Umsetzung nach `ls apps/api/migrations` vergeben.
+>
+> **Ergänzungen (19.10.2026):** Abschnitte 17–19 unten (Mail-Konten mit Bindungen, persönliches Projekt als Projekt, KI-Profile in persönlichen Projekten) und das eigene Konzept `docs/Konzept-KI-Agent.md` (Verhalten, Regel A mit erweiterten Feldern, Chat-Thema, Kennzahlen, Denktiefe, Zeiten). Wo sie abweichen, gelten sie vor 6–8 und 7.2.
+
 ## Umsetzungsplan
 
 | Phase | Umfang | Migration | Abhängig von |
@@ -1390,3 +1394,125 @@ create index task_access_user_idx on task_access(user_id);
 11. **`triggerText`** bekommt Texte für `changed` und `periodic`. `reminder_due` empfiehlt den Chat statt Mail (agent.ts:641).
 12. **ChatPane:** Das Intervall nutzt den aktuellen Thread über `useRef` (ChatPane.tsx:44).
 13. **Dashboard:** Ein Klick auf eine Meldung markiert sie als gelesen.
+
+## 17. Mail-Konten mit Bindungen (Konten allgemein anlegen, Mehrfachverwendung, Standard-Ausgangskonto)
+
+### 17.1 Ist
+
+- `mail_accounts.type` ist genau eins von `personal`, `project`, `org` (001_init.sql:134, 009:2–5); `owner_user_id` bzw. `project_id` hängen daran, der Check-Constraint `mail_accounts_check` (009) erzwingt das, `project_id` ist `on delete cascade`. Ein Org-Postfach gibt es höchstens einmal (nur im Code geprüft: mail.ts:130, oauth.ts:49).
+- Rund 45 Stellen in 17 API-Dateien, 6 Web-Dateien und dem Shared-Typ werten `type`/`owner_user_id` aus: als „das Projektkonto“ (`order by created_at limit 1`: agent.ts:161, reminders.ts:24 als JOIN, escalation.ts:153, notifyMail.ts:51, workflows/engine.ts:224, docs/report.ts:125, meetings.ts:204, docs.ts:296/297/348), als „das Org-Postfach“ (notifyMail.ts:32, users.ts:189, auth.ts:57, engine.ts:225, oauth.ts:49), als Inhalts- und Rechtegrenze „persönlich“ (rights.ts:91–109 getViewRights, origin.ts:11/23 mailBodyOk, actions.ts:34, mailAi.ts:97/152/200/302, agent.ts:142/259/479/486, outbound.ts:168, mail.ts:227/240–254/482/621–764, users.ts:60 Deaktivierung, mail/service.ts:149 Plus-Adresse, seed.ts) und in der Oberfläche (MailAccountsPage, MailView NewView/Rechte, MembersView Mail-Karte, Compose, MailAi, UserSettings).
+
+### 17.2 Soll
+
+Ein Konto ist ein Postfach mit Zugangsdaten und **einem Verwalter**: `managed_user_id` (Person), `managed_project_id` (PL dieses Projekts) oder keines von beiden (Org-Admin). Dazu hat es **Bindungen** (`mail_account_uses`), die sagen, wofür es dient:
+
+| Bindung | Bedeutung | Wer setzt sie | Mehrfach |
+|---|---|---|---|
+| `org` | Absender für Einladungen, Benachrichtigungs-Digest, Systemmails | nur der Org-Admin, nur an Konten, die er verwaltet | höchstens eine je Mandant (Index über `org_id`) |
+| `project` (+ `project_id`, `is_default`) | Projektkonto: Antwortadresse mit Plus-Code, Absender für Agenten, Besprechungseinladungen, Berichte, Eskalationen, Erinnerungen, Workflows | PL des Projekts für Konten mit Verwalter = dieses Projekt oder = sie selbst; der Org-Admin kann ein von ihm verwaltetes Konto jedem Projekt **anbieten**, auch persönlichen (sieht dort nur „persönlich (Name)“, bekommt keine Ansicht und kein Verwaltungsrecht an Ansichten/Entwürfen, Audit `mail_account.offered` ohne Projektnamen im Org-Audit) | je Projekt beliebig viele, genau eins `is_default` |
+| `personal` (+ `user_id`) | erscheint unter „Meine Konten“ der Person; Ansichten daraus teilt nur sie; Senden bleibt bei ihr | die Person selbst für Konten, die sie verwaltet; der Org-Admin kann sein Org-Postfach sich selbst als persönlich binden | je Person beliebig viele |
+
+Regeln:
+- **Ein PL setzt nie `org`.** Konten mit Verwalter Projekt A sind nur an A bindbar; andere Projekte erhalten sie nur per Angebot des Org-Admins (einfache Regel, kein Konto-Sharing zwischen PLs).
+- **Semantik hängt an der Bindung, nicht am Konto.** `mail_views.use_id` (FK auf `mail_account_uses`, cascade) sagt, über welche Bindung eine Ansicht besteht: über `project` → Rollenrechte, Plus-Adresse, Agenten dürfen senden; über `personal` → Eigentümerregeln (Inhalt nur mit Freigabe, Senden und Freigabe nur Eigentümer). Entwürfe ohne Ansicht (Agenten) laufen über die `project`-Bindung des Projekts. `mailBodyOk`, `getViewRights`, mailAi und die Stellen in mail.ts lesen `use`/`use_user_id` statt `account_type`/`owner_user_id`. Wird eine Bindung gelöst, verschwinden ihre Ansichten (cascade), wie heute beim Kontolöschen.
+- **Standard-Ausgangskonto je Projekt:** die erste `project`-Bindung eines Projekts wird Standard; `unbind()` und Kontolöschen rücken die älteste verbleibende eigene Bindung nach; **angebotene Konten (Verwalter ≠ Projekt) werden nie automatisch Standard**. `projectAccount(db, projectId)` liefert nur den Standard, sonst `null` (kein stilles „Ältestes“). `projects.mail_address` wird ein Cache, den nur `setDefault()` schreibt (outbound.ts 4 Stellen lesen ihn weiter). Die PL setzt den Standard in Projekteinstellungen › Mail; Compose zeigt ihn vorbelegt, andere Projektkonten wählbar.
+- **Org-Postfach:** `orgAccount(db, orgId)` liefert die `org`-Bindung; Rückfall auf das Org-Postfach beim Senden (engine.ts:225) nur, wenn `projectPolicy.mail.orgFallback` es erlaubt (persönliche Projekte: nein → Fehler „Kein Projektkonto für den Mail-Schritt“).
+- **Senderechte am Konto** (`accountRights(user, account, projectId)` in `mail/accounts.ts`, genutzt von `maySendDraft`, Compose per `accountId`, docs.ts:296 und dem Agenten): PL eines Projekts mit `project`-Bindung dieses Kontos (für Entwürfe: `d.project_id`) oder Eigentümer der `personal`-Bindung; der Verwalter zusätzlich nur in normalen Projekten. Compose per `accountId` ist zulässig, wenn das Konto eine `project`-Bindung für `b.projectId` hat und der Benutzer dort PL ist, oder bei eigener `personal`-Bindung.
+- **Plus-Adresse und Direktversand:** `sendFromAccount(account, input)` setzt Reply-To mit Plus-Code, wenn `input.projectId` eine `project`-Bindung des Kontos hat (Bindung mitgeben, nicht `type`); `linkByPlusAddress` bleibt. reply_origin direkt (agent.ts:479) und docs.ts:296 prüfen `accountBoundToProject(accountId, projectId)`. Besprechungseinladungen nehmen für Folge-Updates das Konto der ersten Einladung (`meetings.external.accountId`), nicht den aktuellen Standard.
+- **Verwalterwechsel:** `PUT /mail/accounts/:id/manager` (Org-Admin: beliebig; aktueller Verwalter: an die Org oder an ein Projekt, dessen PL er ist). Fällt der Verwalter weg (Benutzer deaktiviert, Projekt gelöscht), verwaltet der Org-Admin; Audit `mail_account.manager_fallback`.
+- **Deaktivierung einer Person** (users.ts:60): Konten mit Verwalter = Person und ohne `project`/`org`-Bindung werden gelöscht; sonst Verwalter auf die Org (oder das Projekt der einzigen `project`-Bindung) übertragen, `personal`-Bindung entfernen, Audit `mail_account.manager_transferred`. **Löschen eines Kontos mit Bindungen**: Bestätigungstext nennt die gebundenen Projekte; Standard rückt je Projekt nach.
+- **Persönliche Projekte:** `accountAllowedInProject` prüft Bindungen: erlaubt sind Konten mit `personal`-Bindung für den Eigentümer oder `project`-Bindung für dieses Projekt (dazu zählt das vom Org-Admin ausdrücklich angebotene Org-Postfach).
+
+### 17.3 Datenmodell (Migrationsnummer bei Umsetzung nach `ls apps/api/migrations`)
+
+```sql
+create table mail_account_uses (
+  id uuid primary key default gen_random_uuid(),
+  org_id uuid not null references orgs(id) on delete cascade,
+  account_id uuid not null references mail_accounts(id) on delete cascade,
+  use text not null check (use in ('org','project','personal')),
+  project_id uuid references projects(id) on delete cascade,
+  user_id uuid references users(id) on delete cascade,
+  is_default boolean not null default false,
+  created_by uuid references users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  check ((use = 'org' and project_id is null and user_id is null) or (use = 'project' and project_id is not null and user_id is null) or (use = 'personal' and user_id is not null and project_id is null))
+);
+create unique index mail_account_uses_uq on mail_account_uses (account_id, use, project_id, user_id) nulls not distinct;
+create unique index mail_account_uses_org_uq on mail_account_uses (org_id) where use = 'org';
+create unique index mail_account_uses_default_uq on mail_account_uses (project_id) where use = 'project' and is_default;
+alter table mail_accounts add column managed_user_id uuid references users(id) on delete set null;
+alter table mail_accounts add column managed_project_id uuid references projects(id) on delete set null;
+alter table mail_accounts add constraint mail_accounts_manager_check check (managed_user_id is null or managed_project_id is null);
+alter table mail_accounts drop constraint if exists mail_accounts_check;
+alter table mail_accounts drop constraint if exists mail_accounts_project_id_fkey;
+alter table mail_accounts add constraint mail_accounts_project_id_fkey foreign key (project_id) references projects(id) on delete set null;
+alter table mail_views add column use_id uuid references mail_account_uses(id) on delete cascade;
+-- Bestand: Verwalter aus dem Typ, eine Bindung je Konto, erstes Projektkonto je Projekt als Standard, Ansichten an die Bindung
+update mail_accounts set managed_user_id = case when type = 'personal' then owner_user_id end, managed_project_id = case when type = 'project' then project_id end;
+insert into mail_account_uses (org_id, account_id, use, project_id, user_id, is_default)
+  select org_id, id, type, case when type = 'project' then project_id end, case when type = 'personal' then owner_user_id end,
+         type = 'project' and id = (select x.id from mail_accounts x where x.project_id = mail_accounts.project_id and x.type = 'project' order by x.created_at limit 1)
+  from mail_accounts;
+update mail_views v set use_id = u.id from mail_account_uses u where u.account_id = v.account_id;
+alter table mail_views alter column use_id set not null;
+```
+
+`type`, `owner_user_id`, `project_id` bleiben eine Version lang als Spiegel des Verwalters (der Server setzt `type` beim Anlegen aus dem Verwalter); sie werden nicht mehr als Bindung ausgewertet und entfallen danach. Teilindizes und `nulls not distinct` laufen bereits unter PGlite (001, 031, 043, 047). Die Migration wählt als Standard dasselbe Konto wie heute `order by created_at limit 1`.
+
+### 17.4 Betroffene Stellen und Helfer
+
+`mail/accounts.ts` (neu): `projectAccount()`, `orgAccount(orgId, {fallbackAllowed})`, `personalAccounts(user)`, `accountUses(account)`, `accountBoundToProject(accountId, projectId)`, `viewUse(viewId)`, `canManageAccount()` (nach Verwalter), `canBind(user, account, use, target)`, `accountRights(user, account, projectId)`, `setDefault()`, `unbind()`.
+
+| Stelle | Umstellung auf |
+|---|---|
+| agent.ts:161/164 (Konto, viewAccount), escalation.ts:153, notifyMail.ts:51, engine.ts:224–225, report.ts:125, meetings.ts:204, docs.ts:297/348 | `projectAccount()`; `orgAccount()` nur mit erlaubtem Rückfall |
+| reminders.ts:24 (JOIN) | Projekte laden, je Projekt `projectAccount()` |
+| docs.ts:296 (explizite accountId), agent.ts:479 (reply_origin direkt) | `accountBoundToProject()` |
+| mail/service.ts:149 (Reply-To mit Plus-Code) | Bindung aus `input.projectId` |
+| rights.ts:91–109 getViewRights, origin.ts:11/23, actions.ts:34, mailAi.ts:97/152/200/302, agent.ts:142/259/486, outbound.ts:168, mail.ts:227/240–254/482/621–764 | `viewUse()`/`use` statt `account_type`/`owner_user_id` |
+| mail.ts:1058 maySendDraft, 886 Compose per accountId, docs.ts:296 | `accountRights()` |
+| notifyMail.ts:32, users.ts:189, auth.ts:57, oauth.ts:49, mail.ts:130 | `orgAccount()`; Eindeutigkeit über den Index |
+| users.ts:60 (Deaktivierung), mail.ts:195–204 (Löschen), mail.ts:139/161/201, oauth.ts:85 (mail_address) | Regeln aus 17.2; `setDefault()` schreibt `projects.mail_address` |
+| mail/access.ts:33 accountAllowedInProject | Bindungen |
+| seed.ts | `mail_account_uses` anlegen (Projektkonto WEB Standard, Org, persönlich Petra) |
+| shared | `MailAccount.managedBy`, `MailAccount.uses: {use, projectId, userId, isDefault}[]`, `MailView.use` statt `accountType` |
+| Web: MailAccountsPage (Liste verwalteter Konten mit Chips „Org“, „Projekt WEB (Standard)“, „persönlich“; „Verwendung hinzufügen“; Verwalter), MailView NewView (Konten aus Bindungen), Rechte-Dialog, MembersView Mail-Karte (Konten des Projekts, Standard setzen, „Konto anbinden“: eigenes anlegen oder verwaltetes binden; angebotene Konten gekennzeichnet), Compose (Kontoauswahl mit Standard), MailAi (Ordner „KI Bearbeiten“ je Bindung), UserSettings | – |
+
+Routen: `GET /mail/accounts` (mit Bindungen), `POST /mail/accounts` (ohne Typzwang: Verwalter = Anleger, Org-Admin optional `managedBy: 'org'`), `POST/DELETE /mail/accounts/:id/uses`, `PUT /mail/accounts/:id/manager`, `PUT /projects/:id/mail/default-account`; `oauth.ts` Start mit Verwalter statt Typ.
+
+Tests: `mail_accounts.test.ts` neu (Bindungen und Rechte je Rolle, PL setzt nie org, Angebot des Org-Admins inkl. persönliches Projekt, Standard setzen/nachrücken/nie automatisch bei Angebot, Reply-To je Bindung, Deaktivierung, Löschen, Migration); Anpassung `mail_actions`, `personal_project`, `origin_mail`, `notify_mail`, `workflows` (persönliches Projekt ohne Konto sendet nicht über das Org-Postfach), `external_scope`.
+
+## 18. Persönliches Projekt bleibt ein Projekt
+
+Ziel: dieselbe Basis, nur minimale Abweichungen, jede Abweichung an genau einer Stelle.
+
+### 18.1 Abweichungen (abschließende Liste)
+
+| Nr. | Abweichung | Stellen heute | Künftig |
+|---|---|---|---|
+| 1 | Anlegen: jede Person, wenn der Mandant es erlaubt; Projektersteller immer; Agenten nie | projects.ts:65–70 | `projectPolicy.canCreate` |
+| 2 | Mitglieder: nur Eigentümer und Agenten; keine Einladungen, keine Gruppen | projects.ts:232, 285; users.ts:234; rights.ts:162 (SQL); MembersView.tsx:275 | `projectPolicy.members`, `SQL.notPersonal` |
+| 3 | Sichtbarkeit nur Mitglieder, nie `org` | projects.ts:146 | `projectPolicy.visibility` |
+| 4 | Org-Admin: kein Inhaltszugriff, verwaltet keine Konten/Ansichten/Entwürfe (darf aber eigene Konten anbieten und entziehen), Audit ohne Details, nicht in Projektlisten der Verwaltung, PL nicht neu bestimmbar | mail.ts:74, 108, 482; users.ts:434–441; projects.ts:320, 333 | `projectPolicy.adminAccess`, `SQL.isPersonal(alias)` |
+| 5 | Postfächer: nur eigene Bindungen (17.2), kein Rückfall auf das Org-Postfach beim Senden | mail/access.ts:33; engine.ts:225 | `projectPolicy.mail` (`orgFallback: false`) |
+| 6 | KI: nur eigenes LLM (`ownLlm`), Org-Profile nur mit `personal_scope`/Auswahl (19) | client.ts:56–57; policy.ts:259–260 | `projectPolicy.ai` |
+| 7 | Keine Systembeiträge der Meldungen im Projektkanal (der Kanal selbst existiert) | notify.ts:154; notifyRules.ts:77; chat.ts:283 | `projectPolicy.channelPosts` |
+| 8 | Start leer: keine Standardordner, keine Vorlage (Server weist `templateId` mit 400 ab) | projects.ts:92; ProjectsPage.tsx:64–74 | `projectPolicy.scaffold` |
+| 9 | Beschriftung „persönlich (Name)“ statt Kürzel in Org-Sichten; Agentenlisten; Audit-Redaktion auch für Agenten mit `agent_project_id` | policy.ts:38; agents.ts:45/47; ai.ts:91; aiPolicy.ts:83; users.ts:435 | `PROJECT_LABEL_SQL` (nach `projectPolicy.ts`) |
+
+Alles andere (Board, Plan, Doku, Besprechungen, Kalender, Workflows, Zeiten, Ressourcen, Agenten, Regeln, Fragen) ist identisch und wird nicht gesondert behandelt. Hauptkonzept 4 (Zeile „Projektkanal bei persönlichen Projekten“) wird an Nr. 7 angeglichen.
+
+### 18.2 Umsetzung
+
+- `src/projectPolicy.ts` exportiert beides: `projectPolicy(p: {personal: boolean; created_by: string})` mit den neun Entscheidungen als Felder, und benannte SQL-Fragmente (`SQL.notPersonal`, `SQL.isPersonal(alias)`, `PROJECT_LABEL_SQL` dorthin verschoben), weil mehrere Stellen SQL-Klauseln sind.
+- Web: `useProjectPolicy(detail.project)` liefert die Entscheidungen und die Beschriftungstexte (MembersView:190, ProjectsPage:64), damit auch Texte nur einmal stehen.
+- Test `project_policy.test.ts`: prüft die neun Abweichungen; statischer Test: `.personal` kommt nur in `projectPolicy.ts`, Migrationen, `mapProject`, Shared-Typen und `useProjectPolicy` vor.
+
+## 19. KI-Profile in persönlichen Projekten
+
+- `ai_profiles.personal_scope boolean not null default false` („auch in persönlichen Projekten“, wirkt nur bei `project_scope = 'all'`; API nimmt es nur damit an, sonst 400; bei „ausgewählte“ werden persönliche Projekte einzeln ausgewählt, der Org-Admin sieht sie als „persönlich (Name)“). `PROJECT_PROFILE_SQL`: `a.project_scope = 'all' and (not p.personal or a.personal_scope or exists (select 1 from ai_profile_projects x where x.profile_id = a.id and x.project_id = p.id))` oder `selected and exists (…)`.
+- **Org-Agenten:** `aiConfigForAgent(db, agentUserId, projectId?)`; für Org-Agenten wird **nur** die Zusatzbedingung für persönliche Projekte geprüft (`not p.personal or a.personal_scope or exists (ai_profile_projects …)`); `project_scope` bleibt für Org-Agenten unangetastet (Hauptkonzept 3.6). Bei `projectId null` (DM) keine Änderung; agentChat.ts:103 prüft je Projekt und filtert damit APs persönlicher Projekte ohne Freigabe aus dem Kontext. Begründung bei Sperre: „Profil im persönlichen Projekt nicht freigegeben (Verwaltung › KI-Profile)“.
+- **Bestand (Leitlinie 0.6):** Die Migration trägt für jedes persönliche Projekt, das heute ein `all`-Profil als Projekt-KI nutzt oder in dem ein Agent (PL-Agent oder Org-Agent, Profil oder Standardprofil) auf einem `all`-Profil läuft, eine Auswahl in `ai_profile_projects` ein (Audit `ai.profile.personal_scope.migrated`); so ändert sich für Bestand nichts, neue persönliche Projekte sehen standardmäßig keine Org-Profile, und der Org-Admin kann die Altfreigaben als „ausgewählt: persönlich (Name)“ entziehen.
+- Stellen: client.ts:55–57 (SQL), 71–78 (aiStatus: `personalScope`), 98–104 (aiConfigForAgent mit projectId), policy.ts:192–194 (Aufruf mit `project.id`), routes/ai.ts (POST/PATCH /ai/profiles), AdminPage (Profilkarte: Kästchen nur bei „alle Projekte“, bei „ausgewählte“ Hinweis), shared (`AiStatus.profiles[].personalScope`), Handbuch §11.
+- Tests: `project_llms.test.ts` (persönliches Projekt sieht Org-Profil nur mit Flag/Auswahl; eigenes LLM wie bisher), `personal_project.test.ts` (Profil A bekommt `personalScope` oder erwartet erst 400 „Dieses LLM ist im Projekt nicht verfügbar“, dann Freigabe), `agent_chat.test.ts` (DM an Org-Agent liefert keine APs aus persönlichen Projekten ohne Freigabe), `ai_policy.test.ts` (Spur „Profil im persönlichen Projekt nicht freigegeben“), Migrationstest für den Backfill.
