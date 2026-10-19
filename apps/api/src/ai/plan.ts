@@ -1,6 +1,6 @@
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
-import { notify } from '../notify.js';
+import { dispatch, dmChannel, notify, projectChannelId } from '../notify.js';
 import { insertTask } from '../tasks/service.js';
 import { queueAgentRun } from './agentEvents.js';
 
@@ -63,11 +63,11 @@ export async function createPlannedTask(db: Db, actor: PlanActor, p: { projectId
   return { id: t.id, number: t.number, title };
 }
 
-/** Zuweisung wirksam machen: Personen benachrichtigen, andere Agenten starten (eigene Arbeit nimmt der Worker beim nächsten Takt auf). */
+/** Zuweisung wirksam machen: Personen benachrichtigen (Klasse assigned, Empfänger nach Regel N), andere Agenten starten (eigene Arbeit nimmt der Worker beim nächsten Takt auf). */
 export async function afterAssign(db: Db, actor: PlanActor, projectId: string, taskId: string, title: string, userId: string | null, kind: string | null) {
   if (!userId || userId === actor.id) return;
   if (kind === 'agent') { queueAgentRun(taskId, 'assigned'); return; }
-  await notify(db, { userId, projectId, type: 'task.assigned', title: `Dir zugewiesen: ${title}`, body: `von ${actor.label}`, link: `/projekte/${projectId}/board?task=${taskId}`, dedupeKey: null });
+  await dispatch(db, { event: 'assigned', projectId, taskId, type: 'task.assigned', title: `Dir zugewiesen: ${title}`, body: `von ${actor.label}`, link: `/projekte/${projectId}/board?task=${taskId}`, ref: { type: 'task', id: taskId }, actorId: actor.id });
 }
 
 /** Termin im Projektkalender (Besprechung ohne Einladung), vorläufig bis eine Person ihn bestätigt (confirmedBy: Person hat den Vorschlag angenommen); optional mit dem Arbeitspaket verknüpft. */
@@ -86,16 +86,9 @@ export const fmtWhen = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short'
  * Die Person bekommt eine Benachrichtigung; Antworten im Chat beantwortet der Agent im Chat und hält sie im Log fest.
  */
 export async function agentChatMessage(db: Db, agent: { id: string; name: string; org_id: string }, target: { userId: string } | { projectId: string }, body: string, projectId: string): Promise<string> {
-  let channelId: string;
-  if ('userId' in target) {
-    const existing = await db.maybeOne(`select c.id from chat_channels c join chat_channel_members a on a.channel_id = c.id and a.user_id = $1 join chat_channel_members b on b.channel_id = c.id and b.user_id = $2 where c.kind = 'dm' and c.org_id = $3 limit 1`, [agent.id, target.userId, agent.org_id]);
-    channelId = existing?.id ?? (await db.one(`insert into chat_channels (org_id, kind) values ($1,'dm') returning id`, [agent.org_id])).id;
-    if (!existing) await db.query(`insert into chat_channel_members (channel_id, user_id) values ($1,$2), ($1,$3)`, [channelId, agent.id, target.userId]);
-  } else {
-    channelId = (await db.one(`insert into chat_channels (org_id, kind, project_id) values ($1,'project',$2) on conflict (project_id) where project_id is not null do update set kind = 'project' returning id`, [agent.org_id, target.projectId])).id;
-  }
+  const channelId = 'userId' in target ? await dmChannel(db, agent.org_id, agent.id, target.userId) : await projectChannelId(db, agent.org_id, target.projectId);
   await db.query(`insert into chat_messages (channel_id, user_id, body) values ($1,$2,$3)`, [channelId, agent.id, body.slice(0, 8000)]);
   await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, agent.id]);
-  if ('userId' in target) await notify(db, { userId: target.userId, projectId, type: 'chat.dm', title: `Nachricht von ${agent.name}`, body: body.length > 160 ? body.slice(0, 160) + ' …' : body, link: `/chat/${channelId}`, dedupeKey: null });
+  if ('userId' in target) await notify(db, { userId: target.userId, projectId, type: 'chat.dm', title: `Nachricht von ${agent.name}`, body: body.length > 160 ? body.slice(0, 160) + ' …' : body, link: `/chat/${channelId}`, ref: { type: 'chat_channel', id: channelId }, actorId: agent.id, chatted: true, dedupeKey: null });
   return channelId;
 }

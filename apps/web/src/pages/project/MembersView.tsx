@@ -17,6 +17,7 @@ import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import { AiFolderDialog } from './MailAi';
+import { ProjectNotifyCard } from '../../components/NotifyRules';
 import type { AgentUser, AiFeatureDef, DocPage, DocTemplate, Group, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
 
 export function MembersView() {
@@ -34,7 +35,7 @@ export function MembersView() {
   return (
     <div className="content settings">
       <nav className="section-nav">
-        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['aussen', 'Außenkommunikation'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['kommunikation', 'Kommunikation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['aussen', 'Außenkommunikation'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
         <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
       </nav>
       <div className="card mb" id="allgemein">
@@ -88,6 +89,10 @@ export function MembersView() {
             <EscalationForm />
             <h3 className="mt">Erinnerungen an Externe</h3>
             <ReminderForm />
+          </div>
+          <div className="card" id="kommunikation">
+            <h2>Kommunikation</h2>
+            <ProjectNotifyCard projectId={detail.project.id} members={detail.members} />
           </div>
           <div className="card" id="reporting">
             <h2>Reporting</h2>

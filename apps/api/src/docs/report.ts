@@ -119,13 +119,13 @@ export async function createReport(db: Db, mail: MailService, projectId: string,
   const pls = (await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [projectId])).rows.map((r: any) => r.user_id);
   const link = `/projekte/${projectId}/doku/${page.id}`;
   if (!direct) {
-    await notifyMany(db, pls, { projectId, type: 'report.review', title: `Bericht zur Prüfung: ${title}`, body: p.recipients.length ? `Nach Prüfung „Final setzen“ und an ${p.recipients.join(', ')} senden.` : 'Kein Empfängerkreis hinterlegt.', link, dedupeKey: `report:${page.id}` });
+    await notifyMany(db, pls, { projectId, type: 'report.review', title: `Bericht zur Prüfung: ${title}`, body: p.recipients.length ? `Nach Prüfung „Final setzen“ und an ${p.recipients.join(', ')} senden.` : 'Kein Empfängerkreis hinterlegt.', link, ref: { type: 'page', id: page.id }, dedupeKey: `report:${page.id}` });
     return { pageId: page.id, title, sent: false, to: p.recipients, status: 'draft' };
   }
   const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [projectId]);
   if (!account || p.recipients.length === 0) {
     const error = !account ? 'Kein Projektkonto für den Versand' : 'Kein Empfängerkreis hinterlegt';
-    await notifyMany(db, pls, { projectId, type: 'report.failed', title: `Bericht erzeugt, nicht versendet: ${title}`, body: error, link, dedupeKey: `reportfail:${page.id}` });
+    await notifyMany(db, pls, { projectId, type: 'report.failed', title: `Bericht erzeugt, nicht versendet: ${title}`, body: error, link, ref: { type: 'page', id: page.id }, dedupeKey: `reportfail:${page.id}` });
     return { pageId: page.id, title, sent: false, to: p.recipients, status: 'final', error };
   }
   try {
@@ -141,11 +141,11 @@ export async function createReport(db: Db, mail: MailService, projectId: string,
     await writeFile(storage, pdf);
     await db.query(`insert into attachments (project_id, page_id, filename, mime, size, storage_path, uploaded_by) values ($1,$2,$3,'application/pdf',$4,$5,$6)`, [projectId, page.id, filename, pdf.length, storage, actor]);
     await audit(db, { orgId: pr.org_id, projectId, userId: opts.manual ? actor : null, action: 'report.sent', objectType: 'doc_page', objectId: page.id, details: { to: p.recipients, messageId: r.messageId, pdf: filename } });
-    await notifyMany(db, pls, { projectId, type: 'report.sent', title: `Bericht versendet: ${title}`, body: `An ${p.recipients.join(', ')}`, link, dedupeKey: `reportsent:${page.id}` });
+    await notifyMany(db, pls, { projectId, type: 'report.sent', title: `Bericht versendet: ${title}`, body: `An ${p.recipients.join(', ')}`, link, ref: { type: 'page', id: page.id }, dedupeKey: `reportsent:${page.id}` });
     return { pageId: page.id, title, sent: true, to: p.recipients, status: 'final' };
   } catch (e: any) {
     const error = String(e?.message ?? e);
-    await notifyMany(db, pls, { projectId, type: 'report.failed', title: `Berichtsversand fehlgeschlagen: ${title}`, body: error, link, dedupeKey: `reportfail:${page.id}` });
+    await notifyMany(db, pls, { projectId, type: 'report.failed', title: `Berichtsversand fehlgeschlagen: ${title}`, body: error, link, ref: { type: 'page', id: page.id }, dedupeKey: `reportfail:${page.id}` });
     await audit(db, { orgId: pr.org_id, projectId, userId: null, action: 'report.failed', objectType: 'doc_page', objectId: page.id, details: { error } });
     return { pageId: page.id, title, sent: false, to: p.recipients, status: 'final', error };
   }

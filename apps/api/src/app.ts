@@ -29,6 +29,7 @@ import { agentRoutes } from './routes/agents.js';
 import { copyRoutes } from './routes/copy.js';
 import { chatRoutes } from './routes/chat.js';
 import { workflowRoutes } from './routes/workflows.js';
+import { notifyRuleRoutes } from './routes/notifyRules.js';
 import { registerAgentChatRunner, registerAgentRunner, registerMailAiRunner } from './ai/agentEvents.js';
 import { runForTask } from './ai/agent.js';
 import { runAgentChat } from './ai/agentChat.js';
@@ -130,6 +131,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(copyRoutes);
       await api.register(chatRoutes);
       await api.register(workflowRoutes);
+      await api.register(notifyRuleRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

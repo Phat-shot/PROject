@@ -11,7 +11,7 @@ import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTas
 import { mailAccess } from '../mail/access.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
-import { notify, notifyMany } from '../notify.js';
+import { dispatch } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
@@ -230,7 +230,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.estimateMinutes) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [r.id, Math.round(b.estimateMinutes)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'task.create', objectType: 'task', objectId: r.id, details: { title: b.title, ...(b.parentId ? { parentId: b.parentId } : {}) } });
     if (b.parentId) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [b.parentId, user.id, `Aufgabe angelegt: ${b.title.trim()}`]);
-    if (b.responsibleUserId) await notify(db, { userId: b.responsibleUserId, projectId: req.params.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}/board?task=${r.id}`, dedupeKey: null });
+    if (b.responsibleUserId) await dispatch(db, { event: 'assigned', projectId: req.params.id, taskId: r.id, type: 'task.assigned', title: `Dir zugewiesen: ${b.title.trim()}`, body: `von ${user.name}`, link: `/projekte/${req.params.id}/board?task=${r.id}`, ref: { type: 'task', id: r.id }, actorId: user.id });
     return { task: await loadTask(db, r.id) };
   });
 
@@ -314,18 +314,14 @@ export async function taskRoutes(app: FastifyInstance) {
     if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
       await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [req.params.id, user.id, b.blocked ? `Blockiert gemeldet${b.blockedReason ? `: ${b.blockedReason}` : ''}. Teilprojekt-Verantwortung wird informiert.` : 'Blockade aufgehoben.']);
-      if (b.blocked) {
-        const sub = await db.maybeOne(`select s.responsible_user_id from tasks t join subprojects s on s.id = t.subproject_id where t.id = $1`, [req.params.id]);
-        const lead = await resolveProjectLead(db, existing.project_id);
-        const tgt = sub?.responsible_user_id ?? lead.userId;
-        if (tgt) await notify(db, { userId: tgt, projectId: existing.project_id, type: 'escalation', title: `Blockiert: ${existing.title}`, body: `${user.name}: ${b.blockedReason ?? 'kein Grund angegeben'}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}` });
-      }
+      // Klasse blocked: Standard TP-Verantwortung, sonst verantwortliche PL (Regel N)
+      if (b.blocked) await dispatch(db, { event: 'blocked', projectId: existing.project_id, taskId: existing.id, type: 'escalation', title: `Blockiert: ${existing.title}`, body: `${user.name}: ${b.blockedReason ?? 'kein Grund angegeben'}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}`, ref: { type: 'task', id: existing.id }, actorId: user.id, logged: true });
     } else if ('blockedReason' in b && existing.blocked) {
       await db.query(`update tasks set blocked_reason = $2 where id = $1`, [req.params.id, b.blockedReason?.trim() || null]);
     }
     await touchTask(db, req.params.id);
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id && b.responsibleUserId !== user.id) {
-      await notify(db, { userId: b.responsibleUserId, projectId: existing.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}` });
+      await dispatch(db, { event: 'assigned', projectId: existing.project_id, taskId: existing.id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}`, ref: { type: 'task', id: existing.id }, actorId: user.id });
     }
     if (b.columnId && b.columnId !== existing.column_id) {
       const newCol = await db.one(`select is_done from board_columns where id = $1`, [b.columnId]);
@@ -422,7 +418,7 @@ export async function taskRoutes(app: FastifyInstance) {
       // Betroffene informieren (Zuständige der verschobenen Arbeitspakete)
       for (const c of changes) {
         const t = (await loadTask(db, c.id))!;
-        if (t.responsible.userId) await notify(db, { userId: t.responsible.userId, projectId: existing.project_id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${t.id}` });
+        await dispatch(db, { event: 'assigned', projectId: existing.project_id, taskId: t.id, type: 'plan.shifted', title: `Termin verschoben: ${t.title}`, body: `Neue Deadline ${c.dueTo ?? '–'} (vorher ${c.dueFrom ?? '–'}), ausgelöst durch „${existing.title}“ von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, actorId: user.id });
       }
     }
     return { changes, applied: Boolean(req.body?.apply) };
@@ -442,10 +438,9 @@ export async function taskRoutes(app: FastifyInstance) {
     const targets = new Set<string>();
     if (level >= 1) targets.add(existing.sub_resp ?? lead.userId ?? '');
     if (level >= 2) (await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [existing.project_id])).rows.forEach((r: any) => targets.add(r.user_id));
-    if (level >= 3 && policy.contactUserId) targets.add(policy.contactUserId);
     targets.delete('');
     const body = `${user.name} eskaliert von Hand${req.body?.note ? `: ${req.body.note}` : ''}`;
-    await notifyMany(db, targets, { projectId: existing.project_id, type: 'escalation', title: `Eskalation ${LEVEL_LABEL[level]}: ${existing.title}`, body, link: `/projekte/${existing.project_id}/board?task=${existing.id}` }, user.id);
+    await dispatch(db, { event: 'escalation', projectId: existing.project_id, taskId: existing.id, users: targets, roles: { escalation_contact: level >= 3 && policy.contactUserId ? [policy.contactUserId] : [] }, type: 'escalation', title: `Eskalation ${LEVEL_LABEL[level]}: ${existing.title}`, body, link: `/projekte/${existing.project_id}/board?task=${existing.id}`, ref: { type: 'task', id: existing.id }, actorId: user.id, logged: true });
     await db.query(`update tasks set escalation_level = greatest(escalation_level, $2), escalated_at = now() where id = $1`, [existing.id, level]);
     await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [existing.id, user.id, `Eskalation ${LEVEL_LABEL[level]} (manuell). ${body}`]);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'escalation.manual', objectType: 'task', objectId: existing.id, details: { level, note: req.body?.note ?? null } });
@@ -509,13 +504,15 @@ export async function taskRoutes(app: FastifyInstance) {
     if (user.kind !== 'agent') queueAgentRun(req.params.id, 'comment');
     const task = (await loadTask(db, req.params.id))!;
     const link = `/projekte/${t.project_id}/board?task=${task.id}`;
-    // Erwähnte zuerst (eigener Typ), danach Zuständige und bisherige Kommentatoren
-    await notifyMany(db, mentions, { projectId: t.project_id, type: 'mention', title: `${user.name} hat dich erwähnt: „${task.title}“`, body: req.body.body.trim().slice(0, 160), link }, user.id);
+    // Klasse log: Erwähnte (eigener Typ, geht vor) und Beteiligte (Zuständige und bisherige Kommentatoren); Empfänger nach Regel N
     const others = await db.query(`select distinct user_id from task_comments where task_id = $1`, [req.params.id]);
-    const targets = new Set<string>(others.rows.map((r: any) => r.user_id));
-    if (task.responsible.userId) targets.add(task.responsible.userId);
-    for (const m of mentions) targets.delete(m);
-    await notifyMany(db, targets, { projectId: t.project_id, type: 'task.comment', title: `Kommentar zu „${task.title}“`, body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link }, user.id);
+    const participants = new Set<string>(others.rows.map((r: any) => r.user_id));
+    if (task.responsible.userId) participants.add(task.responsible.userId);
+    await dispatch(db, {
+      event: 'log', projectId: t.project_id, taskId: task.id, roles: { mentioned: mentions, participants: [...participants] }, type: 'task.comment', title: `Kommentar zu „${task.title}“`,
+      body: `${user.name}: ${req.body.body.trim().slice(0, 140)}`, link, ref: { type: 'task', id: task.id }, actorId: user.id, logged: true,
+      variants: { mentioned: { type: 'mention', title: `${user.name} hat dich erwähnt: „${task.title}“`, body: req.body.body.trim().slice(0, 160) } }
+    });
     return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, mentions, visibility: c.visibility, createdAt: c.created_at } };
   });
 

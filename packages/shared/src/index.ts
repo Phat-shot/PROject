@@ -38,7 +38,10 @@ export interface User {
 export interface UserSettings {
   language?: 'de' | 'en';
   theme?: 'light' | 'dark' | 'system';
-  /** Meldungen per Mail über das Org-Postfach: aus, sofort (gesammelt je Worker-Lauf) oder täglich als Digest (Standard) */
+  /**
+   * Veraltet (eine Version lang mitgeschrieben): Mail-Modus für alle Meldungen; gilt jetzt als Benutzerregel „*“
+   * der Benachrichtigungsregeln (immediate = sofort, daily = Digest)
+   */
   mailNotifications?: 'off' | 'immediate' | 'daily';
   /** In der Seitenleiste angeheftete Projekte (höchstens 5, in dieser Reihenfolge) */
   pinnedProjects?: string[];
@@ -139,6 +142,8 @@ export interface OrgSettings {
   /** Alle Benutzer dürfen ein persönliches Projekt (Assistent) anlegen */
   personalProjects?: boolean;
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
+  /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
+  notify?: { digestHour?: number };
   ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check' };
 }
 
@@ -430,6 +435,157 @@ export interface Notification {
   link: string | null;
   readAt: string | null;
   createdAt: string;
+  /** Ereignisklasse (Benachrichtigungsregeln) */
+  event?: NotifyEvent;
+  /** Bezug: Frage, Chat-Kanal, Thread, Arbeitspaket, Seite oder Buchung (Gelesen- und Erledigt-Status, Deep-Link) */
+  ref?: { type: NotifyRefType; id: string } | null;
+  /** erledigt (z. B. Frage beantwortet); bis dahin „offen für mich“ */
+  resolvedAt?: string | null;
+  /** Mail-Modus, beim Erzeugen nach Regel N festgeschrieben */
+  mail?: NotifyMail;
+}
+
+/**
+ * Benachrichtigungsregeln (Regel N): jede Meldung gehört zu einer Ereignisklasse; die Regeln setzen je Klasse Empfänger
+ * (Rollen), Kanäle (In-App immer, Chat, Mail, Log, Doku) und Fristen. Ebenen: Code → Org → Projekt → AP → Benutzer →
+ * Benutzer im Projekt → Benutzer am AP; jede gesetzte Angabe überschreibt die vorige, Org und Projekt können Felder sperren.
+ */
+export type NotifyEvent = 'question' | 'decision' | 'approval' | 'synergy' | 'confirm' | 'order_request' | 'external_referral' | 'progress' | 'assigned' | 'blocked' | 'escalation' | 'review' | 'mail_in' | 'log' | 'due' | 'chat' | 'booking' | 'info';
+export type NotifyRefType = 'question' | 'chat_channel' | 'chat_thread' | 'task' | 'page' | 'booking';
+/** Chat: aus, Systembeitrag im zugehörigen Thread (Frage, Auftrag, Direktnachricht des Agenten) oder im Projektkanal */
+export type NotifyChat = 'off' | 'thread' | 'project';
+export type NotifyMail = 'off' | 'now' | 'digest';
+/** Zwischenstände: jeder Lauf mit Ergebnis, Meilensteine (Status, In Prüfung, Entscheidung), einmal am Tag, nur Abschluss */
+export type NotifyEvery = 'each' | 'milestones' | 'daily' | 'done';
+export interface NotifyFields {
+  /** geordnete Rollenliste; „a|b“ = a, sonst b */
+  recipients?: string[];
+  chat?: NotifyChat;
+  mail?: NotifyMail;
+  log?: boolean;
+  /** Seite „Entscheidungen und Meldungen“ (ID) oder aus */
+  doc?: string | false;
+  remindH?: number;
+  escalateH?: number;
+  expireH?: number;
+  every?: NotifyEvery;
+}
+export type NotifyField = keyof NotifyFields;
+export const NOTIFY_FIELDS: NotifyField[] = ['recipients', 'chat', 'mail', 'log', 'doc', 'remindH', 'escalateH', 'expireH', 'every'];
+export const NOTIFY_TIMING: NotifyField[] = ['remindH', 'escalateH', 'expireH', 'every'];
+/** Ebenen der Regel N; code = NOTIFY_DEFAULTS */
+export type NotifyLevel = 'code' | 'org' | 'project' | 'task' | 'user' | 'user_project' | 'user_task';
+export const NOTIFY_LEVEL_LABEL: Record<NotifyLevel, string> = { code: 'Standard', org: 'Org', project: 'Projekt', task: 'AP', user: 'Benutzer', user_project: 'Benutzer im Projekt', user_task: 'Benutzer am AP' };
+/** Felder je Ebene: Empfänger, Log, Doku und Fristen nur Org/Projekt/AP (Doku nur Projekt); Benutzer nur Chat und Mail, am AP dazu every (Berichtswunsch). */
+export const NOTIFY_LEVEL_FIELDS: Record<Exclude<NotifyLevel, 'code'>, NotifyField[]> = {
+  org: ['recipients', 'chat', 'mail', 'log', 'remindH', 'escalateH', 'expireH', 'every'],
+  project: ['recipients', 'chat', 'mail', 'log', 'doc', 'remindH', 'escalateH', 'expireH', 'every'],
+  task: ['recipients', 'chat', 'mail', 'log', 'remindH', 'escalateH', 'expireH', 'every'],
+  user: ['chat', 'mail'],
+  user_project: ['chat', 'mail'],
+  user_task: ['chat', 'mail', 'every']
+};
+export interface NotifyEventDef {
+  key: NotifyEvent;
+  label: string;
+  /** welche Meldungen dazugehören */
+  types: string;
+  /** Standard-Empfänger in Worten (bei „von der Aufrufstelle“ ergänzen Regeln weitere Rollen) */
+  recipientsText: string;
+  /** Fragearten: der Chat ist die Frage selbst (Thread, nicht abschaltbar) */
+  fixedChat?: boolean;
+  /** Chat-Meldungen: kein eigener Chat-Kanal */
+  noChat?: boolean;
+  /** Fristen einstellbar (Erinnern, Weitergeben, Ablauf, Zwischenstände) */
+  timing?: boolean;
+}
+export const NOTIFY_EVENTS: NotifyEventDef[] = [
+  { key: 'question', label: 'Frage', types: 'offene Fragen', recipientsText: 'Kette ab Stufe 0 (von der Aufrufstelle)', fixedChat: true, timing: true },
+  { key: 'decision', label: 'Entscheidung', types: 'Entscheidung, Agent „an die PL“', recipientsText: 'verantwortliche PL', fixedChat: true, timing: true },
+  { key: 'approval', label: 'Bestätigung', types: 'angehaltene Agentenaktionen', recipientsText: 'Freigabeberechtigte', fixedChat: true, timing: true },
+  { key: 'synergy', label: 'Überschneidung', types: 'Überschneidungen zwischen APs', recipientsText: 'beide Zuständige, sonst PL (von der Aufrufstelle)', fixedChat: true, timing: true },
+  { key: 'confirm', label: 'Vorläufiger Termin', types: 'vorläufige Termine und Buchungen', recipientsText: 'Zuständige(r)', fixedChat: true, timing: true },
+  { key: 'order_request', label: 'Auftragsvorschlag', types: 'Auftragsvorschläge von Mitgliedern', recipientsText: 'verantwortliche PL', timing: true },
+  { key: 'external_referral', label: 'Rückfrage von extern', types: 'Rückfragen Externer außerhalb ihrer Aufgabe', recipientsText: 'Kette ab Auftraggeber (von der Aufrufstelle)', timing: true },
+  { key: 'progress', label: 'Zwischenstand', types: 'Zwischenstände der Agenten', recipientsText: 'Auftraggeber und Berichtswünsche', timing: true },
+  { key: 'assigned', label: 'Zuweisung', types: 'zugewiesen, Termin verschoben', recipientsText: 'Zuständige(r)' },
+  { key: 'blocked', label: 'Blockiert', types: 'blockiert gemeldet (Person oder Agent)', recipientsText: 'TP-Verantwortung, sonst PL' },
+  { key: 'escalation', label: 'Eskalation', types: 'Eskalation (Worker, von Hand), Eskalationsmail', recipientsText: 'Stufen aus den Eskalationsregeln' },
+  { key: 'review', label: 'Prüfung und Freigabe', types: 'Seite/Bericht zur Prüfung, KI-Vorschlag, Workflow, Mail-Freigabe, Außenprüfung', recipientsText: 'Freigabeberechtigte je Vorgang (von der Aufrufstelle)' },
+  { key: 'mail_in', label: 'Mail am AP', types: 'Mail einem AP zugeordnet', recipientsText: 'niemand (nur Log)' },
+  { key: 'log', label: 'Log und Erwähnung', types: 'Kommentar, Erwähnung', recipientsText: 'Beteiligte, Erwähnte' },
+  { key: 'due', label: 'Fälligkeit', types: 'bald fällig, überfällig', recipientsText: 'Zuständige(r)' },
+  { key: 'chat', label: 'Chat', types: 'Direktnachricht, Erwähnung, Antwort', recipientsText: 'Empfänger der Nachricht', noChat: true },
+  { key: 'booking', label: 'Buchung', types: 'Ressourcen und Personen', recipientsText: 'je Buchung (von der Aufrufstelle)' },
+  { key: 'info', label: 'Information', types: 'Bericht versendet, extern bearbeitet, Mail-KI, PL bestimmt', recipientsText: 'wie die Aufrufstelle bestimmt' }
+];
+/** Ebene „Code“ (L0): Standard je Klasse; „–“ beim Doku-Kanal heißt aus, bis die PL die Seite einschaltet. */
+export const NOTIFY_DEFAULTS: Record<NotifyEvent, { recipients: string[]; chat: NotifyChat; mail: NotifyMail; log: boolean; doc: string | false; remindH?: number; escalateH?: number; expireH?: number; every?: NotifyEvery }> = {
+  question: { recipients: [], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 48, escalateH: 120 },
+  decision: { recipients: ['pl'], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 48 },
+  approval: { recipients: ['flag:can_approve'], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 24, escalateH: 72, expireH: 336 },
+  synergy: { recipients: [], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 72 },
+  confirm: { recipients: ['responsible'], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 72 },
+  order_request: { recipients: ['pl'], chat: 'thread', mail: 'now', log: false, doc: false, remindH: 48 },
+  external_referral: { recipients: [], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 72 },
+  progress: { recipients: ['requester'], chat: 'thread', mail: 'off', log: false, doc: false, every: 'milestones' },
+  assigned: { recipients: ['responsible'], chat: 'off', mail: 'digest', log: false, doc: false },
+  blocked: { recipients: ['subproject_lead|pl'], chat: 'off', mail: 'now', log: true, doc: false },
+  escalation: { recipients: ['escalation_contact'], chat: 'off', mail: 'now', log: false, doc: false },
+  review: { recipients: [], chat: 'off', mail: 'digest', log: false, doc: false },
+  mail_in: { recipients: [], chat: 'off', mail: 'off', log: true, doc: false },
+  log: { recipients: ['participants', 'mentioned'], chat: 'off', mail: 'digest', log: false, doc: false },
+  due: { recipients: ['responsible'], chat: 'off', mail: 'digest', log: false, doc: false },
+  chat: { recipients: [], chat: 'off', mail: 'digest', log: false, doc: false },
+  booking: { recipients: [], chat: 'off', mail: 'digest', log: true, doc: false },
+  info: { recipients: [], chat: 'off', mail: 'digest', log: false, doc: false }
+};
+/** Jeder notifications.type gehört zu genau einer Klasse; unbekannte Typen sind „info“. Aufrufstellen können die Klasse ausdrücklich setzen (z. B. blockiert). */
+export const EVENT_OF_TYPE: Record<string, NotifyEvent> = {
+  'task.assigned': 'assigned', 'plan.shifted': 'assigned', escalation: 'escalation',
+  'page.review': 'review', 'report.review': 'review', 'ai.proposal': 'review', 'workflow.approval': 'review', 'mail.approval': 'review', 'draft.review': 'review', 'outbound.review': 'review',
+  'task.comment': 'log', mention: 'log', 'task.due_soon': 'due', 'task.overdue': 'due', 'chat.dm': 'chat', 'chat.mention': 'chat', 'chat.reply': 'chat',
+  'external.referral': 'external_referral', 'task.progress': 'progress',
+  'report.sent': 'info', 'report.failed': 'info', 'page.external_edit': 'info', 'mail.ai': 'info', 'project.lead': 'info'
+};
+export const eventOfType = (type: string): NotifyEvent => EVENT_OF_TYPE[type] ?? 'info';
+/** Empfängerrollen (dazu group:<id> und user:<id>); Agenten, Inaktive, der Auslöser und Personen ohne Sicht auf das AP fallen immer heraus. */
+export const NOTIFY_ROLES: { key: string; label: string }[] = [
+  { key: 'responsible', label: 'Zuständige(r)' },
+  { key: 'parent_responsible', label: 'Zuständige(r) des Über-AP' },
+  { key: 'subproject_lead', label: 'TP-Verantwortung' },
+  { key: 'pl', label: 'verantwortliche PL' },
+  { key: 'deputy_pl', label: 'Stellvertretung' },
+  { key: 'requester', label: 'Auftraggeber' },
+  { key: 'flag:can_approve', label: 'Freigeben' },
+  { key: 'flag:can_finalize', label: 'Final setzen' },
+  { key: 'flag:can_edit_plan', label: 'Projektplan ändern' },
+  { key: 'participants', label: 'Beteiligte' },
+  { key: 'mentioned', label: 'Erwähnte' },
+  { key: 'escalation_contact', label: 'Eskalationsperson (Stufe 3)' },
+  { key: 'project_channel', label: 'Projektkanal' }
+];
+/** Regelzeile einer Ebene: nur gesetzte Angaben zählen, der Rest erbt. */
+export interface NotificationRule {
+  id: string;
+  projectId: string | null;
+  taskId: string | null;
+  userId: string | null;
+  event: NotifyEvent | '*';
+  recipients: string[] | null;
+  channels: Pick<NotifyFields, 'chat' | 'mail' | 'log' | 'doc'>;
+  timing: Pick<NotifyFields, 'remindH' | 'escalateH' | 'expireH' | 'every'>;
+  locked: NotifyField[];
+  updatedBy: string | null;
+  updatedByName: string | null;
+  updatedAt: string;
+}
+/** Aufgelöste Regel einer Klasse mit Herkunft je Feld und gesperrten Feldern (Ebene der Sperre). */
+export interface EffectiveNotifyRule {
+  event: NotifyEvent;
+  value: NotifyFields & { recipients: string[]; chat: NotifyChat; mail: NotifyMail; log: boolean; doc: string | false };
+  origin: Partial<Record<NotifyField, NotifyLevel>>;
+  locked: Partial<Record<NotifyField, 'org' | 'project'>>;
 }
 
 export interface DocShare {

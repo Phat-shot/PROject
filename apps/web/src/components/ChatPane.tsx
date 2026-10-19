@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
 import { useDialog } from './ui';
 
-export interface ChatMessage { id: string; channelId: string; userId: string; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
 interface Member { userId: string; name: string }
 
@@ -77,15 +78,17 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     await api.patch(`/chat/messages/${editing.id}`, { body: editing.body });
     setEditing(null); await load(); if (thread) await loadThread(thread);
   };
+  const system = (m: ChatMessage) => m.kind === 'system';
   const Msg = ({ m, inThread }: { m: ChatMessage; inThread: boolean }) => (
-    <div className={`chat-msg ${m.userId === user?.id ? 'mine' : ''} ${m.deleted ? 'deleted' : ''}`}>
-      <div className="chat-head"><strong>{m.userName}</strong><span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
-        {!m.deleted && m.userId === user?.id && <button className="btn sm link" title="Bearbeiten" onClick={() => setEditing({ id: m.id, body: m.body })}>✎</button>}
-        {!m.deleted && (m.userId === user?.id || canModerate) && <button className="btn sm link" title="Löschen" onClick={() => void remove(m)}>✕</button>}
+    <div className={`chat-msg ${!system(m) && m.userId === user?.id ? 'mine' : ''} ${system(m) ? 'system' : ''} ${m.deleted ? 'deleted' : ''}`}>
+      <div className="chat-head">{system(m) && <span className="badge" title="Systembeitrag nach den Benachrichtigungsregeln">System</span>}{(!system(m) || m.userId) && <strong>{m.userName}</strong>}<span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
+        {!m.deleted && !system(m) && m.userId === user?.id && <button className="btn sm link" title="Bearbeiten" onClick={() => setEditing({ id: m.id, body: m.body })}>✎</button>}
+        {!m.deleted && ((!system(m) && m.userId === user?.id) || canModerate) && <button className="btn sm link" title="Löschen" onClick={() => void remove(m)}>✕</button>}
       </div>
       {editing?.id === m.id
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void saveEdit(); if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
-        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : <MentionText text={m.body} members={members} />}</div>}
+        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
+      {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
         <button className="btn sm link chat-thread-btn" onClick={() => setThread(m.id)}>{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}

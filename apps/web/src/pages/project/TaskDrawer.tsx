@@ -15,6 +15,7 @@ import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
+import { ReportWish } from '../../components/NotifyRules';
 
 interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string; origin: boolean; answered: boolean }
 
@@ -193,6 +194,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} />}
 
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
+
+      <ReportWish taskId={t.id} />
 
       <h3 className="mt">Log und Kommentare</h3>
       {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.source === 'ai' && <span className="badge" style={{ marginLeft: 6 }} title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge" style={{ marginLeft: 6 }} title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.visibility === 'external' && <span className="badge ok" style={{ marginLeft: 6 }} title="Teil des Außenkontexts: KI-Agenten dürfen das Externen zu diesem AP mitteilen">für Externe sichtbar</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}{canEdit && (canPlan || c.userId === me.userId) && <button className="btn sm link" title={c.visibility === 'external' ? 'Wieder nur intern' : 'Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)'} onClick={() => void run(async () => { await api.patch(`/tasks/${t.id}/comments/${c.id}`, { visibility: c.visibility === 'external' ? 'internal' : 'external' }); await load(); })}>{c.visibility === 'external' ? 'nur intern' : 'für Externe freigeben'}</button>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}

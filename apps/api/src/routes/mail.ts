@@ -16,7 +16,7 @@ import { seal } from '../secrets.js';
 import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
-import { notify, notifyMany } from '../notify.js';
+import { dispatch, notifyMany } from '../notify.js';
 import { checkHint } from '../outbound.js';
 import { newShareToken } from '../docs/share.js';
 import { pagePdf, storePagePdf } from '../docs/layout.js';
@@ -667,7 +667,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (b.responsibleEmail) await db.query(`insert into project_contacts (project_id, email) values ($1, lower($2)) on conflict do nothing`, [b.projectId, String(b.responsibleEmail).trim()]);
     queueAgentRun(t.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy, confirmed: Boolean(b.confirmed) } });
-    if (b.responsibleUserId && b.responsibleUserId !== user.id) await notify(db, { userId: b.responsibleUserId, projectId: b.projectId, type: 'task.assigned', title: `Dir zugewiesen: ${(b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200)}`, body: `von ${user.name} (aus Mail)`, link: `/projekte/${b.projectId}/board?task=${t.id}` });
+    if (b.responsibleUserId && b.responsibleUserId !== user.id) await dispatch(db, { event: 'assigned', projectId: b.projectId, taskId: t.id, type: 'task.assigned', title: `Dir zugewiesen: ${(b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200)}`, body: `von ${user.name} (aus Mail)`, link: `/projekte/${b.projectId}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, actorId: user.id });
     return { task: await loadTask(db, t.id) };
   });
 

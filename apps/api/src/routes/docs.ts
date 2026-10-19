@@ -11,7 +11,7 @@ import { requireProject, requireTask } from '../rights.js';
 import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion } from '../docs/service.js';
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
-import { notify, notifyMany, usersWithRight } from '../notify.js';
+import { dispatch, notifyMany, usersWithRight } from '../notify.js';
 import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
 import { htmlToMd, mdToHtml, sanitizeHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
@@ -244,7 +244,7 @@ export async function docRoutes(app: FastifyInstance) {
     await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: `page.${to}`, objectType: 'doc_page', objectId: r.id, details: { from: r.status, version: u.version } });
     if (to === 'review') {
-      await notifyMany(db, await usersWithRight(db, r.project_id, 'can_finalize'), { projectId: r.project_id, type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}` }, user.id);
+      await dispatch(db, { event: 'review', projectId: r.project_id, users: await usersWithRight(db, r.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
     }
     return { page: mapPage(u) };
   });
@@ -420,7 +420,7 @@ export async function docRoutes(app: FastifyInstance) {
     await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by, external_editor) values ($1,$2,$3,$4,$5,$6,null,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, sh.email]);
     await audit(db, { orgId: (await db.one(`select org_id from projects where id = $1`, [page.project_id])).org_id, projectId: page.project_id, userId: null, action: 'page.external_edit', objectType: 'doc_page', objectId: page.id, details: { email: sh.email, version: u.version, shareId: sh.id } });
     const targets = new Set<string>([sh.created_by, page.created_by].filter(Boolean));
-    await notifyMany(db, targets, { projectId: page.project_id, type: 'page.external_edit', title: `Extern bearbeitet: ${u.title}`, body: `${sh.email} hat Version ${u.version} gespeichert`, link: `/projekte/${page.project_id}/doku/${u.id}` });
+    await notifyMany(db, targets, { projectId: page.project_id, type: 'page.external_edit', title: `Extern bearbeitet: ${u.title}`, body: `${sh.email} hat Version ${u.version} gespeichert`, link: `/projekte/${page.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id } });
     return { page: { ...mapPage(u), updatedByName: sh.email } };
   });
 

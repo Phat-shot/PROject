@@ -12,7 +12,7 @@ import { REFER_MARK, releasedText } from '../outbound.js';
  * zwischen Benutzern des Mandanten, auch mit KI-Agenten (sie antworten über queueAgentChat). Der reguläre Weg der
  * Kommunikation zwischen Projektbeteiligten; Mail bleibt primär für Externe. Ungelesen-Zähler über last_read_at.
  */
-export interface ChatMessage { id: string; channelId: string; userId: string; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systemnachricht aus einem Service (Meldung, Karte), ohne Agentenlauf */ kind: 'user' | 'system'; meta: Record<string, unknown> | null }
 
 const PAGE = 50;
 
@@ -20,14 +20,14 @@ export async function chatRoutes(app: FastifyInstance) {
   const db = app.db;
 
   const mapMessage = (r: any): ChatMessage => ({
-    id: r.id, channelId: r.channel_id, userId: r.user_id, userName: r.user_name ?? '–', threadId: r.thread_id, body: r.deleted_at ? '' : r.body,
+    id: r.id, channelId: r.channel_id, userId: r.user_id ?? null, userName: r.user_name ?? (r.kind === 'system' ? 'System' : '–'), threadId: r.thread_id, body: r.deleted_at ? '' : r.body,
     mentions: typeof r.mentions === 'string' ? JSON.parse(r.mentions) : r.mentions ?? [], replyCount: Number(r.reply_count ?? 0), lastReplyAt: r.last_reply_at ?? null,
-    createdAt: r.created_at, editedAt: r.edited_at ?? null, deleted: Boolean(r.deleted_at)
+    createdAt: r.created_at, editedAt: r.edited_at ?? null, deleted: Boolean(r.deleted_at), kind: r.kind === 'system' ? 'system' : 'user', meta: (typeof r.meta === 'string' ? JSON.parse(r.meta) : r.meta) ?? null
   });
   const MSG_SELECT = `select m.*, u.name as user_name,
       (select count(*)::int from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as reply_count,
       (select max(r.created_at) from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as last_reply_at
-    from chat_messages m join users u on u.id = m.user_id`;
+    from chat_messages m left join users u on u.id = m.user_id`;
 
   /**
    * Arbeitspaket, zu dem der Agent gefragt hat: Thread-Start des Agenten bzw. seine letzte Direktnachricht („KEY-12 „Titel“: …“,
@@ -36,8 +36,8 @@ export async function chatRoutes(app: FastifyInstance) {
    */
   async function answeredTask(agentId: string, channelId: string, threadId: string | null, user: any, messageId: string) {
     const last = threadId
-      ? await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
-      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.thread_id is null and m.deleted_at is null and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
+      ? await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.kind = 'user' and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
+      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.kind = 'user' and m.thread_id is null and m.deleted_at is null and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
     const ref = last ? String(last.body).match(/^([A-Z0-9-]{2,12})-(\d+) „/) : null;
     if (!ref) return null;
     if (!threadId) {
@@ -77,15 +77,21 @@ export async function chatRoutes(app: FastifyInstance) {
 
   async function unreadCount(channelId: string, userId: string): Promise<number> {
     const r = await db.one(
-      `select count(*)::int as n from chat_messages m where m.channel_id = $1 and m.deleted_at is null and m.user_id <> $2
+      `select count(*)::int as n from chat_messages m where m.channel_id = $1 and m.deleted_at is null and m.user_id is distinct from $2
          and m.created_at > coalesce((select last_read_at from chat_channel_members where channel_id = $1 and user_id = $2), '1970-01-01'::timestamptz)`,
       [channelId, userId]
     );
     return r.n;
   }
 
+  /** Kanal gelesen: Zeitpunkt merken und die eigenen Chat-Meldungen dieses Kanals (nicht Meldungen zu Fragen) als gelesen markieren. */
   async function markRead(channelId: string, userId: string) {
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, userId]);
+    await db.query(`update notifications set read_at = now() where user_id = $1 and read_at is null and event = 'chat' and ref_type = 'chat_channel' and ref_id = $2`, [userId, channelId]);
+  }
+  /** Thread geladen: dessen Chat-Meldungen gelten als gelesen. */
+  async function markThreadRead(threadId: string, userId: string) {
+    await db.query(`update notifications set read_at = now() where user_id = $1 and read_at is null and event = 'chat' and ref_type = 'chat_thread' and ref_id = $2`, [userId, threadId]);
   }
 
   async function listMessages(channelId: string, opts: { threadId?: string | null; before?: string | null }) {
@@ -105,6 +111,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const page = await listMessages(channel.id, { threadId: req.query.thread ?? null, before: req.query.before ?? null });
     const unread = await unreadCount(channel.id, user.id);
     if (!req.query.before && !req.query.thread) await markRead(channel.id, user.id);
+    if (req.query.thread) await markThreadRead(req.query.thread, user.id);
     return { channel: { id: channel.id, kind: 'project', projectId: channel.project_id }, ...page, unread, canWrite: Boolean(await getMembership(db, req.params.id, user.id)) };
   });
 
@@ -113,6 +120,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const { channel, canWrite } = await channelAccess(user, req.params.cid);
     const page = await listMessages(channel.id, { threadId: req.query.thread ?? null, before: req.query.before ?? null });
     if (!req.query.before && !req.query.thread) await markRead(channel.id, user.id);
+    if (req.query.thread) await markThreadRead(req.query.thread, user.id);
     return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite };
   });
 
@@ -140,7 +148,7 @@ export async function chatRoutes(app: FastifyInstance) {
       for (const r of members.rows) if (r.kind === 'agent' && mentions.includes(r.user_id)) agents.add(r.user_id);
       // Antwort in einem Thread, in dem ein Agent schon geantwortet hat: der Agent bleibt im Gespräch
       if (threadId) {
-        const inThread = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and u.kind = 'agent' and u.active and m.deleted_at is null`, [threadId]);
+        const inThread = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.kind = 'user' and u.kind = 'agent' and u.active and m.deleted_at is null`, [threadId]);
         for (const a of inThread.rows) if (members.rows.some((x: any) => x.user_id === a.user_id)) agents.add(a.user_id);
       }
     } else {
@@ -149,20 +157,22 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const r = await db.one(`insert into chat_messages (channel_id, user_id, thread_id, body, mentions) values ($1,$2,$3,$4,$5) returning *`, [channel.id, user.id, threadId, body, JSON.stringify(mentions)]);
     await markRead(channel.id, user.id);
+    if (threadId) await markThreadRead(threadId, user.id);
     const snippet = body.slice(0, 160);
     const people = mentions.filter((m) => !agents.has(m));
     if (channel.kind === 'project') {
       const p = await db.one(`select key from projects where id = $1`, [channel.project_id]);
       const link = `/chat/${channel.id}${threadId ? `?thread=${threadId}` : ''}`;
-      await notifyMany(db, people, { projectId: channel.project_id, type: 'chat.mention', title: `${user.name} hat dich im Chat ${p.key} erwähnt`, body: snippet, link }, user.id);
+      const ref = threadId ? { type: 'chat_thread' as const, id: threadId } : { type: 'chat_channel' as const, id: channel.id };
+      await notifyMany(db, people, { projectId: channel.project_id, type: 'chat.mention', title: `${user.name} hat dich im Chat ${p.key} erwähnt`, body: snippet, link, ref, actorId: user.id }, user.id);
       if (threadId) {
         // Thread-Beteiligte (Ersteller und Antwortende) ohne Erwähnte und ohne Agenten
-        const parts = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.user_id <> $2 and u.kind = 'person'`, [threadId, user.id]);
+        const parts = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.kind = 'user' and m.user_id <> $2 and u.kind = 'person'`, [threadId, user.id]);
         const targets = parts.rows.map((x: any) => x.user_id as string).filter((u: string) => !mentions.includes(u));
-        await notifyMany(db, targets, { projectId: channel.project_id, type: 'chat.reply', title: `Antwort im Chat ${p.key}`, body: `${user.name}: ${snippet}`, link, dedupeKey: null }, user.id);
+        await notifyMany(db, targets, { projectId: channel.project_id, type: 'chat.reply', title: `Antwort im Chat ${p.key}`, body: `${user.name}: ${snippet}`, link, ref, actorId: user.id, dedupeKey: null }, user.id);
       }
     } else {
-      for (const to of recipients) await notify(db, { userId: to, projectId: null, type: 'chat.dm', title: `Nachricht von ${user.name}`, body: snippet, link: `/chat/${channel.id}` });
+      for (const to of recipients) await notify(db, { userId: to, projectId: null, type: 'chat.dm', title: `Nachricht von ${user.name}`, body: snippet, link: `/chat/${channel.id}${threadId ? `?thread=${threadId}` : ''}`, ref: threadId ? { type: 'chat_thread', id: threadId } : { type: 'chat_channel', id: channel.id }, actorId: user.id });
     }
     for (const a of agents) {
       // Antwort auf eine Frage des Agenten zu einem Arbeitspaket (Direktnachricht oder Thread, beginnt mit der Kennung): Rückmeldung ins Log, Lauf am Arbeitspaket statt Chat-Antwort
@@ -181,7 +191,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const m = await db.maybeOne(`select * from chat_messages where id = $1 and deleted_at is null`, [req.params.mid]);
     if (!m) throw notFound('Nachricht nicht gefunden');
     const { canWrite } = await channelAccess(user, m.channel_id);
-    if (m.user_id !== user.id) throw forbidden('Nur eigene Nachrichten lassen sich bearbeiten');
+    if (m.user_id !== user.id || m.kind === 'system') throw forbidden('Nur eigene Nachrichten lassen sich bearbeiten (Systemnachrichten nicht)');
     if (!canWrite) throw forbidden(NO_WRITE);
     const body = String(req.body?.body ?? '').trim();
     if (!body) throw badRequest('Nachricht leer');
@@ -194,7 +204,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const m = await db.maybeOne(`select * from chat_messages where id = $1 and deleted_at is null`, [req.params.mid]);
     if (!m) throw notFound('Nachricht nicht gefunden');
     const { isPl } = await channelAccess(user, m.channel_id);
-    if (m.user_id !== user.id && !isPl) throw forbidden('Nur eigene Nachrichten oder als PL löschen');
+    if ((m.user_id !== user.id || m.kind === 'system') && !isPl) throw forbidden('Nur eigene Nachrichten oder als PL löschen (Systemnachrichten nur die PL)');
     await db.query(`update chat_messages set deleted_at = now() where id = $1`, [m.id]);
     return { ok: true };
   });
@@ -249,7 +259,7 @@ export async function chatRoutes(app: FastifyInstance) {
       `select c.id, c.kind, c.project_id, count(m.id)::int as n
        from chat_channels c
        left join chat_channel_members me on me.channel_id = c.id and me.user_id = $1
-       join chat_messages m on m.channel_id = c.id and m.deleted_at is null and m.user_id <> $1 and m.created_at > coalesce(me.last_read_at, '1970-01-01'::timestamptz)
+       join chat_messages m on m.channel_id = c.id and m.deleted_at is null and m.user_id is distinct from $1 and m.created_at > coalesce(me.last_read_at, '1970-01-01'::timestamptz)
        where c.org_id = $2 and ((c.kind = 'dm' and me.user_id is not null) or (c.kind = 'project' and exists (select 1 from project_members pm where pm.project_id = c.project_id and pm.user_id = $1)))
        group by c.id, c.kind, c.project_id`,
       [user.id, user.orgId]
@@ -276,7 +286,7 @@ export async function chatRoutes(app: FastifyInstance) {
        on conflict (project_id) where project_id is not null do nothing`,
       [user.id, user.orgId]
     );
-    const LAST = `(select json_build_object('body', m.body, 'at', m.created_at, 'user', u.name) from chat_messages m join users u on u.id = m.user_id where m.channel_id = c.id and m.deleted_at is null order by m.created_at desc limit 1)`;
+    const LAST = `(select json_build_object('body', m.body, 'at', m.created_at, 'user', coalesce(u.name, 'System')) from chat_messages m left join users u on u.id = m.user_id where m.channel_id = c.id and m.deleted_at is null order by m.created_at desc limit 1)`;
     const projects = await db.query(
       `select c.id, p.id as project_id, p.key, p.name, ${LAST} as last
        from chat_channels c join projects p on p.id = c.project_id join project_members pm on pm.project_id = p.id and pm.user_id = $1
@@ -314,9 +324,9 @@ export async function chatRoutes(app: FastifyInstance) {
     if (q.length < 2) return { messages: [] };
     const like = `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
     const rows = await db.query(
-      `select m.id, m.channel_id, m.thread_id, m.body, m.created_at, u.name as user_name, c.kind, p.key as project_key, p.name as project_name,
+      `select m.id, m.channel_id, m.thread_id, m.body, m.created_at, coalesce(u.name, 'System') as user_name, c.kind, p.key as project_key, p.name as project_name,
          (select ou.name from chat_channel_members om join users ou on ou.id = om.user_id where c.kind = 'dm' and om.channel_id = c.id and om.user_id <> $1 limit 1) as partner_name
-       from chat_messages m join users u on u.id = m.user_id join chat_channels c on c.id = m.channel_id left join projects p on p.id = c.project_id
+       from chat_messages m left join users u on u.id = m.user_id join chat_channels c on c.id = m.channel_id left join projects p on p.id = c.project_id
        where c.org_id = $2 and m.deleted_at is null and m.body ilike $3
          and ((c.kind = 'dm' and exists (select 1 from chat_channel_members x where x.channel_id = c.id and x.user_id = $1))
            or (c.kind = 'project' and p.status = 'active' and exists (select 1 from project_members pm where pm.project_id = c.project_id and pm.user_id = $1)))

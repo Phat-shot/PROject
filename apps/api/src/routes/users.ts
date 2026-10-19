@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { hashPassword, mapUser, requireUser, verifyPassword, withManagedGroups } from '../auth.js';
 import { audit } from '../audit.js';
-import { badRequest, forbidden, notFound } from '../errors.js';
+import { badRequest, forbidden, HttpError, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
@@ -9,6 +9,7 @@ import type { Group, Invitation, User } from '@projekttool/shared';
 import { ORG_RIGHTS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
+import { setRules } from '../rules.js';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen); ?all=1 mit Deaktivierten (Org-Admin, zum Reaktivieren)
@@ -127,6 +128,14 @@ export async function userRoutes(app: FastifyInstance) {
       settings.pinnedProjects = [...new Set(ids as string[])];
     }
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
+    // Übergang (eine Version lang): der alte Mail-Modus schreibt in die Benutzerregel „*“ der Benachrichtigungsregeln
+    if (b.settings && 'mailNotifications' in b.settings && settings.mailNotifications) {
+      const mode = ({ immediate: 'now', daily: 'digest', off: 'off' } as const)[settings.mailNotifications as 'immediate' | 'daily' | 'off'];
+      const star = await app.db.maybeOne(`select channels from notification_rules where org_id = $1 and user_id = $2 and project_id is null and task_id is null and event = '*'`, [user.orgId, user.id]);
+      const channels = typeof star?.channels === 'string' ? JSON.parse(star.channels) : star?.channels ?? {};
+      // Sperrt die Org den Mail-Modus, bleibt es bei der Einstellung (die Regel würde ohnehin nicht gelten)
+      try { await setRules(app.db, user, 'user', { orgId: user.orgId, userId: user.id }, [{ event: '*', channels: { ...channels, mail: mode } }]); } catch (e) { if (!(e instanceof HttpError)) throw e; }
+    }
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     // Die Web-App ersetzt damit den angemeldeten Benutzer: managesGroups wie bei /auth/me (Menüpunkt Verwaltung)
     return { user: await withManagedGroups(app.db, mapUser(r)) };
@@ -396,13 +405,7 @@ export async function userRoutes(app: FastifyInstance) {
     return { settings: o.settings };
   });
 
-  // Benachrichtigungen
-  app.get('/notifications', async (req) => {
-    const user = requireUser(req);
-    const rows = await app.db.query(`select * from notifications where user_id = $1 order by read_at nulls first, created_at desc limit 60`, [user.id]);
-    const unread = await app.db.one(`select count(*)::int as c from notifications where user_id = $1 and read_at is null`, [user.id]);
-    return { notifications: rows.rows.map((n: any) => ({ id: n.id, projectId: n.project_id, type: n.type, title: n.title, body: n.body, link: n.link, readAt: n.read_at, createdAt: n.created_at })), unread: unread.c };
-  });
+  // Benachrichtigungen (Liste mit Filtern in notifyRules.ts)
   app.post<{ Body: { ids?: string[]; all?: boolean } }>('/notifications/read', async (req) => {
     const user = requireUser(req);
     if (req.body?.all) await app.db.query(`update notifications set read_at = now() where user_id = $1 and read_at is null`, [user.id]);

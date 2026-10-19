@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 import type { MailService } from './mail/service.js';
-import { notify } from './notify.js';
+import { dispatch } from './notify.js';
 import { createRecurrenceInstance, dateStr, loadTasks } from './tasks/service.js';
 import { nextDueDate, shouldCreateOnDue, type Recurrence } from './tasks/recurrence.js';
 import { audit } from './audit.js';
@@ -12,18 +12,18 @@ import { runAgents } from './ai/agent.js';
 import { runQueuedMailAi } from './ai/mailAi.js';
 import { runWorkflows } from './workflows/engine.js';
 
-/** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig) und Wiederholungen „vor Fälligkeit“. */
+/** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig; Empfänger nach Regel N, Standard die zuständige Person) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
   const soon = new Date(new Date(today + 'T00:00:00Z').getTime() + 3 * 86400_000).toISOString().slice(0, 10);
   const tasks = await loadTasks(db, `t.archived_at is null and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active')`, []);
   let created = 0;
   for (const t of tasks) {
     if (t.done) continue;
-    if (t.dueDate && t.responsible.userId) {
+    if (t.dueDate) {
       if (t.dueDate < today) {
-        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.overdue', title: `Überfällig: ${t.title}`, body: `Fällig war ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, dedupeKey: `overdue:${t.id}:${today}` });
+        await dispatch(db, { event: 'due', projectId: t.projectId, taskId: t.id, type: 'task.overdue', title: `Überfällig: ${t.title}`, body: `Fällig war ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, dedupeKey: `overdue:${t.id}:${today}` });
       } else if (t.dueDate <= soon) {
-        await notify(db, { userId: t.responsible.userId, projectId: t.projectId, type: 'task.due_soon', title: `Bald fällig: ${t.title}`, body: `Fällig am ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, dedupeKey: `due_soon:${t.id}` });
+        await dispatch(db, { event: 'due', projectId: t.projectId, taskId: t.id, type: 'task.due_soon', title: `Bald fällig: ${t.title}`, body: `Fällig am ${t.dueDate}`, link: `/projekte/${t.projectId}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, dedupeKey: `due_soon:${t.id}:${t.dueDate}` });
       }
     }
   }
@@ -44,9 +44,17 @@ export async function runDailyRules(db: Db, today = new Date().toISOString().sli
   return { created };
 }
 
+/** Tägliches Aufräumen: Papierkorb nach 30 Tagen; gelesene und erledigte Meldungen nach 180 Tagen (offene Fragen bleiben, bis sie erledigt sind). */
+export async function runCleanup(db: Db) {
+  await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);
+  await db.query(`delete from doc_pages where deleted_at < now() - interval '30 days'`);
+  await db.query(`delete from notifications where read_at is not null and created_at < now() - interval '180 days' and (ref_type is distinct from 'question' or resolved_at is not null)`);
+}
+
 /**
  * Worker: regelbasierte Abläufe ohne KI. Je Lauf: Mail-Synchronisation aller Konten, abgelaufene Sitzungen,
- * Benachrichtigungen per Mail; einmal täglich Erinnerungen, Wiederholungen, Eskalationen und Reports.
+ * Benachrichtigungen per Mail (sofort bzw. Digest zur Stunde der Org in Europe/Berlin); einmal täglich Erinnerungen,
+ * Wiederholungen, Eskalationen, Reports und das Aufräumen alter Meldungen.
  */
 export function startWorker(db: Db, mail: MailService, opts: { intervalMs: number }) {
   let running = false;
@@ -66,8 +74,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
-        await db.query(`delete from tasks where deleted_at < now() - interval '30 days'`);
-        await db.query(`delete from doc_pages where deleted_at < now() - interval '30 days'`);
+        await runCleanup(db);
         await runDailyRules(db, today);
         await runEscalations(db, today);
         await runReminders(db, mail, today);

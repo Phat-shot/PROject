@@ -1,6 +1,6 @@
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
-import { notify, notifyMany } from '../notify.js';
+import { dispatch, notify } from '../notify.js';
 import { dateStr, loadTasks, resolveProjectLead } from './service.js';
 
 /**
@@ -142,9 +142,9 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
     const pls = await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [pr.id]);
     pls.rows.forEach((r: any) => targets.add(r.user_id));
   }
-  if (row.targetLevel >= 3 && p.contactUserId) targets.add(p.contactUserId);
   targets.delete('');
-  await notifyMany(db, targets, { projectId: pr.id, type: 'escalation', title, body, link, dedupeKey: `esc:${row.taskId}:${row.targetLevel}` });
+  // Klasse escalation: Stufen der Eskalationsregeln, die Eskalationsperson ab Stufe 3 (auch ohne Projektzugriff); Regeln ergänzen Rollen
+  await dispatch(db, { event: 'escalation', projectId: pr.id, taskId: row.taskId, users: targets, roles: { escalation_contact: row.targetLevel >= 3 && p.contactUserId ? [p.contactUserId] : [] }, type: 'escalation', title, body, link, ref: { type: 'task', id: row.taskId }, dedupeKey: `esc:${row.taskId}:${row.targetLevel}`, logged: true });
   await db.query(`update tasks set escalation_level = $2, escalated_at = now() where id = $1`, [row.taskId, row.targetLevel]);
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1, $2, $3, 'system')`, [row.taskId, task.created_by ?? lead.userId, `${title}\n${body}`]);
   await audit(db, { orgId: pr.org_id, projectId: pr.id, userId: null, action: 'escalation.raise', objectType: 'task', objectId: row.taskId, details: { level: row.targetLevel, reason: row.reason, score: row.score, overdueDays: row.overdueDays, staleDays: row.staleDays } });
@@ -167,7 +167,7 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
           await db.query(`update mail_drafts set status = 'failed', error = $2 where id = $1`, [d.id, String(e?.message ?? e)]);
         }
       } else if (lead.userId) {
-        await notify(db, { userId: lead.userId, projectId: pr.id, type: 'mail.approval', title: `Freigabe: Eskalationsmail an ${p.contactEmail}`, body: row.title, link: `/projekte/${pr.id}/mail/freigaben`, dedupeKey: `escmail:${row.taskId}` });
+        await notify(db, { userId: lead.userId, projectId: pr.id, taskId: row.taskId, event: 'escalation', type: 'mail.approval', title: `Freigabe: Eskalationsmail an ${p.contactEmail}`, body: row.title, link: `/projekte/${pr.id}/mail/freigaben`, dedupeKey: `escmail:${row.taskId}` });
       }
     }
   }

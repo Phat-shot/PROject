@@ -342,7 +342,7 @@ export async function referToChain(db: Db, q: { task: any; agent: { id: string; 
   if (!contact) return { error: 'refer: niemand in der Kette (Über-AP, Teilprojekt, PL) erreichbar' };
   const code = `${t.project_key}-${t.number}`;
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [t.id, q.agent.id, `${REFER_MARK}${q.from ? ` (${q.from})` : ''} außerhalb der Aufgabe an ${contact.name} weitergegeben (${contact.why}): ${cut(q.question, 1500)}`]);
-  await notify(db, { userId: contact.id, projectId: t.project_id, type: 'external.referral', title: `${REFER_MARK}: ${t.title}`, body: cut(q.question, 300), link: `/projekte/${t.project_id}/board?task=${t.id}`, dedupeKey: null });
+  await notify(db, { userId: contact.id, projectId: t.project_id, taskId: t.id, type: 'external.referral', title: `${REFER_MARK}: ${t.title}`, body: cut(q.question, 300), link: `/projekte/${t.project_id}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, actorId: q.agent.id, chatted: true, dedupeKey: null });
   await agentChatMessage(db, q.agent, { userId: contact.id }, `${code} „${t.title}“: ${REFER_MARK}${q.from ? ` (${q.from})` : ''}, gehört nicht zu dieser Aufgabe: ${cut(q.question, 1500)}\nAntworte hier; endet deine Antwort mit dem Satz „Darf weitergegeben werden.“, wird sie für Externe sichtbar und ich gebe sie weiter.`, t.project_id);
   const p = await db.one(`select external_profile, mail_address from projects where id = $1`, [t.project_id]);
   const c = profileOf(p.external_profile).contacts?.[0];

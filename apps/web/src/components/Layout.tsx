@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { Notification, Project } from '@projekttool/shared';
+import type { Notification, NotifyEvent, Project } from '@projekttool/shared';
+import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
@@ -8,7 +9,7 @@ import { useAiStatus } from '../lib/useAi';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
-import { useOpenNotification } from './Notifications';
+import { eventLabel, useOpenNotification } from './Notifications';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -166,12 +167,17 @@ export function TopBar({ title, children, tabs }: { title: ReactNode; children?:
   );
 }
 
+/** Glocke: Meldungen mit Filtern (Klasse, Projekt, nur ungelesene); Klick öffnet über openNotification() wie im Dashboard. */
 function Bell() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
+  const [filter, setFilter] = useState<{ event: NotifyEvent | ''; projectId: string; unread: boolean }>({ event: '', projectId: '', unread: false });
+  const [projects, setProjects] = useState<Project[]>([]);
   const openNotification = useOpenNotification();
-  const load = () => api.get<{ notifications: Notification[]; unread: number }>('/notifications').then(setData).catch(() => undefined);
-  useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, []);
+  const query = new URLSearchParams({ ...(filter.event ? { event: filter.event } : {}), ...(filter.projectId ? { projectId: filter.projectId } : {}), ...(filter.unread ? { unread: '1' } : {}) }).toString();
+  const load = () => api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData).catch(() => undefined);
+  useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, [query]);
+  useEffect(() => { if (open && !projects.length) api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined); }, [open]);
   const go = async (n: Notification) => {
     setOpen(false);
     await openNotification(n);
@@ -183,8 +189,13 @@ function Bell() {
       {open && (
         <div className="notif-panel">
           <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><strong>Benachrichtigungen</strong>{data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
+          <div className="notif-filter">
+            <select aria-label="Klasse" value={filter.event} onChange={(e) => setFilter({ ...filter, event: e.target.value as NotifyEvent | '' })}><option value="">alle Klassen</option>{NOTIFY_EVENTS.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}</select>
+            <select aria-label="Projekt" value={filter.projectId} onChange={(e) => setFilter({ ...filter, projectId: e.target.value })}><option value="">alle Projekte</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.key}</option>)}</select>
+            <label className="check small"><input type="checkbox" checked={filter.unread} onChange={(e) => setFilter({ ...filter, unread: e.target.checked })} /> nur ungelesene</label>
+          </div>
           {data.notifications.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Benachrichtigungen.</div>}
-          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{new Date(n.createdAt).toLocaleString('de-DE')}</div></div>)}
+          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{eventLabel(n)}{new Date(n.createdAt).toLocaleString('de-DE')}</div></div>)}
         </div>
       )}
     </div>

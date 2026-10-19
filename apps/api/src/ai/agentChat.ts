@@ -40,7 +40,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
   const channel = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, agent.org_id]);
-  const msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.deleted_at is null`, [messageId, channelId]);
+  const msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.kind = 'user' and m.deleted_at is null`, [messageId, channelId]);
   if (!channel || !msg || msg.user_id === agent.id) return { status: 'skipped' };
   let project: any = null;
   if (channel.kind === 'project') {
@@ -55,7 +55,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body) values ($1,$2,$3,$4)`, [channel.id, agent.id, threadId, body.slice(0, 8000)]);
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channel.id, agent.id]);
     const link = channel.kind === 'project' ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
-    await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(note, note === body ? 160 : 400), link, dedupeKey: null });
+    await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(note, note === body ? 160 : 400), link, ref: threadId ? { type: 'chat_thread', id: threadId } : { type: 'chat_channel', id: channel.id }, actorId: agent.id, chatted: true, dedupeKey: null });
   };
 
   // Gesperrt antwortet der Agent nur, wenn er gemeint ist (Direktnachricht oder Erwähnung), nicht auf jede Folgenachricht im Thread
@@ -81,8 +81,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
 
   // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
   const history = threadId
-    ? await db.query(`select m.body, m.created_at, u.name, u.id as uid from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
-    : await db.query(`select m.body, m.created_at, u.name, u.id as uid from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
+    ? await db.query(`select m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
+    : await db.query(`select m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
   // Eigene Arbeitspakete: im Projektkanal nur dieses Projekt und keine eingeschränkten Teilprojekte (alle Mitglieder lesen mit),
   // in Direktnachrichten nur Projekte und Teilprojekte, die die fragende Person sieht
   const tasks = await db.query(
@@ -113,7 +113,7 @@ Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threa
 Deine offenen Arbeitspakete${project ? ` in ${project.key}` : ''}:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${String(t.due_date instanceof Date ? t.due_date.toISOString() : t.due_date).slice(0, 10)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 Verlauf (älteste zuerst):
-${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
+${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
 
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {

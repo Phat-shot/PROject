@@ -2,7 +2,7 @@ import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
-import { notify, notifyMany, usersWithRight } from '../notify.js';
+import { dispatch, notify, usersWithRight } from '../notify.js';
 import { contactChain, dateStr, touchTask } from '../tasks/service.js';
 import { aiConfigFor, complete, parseJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
@@ -185,8 +185,8 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const busy = contact ? await db.query(`select m.starts_at, m.ends_at from meetings m where m.project_id <> $2 and (m.created_by = $1 or m.attendees @> jsonb_build_array(jsonb_build_object('userId', $1::text))) and m.starts_at >= now() and m.starts_at < now() + interval '45 days' order by m.starts_at limit 20`, [contact.id, task.project_id]) : { rows: [] as any[] };
   // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
   const dms = await db.query(
-    `select m.body, m.created_at, u.name, m.user_id = $1 as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
-       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 join users u on u.id = m.user_id
+    `select m.body, m.created_at, case when m.kind = 'system' then 'System' else u.name end as name, m.user_id = $1 and m.kind = 'user' as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
+       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 left join users u on u.id = m.user_id
      where m.deleted_at is null and m.created_at > now() - interval '7 days'
        and exists (select 1 from chat_channel_members o join project_members pm on pm.user_id = o.user_id and pm.project_id = $2 where o.channel_id = c.id and o.user_id <> $1)
      order by m.created_at desc limit 10`, [agent.id, task.project_id]);
@@ -258,7 +258,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const notifyDraft = async (acc: AccountRow, subject: string, g: GuardResult | null = null) => {
       const targets = acc.type === 'personal' && acc.owner_user_id ? [acc.owner_user_id] : pls.map((p: any) => p.user_id);
       const held = g?.result === 'held';
-      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben` });
+      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, taskId: task.id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben`, actorId: agent.id });
     };
     // Informationsgrenze: Mails an Nicht-Interne laufen über outbound.ts (Neuformulierung, Prüfung, Protokoll)
     const checkIds: string[] = [];
@@ -359,7 +359,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           const u = await db.one(`update doc_pages set status = $2, finalized_at = case when $2 = 'final' then now() else null end, updated_by = $3, updated_at = now() where id = $1 returning *`, [page.id, to, agent.id]);
           await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
           await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: `page.${to}`, objectType: 'doc_page', objectId: u.id, details: { from: page.status, version: u.version } });
-          if (to === 'review') await notifyMany(db, await usersWithRight(db, task.project_id, 'can_finalize'), { projectId: task.project_id, type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${agent.name} (KI-Agent)`, link: `/projekte/${task.project_id}/doku/${u.id}` }, agent.id);
+          if (to === 'review') await dispatch(db, { event: 'review', projectId: task.project_id, taskId: task.id, users: await usersWithRight(db, task.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${agent.name} (KI-Agent)`, link: `/projekte/${task.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: agent.id, logged: true });
           await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite „${u.title}“ → ${{ draft: 'Entwurf', review: 'In Prüfung', final: 'Final' }[to]}`]);
           applied.push(a);
         }
@@ -495,15 +495,13 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       } else if (a.type === 'blocked' && a.reason) {
         await db.query(`update tasks set blocked = true, blocked_reason = $2 where id = $1`, [task.id, a.reason]);
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Blockiert gemeldet: ${a.reason}`]);
-        for (const pl of pls) await notify(db, { userId: (await db.one(`select id from users where email = $1`, [pl.email])).id, projectId: task.project_id, type: 'escalation', title: `Blockiert (Agent): ${task.title}`, body: a.reason, link: `/projekte/${task.project_id}/board?task=${task.id}` });
+        await dispatch(db, { event: 'blocked', projectId: task.project_id, taskId: task.id, type: 'escalation', title: `Blockiert (Agent): ${task.title}`, body: a.reason, link: `/projekte/${task.project_id}/board?task=${task.id}`, ref: { type: 'task', id: task.id }, actorId: agent.id, logged: true });
         applied.push(a);
       } else if (a.type === 'escalate' && a.text) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `An die Projektleitung: ${a.text}`]);
-        // Eskalation kommt auch im Chat an (Direktnachricht an die verantwortliche PL); die Antwort dort landet im Log
-        for (const pl of pls) {
-          await notify(db, { userId: pl.user_id, projectId: task.project_id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}` });
-          await agentChatMessage(db, agent, { userId: pl.user_id }, `${task.project_key}-${task.number} „${task.title}“: ${a.text}`, task.project_id);
-        }
+        // Entscheidung (Klasse decision, Standard: verantwortliche PL); der Chat ist die Direktnachricht des Agenten, die Antwort dort landet im Log
+        const to = await dispatch(db, { event: 'decision', projectId: task.project_id, taskId: task.id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}`, ref: { type: 'task', id: task.id }, actorId: agent.id, logged: true, chatted: true });
+        for (const u of to) await agentChatMessage(db, agent, { userId: u }, `${task.project_key}-${task.number} „${task.title}“: ${a.text}`, task.project_id);
         applied.push(a);
       } else if (a.type === 'refer') {
         // Frage eines Externen außerhalb seiner Aufgabe: an den nächsten Menschen der Kette; der Externe bekommt nur den Verweis
@@ -581,6 +579,14 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
+    // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen
+    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'chat'].includes(x.type));
+    if (content.length) {
+      const doneCols = new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => x.name));
+      const done = content.some((x: any) => x.type === 'set_status' && doneCols.has(x.column));
+      const milestone = done || content.some((x: any) => x.type === 'set_status' || x.type === 'escalate' || (x.type === 'doc_status' && ['review', 'final'].includes(x.status)));
+      await dispatch(db, { event: 'progress', projectId: task.project_id, taskId: task.id, type: 'task.progress', title: `Zwischenstand ${code}: ${task.title}`, body: progressText(content, j.note), link: `/projekte/${task.project_id}/board?task=${task.id}`, ref: { type: 'task', id: task.id }, actorId: agent.id, logged: true, progress: { milestone, done } });
+    }
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run', objectType: 'task', objectId: task.id, details: { runId: run.id, trigger, actions: applied.map((x) => x.type), profile: c.name, model, inputTokens, outputTokens } });
     return { runId: run.id, taskId: task.id, status: errors.length ? 'error' : 'ok', actions: applied, error: errors.length ? errors.join(' | ') : undefined };
   } catch (e: any) {
@@ -589,6 +595,21 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run_failed', objectType: 'task', objectId: task.id, details: { runId: er.id, trigger, error: msg } });
     return { runId: er.id, taskId: task.id, status: 'error', actions: [], error: msg };
   }
+}
+
+const ACTION_LABEL: Record<string, string> = {
+  comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
+  doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
+  blocked: 'Blockiert', escalate: 'An die PL', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen'
+};
+/** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
+function progressText(actions: AgentAction[], note: unknown): string {
+  const lines = actions.map((a: any) => {
+    const detail = a.type === 'set_status' ? a.column : a.type === 'doc_status' ? a.status : a.type === 'mail' || a.type === 'doc_send_pdf' ? `${(a.to ?? []).join(', ')}${a.subject ? `: ${a.subject}` : ''}` : a.title ?? a.reason ?? a.text;
+    return `${ACTION_LABEL[a.type] ?? a.type}${detail ? `: ${cut(String(detail), 120)}` : ''}`;
+  });
+  return cut([lines.join('; '), String(note ?? '').trim()].filter(Boolean).join(' · '), 600);
 }
 
 /**

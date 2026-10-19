@@ -363,6 +363,6 @@ export async function aiRoutes(app: FastifyInstance) {
   /** Meldung an PL und Freigebende; bei einem Arbeitspaket im eingeschränkten Teilprojekt nur an die, die es sehen. */
   async function notifyApprovers(projectId: string, byUserId: string, title: string, body: string, link: string, subprojectId: string | null = null) {
     const rows = await db.query(`select user_id from project_members where project_id = $1 and (role = 'pl' or can_approve) and user_id <> $2`, [projectId, byUserId]);
-    for (const r of rows.rows) if (await canSeeSubproject(db, r.user_id, subprojectId)) await notify(db, { userId: r.user_id, projectId, type: 'ai.proposal', title, body, link });
+    for (const r of rows.rows) if (await canSeeSubproject(db, r.user_id, subprojectId)) await notify(db, { userId: r.user_id, projectId, type: 'ai.proposal', title, body, link, actorId: byUserId });
   }
 }

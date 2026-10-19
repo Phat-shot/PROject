@@ -769,3 +769,15 @@ body:has(.drawer) .chat-fab { display: none; }
 .ai-cell.allow { background: var(--ok-soft); color: var(--ok); border-color: var(--ok-border); font-weight: 700; }
 .ai-cell.deny { background: var(--danger-soft); color: var(--danger); border-color: var(--danger-border); font-weight: 700; }
 .ai-cell.note::after { content: '•'; margin-left: 2px; }
+
+/* Benachrichtigungsregeln: geerbte Werte grau, Schlösser, Systemnachrichten im Chat, Filter der Glocke */
+.grid > .full { grid-column: 1 / -1; }
+.notify-matrix td, .notify-matrix th { vertical-align: top; }
+.notify-matrix select { width: auto; max-width: 220px; font-size: 12px; padding: 2px 4px; }
+.notify-matrix select.inherited { color: var(--muted); }
+.notify-matrix .lock { padding: 0 2px; opacity: 0.5; }
+.notify-matrix .lock.on { opacity: 1; }
+.chat-msg.system { border-left: 3px solid var(--primary); background: var(--surface-2); }
+.chat-msg.system .chat-body { white-space: pre-wrap; }
+.notif-filter { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
+.notif-filter select { width: auto; font-size: 12px; padding: 2px 4px; }

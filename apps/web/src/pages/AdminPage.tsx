@@ -9,6 +9,7 @@ import { TopBar } from '../components/Layout';
 import { Modal, useAsync, useDialog } from '../components/ui';
 import { invalidateAi, useAiStatus } from '../lib/useAi';
 import { useAuth } from '../lib/auth';
+import { OrgNotifyCard } from '../components/NotifyRules';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
@@ -44,6 +45,7 @@ export function AdminPage() {
         <GroupsCard users={users.data?.users ?? []} canAdmin />
         <ProjectLeadsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
+        <OrgNotifyCard />
         <AiPolicyCard />
         <AiCard />
         <ProjectLlmsCard />
