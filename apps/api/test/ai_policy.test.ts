@@ -311,7 +311,9 @@ test('Chat: Absender und Agent werden geprüft; in Direktnachrichten nur Projekt
   await flushAgentRuns();
   const cid = (await t.api(max).post('/chat/dm', { userId: morton.id })).json().channelId;
   const say = async (body: string) => { const n = calls.length; await t.api(max).post(`/chat/channels/${cid}/messages`, { body }); await flushAgentRuns(); return calls.slice(n).find((c) => (c.response_format?.json_schema?.schema?.required ?? []).includes('reply')); };
-  const p1 = await say('Was steht an?');
+  // Zwei gemeinsame Projekte ohne Anhaltspunkt: Rückfrage statt Auskunft (Thema, Agenten-Konzept 6); „über alle Projekte“ fragt beide ab
+  assert.equal(await say('Was steht an?'), undefined, 'Rückfrage ohne LLM-Aufruf');
+  const p1 = await say('Was steht an, über alle Projekte?');
   assert.ok(p1.messages[1].content.includes('Freigaben prüfen') && p1.messages[1].content.includes('Schnittstellen sichten'), 'beide Projekte');
   await rule(admin, { projectId: erp(), feature: 'agent.chat', effect: 'deny' });
   const p2 = await say('Und jetzt?');
@@ -331,13 +333,16 @@ test('Chat: Absender und Agent werden geprüft; in Direktnachrichten nur Projekt
   await clearRules();
   // Morton nur in ERP für den Chat gesperrt, Absender frei: keine Auskunft aus ERP
   await rule(admin, { projectId: erp(), userId: morton.id, feature: 'agent.chat', effect: 'deny' });
-  const p4 = await say('Und in ERP?');
+  // Das gesperrte Projekt ausdrücklich genannt: feste Absage ohne Inhalte und ohne LLM-Aufruf
+  assert.equal(await say('Und in ERP?'), undefined);
+  assert.equal((await t.api(max).get(`/chat/channels/${cid}/messages`)).json().messages.at(-1).body, 'Dazu kann ich dir hier nichts sagen.');
+  const p4 = await say('Und über alle Projekte?');
   assert.ok(p4.messages[1].content.includes('Freigaben prüfen'));
   assert.ok(!p4.messages[1].content.includes('Schnittstellen sichten'), 'Morton in ERP gesperrt: keine Auskunft daraus');
   await clearRules();
   // Sperre der Läufe betrifft den Chat nicht
   await rule(admin, { userId: morton.id, feature: 'agent.run', effect: 'deny' });
-  assert.ok(await say('Läufst du?'), 'Chat trotz gesperrter Läufe');
+  assert.ok(await say('Läufst du, über alle Projekte?'), 'Chat trotz gesperrter Läufe');
   await clearRules();
   // Absender gesperrt: Begründung im Chat (Direktnachricht: voll), übersprungener Lauf ohne Namen und Notiz, kein LLM-Aufruf
   await rule(admin, { userId: t.ids.users.max, feature: 'agent.chat', effect: 'deny', note: 'nur Mail' });

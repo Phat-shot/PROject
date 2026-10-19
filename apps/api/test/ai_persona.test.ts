@@ -60,7 +60,7 @@ test('Agent-Persona: eine Zeile, nur Org-Admin, steht als Schreibstil im Prompt 
   // Persona leeren: Standardstil
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { persona: '  ' })).json().agent.persona, null);
   await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
-  assert.match(calls.at(-1).messages[0].content, /Du schreibst sachlich, kurz und auf Deutsch\./);
+  assert.match(calls.at(-1).messages[0].content, /Du schreibst sachlich, kurz und auf Deutsch; im Team Du, nach außen Sie\./);
   assert.doesNotMatch(calls.at(-1).messages[0].content, /norddeutsch/);
 });
 

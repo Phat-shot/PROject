@@ -573,6 +573,6 @@ test('Hinweise statt Sperre: Abschluss-Antwort mit KI zeigt Fundstellen; Chat-Ag
   await flushAgentRuns();
   const chat = calls.slice(n0).find((c) => String(c.messages[0].content).includes('# Chat'));
   assert.ok(chat, 'Chat-Lauf');
-  assert.match(String(chat.messages[1].content), /Deine offenen Arbeitspakete:\n– keine –/);
+  assert.match(String(chat.messages[1].content), /Thema: kein gemeinsames Projekt mit Alex Admin[\s\S]*Deine offenen Arbeitspakete zum Thema:\n– keine –/);
   assert.ok(!String(chat.messages[1].content).includes('Fliesenarbeiten'));
 });

@@ -2,10 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
+import { berlinWeek, claimCheck } from '../src/ai/agentChat.js';
 
 /** Lokales LLM: Chat-Läufe (erkennbar am System-Prompt) bekommen reply/notes, Arbeitspaket-Läufe keine Aktion. */
 const prompts: string[] = [];
+let lastChatBody: any = null;
 let nextNotes: { taskId: string; text: string }[] = [];
+let nextReply: string | null = null;
 /** Solange gesetzt, wartet ein Chat-Lauf nach dem Prompt auf die Freigabe (Lauf „läuft gerade“). */
 let gate: Promise<void> | null = null;
 const fakeFetch: typeof fetch = async (input, init) => {
@@ -16,9 +19,11 @@ const fakeFetch: typeof fetch = async (input, init) => {
   let content = 'bereit';
   if (body.response_format && system.includes('Man erreicht dich im Chat')) {
     prompts.push(user);
+    lastChatBody = body;
     if (gate) await gate;
-    content = JSON.stringify({ reply: 'Das Angebot liegt vor, ich kläre die Lizenzen.', notes: nextNotes });
+    content = JSON.stringify({ reply: nextReply ?? 'Das Angebot liegt vor, ich kläre die Lizenzen.', notes: nextNotes });
     nextNotes = [];
+    nextReply = null;
   } else if (body.response_format) content = JSON.stringify({ note: 'nichts zu tun', actions: [{ type: 'none', reason: 'Test' }] });
   return new Response(JSON.stringify({ model: 'qwen3', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { status: 200 });
 };
@@ -149,4 +154,154 @@ test('Projektkanal: Erwähnungen in verschiedenen Threads während eines Laufs b
   await flushAgentRuns();
   assert.deepEqual([await answers(a.id), await answers(b.id), await answers(c.id)], [1, 1, 1]);
   assert.equal(prompts.length, n0 + 3, 'ein Lauf je Thread');
+});
+
+test('Kennzahlen-Woche (Europe/Berlin) und claimCheck (deterministisch, nur erste Person)', () => {
+  const w = berlinWeek(new Date());
+  assert.ok(w.sunday >= w.today);
+  assert.equal(new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(w.sunday + 'T12:00:00Z')), 'Sun');
+  assert.deepEqual(berlinWeek(new Date('2026-10-19T10:00:00Z')), { today: '2026-10-19', sunday: '2026-10-25' });
+  assert.deepEqual(berlinWeek(new Date('2026-10-25T23:30:00Z')), { today: '2026-10-26', sunday: '2026-11-01' }, 'Sonntag 23:30 UTC ist in Berlin schon Montag');
+
+  const c1 = claimCheck('Ich habe die Mail an Müller gesendet. Das Angebot liegt vor.', false);
+  assert.equal(c1.text, 'Das konnte ich nicht ausführen: „Ich habe die Mail an Müller gesendet“. Das Angebot liegt vor.');
+  assert.deepEqual(c1.replaced, ['Ich habe die Mail an Müller gesendet.']);
+  assert.equal(claimCheck('Zu WEB-4: Das habe ich im Log eingetragen.', true).replaced.length, 0, 'mit Notiz ist „eingetragen“ wahr');
+  assert.equal(claimCheck('Zu WEB-4: Das habe ich im Log eingetragen.', false).replaced.length, 1, 'ohne Notiz nicht');
+  assert.equal(claimCheck('Die Aufgabe wurde von mir angelegt.', false).replaced.length, 1);
+  assert.equal(claimCheck('Ich habe gesehen, dass Anna das Angebot freigegeben hat.', false).replaced.length, 0, 'Nebensatz über andere');
+  assert.equal(claimCheck('Erledigt: WEB-4 ist abgeschlossen. Anna hat die Mail gesendet.', true).replaced.length, 0, 'nicht erste Person');
+  assert.equal(claimCheck('Ich habe nichts gesendet, das macht die PL.', true).replaced.length, 0, 'Verneinung');
+  assert.equal(claimCheck('Wir haben keine Aufgabe angelegt.', true).replaced.length, 0, 'Verneinung');
+});
+
+test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rückfrage, fremde Kennung, Kennzahlen, claimCheck, Thread-Wurzel', async () => {
+  const pl = await t.login('pl@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const max = await t.login('max@demo.local');
+  const agent = await t.db.one(`select id from users where name = 'Chatty' and kind = 'agent'`);
+  const t4 = await t.db.one(`select number from tasks where id = $1`, [t.ids.tasks.t4]);
+  // Chatty auch in ERP (Anna ist dort PL) mit einem eigenen Arbeitspaket: Max und Chatty haben nun zwei gemeinsame Projekte
+  assert.equal((await t.api(anna).put(`/projects/${t.ids.projects.erp}/members/${agent.id}`, { role: 'member', agentCanMail: false })).statusCode, 200);
+  const erpTask = await t.db.one(`select id, number from tasks where title = 'Schnittstellenliste Altsystem'`);
+  assert.equal((await t.api(anna).patch(`/tasks/${erpTask.id}`, { responsibleUserId: agent.id })).statusCode, 200);
+  await flushAgentRuns();
+  const cid = (await t.api(max).post('/chat/dm', { userId: agent.id })).json().channelId;
+  const say = async (who: Record<string, string>, channel: string, body: string, threadId?: string) => { const r = await t.api(who).post(`/chat/channels/${channel}/messages`, { body, threadId }); assert.equal(r.statusCode, 200, r.body); await flushAgentRuns(); return r.json().message; };
+  const lastReply = async (channel: string) => (await t.api(max).get(`/chat/channels/${channel}/messages`)).json().messages.filter((m: any) => m.userId === agent.id).at(-1).body as string;
+
+  // Kennung: nur dieses Projekt und dieses Arbeitspaket im Prompt, das andere Projekt fehlt vollständig
+  await say(max, cid, `Wie steht es mit WEB-${t4.number}?`);
+  let p = prompts.at(-1)!;
+  assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(in der Nachricht genannt\\)`));
+  assert.ok(p.includes('Angebot Agentur'));
+  assert.ok(!p.includes('ERP') && !p.includes('Schnittstellenliste'), 'anderes Projekt fehlt vollständig');
+  assert.match(p, new RegExp(`Kennzahlen zu WEB-${t4.number}: offen \\d+ · in Arbeit \\d+ · fällig diese Woche \\d+ · überfällig \\d+ · blockiert \\d+ · wartet \\d+`));
+  assert.ok(!p.includes('stammt aus dem Verlauf'));
+  // Anthropic Structured Outputs begrenzt Union-Typen (Typ-Listen, anyOf): das Chat-Schema kommt ohne aus
+  const unions = (o: any): number => !o || typeof o !== 'object' ? 0 : (Array.isArray(o.type) || o.anyOf ? 1 : 0) + Object.values(o).reduce((n: number, v) => n + unions(v), 0);
+  assert.equal(unions(lastChatBody.response_format.json_schema.schema), 0);
+  let run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
+  assert.equal(run.status, 'ok');
+  assert.match(run.reasoning, new RegExp(`Thema: WEB-${t4.number} \\(mentioned\\)`));
+
+  // Verlauf: ohne neue Nennung bleibt das zuletzt genannte Arbeitspaket das Thema, die Antwort beginnt mit „Zu WEB-n:“
+  await say(max, cid, 'Und bis wann?');
+  p = prompts.at(-1)!;
+  assert.match(p, /\(zuletzt im Verlauf genannt\)/);
+  assert.ok(p.includes(`Beginne deine Antwort mit „Zu WEB-${t4.number}:“`));
+  assert.ok(p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste'));
+
+  // Projektname: nur ERP, ohne die eigenen Arbeitspakete aus WEB
+  await say(max, cid, 'Was läuft gerade in der ERP-Einführung?');
+  p = prompts.at(-1)!;
+  assert.match(p, /Thema: Projekt ERP „ERP-Einführung“ \(in der Nachricht genannt\)/);
+  assert.ok(p.includes(`ERP-${erpTask.number} „Schnittstellenliste Altsystem“`));
+  assert.ok(!p.includes('Angebot Agentur') && !p.includes('Kennzahlen zu WEB'));
+  assert.match(p, /Kennzahlen zu ERP: offen \d+/);
+
+  // „über alle Projekte“: beide Projekte, je Zeile mit Kürzel, Kennzahlen je Projekt
+  await say(max, cid, 'Wie sieht es über alle Projekte aus?');
+  p = prompts.at(-1)!;
+  assert.match(p, /Thema: Projekt ERP „ERP-Einführung“, WEB „Website-Relaunch“ \(alle gemeinsamen Projekte, ausdrücklich gefragt\)/);
+  assert.match(p, /Kennzahlen zu ERP: offen \d+[\s\S]*Kennzahlen zu WEB: offen \d+/);
+  assert.ok(p.includes(`- WEB-${t4.number} „Angebot Agentur`) && p.includes(`- ERP-${erpTask.number} „Schnittstellenliste`));
+
+  // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit Projektnamen, keine Inhalte, kein LLM-Aufruf, kein Budget
+  const plDm = (await t.api(pl).post('/chat/dm', { userId: agent.id })).json().channelId;
+  let n0 = prompts.length;
+  await say(pl, plDm, 'Hallo, wie ist der Stand?');
+  assert.equal(prompts.length, n0, 'kein LLM-Aufruf');
+  const ask = (await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1);
+  assert.equal(ask.userId, agent.id);
+  assert.equal(ask.body, 'Zu welchem Projekt? ERP-Einführung (ERP) oder Website-Relaunch (WEB)?');
+  run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.error, 'Rückfrage: Projekt nicht eindeutig');
+  // Kürzel als Antwort genügt
+  await say(pl, plDm, 'WEB');
+  assert.equal(prompts.length, n0 + 1);
+  assert.match(prompts.at(-1)!, /Thema: Projekt WEB „Website-Relaunch“ \(in der Nachricht genannt\)/);
+
+  // Kennung aus einem Projekt, das Max nicht sieht: feste Absage ohne Titel, kein LLM-Aufruf
+  const geh = (await t.api(pl).post('/projects', { key: 'GEH', name: 'Geheimprojekt' })).json().project;
+  assert.equal((await t.api(pl).put(`/projects/${geh.id}/members/${agent.id}`, { role: 'member', agentCanMail: false })).statusCode, 200);
+  const cols = new Map<string, string>((await t.db.query(`select id, name from board_columns where project_id = $1`, [geh.id])).rows.map((c: any) => [c.name, c.id]));
+  const secret = (await t.api(pl).post(`/projects/${geh.id}/tasks`, { title: 'Streng vertraulich', columnId: cols.get('Geplant') })).json().task;
+  n0 = prompts.length;
+  await say(max, cid, `Was ist mit GEH-${secret.number}?`);
+  assert.equal(prompts.length, n0, 'kein LLM-Aufruf');
+  assert.equal(await lastReply(cid), 'Dazu kann ich dir hier nichts sagen.');
+  run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
+  assert.equal(run.status, 'skipped');
+  assert.equal(run.error, `Thema ohne gemeinsame Freigabe: GEH-${secret.number}`);
+  // Gemischt: zum fremden nichts (ohne Titel), zum eigenen normal
+  await say(max, cid, `WEB-${t4.number} und GEH-${secret.number}: wie weit?`);
+  assert.equal(prompts.length, n0 + 1);
+  assert.ok(!prompts.at(-1)!.includes('Streng vertraulich') && !prompts.at(-1)!.includes('Geheimprojekt'));
+  assert.equal(await lastReply(cid), `Zu GEH-${secret.number} kann ich dir hier nichts sagen. Das Angebot liegt vor, ich kläre die Lizenzen.`);
+
+  // Kennzahlen gegen eine Fixture: offen 5 (alle außer Erledigt), in Arbeit 2 (Offen, In Arbeit), fällig diese Woche 1 (heute), überfällig 1, blockiert 1, wartet 1
+  const { today } = berlinWeek(new Date());
+  const shift = (days: number) => { const [y, m, d] = today.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10); };
+  const mk = async (title: string, col: string, dueDate: string | null) => (await t.api(pl).post(`/projects/${geh.id}/tasks`, { title, columnId: cols.get(col), dueDate })).json().task;
+  const a = await mk('Angebot anfordern', 'Offen', today);
+  const b = await mk('Vertrag prüfen', 'In Arbeit', shift(-3));
+  const c = await mk('Kickoff vorbereiten', 'Geplant', null);
+  await mk('Altes Konzept', 'Erledigt', shift(-10));
+  await mk('Später', 'Zurückgestellt', shift(30));
+  assert.equal((await t.api(pl).patch(`/tasks/${b.id}`, { blocked: true, blockedReason: 'Unterschrift fehlt' })).statusCode, 200);
+  await t.db.query(`update tasks set agent_wait = $2 where id = $1`, [c.id, JSON.stringify({ kind: 'reply', reason: 'Antwort der PL', since: new Date().toISOString() })]);
+  assert.equal((await t.api(pl).patch(`/tasks/${a.id}`, { responsibleUserId: agent.id })).statusCode, 200);
+  await flushAgentRuns();
+  await say(pl, plDm, 'Status GEH?');
+  p = prompts.at(-1)!;
+  assert.ok(p.includes('Kennzahlen zu GEH: offen 5 · in Arbeit 2 · fällig diese Woche 1 · überfällig 1 · blockiert 1 · wartet 1'), p);
+  assert.ok(p.includes(`- GEH-${a.number} „Angebot anfordern“`) && !p.includes('Streng vertraulich'), 'eigene Arbeitspakete des Themas, fremde nicht');
+
+  // claimCheck: Behauptung ohne Notiz wird ersetzt und im Lauf vermerkt; mit Notiz bleibt „vermerkt“ stehen
+  nextReply = 'Ich habe die Mail an Müller gesendet. Das Angebot liegt vor.';
+  await say(pl, plDm, 'Hast du die Mail an Müller geschickt?');
+  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1).body, 'Das konnte ich nicht ausführen: „Ich habe die Mail an Müller gesendet“. Das Angebot liegt vor.');
+  run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
+  assert.deepEqual(run.actions.find((x: any) => x.type === 'claim_check'), { type: 'claim_check', replaced: 1, text: 'Ich habe die Mail an Müller gesendet.' });
+  nextReply = 'Ich habe das im Log vermerkt.';
+  nextNotes = [{ taskId: a.id, text: 'PL: Angebot kommt Freitag.' }];
+  await say(pl, plDm, 'Das Angebot kommt Freitag.');
+  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1).body, 'Ich habe das im Log vermerkt.');
+  assert.equal((await t.db.one(`select count(*)::int as n from task_comments where task_id = $1 and body like 'Aus dem Chat%'`, [a.id])).n, 1);
+  run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
+  assert.ok(!run.actions.some((x: any) => x.type === 'claim_check'));
+
+  // Projektkanal mit Thread: die Kennung der Thread-Wurzel bestimmt das Arbeitspaket mit, Kennungen anderer Projekte zählen nicht
+  const ch = (await t.api(pl).get(`/projects/${t.ids.projects.web}/chat`)).json().channel.id;
+  const root = await say(pl, ch, `@Chatty zu WEB-${t4.number} und ERP-${erpTask.number}: wie weit?`);
+  p = prompts.at(-1)!;
+  assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(Projekt dieses Kanals\\)`));
+  assert.ok(!p.includes('Schnittstellenliste'));
+  assert.ok((await t.api(pl).get(`/chat/channels/${ch}/messages?thread=${root.id}`)).json().messages.at(-1).body.startsWith(`Zu ERP-${erpTask.number} kann ich dir hier nichts sagen. `));
+  await say(pl, ch, 'Und die Lizenzen?', root.id);
+  p = prompts.at(-1)!;
+  assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(Projekt dieses Kanals\\)`));
+  assert.match(p, new RegExp(`Kennzahlen zu WEB-${t4.number}:`));
 });

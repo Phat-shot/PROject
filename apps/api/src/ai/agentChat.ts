@@ -1,7 +1,7 @@
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
-import { visibleSubprojectSql } from '../rights.js';
+import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { aiConfigFor, complete, parseJson } from './client.js';
 import { aiAllowed } from './policy.js';
 import { queueAgentRun } from './agentEvents.js';
@@ -12,9 +12,15 @@ import { isInternal } from '../outbound.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
- * schon geantwortet hat. Auskunft gibt er nur über seine eigenen Arbeitspakete und nur aus Projekten, die die
- * fragende Person sehen darf. Enthält die Nachricht etwas für eines seiner Arbeitspakete, hält er es dort im Log fest
- * (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Jeder Lauf zählt gegen das Tagesbudget.
+ * schon geantwortet hat. Jede Antwort hat genau ein Thema, das das System bestimmt (resolveChatScope), nicht das Modell:
+ * im Projektkanal das Projekt des Kanals (im Thread dazu das Arbeitspaket der Thread-Wurzel), in Direktnachrichten die
+ * genannten Kennungen bzw. Projekte, sonst das zuletzt im Verlauf genannte, ausdrücklich „über alle Projekte“ alle
+ * gemeinsamen; ohne Anhaltspunkt fragt er bei mehreren gemeinsamen Projekten nach (ohne LLM-Aufruf). Der Prompt enthält
+ * nur Arbeitspakete des Themas, dazu Kennzahlen, die das System per SQL berechnet. Auskunft gibt er nur über seine eigenen
+ * Arbeitspakete und nur aus Projekten, die die fragende Person sehen darf. Enthält die Nachricht etwas für eines seiner
+ * Arbeitspakete, hält er es dort im Log fest (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Behauptet die
+ * Antwort in der ersten Person, etwas sei angelegt, gesendet oder erledigt, ohne dass eine Notiz dahintersteht, ersetzt das
+ * System den Satz (claimCheck). Jeder LLM-Lauf zählt gegen das Tagesbudget.
  * KI-Freigaben (agent.chat) gelten für Absender und Agent; in Direktnachrichten ohne Projekt, danach antwortet der Agent
  * nur aus Projekten, in denen der Absender „KI nutzen“ hat oder PL ist und beide freigegeben sind. Gesperrt antwortet er
  * nur auf Direktnachrichten und Erwähnungen (nicht auf jede Folgenachricht im Thread); im Projektkanal ohne Namen und Notiz
@@ -33,8 +39,194 @@ const SCHEMA = {
 
 const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').trim(); return t.length > n ? t.slice(0, n) + ' …' : t; };
 const hhmm = (d: string | Date) => new Date(d).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
+const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
 
-export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; error?: string }
+export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask';
+export interface ScopeProject { id: string; key: string; name: string }
+/** Thema einer Chat-Nachricht: Projekte und Arbeitspakete, aus denen der Kontext kommt, und wie es bestimmt wurde. */
+export interface ChatScope {
+  how: ChatScopeHow;
+  /** Projekte des Themas; bei ask leer (Auswahl steht in projects) */
+  projectIds: string[];
+  /** Arbeitspakete des Themas (Kennungen aus Nachricht, Thread-Wurzel oder Verlauf); leer = das ganze Projekt */
+  taskIds: string[];
+  /** Kennungen der Arbeitspakete des Themas, z. B. WEB-12 */
+  refs: string[];
+  /** Kennungen bzw. Kürzel aus der Nachricht, zu denen hier nichts gesagt wird (Projekt nicht sichtbar oder einer gesperrt) */
+  hidden: string[];
+  /** Gemeinsame, beidseitig freie Projekte (Direktnachricht) bzw. das Kanalprojekt */
+  projects: ScopeProject[];
+}
+
+/** „über alle Projekte“, „insgesamt“: Thema sind alle gemeinsamen Projekte. */
+const ALL_RE = /über alle projekte|alle[n]? (meine[n]? |unsere[n]? |gemeinsamen )?projekte[n]?|insgesamt|projektübergreifend/i;
+const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * Kennungen (KEY-12, auch klein geschrieben) und Projekte (Kürzel als Wort in Großschreibung oder Projektname) in einem
+ * Text, geprüft gegen die bekannten Projekte des Mandanten. Ein Kürzel direkt vor „-Nummer“ zählt nur als Kennung.
+ */
+function findMentions(text: string, projects: ScopeProject[]): { refs: { project: ScopeProject; number: number }[]; projects: ScopeProject[] } {
+  const refs: { project: ScopeProject; number: number }[] = [];
+  const found = new Map<string, ScopeProject>();
+  if (!projects.length) return { refs, projects: [] };
+  const keys = [...projects].sort((a, b) => b.key.length - a.key.length).map((p) => escRe(p.key));
+  for (const m of text.matchAll(new RegExp(`(?<![A-Za-z0-9-])(${keys.join('|')})-(\\d{1,6})(?![0-9])`, 'gi'))) {
+    const p = projects.find((x) => x.key === m[1].toUpperCase());
+    if (p) { refs.push({ project: p, number: Number(m[2]) }); found.set(p.id, p); }
+  }
+  for (const p of projects) {
+    // Kürzel nur mit Buchstaben als Wort werten (ein rein numerisches Kürzel wäre jede Jahreszahl)
+    if ((/[A-Z]/.test(p.key) && new RegExp(`(?<![A-Za-z0-9-])${escRe(p.key)}(?![A-Za-z0-9-])`).test(text)) || new RegExp(`(?<![\\p{L}\\p{N}])${escRe(p.name)}(?![\\p{L}\\p{N}])`, 'iu').test(text)) found.set(p.id, p);
+  }
+  return { refs, projects: [...found.values()] };
+}
+
+/**
+ * Thema der Nachricht nach Agenten-Konzept Abschnitt 6 (ohne offene Fragen, die kommen mit P5). Projektkanal: das Projekt
+ * des Kanals, im Thread zusätzlich das Arbeitspaket aus der Kennung der Thread-Wurzel (höchstens 14 Tage alt). Direktnachricht,
+ * in dieser Reihenfolge: Kennungen oder Projektname/-kürzel in der Nachricht (mentioned), ausdrücklich „über alle Projekte“
+ * (all), zuletzt genanntes Arbeitspaket/Projekt des Verlaufs ohne Zeitfenster (history), sonst bei genau einem gemeinsamen
+ * Projekt dieses (all), bei mehreren Rückfrage (ask). Gemeinsam heißt: beide Mitglied, Absender PL oder „KI nutzen“, beide per
+ * KI-Freigabe (agent.chat) frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
+ * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
+ */
+export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string }[]; senderId: string; agent: { id: string; org_id: string } }, now = new Date()): Promise<ChatScope> {
+  const all: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1 order by key`, [q.agent.org_id])).rows;
+  const channelProject = q.channel.kind === 'project' ? all.find((p) => p.id === q.channel.project_id) ?? null : null;
+  /** Arbeitspaket zu einer Kennung; null, wenn es fehlt oder einer von beiden es nicht sieht (eingeschränktes Teilprojekt). */
+  const taskOf = async (r: { project: ScopeProject; number: number }): Promise<{ id: string; project_id: string } | null | undefined> => {
+    const t = await db.maybeOne(`select t.id, t.project_id, t.subproject_id from tasks t where t.project_id = $1 and t.number = $2 and t.deleted_at is null`, [r.project.id, r.number]);
+    if (!t) return undefined;
+    if (channelProject) return t.subproject_id && (await db.maybeOne(`select 1 from subprojects where id = $1 and restricted`, [t.subproject_id])) ? null : t;
+    return (await canSeeSubproject(db, q.senderId, t.subproject_id)) && (await canSeeSubproject(db, q.agent.id, t.subproject_id)) ? t : null;
+  };
+  const ref = (r: { project: ScopeProject; number: number }) => `${r.project.key}-${r.number}`;
+
+  if (channelProject) {
+    const scope: ChatScope = { how: 'channel', projectIds: [channelProject.id], taskIds: [], refs: [], hidden: [], projects: [channelProject] };
+    const texts = [q.message.body];
+    // Thread: die Kennung der Thread-Wurzel (höchstens 14 Tage alt) bestimmt das Arbeitspaket mit
+    if (q.message.thread_id) {
+      const root = await db.maybeOne(`select body from chat_messages where id = $1 and deleted_at is null and created_at > $2::timestamptz - interval '14 days'`, [q.message.thread_id, now]);
+      if (root) texts.push(String(root.body));
+    }
+    for (const text of texts) {
+      for (const r of findMentions(text, all).refs) {
+        if (r.project.id !== channelProject.id) { if (!scope.hidden.includes(ref(r))) scope.hidden.push(ref(r)); continue; }
+        const t = await taskOf(r);
+        if (t === null) { if (!scope.hidden.includes(ref(r))) scope.hidden.push(ref(r)); continue; }
+        if (t && !scope.taskIds.includes(t.id)) { scope.taskIds.push(t.id); scope.refs.push(ref(r)); }
+      }
+    }
+    return scope;
+  }
+
+  // Direktnachricht: gemeinsame, beidseitig freie Projekte (Absender PL oder „KI nutzen“, KI-Freigaben für beide)
+  const common: ScopeProject[] = [];
+  const candidates = await db.query(
+    `select p.id, p.key, p.name from projects p
+       join project_members a on a.project_id = p.id and a.user_id = $1
+       join project_members s on s.project_id = p.id and s.user_id = $2 and (s.role = 'pl' or s.can_use_ai)
+     where p.org_id = $3 and p.status = 'active' order by p.key`, [q.agent.id, q.senderId, q.agent.org_id]);
+  for (const p of candidates.rows as ScopeProject[]) {
+    if ((await aiAllowed(db, { userId: q.senderId, projectId: p.id, feature: 'agent.chat' })).allowed && (await aiAllowed(db, { userId: q.agent.id, projectId: p.id, feature: 'agent.chat', budget: false })).allowed) common.push(p);
+  }
+  const isCommon = (id: string) => common.some((p) => p.id === id);
+  /** Erwähnungen eines Texts auflösen: erlaubte Projekte und Arbeitspakete, verborgene Kennungen bzw. Kürzel. */
+  const resolve = async (text: string) => {
+    const m = findMentions(text, all);
+    const out = { projectIds: [] as string[], taskIds: [] as string[], refs: [] as string[], hidden: [] as string[] };
+    const add = (list: string[], v: string) => { if (!list.includes(v)) list.push(v); };
+    for (const r of m.refs) {
+      if (!isCommon(r.project.id)) { add(out.hidden, ref(r)); continue; }
+      const t = await taskOf(r);
+      if (t === null) { add(out.hidden, ref(r)); continue; }
+      add(out.projectIds, r.project.id);
+      if (t) { add(out.taskIds, t.id); add(out.refs, ref(r)); }
+    }
+    for (const p of m.projects) { if (isCommon(p.id)) add(out.projectIds, p.id); else if (!m.refs.some((r) => r.project.id === p.id)) add(out.hidden, p.key); }
+    return out;
+  };
+  const mine = await resolve(q.message.body);
+  if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)) };
+  if (ALL_RE.test(q.message.body)) return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
+  // Verlauf (neueste zuerst): das zuletzt genannte Arbeitspaket bzw. Projekt, ohne Zeitfenster
+  for (const h of q.history) {
+    if (h.id === q.message.id) continue;
+    const r = await resolve(String(h.body ?? ''));
+    if (r.projectIds.length) return { how: 'history', projectIds: r.projectIds, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => r.projectIds.includes(p.id)) };
+  }
+  if (common.length > 1) return { how: 'ask', projectIds: [], taskIds: [], refs: [], hidden: [], projects: common };
+  return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
+}
+
+/** Heutiges Datum in Europe/Berlin (YYYY-MM-DD) und der Sonntag dieser Woche, für „fällig diese Woche“. */
+export function berlinWeek(now: Date): { today: string; sunday: string } {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', weekday: 'short' }).format(now));
+  const [y, m, d] = today.split('-').map(Number);
+  return { today, sunday: new Date(Date.UTC(y, m - 1, d + ((7 - dow) % 7))).toISOString().slice(0, 10) };
+}
+
+export interface KeyFigures { open: number; active: number; dueWeek: number; overdue: number; blocked: number; waiting: number }
+/**
+ * Kennzahlen des Themas, vom System per SQL berechnet (das Modell zählt nie selbst): offen = nicht erledigt; in Arbeit =
+ * aktive Spalte (nicht Geplant, Zurückgestellt oder erledigt); fällig diese Woche = Termin von heute bis Sonntag (Europe/Berlin);
+ * überfällig = Termin vor heute; blockiert; wartet = Wartezustand des Agenten gesetzt. Ohne taskIds zählen die Arbeitspakete
+ * der Projekte (keine Aufgaben), mit taskIds diese Arbeitspakete und ihre Aufgaben. Sichtbarkeit wie der Kontext: im Projektkanal
+ * ohne eingeschränkte Teilprojekte, in Direktnachrichten nur, was der Absender sieht.
+ */
+export async function keyFigures(db: Db, q: { projectIds: string[]; taskIds?: string[] | null; viewerId: string | null; now?: Date }): Promise<KeyFigures> {
+  const { today, sunday } = berlinWeek(q.now ?? new Date());
+  const ids = q.taskIds?.length ? q.taskIds : null;
+  const r = await db.one(
+    `select count(*) filter (where not c.is_done)::int as open,
+            count(*) filter (where c.kind = 'active')::int as active,
+            count(*) filter (where not c.is_done and t.due_date >= $3::date and t.due_date <= $4::date)::int as due_week,
+            count(*) filter (where not c.is_done and t.due_date < $3::date)::int as overdue,
+            count(*) filter (where not c.is_done and t.blocked)::int as blocked,
+            count(*) filter (where not c.is_done and t.agent_wait is not null)::int as waiting
+     from tasks t join board_columns c on c.id = t.column_id
+     where t.project_id = any($1::uuid[]) and t.deleted_at is null and t.archived_at is null
+       and (case when $2::uuid[] is null then t.parent_id is null else t.id = any($2::uuid[]) or t.parent_id = any($2::uuid[]) end)
+       and ${q.viewerId ? visibleSubprojectSql(5) : `(t.subproject_id is null or not exists (select 1 from subprojects s where s.id = t.subproject_id and s.restricted))`}`,
+    q.viewerId ? [q.projectIds, ids, today, sunday, q.viewerId] : [q.projectIds, ids, today, sunday]
+  );
+  return { open: r.open, active: r.active, dueWeek: r.due_week, overdue: r.overdue, blocked: r.blocked, waiting: r.waiting };
+}
+export const keyFiguresLine = (label: string, k: KeyFigures) => `Kennzahlen zu ${label}: offen ${k.open} · in Arbeit ${k.active} · fällig diese Woche ${k.dueWeek} · überfällig ${k.overdue} · blockiert ${k.blocked} · wartet ${k.waiting}`;
+
+/** Verben, mit denen eine Notiz (Log-Eintrag) beschrieben wird: zulässig, wenn eine Notiz ausgeführt wurde. */
+const CLAIM_LOG = 'vermerkt|eingetragen|notiert|festgehalten|hinterlegt|protokolliert|dokumentiert';
+/** Verben für Aktionen, die es im Chat nicht gibt: nie zulässig. */
+const CLAIM_ACT = 'angelegt|erstellt|gesendet|geschickt|verschickt|versendet|verschoben|zugewiesen|erledigt|abgeschlossen|freigegeben|gesetzt';
+/**
+ * claimCheck (Agenten-Konzept 5 und 10): Sätze in der ersten Person, die behaupten, etwas sei angelegt, eingetragen, vermerkt,
+ * gesendet, erledigt oder freigegeben („Ich habe … gesendet“, „habe ich … angelegt“, „wurde von mir … erstellt“), ersetzt das
+ * System durch „Das konnte ich nicht ausführen: …“. Deterministisch, ohne Kommas/Nebensätze dazwischen (kein „ich habe gesehen,
+ * dass …“) und ohne Verneinung („ich habe nichts gesendet“). Mit ausgeführter Notiz bleiben Sätze über Vermerken bzw. Eintragen stehen.
+ */
+export function claimCheck(reply: string, noted: boolean): { text: string; replaced: string[] } {
+  const verbs = noted ? CLAIM_ACT : `${CLAIM_ACT}|${CLAIM_LOG}`;
+  const inner = '[^.!?\\n,;:]*?';
+  const patterns = [
+    new RegExp(`\\b(ich|wir)\\b${inner}\\b(habe|hab|haben)\\b${inner}\\b(${verbs})\\b`, 'i'),
+    new RegExp(`\\b(habe|hab|haben)\\s+(ich|wir)\\b${inner}\\b(${verbs})\\b`, 'i'),
+    new RegExp(`\\b(ist|wurde|sind|wurden)\\b${inner}\\bvon (mir|uns)\\b${inner}\\b(${verbs})\\b`, 'i')
+  ];
+  const claims = (s: string) => patterns.some((p) => { const m = s.match(p); return Boolean(m) && !/\b(nicht|nichts|nie|kein\w*)\b/i.test(m![0]); });
+  const replaced: string[] = [];
+  const text = reply.replace(/[^.!?\n]+[.!?]*/g, (s) => {
+    const core = s.trim();
+    if (!core || !claims(core)) return s;
+    replaced.push(core);
+    return `${s.match(/^\s*/)![0]}Das konnte ich nicht ausführen: „${core.replace(/[.!?]+$/, '')}“.`;
+  });
+  return { text, replaced };
+}
+
+export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string }
 
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
   const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
@@ -81,56 +273,86 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
 
   // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
   const history = threadId
-    ? await db.query(`select m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
-    : await db.query(`select m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
-  // Eigene Arbeitspakete: im Projektkanal nur dieses Projekt und keine eingeschränkten Teilprojekte (alle Mitglieder lesen mit),
-  // in Direktnachrichten nur Projekte und Teilprojekte, die die fragende Person sieht
-  const tasks = await db.query(
+    ? await db.query(`select m.id, m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
+    : await db.query(`select m.id, m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
+  // Thema der Nachricht (Abschnitt 6 des Agenten-Konzepts): bestimmt das System, nicht das Modell
+  const scope = await resolveChatScope(db, { channel, message: msg, history: history.rows, senderId: msg.user_id, agent }, now);
+  const scopeText = `${scope.refs.length ? scope.refs.join(', ') : scope.projects.map((p) => p.key).join(', ') || '–'} (${scope.how})`;
+  /** Antwort ohne LLM-Aufruf (zählt nicht gegen das Budget): als übersprungener Lauf mit Begründung protokolliert. */
+  const direct = async (reply: string, logged: string): Promise<AgentChatResult> => {
+    await post(reply);
+    await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, error, channel_id) values ($1,$2,$3,null,'chat','skipped',$4,$5,$6,$7)`,
+      [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify([{ type: 'chat_reply', text: cut(reply, 300) }]), logged.slice(0, 500), channel.id]);
+    return { status: 'skipped', reply, scope, error: logged };
+  };
+  // Kennungen oder Projekte, die der Absender nicht sieht oder in denen einer gesperrt ist: nichts dazu, auch kein Titel
+  if (scope.how === 'mentioned' && !scope.projectIds.length) return direct('Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
+  // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit den Projektnamen, keine Inhalte
+  if (scope.how === 'ask') {
+    const names = scope.projects.map((p) => `${p.name} (${p.key})`);
+    return direct(`Zu welchem Projekt? ${names.slice(0, -1).join(', ')} oder ${names.at(-1)}?`, 'Rückfrage: Projekt nicht eindeutig');
+  }
+
+  // Eigene offene Arbeitspakete zum Thema: im Projektkanal ohne eingeschränkte Teilprojekte (alle Mitglieder lesen mit), in
+  // Direktnachrichten nur Teilprojekte, die die fragende Person sieht; genannte Arbeitspakete begrenzen die Liste auf sich und ihre Aufgaben
+  const taskIds = scope.taskIds.length ? scope.taskIds : null;
+  const tasks = scope.projectIds.length ? await db.query(
     `select t.id, t.project_id, t.subproject_id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
        (select string_agg(x.body, ' | ' order by x.created_at desc) from (select body, created_at from task_comments where task_id = t.id order by created_at desc limit 3) x) as recent
      from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
      where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
-       and ${project ? `t.project_id = $2 and (t.subproject_id is null or not exists (select 1 from subprojects s where s.id = t.subproject_id and s.restricted))`
-                     : `exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $2 and (pm.role = 'pl' or pm.can_use_ai)) and ${visibleSubprojectSql(2)}`}
-     order by t.due_date nulls last limit 25`,
-    [agent.id, project ? project.id : msg.user_id]
-  );
-  // Direktnachricht: nur Projekte, in denen Absender und Agent freigegeben sind (Projektregeln, Ausnahmen), und nur Arbeitspakete,
-  // für die der Absender intern ist (Regel E); Org-Benutzer ohne Projektzugriff (outside) bekommen nichts aus dem Projekt
+       and t.project_id = any($2::uuid[]) and ($3::uuid[] is null or t.id = any($3::uuid[]) or t.parent_id = any($3::uuid[]))
+       and ${project ? `(t.subproject_id is null or not exists (select 1 from subprojects s where s.id = t.subproject_id and s.restricted))` : visibleSubprojectSql(4)}
+     order by t.due_date nulls last limit 40`,
+    project ? [agent.id, scope.projectIds, taskIds] : [agent.id, scope.projectIds, taskIds, msg.user_id]
+  ) : { rows: [] as any[] };
+  // Direktnachricht: nur Arbeitspakete, für die der Absender intern ist (Regel E); die Freigaben beider Seiten prüft schon das Thema
   if (!project) {
-    const ok = new Map<string, boolean>();
-    for (const pid of new Set<string>(tasks.rows.map((t: any) => t.project_id))) {
-      ok.set(pid, (await aiAllowed(db, { userId: msg.user_id, projectId: pid, feature: 'agent.chat' })).allowed && (await aiAllowed(db, { userId: agent.id, projectId: pid, feature: 'agent.chat', budget: false })).allowed);
-    }
     const inner: any[] = [];
-    for (const t of tasks.rows as any[]) if (ok.get(t.project_id) && (await isInternal(db, { projectId: t.project_id, subprojectId: t.subproject_id, userId: msg.user_id }))) inner.push(t);
+    for (const t of tasks.rows as any[]) if (await isInternal(db, { projectId: t.project_id, subprojectId: t.subproject_id, userId: msg.user_id })) inner.push(t);
     tasks.rows = inner;
   }
   const known = new Map<string, any>(tasks.rows.map((t: any) => [t.id, t]));
+  // Genannte Arbeitspakete, für die der Agent nicht zuständig ist: nur der Stand, kein Log (Sichtbarkeit hat das Thema geprüft)
+  const others = scope.taskIds.filter((id) => !known.has(id));
+  const named = others.length ? await db.query(`select t.id, t.number, t.title, t.due_date, t.blocked, t.blocked_reason, c.name as column_name, c.is_done, p.key, coalesce(u.name, t.responsible_email) as resp from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join users u on u.id = t.responsible_user_id where t.id = any($1::uuid[]) and t.deleted_at is null order by p.key, t.number`, [others]) : { rows: [] as any[] };
+  // Kennzahlen je Thema (bei „alle“ je Projekt eine Zeile), vom System berechnet
+  const viewerId = project ? null : msg.user_id;
+  const figures: string[] = [];
+  if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
+  else for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
+  const HOW: Record<ChatScopeHow, string> = { channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Verlauf genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '' };
+  const theme = scope.projects.length
+    ? `${scope.refs.length ? `Arbeitspaket ${scope.refs.join(', ')} in ` : ''}Projekt ${scope.projects.map((p) => `${p.key} „${p.name}“`).join(', ')} (${HOW[scope.how]})`
+    : `kein gemeinsames Projekt mit ${msg.user_name}; du kannst nur allgemein antworten`;
   const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
-Deine offenen Arbeitspakete${project ? ` in ${project.key}` : ''}:
-${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${String(t.due_date instanceof Date ? t.due_date.toISOString() : t.due_date).slice(0, 10)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
-Verlauf (älteste zuerst):
+Thema: ${theme}
+${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
+${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
+${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-
+${scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine Antwort mit „Zu ${scope.refs[0] ?? scope.projects[0]?.key}:“.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
     const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[] }>(r.text);
-    const reply = String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.';
     const notes = (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);
+    // claimCheck: Behauptungen ohne ausgeführte Aktion ersetzt das System; Kennungen ohne Freigabe bekommen die feste Absage voran
+    const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0);
+    const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${checked.text}`;
     await post(reply);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
       queueAgentRun(n.taskId, 'comment');
     }
-    const actions = [{ type: 'chat_reply', text: cut(reply, 300) }, ...notes.map((n) => ({ type: 'chat_note', taskId: n.taskId, text: cut(n.text, 300) }))];
+    const actions: Record<string, unknown>[] = [{ type: 'chat_reply', text: cut(reply, 300) }, ...notes.map((n) => ({ type: 'chat_note', taskId: n.taskId, text: cut(n.text, 300) }))];
+    if (checked.replaced.length) actions.push({ type: 'claim_check', replaced: checked.replaced.length, text: cut(checked.replaced.join(' | '), 300) });
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens, channel_id) values ($1,$2,$3,null,'chat','ok',$4,$5,$6,$7,$8) returning id`,
-      [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);
-    await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, notes: notes.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
-    return { status: 'ok', reply, notes };
+      [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);
+    await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, scope: scope.how, notes: notes.length, claimsReplaced: checked.replaced.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+    return { status: 'ok', reply, notes, scope };
   } catch (e: any) {
     const err = String(e?.message ?? e).slice(0, 300);
     await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','error',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, err, channel.id]);

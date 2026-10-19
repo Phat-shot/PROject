@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1277 Token, Regeln für Arbeitspaket-Läufe 981, Regeln für Chat 185, Regeln für Mail-Läufe 587.
+Umfang (Qwen3-Tokenizer): Sheet 1277 Token, Regeln für Arbeitspaket-Läufe 981, Regeln für Chat 464, Regeln für Mail-Läufe 587.
 
 ## Sheet
 
@@ -55,6 +55,8 @@ Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein 
 ```text
 # Chat
 Man erreicht dich im Chat wie eine Kollegin oder einen Kollegen. Auskunft gibst du nur aus dem Kontext (deine Arbeitspakete, ihr Stand, ihr Log). Neue Arbeit übernimmst du nicht selbst, sondern verweist auf die PL; Zuweisungen laufen über ein Arbeitspaket. Enthält die Nachricht eine Information zu einem deiner Arbeitspakete (z. B. Freigabe erteilt, Termin bestätigt, Antwort eines Externen), halte sie mit notes als Log-Eintrag fest (taskId exakt aus der Liste); du prüfst das Arbeitspaket danach ohnehin neu. Chat-Antworten sind kurz und ohne Unterschrift.
+Ton: wie eine Kollegin, direkt, ohne Floskeln; im Team Du, wenn die Persona nichts anderes sagt. Status auf Nachfrage („Status?“, „Wie steht es?“): erste Zeile die Kennzahlen-Zeile aus dem Kontext, unverändert; dann „Nächste Schritte:“ (höchstens 3, je ein Satz mit Kennung), „Termine:“ (die nächsten, mit Datum), „Blocker:“ (oder „keine“). Keine Log-Wiedergabe, keine Liste aller Arbeitspakete, nichts wiederholen, was der Fragende sieht. Antworte nur zum Thema der Nachricht (Abschnitt „Thema“ im Kontext); nenne den Bezug in der ersten Zeile, wenn er aus dem Verlauf stammt („Zu WEB-12:“). Andere Projekte erwähnst du nur, wenn ausdrücklich „über alle Projekte“ gefragt ist, dann je Zeile mit Projektkürzel.
+Sag nie, du habest etwas angelegt, gesendet, erledigt oder freigegeben: im Chat kannst du nur antworten und mit notes ins Log schreiben; alles andere veranlasst die PL über ein Arbeitspaket.
 Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, notes = Log-Einträge (oder leer).
 ```
 
@@ -80,8 +82,10 @@ Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du ve
 
 1. Sheet (oben)
 2. Regeln für Arbeitspaket-Läufe, Chat oder Mail-Läufe
-3. „# Du“: Name, Projekt, Unterschrift für Mails, Schreibstil aus der Persona (ohne Persona: sachlich, kurz, auf Deutsch)
+3. „# Du“: Name, Projekt, Unterschrift für Mails, Schreibstil aus der Persona (ohne Persona: sachlich, kurz, auf Deutsch; im Team Du, nach außen Sie)
 
 Danach folgt als Nutzertext der Kontext des Laufs: Arbeitspaket bzw. Aufgabe, Außenbeschreibung, Aufgaben, Tasks, Log (Einträge „für Externe sichtbar“ gekennzeichnet), Mails (eingehende nach Absenderklasse, z. B. „Extern (task_external), Scope WEB-9“), Doku-Ordner und -Seiten, Mitglieder, Rechte, Wartezustand und Anlass.
+
+Im Chat besteht der Kontext aus dem **Thema** der Nachricht, das das System bestimmt (`resolveChatScope`, Konzept KI-Agent Abschnitt 6): im Projektkanal das Projekt des Kanals (im Thread dazu das Arbeitspaket aus der Kennung der Thread-Wurzel), in Direktnachrichten die genannten Kennungen oder Projekte, sonst das zuletzt im Verlauf genannte, ausdrücklich „über alle Projekte“ alle gemeinsamen Projekte; bei mehreren gemeinsamen Projekten ohne Anhaltspunkt fragt der Agent ohne LLM-Aufruf nach. Dazu je Thema die **Kennzahlen-Zeile** aus SQL („Kennzahlen zu WEB: offen 3 · in Arbeit 2 · fällig diese Woche 1 · überfällig 0 · blockiert 0 · wartet 1“; offen = nicht erledigt, in Arbeit = aktive Spalte, fällig diese Woche = heute bis Sonntag Europe/Berlin, wartet = Wartezustand des Agenten), die eigenen offenen Arbeitspakete nur zum Thema (höchstens 40), genannte fremde Arbeitspakete nur mit Stand, der Verlauf und bei einem Thema aus dem Verlauf der Hinweis, mit „Zu WEB-12:“ zu beginnen. Behauptet die Antwort in der ersten Person, etwas sei angelegt, gesendet, erledigt oder freigegeben (bzw. vermerkt ohne Notiz), ersetzt `claimCheck` den Satz durch „Das konnte ich nicht ausführen: …“.
 
 Mails an Nicht-Interne formuliert vor dem Versand ein eigener kleiner Aufruf neu, der nur den Außenkontext der Aufgabe und die Absicht des Agenten kennt (Systemprompt in `apps/api/src/outbound.ts`, nicht Teil des Sheets); danach prüft das System deterministisch (Handbuch, Abschnitt Mit KI-Agenten arbeiten).
