@@ -93,7 +93,7 @@ export async function rulesAt(db: Db, s: RuleScope): Promise<NotificationRule[]>
 }
 
 export interface RuleInput { event: string; recipients?: string[] | null; channels?: Record<string, unknown>; timing?: Record<string, unknown>; locked?: string[] }
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+export const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Empfängerrolle prüfen: bekannte Rolle, group:<id> bzw. user:<id> (Person) des Mandanten; „a|b“ = a, sonst b. */
 async function checkRole(db: Db, orgId: string, entry: unknown): Promise<string> {
@@ -112,12 +112,20 @@ async function checkRole(db: Db, orgId: string, entry: unknown): Promise<string>
   return v;
 }
 
-/** Seite „Entscheidungen und Meldungen“ des Projekts (Kanal Doku): vorhandene aus einer Projektregel, sonst neu im Ordner „Allgemein“. */
+/** Nicht gelöschte Seite des Projekts (Kanal Doku: nur Seiten dieses Projekts). */
+const projectPage = (db: Db, pageId: string, projectId: string) => db.maybeOne(`select 1 from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pageId, projectId]);
+
+/**
+ * Seite „Entscheidungen und Meldungen“ des Projekts (Kanal Doku): vorhandene aus einer Projektregel, sonst die neueste Seite
+ * dieses Titels (nach Aus- und wieder Einschalten), sonst neu im Ordner „Allgemein“.
+ */
 export async function ensureDocPage(db: Db, projectId: string, userId: string): Promise<string> {
   const known = await db.query(`select channels->>'doc' as doc from notification_rules where project_id = $1 and task_id is null and user_id is null and channels ? 'doc'`, [projectId]);
   for (const r of known.rows) {
-    if (r.doc && r.doc !== 'false' && UUID.test(r.doc) && (await db.maybeOne(`select 1 from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [r.doc, projectId]))) return r.doc;
+    if (r.doc && r.doc !== 'false' && UUID.test(r.doc) && (await projectPage(db, r.doc, projectId))) return r.doc;
   }
+  const existing = await db.maybeOne(`select id from doc_pages where project_id = $1 and title = $2 and deleted_at is null order by created_at desc limit 1`, [projectId, DOC_PAGE_TITLE]);
+  if (existing) return existing.id;
   const folder = await db.maybeOne(`select id from doc_folders where project_id = $1 and parent_id is null order by (name = 'Allgemein') desc, position limit 1`, [projectId]);
   const md = `Einträge des Systems nach den Benachrichtigungsregeln (Kanal Doku), neueste unten.\n`;
   const p = await db.one(`insert into doc_pages (project_id, folder_id, title, content_md, content_html, created_by, updated_by) values ($1,$2,$3,$4,$5,$6,$6) returning id`, [projectId, folder?.id ?? null, DOC_PAGE_TITLE, md, mdToHtml(md), userId]);
@@ -137,7 +145,8 @@ export async function appendDocEntry(db: Db, pageId: string, line: string, userI
 
 /**
  * Regeln einer Ebene setzen (je Klasse eine Zeile, ersetzt die bisherige; eine leere Zeile wird gelöscht). Prüft Felder je
- * Ebene, Werte, Empfänger und Sperren der Ebenen darüber; Doku „true“ wird zur Seite des Projekts (wird bei Bedarf angelegt).
+ * Ebene, Werte, Empfänger und Sperren der Ebenen darüber; Doku „true“ wird zur Seite des Projekts (nach der Prüfung aller
+ * Zeilen bei Bedarf angelegt), eine Seiten-ID muss eine Seite dieses Projekts sein (die Oberfläche schickt die gespeicherte zurück).
  */
 export async function setRules(db: Db, user: User, level: RuleLevel, s: RuleScope, items: RuleInput[]): Promise<void> {
   if (!Array.isArray(items) || !items.length) throw badRequest('Regeln als Liste');
@@ -150,7 +159,7 @@ export async function setRules(db: Db, user: User, level: RuleLevel, s: RuleScop
     return l === 'org' ? level !== 'org' : l === 'project' ? ['task', 'user_project', 'user_task'].includes(level) : false;
   });
   const writes: { event: string; recipients: string[] | null; channels: Record<string, unknown>; timing: Record<string, unknown>; locked: string[] }[] = [];
-  let docPage: string | undefined; // eine Seite je Projekt, auch wenn ein Aufruf mehrere Klassen einschaltet
+  let needDoc = false; // eine Seite je Projekt, auch wenn ein Aufruf mehrere Klassen einschaltet
   for (const it of items) {
     const event = String(it?.event ?? '');
     const def = eventDef(event);
@@ -184,8 +193,10 @@ export async function setRules(db: Db, user: User, level: RuleLevel, s: RuleScop
     if ('mail' in channels && !['off', 'now', 'digest'].includes(String(channels.mail))) throw badRequest('Mail: off, now oder digest');
     if ('log' in channels && typeof channels.log !== 'boolean') throw badRequest('Log: true oder false');
     if ('doc' in channels) {
-      if (channels.doc === true) channels.doc = docPage ??= await ensureDocPage(db, s.projectId!, user.id);
-      else if (channels.doc !== false) throw badRequest('Doku: true oder false');
+      if (channels.doc === true) needDoc = true;
+      else if (typeof channels.doc === 'string' && UUID.test(channels.doc)) {
+        if (!(await projectPage(db, channels.doc, s.projectId!))) throw badRequest('Doku: Seite nicht in diesem Projekt (true legt die Seite „Entscheidungen und Meldungen“ an)');
+      } else if (channels.doc !== false) throw badRequest('Doku: true, false oder Seiten-ID');
     }
     for (const k of ['remindH', 'escalateH', 'expireH']) if (k in timing && !(Number.isInteger(timing[k]) && Number(timing[k]) >= 1 && Number(timing[k]) <= 2000)) throw badRequest(`${k}: ganze Stunden von 1 bis 2000`);
     if ('every' in timing && !['each', 'milestones', 'daily', 'done'].includes(String(timing.every))) throw badRequest('every: each, milestones, daily oder done');
@@ -194,7 +205,10 @@ export async function setRules(db: Db, user: User, level: RuleLevel, s: RuleScop
     for (const f of locked) if (!allowed.includes(f as NotifyField)) throw badRequest(`Sperre „${f}“ auf dieser Ebene nicht möglich`);
     writes.push({ event, recipients, channels, timing, locked });
   }
+  // Seite erst, wenn alle Zeilen geprüft sind (sonst bliebe bei einem Fehler eine verwaiste Seite)
+  const docPage = needDoc ? await ensureDocPage(db, s.projectId!, user.id) : null;
   for (const w of writes) {
+    if (w.channels.doc === true) w.channels.doc = docPage;
     await db.query(`delete from notification_rules where org_id = $1 and project_id is not distinct from $2::uuid and task_id is not distinct from $3::uuid and user_id is not distinct from $4::uuid and event = $5`, [s.orgId, s.projectId ?? null, s.taskId ?? null, s.userId ?? null, w.event]);
     if (!w.recipients && !Object.keys(w.channels).length && !Object.keys(w.timing).length && !w.locked.length) continue;
     await db.query(

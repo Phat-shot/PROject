@@ -359,7 +359,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           const u = await db.one(`update doc_pages set status = $2, finalized_at = case when $2 = 'final' then now() else null end, updated_by = $3, updated_at = now() where id = $1 returning *`, [page.id, to, agent.id]);
           await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
           await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: `page.${to}`, objectType: 'doc_page', objectId: u.id, details: { from: page.status, version: u.version } });
-          if (to === 'review') await dispatch(db, { event: 'review', projectId: task.project_id, taskId: task.id, users: await usersWithRight(db, task.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${agent.name} (KI-Agent)`, link: `/projekte/${task.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: agent.id, logged: true });
+          // Ohne AP-Bezug: die Seite gehört dem Projekt, nicht dem Teilprojekt des AP (Freigabeberechtigte ohne Sicht auf das TP prüfen sie trotzdem)
+          if (to === 'review') await dispatch(db, { event: 'review', projectId: task.project_id, users: await usersWithRight(db, task.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${agent.name} (KI-Agent)`, link: `/projekte/${task.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: agent.id, logged: true });
           await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite „${u.title}“ → ${{ draft: 'Entwurf', review: 'In Prüfung', final: 'Final' }[to]}`]);
           applied.push(a);
         }

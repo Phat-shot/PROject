@@ -545,7 +545,7 @@ export const EVENT_OF_TYPE: Record<string, NotifyEvent> = {
   'task.assigned': 'assigned', 'plan.shifted': 'assigned', escalation: 'escalation',
   'page.review': 'review', 'report.review': 'review', 'ai.proposal': 'review', 'workflow.approval': 'review', 'mail.approval': 'review', 'draft.review': 'review', 'outbound.review': 'review',
   'task.comment': 'log', mention: 'log', 'task.due_soon': 'due', 'task.overdue': 'due', 'chat.dm': 'chat', 'chat.mention': 'chat', 'chat.reply': 'chat',
-  'external.referral': 'external_referral', 'task.progress': 'progress',
+  'external.referral': 'external_referral', 'task.progress': 'progress', 'mail.in': 'mail_in',
   'report.sent': 'info', 'report.failed': 'info', 'page.external_edit': 'info', 'mail.ai': 'info', 'project.lead': 'info'
 };
 export const eventOfType = (type: string): NotifyEvent => EVENT_OF_TYPE[type] ?? 'info';

@@ -8,6 +8,8 @@ const t = await testApp();
 test.after(() => t.close());
 const maxId = async () => (await t.db.one(`select id from users where email = 'max@demo.local'`)).id as string;
 const mailsTo = (addr: string) => t.mail.dev.sent.filter((m) => m.msg.to.includes(addr));
+/** Entstehungszeit einer Meldung auf die simulierte Uhr setzen (der Digest nimmt nur, was vor der Digest-Zeit des Tages entstand). */
+const createdAt = (id: string | null, iso: string) => t.db.query(`update notifications set created_at = $2 where id = $1`, [id, iso]);
 
 test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Digest zur Stunde der Org (Europe/Berlin), aus = nichts', async () => {
   const max = await maxId();
@@ -30,12 +32,12 @@ test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Diges
 
   // Digest: Stunde der Org (Standard 7 Uhr in Europe/Berlin, im Oktober 05:00 UTC)
   await t.api(maxC).patch('/me', { settings: { mailNotifications: 'daily' } });
-  await notify(t.db, { userId: max, type: 'test', title: 'Dritte Meldung' });
+  await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Dritte Meldung' }), '2026-10-18T04:00:00Z');
   await runNotificationMails(t.db, t.mail, new Date('2026-10-18T04:30:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 1, 'vor 7 Uhr Berlin kein Digest');
   await runNotificationMails(t.db, t.mail, new Date('2026-10-18T05:05:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 2, 'Digest ab 7 Uhr Berlin');
-  await notify(t.db, { userId: max, type: 'test', title: 'Vierte Meldung' });
+  await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Vierte Meldung' }), '2026-10-18T06:00:00Z');
   await runNotificationMails(t.db, t.mail, new Date('2026-10-18T09:00:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 2, 'nur ein Digest am Tag');
   // Die Org verlegt den Digest auf 9 Uhr
@@ -58,6 +60,33 @@ test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Diges
   assert.match(String(mailsTo('max@demo.local').at(-1)!.msg.subject), /Fünfte Meldung/);
   await runNotificationMails(t.db, t.mail, new Date('2026-10-21T08:00:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 4, 'aus: keine Mail');
+});
+
+test('Digest-Fenster: war zur Digest-Stunde nichts offen, warten spätere Digest-Meldungen bis zur nächsten Digest-Stunde', async () => {
+  const max = await maxId();
+  const maxC = await t.login('max@demo.local');
+  await t.api(await t.login('admin@demo.local')).put('/org/notification-rules', { digestHour: 7 });
+  await t.api(maxC).patch('/me', { settings: { mailNotifications: 'daily' } });
+  await t.db.query(`update notifications set mailed_at = now() where user_id = $1 and mailed_at is null`, [max]);
+  // Digest am Vortag 07:05 Berlin
+  await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Vortag' }), '2026-10-21T04:00:00Z');
+  const before = mailsTo('max@demo.local').length;
+  await runNotificationMails(t.db, t.mail, new Date('2026-10-21T05:05:00Z'));
+  assert.equal(mailsTo('max@demo.local').length, before + 1);
+  // Heute um 7 Uhr war nichts offen; um 10:13 Berlin entsteht eine Digest-Meldung: der Lauf um 10:14 verschickt sie nicht
+  await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Nach der Digest-Stunde' }), '2026-10-22T08:13:00Z');
+  await runNotificationMails(t.db, t.mail, new Date('2026-10-22T08:14:00Z'));
+  assert.equal(mailsTo('max@demo.local').length, before + 1, 'Digest nur zur Digest-Stunde');
+  // Eine „sofort“-Meldung geht trotzdem, die Digest-Meldung bleibt liegen
+  const d2 = await notify(t.db, { userId: max, type: 'test', title: 'Sofort dazwischen', event: 'decision' });
+  await t.db.query(`update notifications set mail = 'now', created_at = '2026-10-22T08:20:00Z' where id = $1`, [d2]);
+  await runNotificationMails(t.db, t.mail, new Date('2026-10-22T08:21:00Z'));
+  assert.equal(mailsTo('max@demo.local').length, before + 2);
+  assert.doesNotMatch(String(mailsTo('max@demo.local').at(-1)!.msg.text), /Nach der Digest-Stunde/);
+  // Nächster Tag 07:01 Berlin: Digest mit der liegengebliebenen Meldung
+  await runNotificationMails(t.db, t.mail, new Date('2026-10-23T05:01:00Z'));
+  assert.equal(mailsTo('max@demo.local').length, before + 3);
+  assert.match(String(mailsTo('max@demo.local').at(-1)!.msg.subject), /Nach der Digest-Stunde/);
 });
 
 test('Gelesene Meldungen werden nicht per Mail verschickt', async () => {

@@ -3,7 +3,7 @@ import type { MailService } from './mail/service.js';
 import { publicBase } from './docs/share.js';
 import { pagePdf } from './docs/layout.js';
 import { audit } from './audit.js';
-import { dueLocal } from './localTime.js';
+import { beforeLocal, dueLocal } from './localTime.js';
 
 /** Stunde des Tages-Digests ohne Einstellung der Org (orgs.settings.notify.digestHour, Europe/Berlin). */
 export const DEFAULT_DIGEST_HOUR = 7;
@@ -15,7 +15,8 @@ export const digestHourOf = (settings: any): number => {
 /**
  * In-App-Meldungen per Mail. Den Modus trägt jede Meldung selbst (beim Erzeugen nach Regel N festgeschrieben): „sofort“
  * geht gesammelt je Worker-Lauf, „Digest“ einmal am Tag ab der Digest-Stunde der Org (Europe/Berlin, dueLocal) zusammen mit
- * allem Offenen, „aus“ nie. Gelesene Meldungen werden nicht mehr verschickt. Versand über das Org-Postfach; ohne Org-Postfach
+ * allem Offenen, das vor der Digest-Zeit des Tages entstand (spätere Digest-Meldungen warten bis zum nächsten Tag, auch wenn
+ * zur Stunde nichts offen war), „aus“ nie. Gelesene Meldungen werden nicht mehr verschickt. Versand über das Org-Postfach; ohne Org-Postfach
  * gehen nur Lieferungen (Meldungen mit angehängter Seite) über das Projektkonto. Anhänge nur an interne Empfänger mit
  * Leserecht im Projekt der Seite. Fehler gehen ins Audit (notify.mail_failed).
  */
@@ -39,8 +40,9 @@ export async function runNotificationMails(db: Db, mail: MailService, now = new 
        where n.user_id = $1 and n.mailed_at is null and n.read_at is null and n.mail <> 'off' and n.created_at > $2::timestamptz - interval '7 days' order by n.created_at`,
       [u.id, now]
     )).rows;
-    const digest = dueLocal(now, digestHourOf(u.org_settings), u.last_digest);
-    const due = digest ? rows : rows.filter((n: any) => n.mail === 'now');
+    const hour = digestHourOf(u.org_settings);
+    const digest = dueLocal(now, hour, u.last_digest);
+    const due = rows.filter((n: any) => n.mail === 'now' || (digest && beforeLocal(n.created_at, now, hour)));
     if (!due.length) continue;
     const account = await orgAccount(u.org_id);
     if (account) {

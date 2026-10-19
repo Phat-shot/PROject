@@ -93,7 +93,9 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - **Fristen** je Klasse: Nachfassen, Weitergabe an die nächste Stufe und Verfall in Stunden; bei Zwischenständen die Häufigkeit (jeder Schritt, Meilensteine, täglich, nur Abschluss).
 - **Benutzer** stellen nur Chat und Mail ein; „stummschalten“ nimmt ein Projekt aus Mail und Chat (In-App bleibt, Sperren der Org oder PL gelten weiter). Die alte Einstellung „Mail-Benachrichtigungen“ ist die Zeile „alle Ereignisse“ dieser Matrix.
 - **Berichtswunsch am AP:** Oben im AP legst du fest, wie oft du Zwischenstände eines Agenten willst (für dich; als PL oder zuständige Person auch für das AP mit Empfängern). Zwischenstände schreibt das System aus den ausgeführten Aktionen, der Agent schickt keine eigenen Berichte.
-- **Tages-Digest:** Stunde je Mandant (Verwaltung › Kommunikation, Europe/Berlin). Gelesene Meldungen werden nicht mehr verschickt. Lieferungen mit Seitenbezug (z. B. eine Entscheidungsvorlage) hängen das PDF an, nur für interne Empfänger mit Leserecht.
+- **Tages-Digest:** Stunde je Mandant (Verwaltung › Kommunikation, Europe/Berlin); er enthält, was vor dieser Stunde entstand, spätere Digest-Meldungen warten bis zum nächsten Tag. Gelesene Meldungen werden nicht mehr verschickt. Lieferungen mit Seitenbezug (z. B. eine Entscheidungsvorlage) hängen das PDF an, nur für interne Empfänger mit Leserecht.
+- **Mail am AP:** Jede neue Zuordnung einer Mail zu einem Arbeitspaket (von Hand, über die Antwortadresse, durch die Mail-KI oder aus einer angenommenen Änderung) ist ein Ereignis dieser Klasse: Standard ist ein Log-Eintrag im AP, Empfänger (z. B. Zuständige) legt die Regel fest; wer zuordnet, bekommt keine Meldung.
+- **Doku-Seite:** „Entscheidungen und Meldungen“ legt die PL in den Projekteinstellungen einmal an; nach Aus- und wieder Einschalten wird dieselbe Seite weiterverwendet.
 
 **Ursprungsmail**
 - Entsteht ein AP oder eine Aufgabe aus einer Mail, ist diese Mail als **Ursprung** markiert (im AP unter Mails umschaltbar). An der Mail stehen die daraus entstandenen APs und Aufgaben, auch aus anderen Projekten, soweit man sie sehen darf; ein Klick springt hin.

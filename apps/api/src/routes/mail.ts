@@ -10,6 +10,7 @@ import { aiAllowed, aiError } from '../ai/policy.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { PERSONAL_MAIL_ONLY, accountAllowedInProject, mailAccess, mailAllowedInProject } from '../mail/access.js';
+import { linkMailToTask } from '../mail/link.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
 import { decideProposals } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
@@ -624,10 +625,7 @@ export async function mailRoutes(app: FastifyInstance) {
         return { needsConfirmation: true, willSee: members.rows.map((x: any) => ({ name: x.name, role: x.role })) };
       }
     }
-    await db.query(
-      `insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,$3,$4) on conflict (mail_id, task_id) do update set copied = mail_task_links.copied or excluded.copied`,
-      [mail.id, task.id, copy, user.id]
-    );
+    await linkMailToTask(db, { mailId: mail.id, taskId: task.id, copied: copy, linkedBy: user.id, actorId: user.id });
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: copy ? 'mail.copy_to_task' : 'mail.link_task', objectType: 'mail', objectId: mail.id, details: { taskId: task.id, subject: mail.subject, viewIds: access.viewIds } });
     return { ok: true };
   });
@@ -663,7 +661,7 @@ export async function mailRoutes(app: FastifyInstance) {
        values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`,
       [b.projectId, b.subprojectId ?? null, col.id, (b.title ?? mail.subject ?? 'Neues Arbeitspaket').slice(0, 200), desc, b.dueDate ?? null, b.responsibleUserId ?? null, b.responsibleEmail ?? null, pos.p, newMailCode(), user.id]
     );
-    await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by, origin) values ($1,$2,$3,$4,$5)`, [mail.id, t.id, copy, user.id, !mail.outgoing]);
+    await linkMailToTask(db, { mailId: mail.id, taskId: t.id, copied: copy, linkedBy: user.id, origin: !mail.outgoing, actorId: user.id });
     if (b.responsibleEmail) await db.query(`insert into project_contacts (project_id, email) values ($1, lower($2)) on conflict do nothing`, [b.projectId, String(b.responsibleEmail).trim()]);
     queueAgentRun(t.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: b.projectId, userId: user.id, action: 'task.create_from_mail', objectType: 'task', objectId: t.id, details: { mailId: mail.id, subject: mail.subject, copied: copy, confirmed: Boolean(b.confirmed) } });
@@ -690,7 +688,7 @@ export async function mailRoutes(app: FastifyInstance) {
     }
     const body = (req.body?.note?.trim() ? req.body.note.trim() + '\n\n' : '') + mailToLogEntry(mail);
     const c = await db.one(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4) returning *`, [task.id, user.id, body, mail.id]);
-    await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, task.id, user.id]);
+    await linkMailToTask(db, { mailId: mail.id, taskId: task.id, linkedBy: user.id, actorId: user.id, logged: true });
     queueAgentRun(task.id, 'mail');
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'mail.to_task_log', objectType: 'task', objectId: task.id, details: { mailId: mail.id, subject: mail.subject, confirmed: Boolean(req.body?.confirmed) } });
     return { comment: { id: c.id, taskId: c.task_id, userId: c.user_id, userName: user.name, body: c.body, source: c.source, mailId: c.mail_id, createdAt: c.created_at } };

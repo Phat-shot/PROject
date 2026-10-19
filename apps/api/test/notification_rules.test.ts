@@ -9,7 +9,7 @@ import { dispatch, notify } from '../src/notify.js';
 import { resolveRule } from '../src/rules.js';
 import { runNotificationMails } from '../src/notifyMail.js';
 import { runCleanup, runDailyRules } from '../src/worker.js';
-import { dueLocal } from '../src/localTime.js';
+import { beforeLocal, dueLocal } from '../src/localTime.js';
 import { createDb, runMigrations } from '../src/db.js';
 
 const t = await testApp();
@@ -125,6 +125,18 @@ test('Regeln: Felder je Ebene, Werte, Empfänger und Rechte werden geprüft', as
   assert.deepEqual([(await resolveRule(t.db, { ...sa, event: 'question' })).value.chat, (await resolveRule(t.db, { ...sa, event: 'blocked' })).value.chat], ['thread', 'off'], 'ohne eigene Regel: Org „aus“ gilt, außer bei Fragen');
   await t.api(admin).put('/org/notification-rules', { rules: [{ event: '*' }] });
   await t.api(max).put('/me/notification-rules', { rules: [{ event: '*' }] });
+  // Projekt gegen Org-Sperre: das gesperrte Feld nicht, andere Felder und „*“ schon (die Sperre gilt je Klasse)
+  await t.api(admin).put('/org/notification-rules', { rules: [{ event: 'review', channels: { mail: 'now' }, locked: ['mail'] }] });
+  const locked = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'review', channels: { mail: 'off' } }] });
+  assert.equal(locked.statusCode, 400);
+  assert.match(locked.json().error, /gesperrt \(Org\)/);
+  assert.equal((await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'review', channels: { chat: 'project' } }] })).statusCode, 200);
+  const star = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: '*', channels: { mail: 'off' } }] });
+  assert.equal(star.statusCode, 200, star.body);
+  assert.equal(star.json().effective.find((e: any) => e.event === 'review').value.mail, 'now', 'Org-Sperre schlägt das „*“ des Projekts');
+  assert.equal(star.json().effective.find((e: any) => e.event === 'assigned').value.mail, 'off');
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'review' }, { event: '*' }] });
+  await t.api(admin).put('/org/notification-rules', { rules: [{ event: 'review' }] });
 });
 
 test('dispatch: Rollen mit „sonst“, Auslöser, Gruppen nur mit Projektzugriff und Sicht auf das Teilprojekt', async () => {
@@ -202,6 +214,16 @@ test('Kanäle des Ereignisses: Systembeitrag im Projektkanal (nicht bei eingesch
   // Systembeiträge erzeugen keine Chat-Meldungen und lassen sich nicht bearbeiten; die PL darf sie löschen
   assert.equal((await notes(U().max, `event = 'chat' and body like '%Kanaltest%'`)).length, 0);
   assert.equal((await t.api(pl).patch(`/chat/messages/${sys[0].id}`, { body: 'geändert' })).statusCode, 403);
+  // Systembeitrag mit der auslösenden Person als Autor: auch sie löscht ihn nicht, nur die PL
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'blocked', channels: { chat: 'project' } }] });
+  const blocked = await newTask('Blockiert im Kanal', { responsibleUserId: U().max });
+  assert.equal((await t.api(max).patch(`/tasks/${blocked.id}`, { blocked: true, blockedReason: 'Teile fehlen' })).statusCode, 200);
+  const sysB = (await t.api(max).get(`/projects/${web()}/chat`)).json().messages.find((m: any) => m.kind === 'system' && m.meta?.event === 'blocked' && m.body.includes('Blockiert im Kanal'));
+  assert.equal(sysB.userId, U().max, 'Autor ist, wer blockiert gemeldet hat');
+  assert.equal((await t.api(max).del(`/chat/messages/${sysB.id}`)).statusCode, 403);
+  assert.equal((await t.api(pl).del(`/chat/messages/${sysB.id}`)).statusCode, 200);
+  assert.equal((await t.api(max).get(`/projects/${web()}/chat`)).json().messages.find((m: any) => m.id === sysB.id)?.deleted, true);
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'blocked' }] });
   // Eingeschränktes Teilprojekt: kein Beitrag im Projektkanal
   const hidden = await newTask('Kanaltest geheim', { subprojectId: geheim, responsibleUserId: U().max });
   const chat2 = (await t.api(max).get(`/projects/${web()}/chat`)).json();
@@ -209,7 +231,10 @@ test('Kanäle des Ereignisses: Systembeitrag im Projektkanal (nicht bei eingesch
   assert.equal((await notes(U().max, `ref_id = $2`, [hidden.id])).length, 1, 'In-App kommt trotzdem');
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'assigned' }] });
 
-  // Doku: Einschalten legt die Seite an; Eskalationen werden eingetragen, nicht aus eingeschränkten Teilprojekten
+  // Doku: Einschalten legt die Seite an (erst wenn alle Zeilen geprüft sind); Eskalationen werden eingetragen, nicht aus eingeschränkten Teilprojekten
+  const pages = () => t.db.one(`select count(*)::int as c from doc_pages where project_id = $1 and title = 'Entscheidungen und Meldungen' and deleted_at is null`, [web()]).then((r) => r.c as number);
+  assert.equal((await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: true } }, { event: 'escalation', channels: { mail: 'später' } }] })).statusCode, 400);
+  assert.equal(await pages(), 0, 'keine verwaiste Seite nach abgewiesenem Aufruf');
   const on = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: true } }, { event: 'escalation', channels: { doc: true } }] });
   assert.equal(on.statusCode, 200, on.body);
   const pageId = on.json().effective.find((e: any) => e.event === 'escalation').value.doc;
@@ -217,6 +242,20 @@ test('Kanäle des Ereignisses: Systembeitrag im Projektkanal (nicht bei eingesch
   assert.equal(page.title, 'Entscheidungen und Meldungen');
   assert.equal(on.json().effective.find((e: any) => e.event === 'decision').value.doc, pageId, 'eine Seite je Projekt');
   assert.equal(on.json().effective.find((e: any) => e.event === 'blocked').value.doc, false);
+  // Zeile mit eingeschalteter Seite ändern: die Seiten-ID kommt zurück (so schickt die Oberfläche die Zeile), nur Seiten dieses Projekts
+  const withPage = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: pageId, mail: 'now' } }] });
+  assert.equal(withPage.statusCode, 200, withPage.body);
+  assert.deepEqual([withPage.json().effective.find((e: any) => e.event === 'decision').value.doc, withPage.json().effective.find((e: any) => e.event === 'decision').value.mail], [pageId, 'now']);
+  const foreign = await t.db.one(`insert into doc_pages (project_id, title, content_md, content_html, created_by, updated_by) values ($1,'Fremde Seite','','',$2,$2) returning id`, [t.ids.projects.erp, U().anna]);
+  const bad = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: foreign.id } }] });
+  assert.equal(bad.statusCode, 400);
+  assert.match(bad.json().error, /Seite nicht in diesem Projekt/);
+  assert.equal((await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: 'ja' } }] })).statusCode, 400);
+  // Aus und wieder ein: dieselbe Seite, keine zweite
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: false } }, { event: 'escalation', channels: { doc: false } }] });
+  const again = await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', channels: { doc: true } }, { event: 'escalation', channels: { doc: true } }] });
+  assert.equal(again.json().effective.find((e: any) => e.event === 'escalation').value.doc, pageId, 'bestehende Seite wird wiederverwendet');
+  assert.equal(await pages(), 1);
   const e1 = await newTask('Eskalation Doku', { responsibleUserId: U().max });
   assert.equal((await t.api(pl).post(`/tasks/${e1.id}/escalate`, { level: 1, note: 'Freigabe fehlt' })).statusCode, 200);
   const e2 = await newTask('Eskalation geheim Doku', { subprojectId: geheim, responsibleUserId: U().max });
@@ -283,6 +322,43 @@ test('GET /notifications: Klasse, Bezug, Mail-Modus und Filter', async () => {
   const unread = (await t.api(max).get('/notifications?unread=1')).json();
   assert.ok(unread.notifications.every((n: any) => !n.readAt) && !unread.notifications.some((n: any) => n.id === f.id));
   assert.equal((await t.api(max).get('/notifications?event=quatsch')).statusCode, 400);
+  assert.equal((await t.api(max).get('/notifications?projectId=abc')).statusCode, 400, 'ungültige Projekt-ID ist kein Serverfehler');
+});
+
+test('Mail am AP (Klasse mail_in): neue Zuordnung schreibt einmal ins Log, Meldungen nur nach Regel und nie an die zuordnende Person', async () => {
+  const pl = await login('pl');
+  const mail = (await t.api(pl).get(`/mail/views/${t.ids.views.project}/mails`)).json().mails[0];
+  const row = await t.db.one(`select subject, from_addr from mails where id = $1`, [mail.id]);
+  const logs = (taskId: string) => t.db.query(`select body from task_comments where task_id = $1 and source = 'system' and body like 'Mail am AP:%'`, [taskId]).then((r) => r.rows);
+  const ap = await newTask('Mail-Zuordnung', { responsibleUserId: U().max });
+  assert.equal((await t.api(pl).post(`/mail/mails/${mail.id}/link`, { taskId: ap.id })).statusCode, 200);
+  assert.deepEqual((await logs(ap.id)).map((r: any) => r.body), [`Mail am AP: Mail von ${row.from_addr}: ${row.subject}`]);
+  assert.equal((await notes(U().max, `ref_id = $2 and event = 'mail_in'`, [ap.id])).length, 0, 'Standard: niemand, nur Log');
+  // Dieselbe Mail noch einmal (als Kopie): kein zweiter Log-Eintrag
+  assert.equal((await t.api(pl).post(`/mail/mails/${mail.id}/link`, { taskId: ap.id, copy: true, confirmed: true })).statusCode, 200);
+  assert.equal((await logs(ap.id)).length, 1);
+  assert.equal((await t.db.one(`select copied from mail_task_links where mail_id = $1 and task_id = $2`, [mail.id, ap.id])).copied, true, 'Kopie bleibt gesetzt');
+  // Projektregel: Zuständige(r) bekommt die Meldung, nicht wer zuordnet
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'mail_in', recipients: ['responsible'] }] });
+  const ap2 = await newTask('Mail-Zuordnung mit Regel', { responsibleUserId: U().max });
+  await t.api(pl).post(`/mail/mails/${mail.id}/link`, { taskId: ap2.id });
+  const n = await notes(U().max, `ref_id = $2 and event = 'mail_in'`, [ap2.id]);
+  assert.equal(n.length, 1);
+  assert.deepEqual([n[0].type, n[0].title, n[0].dedupe_key], ['mail.in', `Mail von ${row.from_addr}: ${row.subject}`, `mail_in:${mail.id}:${ap2.id}`]);
+  assert.equal((await notes(U().pl, `ref_id = $2 and event = 'mail_in'`, [ap2.id])).length, 0, 'Auslöser');
+  // Mail als Log-Eintrag: die Aufrufstelle schreibt selbst ins Log, das System nicht noch einmal; die Meldung kommt trotzdem
+  const ap3 = await newTask('Mail als Log', { responsibleUserId: U().max });
+  assert.equal((await t.api(pl).post(`/mail/mails/${mail.id}/to-task-log`, { taskId: ap3.id, confirmed: true })).statusCode, 200);
+  assert.equal((await logs(ap3.id)).length, 0);
+  assert.equal((await notes(U().max, `ref_id = $2 and event = 'mail_in'`, [ap3.id])).length, 1);
+  // Automatische Zuordnung über die Antwortadresse (ohne Auslöser): Log und Meldung an die zuständige Person
+  const ap4 = await newTask('Antwort von extern', { responsibleUserId: U().max });
+  const code = (await t.db.one(`select mail_code from tasks where id = $1`, [ap4.id])).mail_code;
+  t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'lieferant@extern.de', name: 'Lieferant' }, to: [`projekt-web+t${code}@demo.local`], subject: 'Re: Liefertermin', text: 'Passt.', folder: 'INBOX' } as any);
+  await t.mail.syncAccount(t.ids.accounts.project);
+  assert.deepEqual((await logs(ap4.id)).map((r: any) => r.body), ['Mail am AP: Mail von lieferant@extern.de: Re: Liefertermin']);
+  assert.equal((await notes(U().max, `ref_id = $2 and event = 'mail_in'`, [ap4.id])).length, 1);
+  await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'mail_in' }] });
 });
 
 test('PATCH /me mit mailNotifications schreibt die Benutzerregel „*“ (Übergang)', async () => {
@@ -384,6 +460,13 @@ test('dueLocal: Ortszeit Europe/Berlin, einmal je Tag, werktags', () => {
   assert.equal(dueLocal(new Date('2026-10-19T05:30:00Z'), 7, new Date('2026-10-18T05:10:00Z')), true, '07:30 Berlin am 19.');
   assert.equal(dueLocal(new Date('2026-10-17T08:00:00Z'), '06:45', null, { weekdays: true }), false, 'Samstag');
   assert.equal(dueLocal(new Date('2026-10-19T05:00:00Z'), '06:45', null, { weekdays: true }), true, 'Montag 07:00');
+  // Vor der Digest-Zeit des Tages entstanden?
+  const at = new Date('2026-10-20T08:14:00Z'); // 10:14 Berlin
+  assert.equal(beforeLocal('2026-10-20T04:59:00Z', at, 7), true, '06:59 Berlin');
+  assert.equal(beforeLocal('2026-10-20T05:00:00Z', at, 7), false, '07:00 Berlin ist nicht mehr davor');
+  assert.equal(beforeLocal('2026-10-20T08:13:00Z', at, 7), false, 'nach der Digest-Stunde');
+  assert.equal(beforeLocal('2026-10-19T20:00:00Z', at, 7), true, 'Vortag');
+  assert.equal(beforeLocal('2026-10-19T22:30:00Z', at, '07:00'), true, '00:30 Berlin am 20.');
 });
 
 test('Fälligkeit: Dedupe-Schlüssel mit Fälligkeitsdatum; Aufräumen nach 180 Tagen', async () => {

@@ -10,6 +10,7 @@ import { seal, unseal } from '../secrets.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
 import { enqueueForNewMail } from '../ai/mailAi.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
+import { linkMailToTask } from './link.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
 
 export interface SyncResult {
@@ -132,7 +133,7 @@ export class MailService {
     // Persönliche Projekte nehmen nur Mails aus eigenen Postfächern auf
     if (taskId && !(await accountAllowedInProject(this.db, account, (await this.db.one(`select project_id from tasks where id = $1`, [taskId])).project_id))) taskId = null;
     if (taskId) {
-      await this.db.query(`insert into mail_task_links (mail_id, task_id, copied, checklist_item_id) values ($1,$2,false,$3) on conflict do nothing`, [mailId, taskId, itemId]);
+      await linkMailToTask(this.db, { mailId, taskId, checklistItemId: itemId });
       await audit(this.db, { orgId: account.org_id, projectId: account.project_id, action: 'mail.auto_linked', objectType: 'mail', objectId: mailId, details: { taskId, via: code ? 'plus-address' : 'in-reply-to' } });
       queueAgentRun(taskId, 'reply');
     }

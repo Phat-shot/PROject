@@ -5,7 +5,7 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject, requireTask } from '../rights.js';
-import { resolveAll, resolveRule, rulesAt, setRules, type RuleInput } from '../rules.js';
+import { resolveAll, resolveRule, rulesAt, setRules, UUID, type RuleInput } from '../rules.js';
 import { eventContext, recipientsOf } from '../notify.js';
 import { digestHourOf } from '../notifyMail.js';
 
@@ -139,6 +139,7 @@ export async function notifyRuleRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const q = req.query;
     if (q.event && !NOTIFY_EVENTS.some((e) => e.key === q.event)) throw badRequest('Unbekannte Ereignisklasse');
+    if (q.projectId && !UUID.test(q.projectId)) throw badRequest('Ungültige Projekt-ID');
     const rows = await db.query(
       `select * from notifications where user_id = $1 and ($2::text is null or event = $2) and ($3::uuid is null or project_id = $3)
          and (not $4 or read_at is null) and (not $5 or resolved_at is null)

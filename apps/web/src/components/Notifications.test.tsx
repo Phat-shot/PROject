@@ -39,4 +39,20 @@ describe('Meldungen im Dashboard', () => {
     await waitFor(() => expect(openChat).toHaveBeenCalledWith(c, th));
     expect(post).not.toHaveBeenCalled();
   });
+
+  it('Chat-Bezug ohne Chat-Link öffnet den Kanal im Messenger', async () => {
+    const c = '33333333-3333-4333-8333-333333333333';
+    render(<MemoryRouter><NotificationRow n={note({ link: null, ref: { type: 'chat_channel', id: c }, readAt: '2026-10-18T11:00:00Z' })} /></MemoryRouter>);
+    fireEvent.click(screen.getByRole('button'));
+    await waitFor(() => expect(openChat).toHaveBeenCalledWith(c, null));
+  });
+
+  it('zeigt die Ereignisklasse als Präfix, bei Information keines', () => {
+    const { unmount } = render(<MemoryRouter><NotificationRow n={note({ event: 'escalation' })} /></MemoryRouter>);
+    expect(screen.getByText('Eskalation · 2026-10-18T10:00:00Z')).toBeInTheDocument();
+    unmount();
+    render(<MemoryRouter><NotificationRow n={note({ event: 'info' })} /></MemoryRouter>);
+    expect(screen.getByText('2026-10-18T10:00:00Z')).toBeInTheDocument();
+    expect(screen.queryByText(/Information/)).toBeNull();
+  });
 });

@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { composeEcho, testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
+import { localParts } from '../src/localTime.js';
 
 /** Lokales LLM: Läufe am AP liefern die Aktionen aus `next`, Chat-Läufe eine kurze Antwort. */
 let next: any[] = [];
@@ -71,6 +72,15 @@ test('Zwischenstände: Berichtswunsch am AP (für mich und für das AP), every j
   await run(A({ type: 'set_status', column: 'In Arbeit' }));
   assert.equal((await progress(U().max, ap.id)).length, 4);
   assert.equal((await progress(U().pl, ap.id)).length, 4);
+  // Einmal am Tag: zwei Läufe mit Inhalt am selben Tag ergeben eine Meldung (Dedupe je AP und Tag)
+  await t.api(max).put(`/me/notification-rules?taskId=${ap.id}`, { rules: [{ event: 'progress', channels: { mail: 'digest' }, timing: { every: 'daily' } }] });
+  await run(A({ type: 'comment', text: 'Rückruf bei Elektro Nord' }));
+  await run(A({ type: 'comment', text: 'Angebot von Elektro Nord liegt vor' }));
+  mx = await progress(U().max, ap.id);
+  assert.equal(mx.length, 5);
+  assert.equal(mx[4].dedupe_key, `progress:${ap.id}:${localParts(new Date()).date}`);
+  assert.equal((await progress(U().pl, ap.id)).length, 4, 'Kommentare sind keine Meilensteine');
+  await t.api(max).put(`/me/notification-rules?taskId=${ap.id}`, { rules: [{ event: 'progress' }] });
   // Nichts Inhaltliches (nur none) → kein Zwischenstand
   await run(A({ type: 'none', reason: 'nichts zu tun' }));
   assert.equal((await progress(U().pl, ap.id)).length, 4);
@@ -140,4 +150,22 @@ test('Chat „thread“ ohne eigenen Thread: Systembeitrag in der Direktnachrich
   await flushAgentRuns();
   assert.equal((await t.db.one(`select count(*)::int as c from agent_runs where channel_id = $1`, [channel.channel.id])).c, runsBefore + 1);
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'assigned' }] });
+});
+
+test('Seite „In Prüfung“ aus einem AP im eingeschränkten Teilprojekt: Freigabeberechtigte ohne Sicht auf das TP bekommen die Meldung (die Seite gehört dem Projekt)', async () => {
+  const pl = await t.login('pl@demo.local');
+  assert.equal((await t.api(pl).put(`/projects/${web()}/members/${U().max}`, { role: 'member', canEditPlan: true, canFinalize: true })).statusCode, 200);
+  const sp = await t.api(pl).post(`/projects/${web()}/subprojects`, { name: 'Geheim', restricted: true, accessUserIds: [morton.id] });
+  assert.equal(sp.statusCode, 200, sp.body);
+  const secret = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Vertrauliche Seite prüfen lassen', subprojectId: sp.json().subproject.id, responsibleUserId: morton.id })).json().task;
+  await flushAgentRuns();
+  const page = await t.db.one(`select id, title from doc_pages where project_id = $1 and status = 'draft' and deleted_at is null order by created_at limit 1`, [web()]);
+  next = [A({ type: 'doc_status', pageId: page.id, status: 'review' })];
+  assert.equal((await t.api(pl).post(`/tasks/${secret.id}/agent-run`)).statusCode, 200);
+  assert.equal((await t.db.one(`select status from doc_pages where id = $1`, [page.id])).status, 'review');
+  const review = (userId: string) => t.db.query(`select * from notifications where user_id = $1 and type = 'page.review' and ref_id = $2`, [userId, page.id]).then((r) => r.rows);
+  assert.equal((await review(U().max)).length, 1, 'Max darf final setzen, sieht das TP aber nicht');
+  assert.equal((await review(U().pl)).length, 1);
+  assert.equal((await review(U().leser)).length, 0, 'ohne Recht nichts');
+  await t.api(pl).put(`/projects/${web()}/members/${U().max}`, { role: 'member', canEditPlan: true });
 });

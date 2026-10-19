@@ -9,6 +9,7 @@ import { onWorkflowTaskDone } from '../workflows/engine.js';
 import { canSeeSubproject, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
 import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { mailAccess } from '../mail/access.js';
+import { linkMailToTask } from '../mail/link.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { dispatch } from '../notify.js';
@@ -334,7 +335,7 @@ export async function taskRoutes(app: FastifyInstance) {
       // Arbeitspaket anpassen mit Mail als Beleg: verknüpfen und Änderung im Log festhalten.
       const mail = await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [b.sourceMailId]);
       if (mail) {
-        await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, req.params.id, user.id]);
+        await linkMailToTask(db, { mailId: mail.id, taskId: req.params.id, linkedBy: user.id, actorId: user.id, logged: true });
         const parts = Object.entries(changed).map(([k, v]) => `${k}: ${v ?? '–'}`).join(', ');
         await db.query(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'mail',$4)`,
           [req.params.id, user.id, `${b.note?.trim() ? b.note.trim() + '\n\n' : ''}Angepasst auf Grundlage der Mail „${mail.subject}“ von ${mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')}): ${parts}`, mail.id]);

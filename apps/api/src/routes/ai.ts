@@ -6,6 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
+import { linkMailToTask } from '../mail/link.js';
 import { aiConfigFor, aiStatus, complete, MODELS, projectProfiles } from '../ai/client.js';
 import { aiError, ownLlmAllowed, ownLlmReason, PROJECT_LABEL_SQL, setAiPolicy } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
@@ -305,7 +306,7 @@ export async function aiRoutes(app: FastifyInstance) {
       const mail = p.mail_id ? await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [p.mail_id]) : null;
       const suffix = mail ? `\n\nQuelle: Mail „${mail.subject}“ von ${mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')})` : '';
       await db.query(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'ai',$4)`, [task.id, user.id, `${entry}${changes.length ? `\n\n${changes.join(', ')}` : ''}${suffix}`, mail?.id ?? null]);
-      if (mail) await db.query(`insert into mail_task_links (mail_id, task_id, copied, linked_by) values ($1,$2,false,$3) on conflict do nothing`, [mail.id, task.id, user.id]);
+      if (mail) await linkMailToTask(db, { mailId: mail.id, taskId: task.id, linkedBy: user.id, actorId: user.id, logged: true });
       await touchTask(db, task.id);
       await db.query(`update ai_proposals set status = 'approved', decided_by = $2, decided_at = now() where id = $1`, [p.id, user.id]);
       await audit(db, { orgId: user.orgId, projectId: p.project_id, userId: user.id, action: 'ai.approve', objectType: 'task', objectId: task.id, details: { proposalId: p.id, changes } });

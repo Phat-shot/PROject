@@ -28,9 +28,14 @@ export function recipientsLabel(list: string[], t?: RuleTargets): string {
   return list.map((e) => e.split('|').map(one).join(', sonst ')).join(' · ');
 }
 
-/** Regelzeile als Eingabe für PUT (alle gesetzten Angaben der Ebene); Änderungen setzen bzw. entfernen einzelne Angaben. */
+/**
+ * Regelzeile als Eingabe für PUT (alle gesetzten Angaben der Ebene); Änderungen setzen bzw. entfernen einzelne Angaben.
+ * Die gespeicherte Doku-Seite geht als „an“ zurück (der Server löst die Seite des Projekts auf, auch nach dem Löschen).
+ */
 function itemOf(row: NotificationRule | undefined, event: string): RuleItem {
-  return { event, recipients: row?.recipients ?? null, channels: { ...(row?.channels ?? {}) }, timing: { ...(row?.timing ?? {}) }, locked: [...(row?.locked ?? [])] };
+  const channels = { ...(row?.channels ?? {}) };
+  if (typeof channels.doc === 'string') channels.doc = true as unknown as string;
+  return { event, recipients: row?.recipients ?? null, channels, timing: { ...(row?.timing ?? {}) }, locked: [...(row?.locked ?? [])] };
 }
 
 export function RulesMatrix({ level, data, canEdit, onSave, events, targets }: { level: Level; data: RulesListing; canEdit: boolean; onSave: (items: RuleItem[]) => Promise<unknown>; events?: NotifyEvent[]; targets?: RuleTargets }) {
