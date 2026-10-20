@@ -236,6 +236,8 @@ table.table { width: 100%; border-collapse: collapse; }
 .mail-item { padding: 10px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
 .mail-item:hover { background: var(--surface-2); }
 .mail-item.active { background: var(--primary-soft); }
+.mail-item.unread .from, .mail-item.unread .subject { font-weight: 700; }
+.mail-item.unread .subject::before { content: '●'; color: var(--primary); font-size: 9px; margin-right: 6px; vertical-align: middle; }
 .mail-item .from { font-weight: 600; display: flex; justify-content: space-between; gap: 8px; }
 .mail-item .from .date { font-weight: 400; color: var(--muted); font-size: 11px; white-space: nowrap; }
 .mail-item .subject { margin: 2px 0; }

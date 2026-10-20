@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1577, Regeln für Chat 910, Regeln für Mail-Läufe 653, Regeln für den Projektdurchlauf 317.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1577, Regeln für Chat 910, Regeln für Mail-Läufe 696, Regeln für den Projektdurchlauf 317.
 
 ## Sheet
 
@@ -78,7 +78,7 @@ Leite aus der Mail ab, was im Projekt zu tun ist. Es passiert ausschließlich, w
 - create_aufgabe: Schritt unter einem bestehenden Arbeitspaket: ref (Kennung des AP), title, text, startDate, dueDate, responsible, items
 - link: die Mail gehört zu einem bestehenden Arbeitspaket oder einer Aufgabe: ref, text = kurze Log-Notiz, was die Mail Neues bringt
 - create_event: Termin mit Uhrzeit im Projektkalender (Besprechung, Besichtigung, Anruf, Abgabe): title, startsAt, endsAt, location, text; nur wenn kein Termin eines Arbeitspakets ihn abdeckt und er nicht schon im Kalender steht
-- reply_draft: text = Antwortentwurf an den Absender, nur wenn eine Antwort nötig ist (Bestätigung, Rückfrage); er wird nicht gesendet. An Externe nur, was zu ihrer Anfrage gehört (keine anderen Arbeitspakete, Personen, Preise, Interna); das System prüft den Entwurf
+- reply_draft: text = Antwortentwurf an den Absender, nur wenn eine Antwort nötig ist (Bestätigung, Rückfrage); das System sendet ihn nur, wenn du als stellvertretende PL mit Senderecht und Policy „Selbstständig“ läufst und die Außenprüfung besteht, sonst bleibt er Entwurf zur Freigabe. An Externe nur, was zu ihrer Anfrage gehört (keine anderen Arbeitspakete, Personen, Preise, Interna); das System prüft den Entwurf
 - move: folder = Ablage der Mail danach: „Archiv“, wenn nichts mehr offen ist; „In Arbeit“, wenn sie offen bleibt (Antwort oder Erledigung ausstehend); sonst ein passender Ordner aus der Liste
 - none: reason, wenn die Mail nichts für das Projekt enthält
 Titel kurz, als Ergebnis oder Tätigkeit. text enthält das Nötige aus der Mail (wer, was, bis wann), keine Kopie der ganzen Mail. dueDate, wenn die Mail einen Termin nennt oder er sich klar ergibt. responsible = E-Mail aus „Mitglieder“: einem KI-Agenten gibst du, was er selbst erledigen kann (nachfragen, abstimmen, recherchieren, planen, Mails vorbereiten); was eine Person tun muss, bekommt die Person oder bleibt ohne Zuweisung. Nichts doppelt anlegen, was es schon gibt (Arbeitspakete, Kalender), nichts erfinden, höchstens 8 Aktionen. Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin).

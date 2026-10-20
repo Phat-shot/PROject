@@ -7,7 +7,10 @@ import { notify } from '../notify.js';
 import { canSeeSubproject, getMembership, getViewRights, visibleSubprojectSql } from '../rights.js';
 import { reSubject } from '../mail/origin.js';
 import { linkMailToTask } from '../mail/link.js';
-import { aiConfigFor, complete, parseJson } from './client.js';
+import { aiConfigFor, complete, parseJson, type AiConfig } from './client.js';
+import { effectiveAgentPolicy } from './agentPolicy.js';
+import { audienceOf, guardOutbound, recordCheck } from '../outbound.js';
+import { externalWindow, inWindow, nextWindowStart } from './web.js';
 import { AGENT_SHEET, MAIL_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { parseUntil, styleText } from './agent.js';
@@ -31,7 +34,7 @@ import { handleOpenPoints } from './mailInquiry.js';
  * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
  */
 export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; folder?: string | null; reason?: string | null };
-export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number }; decidedBy?: string | null };
+export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number; /** vom Agenten gesendet */ sent?: boolean; /** Versand geplant (Arbeitszeitfenster) */ scheduled?: string }; decidedBy?: string | null };
 
 const TYPES = ['create_ap', 'create_aufgabe', 'link', 'create_event', 'reply_draft', 'move', 'none'];
 const SCHEMA = {
@@ -114,7 +117,7 @@ export function actionLabel(a: MailAiAction): string {
     case 'create_aufgabe': return `Aufgabe „${a.title ?? ''}“ in ${a.ref ?? '?'}${a.dueDate ? ` · fällig ${a.dueDate}` : ''}`;
     case 'link': return `Zu ${a.ref ?? '?'}${a.text ? `: ${cut(a.text, 120)}` : ''}`;
     case 'create_event': return `Termin „${a.title ?? ''}“ ${(a.startsAt ?? '').replace('T', ' ')}${a.location ? ` · ${a.location}` : ''}`;
-    case 'reply_draft': return `Antwortentwurf: ${cut(a.text, 140)}`;
+    case 'reply_draft': return `Antwort${(a as StoredAction).result?.sent || (a as StoredAction).result?.scheduled ? '' : 'entwurf'}: ${cut(String(a.text ?? '').replace(/\s+/g, ' '), 140)}`;
     case 'move': return `Ablage: ${a.folder ?? 'Archiv'}`;
     default: return `Nichts zu tun${a.reason ? `: ${a.reason}` : ''}`;
   }
@@ -197,13 +200,15 @@ Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.sp
     let inquiry: Awaited<ReturnType<typeof handleOpenPoints>> = { action: 'none' };
     if (run.mode === 'process') {
       const actor = (await userRow(db, run.actor_user_id))!;
-      stored = await applyActions(db, mailSvc, { run, project, mail: m, view, actor }, proposed);
+      stored = await applyActions(db, mailSvc, { run, project, mail: m, view, actor, cfg, fetchFn, now }, proposed);
       const taskId = stored.find((x) => x.status === 'done' && x.result?.taskId)?.result?.taskId ?? null;
       // Offene Punkte: der Agent fragt nach (Mail-Rückfrage)
       inquiry = await handleOpenPoints(db, { project, mail: m, taskId, asker: agent, actorId: null, openPoints });
+      // Info an die PL als Direktnachricht des Agenten: was angelegt wurde, was nicht ging, offene Punkte, Entwürfe zur Freigabe oder gesendete Antworten
       const recipients = await plIds();
-      const failedText = stored.filter((x) => x.status === 'error').map((x) => `${actionLabel(x)} (${x.result?.error ?? 'Fehler'})`).join('; ');
-      for (const u of recipients) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${agent.name} hat Mail bearbeitet: ${cut(m.subject, 80)}`, body: `${summary}${inquiry.action === 'log' || inquiry.action === 'none' ? openText : ''}${failedText ? ` · Nicht ausgeführt: ${cut(failedText, 400)}` : ''}`, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null, actorId: agent.id });
+      const lines = stored.filter((x) => x.type !== 'none').map((x, i) => `${i + 1}) ${actionLabel(x)}${x.status === 'error' ? ` – nicht ausgeführt: ${x.result?.error ?? 'Fehler'}` : x.type === 'reply_draft' ? (x.result?.sent ? ' – gesendet' : x.result?.scheduled ? ` – Versand geplant ${x.result.scheduled}` : ' – Entwurf wartet auf Freigabe (Mail › Freigaben)') : ''}`);
+      const body = `Mail „${cut(m.subject, 80)}“ (von ${m.from_name ?? m.from_addr}) bearbeitet: ${summary}${lines.length ? `\n${lines.join('\n')}` : ''}${(inquiry.action === 'log' || inquiry.action === 'none') && openPoints.length ? `\nOffen: ${openPoints.join('; ')}` : ''}\nMail: /projekte/${project.id}/mail/m/${m.id}`;
+      for (const u of recipients) await agentChatMessage(db, agent, { userId: u }, body, project.id);
       await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens) values ($1,$2,$3,$4,'mail_process','ok',$5,$6,$7,$8)`,
         [project.org_id, agent.id, project.id, taskId, `Mail bearbeitet: ${stored.filter((x) => x.status === 'done' && x.type !== 'none').length} Aktionen${openPoints.length ? `, ${openPoints.length} offene Punkte` : ''}`, JSON.stringify(stored.map((x) => ({ type: x.type, status: x.status }))), r.inputTokens, r.outputTokens]);
     } else {
@@ -233,7 +238,7 @@ Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.sp
   }
 }
 
-interface Ctx { run: any; project: any; mail: any; view: any; actor: User }
+interface Ctx { run: any; project: any; mail: any; view: any; actor: User; /** nur im Lauf des Agenten: für Außenprüfung und autonomen Versand */ cfg?: AiConfig; fetchFn?: typeof fetch; now?: Date }
 
 const clean = (a: MailAiAction): MailAiAction => Object.fromEntries(Object.entries(a).filter(([, v]) => v !== null && v !== undefined && v !== '' && !(Array.isArray(v) && !v.length))) as MailAiAction;
 
@@ -327,6 +332,38 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
       if (!rights.canDraft && !rights.canSend) fail('Kein Entwurfsrecht an der Ansicht');
       const text = String(a.text ?? '').trim();
       if (!text) fail('Antworttext fehlt');
+      const subject = reSubject(mail.subject);
+      // Autonomer Versand: Agent als stellvertretende PL mit Senderecht, „darf Mails senden“ und Policy „Selbstständig“; Außenprüfung wie bei Agenten-Mails
+      // (Neuformulierung nach Stufe, Prüfung); bestanden und kein erster Kontakt → senden bzw. im Arbeitszeitfenster planen, sonst Entwurf zur Freigabe
+      const autonomous = asAgent && ctx.run.mode === 'process' && Boolean(ctx.cfg && ctx.fetchFn) && rights.canSend && membership!.agentCanMail && (await effectiveAgentPolicy(db, { agentId: actor.id, projectId: project.id })).mode === 'auto';
+      if (autonomous) {
+        const aud = await audienceOf(db, { projectId: project.id, taskId: state.taskId, recipients: [mail.from_addr] });
+        const g = aud.audience === 'internal' ? null : await guardOutbound(db, ctx.cfg!, ctx.fetchFn!, { projectId: project.id, taskId: state.taskId, aud, subject, text, compose: true, keepSubject: true });
+        const sendable = !g || (g.result === 'pass' && aud.audience !== 'unknown_external');
+        const now = ctx.now ?? new Date();
+        const rec = (draftId: string | null) => (g ? recordCheck(db, { orgId: project.org_id, projectId: project.id, taskId: state.taskId, channel: 'mail', aud, result: g.result, findings: g.findings, withheld: g.withheld, mailDraftId: draftId, userId: actor.id }) : Promise.resolve(null));
+        const ins = (status: string, sendAt: Date | null) => db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status, send_at) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,$10,$11) returning id`,
+          [mail.account_id, view.id, state.taskId, project.id, actor.id, JSON.stringify([mail.from_addr]), subject, g?.text ?? text, mail.message_id ?? null, status, sendAt]);
+        if (sendable && g) {
+          const win = await externalWindow(db, project.org_id);
+          if (!inWindow(win, now)) {
+            const at = nextWindowStart(win, now);
+            const d = await ins('scheduled', at);
+            await rec(d.id);
+            return { draftId: d.id, scheduled: fmtWhen(at) };
+          }
+        }
+        if (sendable) {
+          const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [mail.account_id]);
+          await svc.sendFromAccount(account, { to: [mail.from_addr], subject, text: g?.text ?? text, taskId: state.taskId, inReplyTo: mail.message_id ?? null, userId: actor.id, projectId: project.id });
+          await rec(null);
+          await audit(db, { orgId: project.org_id, projectId: project.id, userId: actor.id, action: 'mail.send', objectType: 'mail', objectId: mail.id, details: { to: mail.from_addr, subject, by, autonomous: true } });
+          return { sent: true, ...(g?.findings.length ? { hints: g.findings.length } : {}) };
+        }
+        const d = await ins('pending_approval', null);
+        await rec(d.id);
+        return { draftId: d.id, ...(g?.findings.length ? { hints: g.findings.length } : {}) };
+      }
       const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'draft') returning id`,
         [mail.account_id, view.id, state.taskId, project.id, actor.id, JSON.stringify([mail.from_addr]), reSubject(mail.subject), text, mail.message_id ?? null]);
       // Außenprüfung nur als Hinweis: die Person sieht die Fundstellen am Entwurf und sendet selbst

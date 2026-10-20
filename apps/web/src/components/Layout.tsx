@@ -7,6 +7,7 @@ import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
 import { useAiStatus } from '../lib/useAi';
 import { useChatUnread } from '../lib/useChatUnread';
+import { useMailUnread } from '../lib/useMailUnread';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
 import { eventLabel, useOpenNotification } from './Notifications';
@@ -42,6 +43,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [chat, setChat] = useState<{ open: boolean; channelId: string | null; threadId: string | null; msgId: string | null }>({ open: false, channelId: null, threadId: null, msgId: null });
   const ai = useAiStatus();
   const unread = useChatUnread();
+  const mailUnread = useMailUnread();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -116,7 +118,7 @@ export function Layout({ children }: { children: ReactNode }) {
           </>}
         </div>
         <div className="nav-sep" />
-        <NavLink to="/postfach" data-tour="postfach">Postfach</NavLink>
+        <NavLink to="/postfach" data-tour="postfach"><span>Postfach</span>{mailUnread.total > 0 && <span className="badge danger" style={{ marginLeft: 6 }} title="ungelesene Mails">{mailUnread.total}</span>}</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <NavLink to="/workflows" data-tour="workflows">Workflows</NavLink>
         <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count">{unread.total}</span>}</NavLink>

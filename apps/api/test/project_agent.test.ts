@@ -77,7 +77,7 @@ test('Projektagent bearbeitet neue Mails des Projektkontos selbst (Rechte und Bu
   assert.equal(task.copied, true);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and user_id = $2 and body like '%Projektagent Morton%'`, [task.id, agent.id]), 'Log unter dem Namen des Agenten');
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where agent_user_id = $1 and trigger = 'mail_process' and task_id = $2`, [agent.id, task.id]), 'zählt als Lauf des Agenten');
-  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai' and title like 'Morton hat Mail bearbeitet%'`, [t.ids.users.pl]), 'PL erfährt davon');
+  assert.ok(await t.db.maybeOne(`select 1 from chat_messages m join chat_channel_members x on x.channel_id = m.channel_id and x.user_id = $1 where m.user_id = $2 and m.body like 'Mail „Angebot Elektrik“%bearbeitet:%'`, [t.ids.users.pl, agent.id]), 'PL erfährt davon per Chat');
   const q = await openQuestion(mail.id);
   assert.ok(q, 'Frage an die PL');
   assert.equal(q.kind, 'decision');
@@ -169,7 +169,7 @@ test('Einstellung je Projekt (aus, im Projekt fragen) und Vorgabe des Mandanten;
   const run4 = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [mail4.id]);
   assert.equal(run4.mode, 'triage'); assert.equal(run4.agent_user_id, agent.id); assert.equal(run4.actor_user_id, null);
   assert.equal(run4.actions[0].status, 'pending');
-  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai' and body like '%Offen: Lieferadresse%'`, [t.ids.users.pl]));
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai' and body like '%Offen: Lieferadresse%'`, [t.ids.users.pl]), 'Vorschläge: offene Punkte in der Meldung');
   assert.equal(await openQuestion(mail4.id), null, 'ohne Arbeitspaket keine Frage');
 
   // Modus aus: keine Läufe mehr

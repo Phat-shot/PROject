@@ -14,7 +14,7 @@ import { accountKind, accountBoundToProject, accountRights, accountUseIn, accoun
 import { projectLabelSql } from '../projectPolicy.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
-import { decideProposals, enqueueForNewMail, suggestAgent } from '../ai/mailAi.js';
+import { decideProposals, enqueueForNewMail, moveMailTo, suggestAgent } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
 import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
@@ -40,6 +40,7 @@ function mapSummary(r: any): MailSummary {
   return {
     id: r.id, accountId: r.account_id, folder: r.folder, messageId: r.message_id, fromAddr: r.from_addr, fromName: r.from_name,
     toJson: r.to_json ?? [], subject: r.subject, date: r.date, snippet: r.snippet, hasAttachments: r.has_attachments, outgoing: Boolean(r.outgoing),
+    ...(r.unread === undefined ? {} : { unread: Boolean(r.unread) }),
     linkedTaskIds: (typeof r.linked_task_ids === 'string' ? JSON.parse(r.linked_task_ids) : r.linked_task_ids) ?? []
   };
 }
@@ -655,9 +656,9 @@ export async function mailRoutes(app: FastifyInstance) {
     if (readable.length === 0) return { mails: [], views: [] };
     const ids = readable.filter((v) => !req.query.viewId || v.id === req.query.viewId).map((v) => v.id);
     const rows = await db.query(
-      `select distinct on (m.id) m.*, x.view_id, ${LINKED} from mails m join mail_view_matches x on x.mail_id = m.id
-       where x.view_id = any($1::uuid[]) ${req.query.folder ? 'and lower(m.folder) = lower($2)' : ''} order by m.id, x.view_id`,
-      req.query.folder ? [ids, req.query.folder] : [ids]
+      `select distinct on (m.id) m.*, x.view_id, ${LINKED}, (not m.outgoing and not exists (select 1 from mail_reads rd where rd.mail_id = m.id and rd.user_id = $2)) as unread from mails m join mail_view_matches x on x.mail_id = m.id
+       where x.view_id = any($1::uuid[]) ${req.query.folder ? 'and lower(m.folder) = lower($3)' : ''} order by m.id, x.view_id`,
+      req.query.folder ? [ids, user.id, req.query.folder] : [ids, user.id]
     );
     const byView = new Map(readable.map((v) => [v.id, v]));
     const mails = rows.rows
@@ -667,12 +668,36 @@ export async function mailRoutes(app: FastifyInstance) {
     return { mails, views: readable };
   });
 
+  // Ungelesene Mails (nicht geöffnet, nicht gesendet, nicht Papierkorb/Spam) in lesbaren Ansichten: gesamt und je Projekt, für Navigation und Listen
+  app.get('/mail/unread', async (req) => {
+    const user = requireUser(req);
+    const views = await db.query(`select v.id, v.project_id from mail_views v join projects p on p.id = v.project_id where p.org_id = $1 and p.status = 'active'`, [user.orgId]);
+    const readable: { id: string; projectId: string }[] = [];
+    for (const v of views.rows) { const r = await getViewRights(db, v.id, user, await getMembership(db, v.project_id, user.id)); if (r.canRead) readable.push({ id: v.id, projectId: v.project_id }); }
+    if (!readable.length) return { total: 0, byProject: {} };
+    const rows = await db.query(
+      `select v.project_id, count(distinct m.id)::int as n from mails m join mail_view_matches x on x.mail_id = m.id join mail_views v on v.id = x.view_id
+       where x.view_id = any($1::uuid[]) and not m.outgoing and lower(m.folder) not similar to '%(trash|papierkorb|junk|spam|gelöscht|deleted)%'
+         and not exists (select 1 from mail_reads rd where rd.mail_id = m.id and rd.user_id = $2) group by v.project_id`, [readable.map((v) => v.id), user.id]);
+    const byProject: Record<string, number> = {};
+    for (const r of rows.rows) byProject[r.project_id] = r.n;
+    return { total: Object.values(byProject).reduce((a, b) => a + b, 0), byProject };
+  });
+  app.post<{ Params: { mid: string }; Body: { read: boolean } }>('/mail/mails/:mid/read', async (req) => {
+    const user = requireUser(req);
+    if (!(await mailReadable(user, req.params.mid)).ok) throw forbidden();
+    if (req.body?.read === false) await db.query(`delete from mail_reads where mail_id = $1 and user_id = $2`, [req.params.mid, user.id]);
+    else await db.query(`insert into mail_reads (mail_id, user_id) values ($1,$2) on conflict do nothing`, [req.params.mid, user.id]);
+    return { ok: true };
+  });
   app.get<{ Params: { mid: string } }>('/mail/mails/:mid', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select m.*, ${LINKED} from mails m where m.id = $1`, [req.params.mid]);
     if (!r) throw notFound('Mail nicht gefunden');
     const access = await mailReadable(user, r.id);
     if (!access.ok) throw forbidden('Verknüpfte Mail, keine Berechtigung');
+    // Öffnen = gelesen (je Person)
+    await db.query(`insert into mail_reads (mail_id, user_id) values ($1,$2) on conflict do nothing`, [r.id, user.id]);
     // Abgeleitete Arbeitspakete/Aufgaben (auch in anderen Projekten), nur soweit man sie sehen darf
     const linkRows = await db.query(`select l.*, t.title, t.number, t.project_id, t.subproject_id, t.parent_id, p.key, p.visibility from mail_task_links l join tasks t on t.id = l.task_id join projects p on p.id = t.project_id where l.mail_id = $1 and t.deleted_at is null and p.org_id = $2 order by l.origin desc, t.created_at`, [r.id, user.orgId]);
     const links: any[] = [];
@@ -1251,6 +1276,14 @@ export async function mailRoutes(app: FastifyInstance) {
     await notifyMany(db, targets, { projectId, type: 'mail.approval', title: `Freigabe wartet: ${subject}`, body: `Entwurf von ${author.name}`, link: `/projekte/${projectId}/mail/freigaben` }, author.id);
   }
 
+  async function archiveParkedMail(account: AccountRow, messageId: string, user: User, projectId: string | null) {
+    const m = await db.maybeOne(`select * from mails where account_id = $1 and message_id = $2 and not outgoing`, [account.id, messageId]);
+    if (!m || !/in arbeit$/i.test(String(m.folder))) return;
+    if (await db.maybeOne(`select 1 from questions where status = 'open' and context->>'mailId' = $1`, [m.id])) return;
+    const path = await moveMailTo(db, app.mail, m, 'Archiv');
+    await audit(db, { orgId: user.orgId, projectId, userId: user.id, action: 'mail.archive', objectType: 'mail', objectId: m.id, details: { from: m.folder, to: path, reason: 'Antwort gesendet' } });
+  }
+
   async function doSend(draftId: string, user: User, account: AccountRow, references: string | null) {
     const d = await db.one(`select * from mail_drafts where id = $1`, [draftId]);
     // Angehaltener PDF-Versand: das PDF der Seite wird beim Senden erzeugt, nur solange die Seite final ist
@@ -1264,6 +1297,8 @@ export async function mailRoutes(app: FastifyInstance) {
       if (page && pdf) await storePagePdf(db, page, pdf, user.id);
       await db.query(`update mail_drafts set status = 'sent', sent_at = now(), sent_by = $2, error = null, updated_at = now() where id = $1`, [draftId, user.id]);
       await db.query(`update outbound_checks set decided_by = $2, decided_at = now() where mail_draft_id = $1 and decided_at is null`, [draftId, user.id]);
+      // Abschluss: eine vom Agenten nach „In Arbeit“ gelegte Mail (Antwort ausstehend) wandert mit der gesendeten Antwort ins Archiv, sofern keine Rückfrage dazu offen ist
+      if (d.in_reply_to) await archiveParkedMail(account, d.in_reply_to, user, d.project_id).catch((e) => app.log.warn(`[mail] Archiv nach Antwort: ${e?.message ?? e}`));
       return res;
     } catch (e: any) {
       await db.query(`update mail_drafts set status = 'failed', error = $2, updated_at = now() where id = $1`, [draftId, String(e?.message ?? e)]);

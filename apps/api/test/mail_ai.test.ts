@@ -48,6 +48,8 @@ test('Ordner „KI Bearbeiten“ einrichten: nur mit Agent, Projektkonto nur dur
 test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail, Termin, Antwortentwurf, Ablage; einmal je Mail', async () => {
   const pl = await t.login('pl@demo.local');
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'process' })).statusCode, 200);
+  // Policy „Rückfrage bei wichtigen Schritten“: Antworten bleiben Entwurf (autonomer Versand nur mit „Selbstständig“, eigener Test)
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'confirm_critical' })).statusCode, 200);
   mailNext = [
     M({ type: 'create_ap', title: 'Angebot Elektrik einholen', text: 'Angebot für die Elektrik im Gästezimmer bis 20.11.', dueDate: '2026-11-20', responsible: agent.email, items: ['Drei Angebote anfragen', 'Vergleich'] }),
     M({ type: 'create_event', title: 'Besichtigung Elektro Kurz', startsAt: '2026-11-05T14:00', location: 'Gästezimmer' }),
@@ -77,7 +79,14 @@ test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner di
   const check = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [draft.id]);
   assert.deepEqual([check.channel, check.audience, check.result], ['draft', 'task_external', 'pass']);
   assert.equal((await t.db.one(`select folder from mails where id = $1`, [mail.id])).folder, 'In Arbeit');
-  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai'`, [t.ids.users.pl]));
+  // Abschluss: gesendete Antwort ohne offene Rückfrage legt die geparkte Mail ins Archiv
+  const sent = await t.api(pl).post(`/mail/drafts/${draft.id}/send`);
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.match((await t.db.one(`select folder from mails where id = $1`, [mail.id])).folder, /^Archive$/);
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'mail.archive' and object_id = $1 and details->>'reason' = 'Antwort gesendet'`, [mail.id]));
+  const dmPl = await t.db.one(`select m.body from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members x on x.channel_id = c.id and x.user_id = $1 where m.user_id = $2 order by m.created_at desc limit 1`, [t.ids.users.pl, agent.id]);
+  assert.match(dmPl.body, /^Mail „Besichtigung und Angebot“ \(von Elektro Kurz\) bearbeitet: /); assert.match(dmPl.body, /Antwortentwurf: .* – Entwurf wartet auf Freigabe/); assert.match(dmPl.body, new RegExp(`Mail: /projekte/${web()}/mail/m/${mail.id}`));
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'chat.dm' and title = 'Nachricht von Morton'`, [t.ids.users.pl]), 'Info im Chat');
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and agent_user_id = $2`, [task.id, agent.id]), 'Agent legt sofort los');
   // Kein zweiter Lauf
   await t.mail.syncAccount(t.ids.accounts.project);
@@ -86,6 +95,29 @@ test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner di
   const view = (await t.api(pl).get(`/mail/mails/${mail.id}/ai`)).json().runs;
   assert.equal(view[0].actions.length, 4);
   assert.ok(view[0].actions.every((a: any) => a.status === 'done'));
+});
+
+test('Autonomer Modus: Agent als stellv. PL mit Senderecht und Policy „Selbstständig“ sendet die Antwort selbst (Außenprüfung bestanden); Info im Chat', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  assert.equal((await t.api(admin).put('/ai/settings', { externalGuard: 'check' })).statusCode, 200);
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' })).statusCode, 200);
+  const sentBefore = t.mail.dev.sent.length;
+  mailNext = [M({ type: 'create_ap', title: 'Rückruf Elektro Kurz' }), M({ type: 'reply_draft', text: 'Guten Tag,\n\ndanke, wir rufen morgen zurück.\n\nViele Grüße' }), M({ type: 'move', folder: 'Archiv' })];
+  await inject({ subject: 'Rückruf bitte', text: 'Bitte um Rückruf.', folder: 'KI Bearbeiten' });
+  const mail = await t.db.one(`select * from mails where subject = 'Rückruf bitte'`);
+  const run = (await t.api(pl).get(`/mail/mails/${mail.id}/ai`)).json().runs[0];
+  const reply = run.actions.find((a: any) => a.type === 'reply_draft');
+  assert.equal(reply.status, 'done', JSON.stringify(reply));
+  assert.equal(reply.result.sent, true, 'selbst gesendet');
+  assert.equal(t.mail.dev.sent.length, sentBefore + 1);
+  assert.equal(t.mail.dev.sent.at(-1)!.msg.subject, 'Re: Rückruf bitte');
+  assert.ok(await t.db.maybeOne(`select 1 from outbound_checks where channel = 'mail' and audience = 'task_external' and result = 'pass' and mail_draft_id is null`), 'Außenprüfung protokolliert');
+  const dm = await t.db.one(`select m.body from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members x on x.channel_id = c.id and x.user_id = $1 where m.user_id = $2 order by m.created_at desc limit 1`, [t.ids.users.pl, agent.id]);
+  assert.match(dm.body, /Antwort: .* – gesendet/);
+  // Ohne Senderecht bzw. ohne Policy „Selbstständig“: wieder Entwurf
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'confirm_critical' })).statusCode, 200);
+  await t.api(admin).put('/ai/settings', { externalGuard: 'strict' });
 });
 
 test('Antwortentwurf der Mail-KI an Externe mit Projektinternem: Hinweis am Entwurf und im Ergebnis, kein Block', async () => {

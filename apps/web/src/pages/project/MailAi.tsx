@@ -17,7 +17,7 @@ function label(a: MailAiRun['actions'][number]): string {
     case 'create_aufgabe': return `Aufgabe „${a.title ?? ''}“ in ${a.ref ?? '?'}${a.responsible ? ` · ${a.responsible}` : ''}${a.dueDate ? ` · fällig ${a.dueDate}` : ''}`;
     case 'link': return `Zu ${a.ref ?? '?'}${a.text ? `: ${a.text}` : ''}`;
     case 'create_event': return `Termin „${a.title ?? ''}“ ${when(a.startsAt)}${a.location ? ` · ${a.location}` : ''}`;
-    case 'reply_draft': return `Antwortentwurf: ${(a.text ?? '').slice(0, 140)}${(a.text ?? '').length > 140 ? ' …' : ''}`;
+    case 'reply_draft': return `${a.result?.sent || a.result?.scheduled ? 'Antwort' : 'Antwortentwurf'}: ${(a.text ?? '').slice(0, 140)}${(a.text ?? '').length > 140 ? ' …' : ''}`;
     case 'move': return `Ablage: ${a.folder ?? 'Archiv'}`;
     default: return `Nichts zu tun${a.reason ? `: ${a.reason}` : ''}`;
   }
@@ -47,7 +47,9 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
             <span className="small">{label(a)}</span> <span className={`badge ${cls}`}>{st}</span>
             {r.taskId && <button className="btn sm link" onClick={() => openTask(r.taskId!)}>{r.ref ?? 'öffnen'}</button>}
             {r.meetingId && <Link className="btn sm link" to={`${base}/besprechungen`}>Kalender</Link>}
-            {r.draftId && <Link className="btn sm link" to={`${base}/mail/freigaben`}>Entwurf</Link>}
+            {r.sent && <span className="badge ok">gesendet</span>}
+            {r.scheduled && <span className="badge" title="Arbeitszeitfenster für Mails nach außen">Versand geplant {r.scheduled}</span>}
+            {r.draftId && !r.scheduled && <Link className="btn sm link" to={`${base}/mail/freigaben`}>Entwurf</Link>}
             {r.draftId && r.hints ? <span className="small" style={{ color: 'var(--warn)' }} title="Der Entwurf nennt Inhalte, die Externe nicht erfahren sollen; Details unter Mail › Freigaben">{r.hints} {r.hints === 1 ? 'Hinweis' : 'Hinweise'} der Außenprüfung</span> : null}
             {r.error && <span className="muted small"> {r.error}</span>}
             {run.mode === 'triage' && (a.status === 'pending' || a.status === 'error') && <span className="row" style={{ display: 'inline-flex', gap: 4, marginLeft: 6 }}>
