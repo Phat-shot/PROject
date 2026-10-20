@@ -366,7 +366,7 @@ test('Doku wie ein Mitglied: Seite lesen (Leserunde), Inhalt ersetzen, Status mi
   const r = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
   assert.equal(r.statusCode, 200, r.body);
   assert.equal(calls.length - n0, 2, 'zwei Modellaufrufe');
-  assert.match(calls[calls.length - 1].body.messages[1].content, /Gelesene Seiten \(Markdown\):\n### „JF 2026-10-17“ \(pageId/);
+  assert.match(calls[calls.length - 1].body.messages[1].content, /Gelesene Seiten \(Markdown\) und Recherche-Ergebnisse:\n### „JF 2026-10-17“ \(pageId/);
   assert.match(calls[calls.length - 1].body.messages[1].content, /# Jour fixe[\s\S]*Beschlüsse/);
   assert.match(calls[calls.length - 1].body.messages[1].content, /wurden NICHT ausgeführt/);
   assert.deepEqual(r.json().actions.map((x: any) => x.type), ['doc_update', 'doc_status']);

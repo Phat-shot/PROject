@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1204, Regeln für Chat 756, Regeln für Mail-Läufe 653.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1303, Regeln für Chat 756, Regeln für Mail-Läufe 653.
 
 ## Sheet
 
@@ -39,6 +39,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - chat: to (E-Mail von Projektmitgliedern, die das Teilprojekt sehen; leer = PL; „projekt“ = Projektkanal, nicht bei eingeschränkten Teilprojekten), text = Information ohne erwartete Antwort; höchstens drei je Lauf
 - reply_origin: text = Antwort an den Absender der Ursprungsmail, geht aus deren Konto (ohne Senderecht als Entwurf zur Freigabe); einmal, wenn das Ergebnis vorliegt
 - read_page: pageId; liest eine Seite. Erst lesen, ändernde Aktionen danach angeben.
+- research: text = Suchfrage für die Online-Recherche, nur wenn „Deine Rechte“ sie freigibt; Begriffe ohne Namen, Adressen oder Interna; nur lesen, keine Kontaktaufnahme. Das Ergebnis kommt wie bei read_page als Leserunde mit Quellen zurück; erst dann handeln. Netzfunde nur mit Quelle (URL) übernehmen, das System hängt Seiten den Abschnitt „Quellen“ an.
 - doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: nur finale Seiten; pageId, subject, text, to (Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners)
 - create_aufgabe: title, text, ref (Kennung des AP, leer = dieses), startDate, dueDate, responsible, items (Tasks); create_ap: title, text, subproject (leer = dieses Teilprojekt), startDate, dueDate, responsible, items
 - assign: ref, responsible (leer = direkte Zuweisung aufheben, dann gilt die geerbte); set_dates: ref (leer = dieses), startDate, dueDate

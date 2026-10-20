@@ -17,7 +17,7 @@ import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 import { ReportWish } from '../../components/NotifyRules';
 import { useOpenChat } from '../../components/Messenger';
-import type { Question } from '@projekttool/shared';
+import type { Question, WebSource } from '@projekttool/shared';
 import { ApprovalCard, modeLabel } from '../../components/AgentPolicy';
 import { AGENT_MODES } from '@projekttool/shared';
 
@@ -200,6 +200,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
       <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
+      <WebSourcesBlock taskId={t.id} />
 
       <ReportWish taskId={t.id} />
 
@@ -449,6 +450,17 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
  * Offene Fragen am Arbeitspaket (von Agenten oder Personen): beantworten in der Aufgabe (Text oder Auswahl), im Chat öffnen,
  * als erledigt schließen (PL). Beantwortete und erledigte der letzten Zeit stehen eingeklappt darunter.
  */
+/** Quellen der Online-Recherche des Agenten (Konzept 8). */
+function WebSourcesBlock({ taskId }: { taskId: string }) {
+  const d = useData<{ sources: WebSource[] }>(`/tasks/${taskId}/web-sources`, [taskId]);
+  const list = d.data?.sources ?? [];
+  if (!list.length) return null;
+  return <>
+    <h3 className="mt">Quellen aus der Online-Recherche <span className="badge">{list.length}</span></h3>
+    <ul className="small">{list.slice(0, 30).map((s) => <li key={s.id}><a href={s.url} target="_blank" rel="noreferrer">{s.title ?? s.url}</a> <span className="muted">· {fmtDateTime(s.retrievedAt)}{s.query ? ` · „${s.query}“` : ''}</span>{s.citedText && <div className="muted">{s.citedText.slice(0, 200)}</div>}</li>)}</ul>
+  </>;
+}
+
 function QuestionsBlock({ taskId, canAnswer, isPl, onChanged }: { taskId: string; canAnswer: boolean; isPl: boolean; onChanged: () => void }) {
   const data = useData<{ questions: Question[] }>(`/tasks/${taskId}/questions?status=all`, [taskId]);
   const openChat = useOpenChat();

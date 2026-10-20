@@ -329,14 +329,14 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 function AiCard() {
   const st = useAiStatus();
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
-  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false });
+  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false });
   const [budget, setBudget] = useState<number | null>(null);
   const [assist, setAssist] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all', projectIds: [], personalScope: false } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: (p as any).projectScope ?? 'all', projectIds: (p as any).projectIds ?? [], personalScope: Boolean((p as any).personalScope) }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all', projectIds: [], personalScope: false, webSearch: false } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: (p as any).projectScope ?? 'all', projectIds: (p as any).projectIds ?? [], personalScope: Boolean((p as any).personalScope), webSearch: Boolean(p.webSearch) }); };
   return (
     <div className="card">
       <div className="row between"><h2 style={{ margin: 0 }}>KI-Profile</h2><button className="btn primary sm" onClick={() => open('new')}>Profil anlegen</button></div>
@@ -362,6 +362,7 @@ function AiCard() {
       <h3 className="mt">Agenten-Policy des Mandanten</h3>
       <p className="muted small">Vorgabe für alle Projekte: Selbstständigkeit (ohne Angabe „Rückfrage bei wichtigen Schritten“; Bestandsprojekte stehen auf „Selbstständig“) und Grenzen, die kein Projekt unterschreiten kann. Die PL stellt je Projekt, Agent und Arbeitspaket weiter ein; gesperrte Klassen regeln die KI-Freigaben (agent.finalize, agent.send_external, agent.close …).</p>
       <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
+      <WebSearchForm st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
       {edit && (
         <Modal title={edit === 'new' ? 'KI-Profil anlegen' : `Profil: ${edit.name}`} onClose={() => setEdit(null)}>
           <div className="form cols-2">
@@ -376,6 +377,7 @@ function AiCard() {
             {f.provider === 'local' && <label className="field"><span>Schlüssel (optional, Bearer)</span><input type="password" value={f.apiKey} autoComplete="new-password" placeholder="leer, wenn der Server keinen verlangt" onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>}
             {f.provider === 'local' && <div className="full stack" style={{ gap: 4 }}>
               <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus</label>
+              <label className="check" title="Dazu muss die KI-Freigabe „Online-Recherche“ (agent.web) erlauben; lokale Profile brauchen einen Suchdienst (unten)"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem Profil erlaubt</label>
               <span className="muted small">Für Modelle mit Thinking (z. B. Qwen): schneller, weniger Token, keine abgeschnittenen Antworten. Sendet <code>chat_template_kwargs.enable_thinking = false</code> (vLLM, llama.cpp).</span>
             </div>}
             <ScopeEditor scope={f.projectScope} projectIds={f.projectIds} onChange={(projectScope, projectIds) => setF({ ...f, projectScope, projectIds, personalScope: projectScope === 'all' && f.personalScope })} />
@@ -395,6 +397,39 @@ function AiCard() {
 }
 
 /** Eigene LLMs der Projekte und höchstes Tagesbudget eigener Agenten der PL (nie über dem Mandantenwert); ob PL Agenten anlegen dürfen, regeln die KI-Freigaben. */
+/** Online-Recherche (Konzept 8) und Arbeitszeitfenster für Mails der Agenten nach außen. */
+function WebSearchForm({ st, onSaved }: { st: NonNullable<ReturnType<typeof useAiStatus>>; onSaved: () => Promise<void> }) {
+  const w = st.web ?? {};
+  const win = st.externalWindow ?? { enabled: true, days: [1, 2, 3, 4, 5], from: '07:00', to: '19:00' };
+  const [f, setF] = useState({ provider: w.provider ?? 'none', url: w.url ?? '', apiKey: '', maxPerRun: w.maxPerRun ?? 5, dailyPerAgent: w.dailyPerAgent ?? 20, allowed: (w.allowedDomains ?? []).join(', '), blocked: (w.blockedDomains ?? []).join(', ') });
+  const [fw, setFw] = useState({ enabled: win.enabled, days: win.days, from: win.from, to: win.to });
+  const { busy, error, run } = useAsync();
+  const list = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
+  return <>
+    <h3 className="mt">Online-Recherche</h3>
+    <p className="muted small">Standardmäßig gesperrt: freigegeben wird über die KI-Freigabe „Online-Recherche“ (agent.web) je Mandant, Projekt oder Agent und das Häkchen am Profil. Anthropic-Profile suchen über das Server-Tool web_search (Kosten je Suche laut Preisliste); lokale Profile brauchen SearXNG (eigener Dienst) oder die Brave Search API. Nur lesen, Quellen werden gespeichert und Seiten als Abschnitt „Quellen“ angehängt; Suchbegriffe ohne Namen, Adressen und Interna.</p>
+    <div className="form cols-2">
+      <label className="field"><span>Suchdienst für lokale Profile</span><select value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value as 'none' | 'searxng' | 'brave' })}><option value="none">keiner (nur Anthropic-Profile recherchieren)</option><option value="searxng">SearXNG (eigene Instanz)</option><option value="brave">Brave Search API</option></select></label>
+      {f.provider === 'searxng' && <label className="field"><span>SearXNG-Adresse</span><input type="url" value={f.url} placeholder="https://searx.firma.local" onChange={(e) => setF({ ...f, url: e.target.value })} /></label>}
+      {f.provider === 'brave' && <label className="field"><span>Brave-Schlüssel {w.hasKey && <span className="muted">(gesetzt; leer lassen = behalten)</span>}</span><input type="password" value={f.apiKey} onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>}
+      <label className="field"><span>Suchen je Lauf (höchstens 20)</span><input type="number" min={1} max={20} value={f.maxPerRun} onChange={(e) => setF({ ...f, maxPerRun: Number(e.target.value) })} /></label>
+      <label className="field"><span>Suchen je Agent und Tag</span><input type="number" min={0} max={500} value={f.dailyPerAgent} onChange={(e) => setF({ ...f, dailyPerAgent: Number(e.target.value) })} /></label>
+      <label className="field"><span>Nur diese Domains (Komma)</span><input type="text" value={f.allowed} placeholder="leer = alle" onChange={(e) => setF({ ...f, allowed: e.target.value, blocked: e.target.value ? '' : f.blocked })} /></label>
+      <label className="field"><span>Gesperrte Domains (Komma)</span><input type="text" value={f.blocked} disabled={Boolean(f.allowed)} onChange={(e) => setF({ ...f, blocked: e.target.value })} /></label>
+      <div className="full"><button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { web: { provider: f.provider, url: f.url || null, ...(f.apiKey ? { apiKey: f.apiKey } : {}), maxPerRun: f.maxPerRun, dailyPerAgent: f.dailyPerAgent, allowedDomains: list(f.allowed), blockedDomains: list(f.blocked) } }); setF({ ...f, apiKey: '' }); await onSaved(); })}>Speichern</button></div>
+    </div>
+    <h3 className="mt">Arbeitszeitfenster für Mails nach außen</h3>
+    <p className="muted small">Mails der Agenten an Nicht-Interne (auch Antworten auf Ursprungsmails und PDF-Versand) gehen nur in diesem Fenster (Europe/Berlin); außerhalb plant das System den Versand auf den nächsten Fensterbeginn und schreibt das ins Log. Interner Chat, Fragen und Entwürfe sind nicht betroffen.</p>
+    <div className="form cols-2">
+      <label className="check full"><input type="checkbox" checked={fw.enabled} onChange={(e) => setFw({ ...fw, enabled: e.target.checked })} /> Fenster aktiv</label>
+      <div className="field"><span>Wochentage</span><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>{['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'].map((d, i) => <label key={d} className="check small" style={{ margin: 0 }}><input type="checkbox" checked={fw.days.includes(i + 1)} onChange={(e) => setFw({ ...fw, days: e.target.checked ? [...fw.days, i + 1].sort() : fw.days.filter((x) => x !== i + 1) })} /> {d}</label>)}</div></div>
+      <div className="row"><label className="field"><span>von</span><input type="time" value={fw.from} onChange={(e) => setFw({ ...fw, from: e.target.value })} /></label><label className="field"><span>bis</span><input type="time" value={fw.to} onChange={(e) => setFw({ ...fw, to: e.target.value })} /></label></div>
+      {error && <div className="error full">{error}</div>}
+      <div className="full"><button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { externalWindow: fw }); await onSaved(); })}>Speichern</button></div>
+    </div>
+  </>;
+}
+
 function PlAgentPolicy({ st, onSaved }: { st: NonNullable<ReturnType<typeof useAiStatus>>; onSaved: () => Promise<void> }) {
   const cur = { maxBudget: st.plAgents?.maxBudget ?? 20, ownLlm: st.ownLlm ?? 'personal' };
   const [f, setF] = useState<typeof cur | null>(null);

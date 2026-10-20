@@ -9,6 +9,8 @@ export async function testApp(opts: { fetchFn?: typeof fetch } = {}) {
   const db = await createDb();
   await runMigrations(db);
   const ids = await seed(db);
+  // Tests laufen zu jeder Uhrzeit: das Arbeitszeitfenster für Mails nach außen ist hier aus (eigener Test schaltet es ein)
+  await db.query(`update orgs set settings = jsonb_set(coalesce(settings, '{}'::jsonb), '{ai}', coalesce(settings->'ai', '{}'::jsonb) || '{"externalWindow":{"enabled":false}}'::jsonb)`);
   const mail = new MailService(db, opts.fetchFn);
   await seedDevMails(db, (id, m) => mail.dev.inject(id, m), (id) => mail.syncAccount(id));
   const app = await buildApp({ db, mail, fetchFn: opts.fetchFn });

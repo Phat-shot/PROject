@@ -154,7 +154,7 @@ export interface OrgSettings {
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
   /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
   notify?: { digestHour?: number };
-  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy };
+  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy; /** Online-Recherche (Konzept 8): Suchdienst für lokale Profile, Grenzen, Domains */ web?: WebSearchSettings; /** Arbeitszeitfenster für Mails der Agenten nach außen (Standard Mo–Fr 07–19 Europe/Berlin) */ externalWindow?: ExternalWindow };
 }
 
 /**
@@ -182,7 +182,7 @@ export const AI_FEATURES = [
   { key: 'agent.run', category: 'agent', label: 'Agentenläufe', who: 'agent' },
   { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
   { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both' },
-  { key: 'agent.web', category: 'agent', label: 'Online-Recherche', who: 'agent', defaultDeny: true, later: true },
+  { key: 'agent.web', category: 'agent', label: 'Online-Recherche', who: 'agent', defaultDeny: true },
   { key: 'agent.finalize', category: 'agent', label: 'Final setzen', who: 'agent' },
   { key: 'agent.distribute', category: 'agent', label: 'PDF an Verteiler', who: 'agent' },
   { key: 'agent.send_external', category: 'agent', label: 'Mails nach außen', who: 'agent' },
@@ -490,6 +490,11 @@ export interface Question {
 export type MailInquiryMode = 'ask_pl' | 'ask_project' | 'ask_sender' | 'off';
 export interface MailInquiry { mode: MailInquiryMode; /** Frist in Stunden, nach der eine Rückfrage im Projekt weitergegeben wird */ waitHours: number; /** vom Mandanten geerbt (Projekt ohne eigene Einstellung) */ inherited?: boolean }
 export type AgentMailMode = 'off' | 'triage' | 'process';
+/** Online-Recherche: Anthropic-Profile nutzen das Server-Tool web_search; lokale Profile brauchen SearXNG oder Brave. Schlüssel nur schreibend. */
+export interface WebSearchSettings { provider?: 'none' | 'searxng' | 'brave'; url?: string | null; hasKey?: boolean; maxPerRun?: number; dailyPerAgent?: number; allowedDomains?: string[]; blockedDomains?: string[] }
+/** Arbeitszeitfenster für Mails nach außen: außerhalb wird der Versand auf den nächsten Fensterbeginn geplant */
+export interface ExternalWindow { enabled: boolean; /** 1 = Montag … 7 = Sonntag */ days: number[]; from: string; to: string }
+export interface WebSource { id: string; runId: string | null; taskId: string | null; pageId: string | null; query: string | null; url: string; title: string | null; citedText: string | null; retrievedAt: string }
 /** Agenten-Policy (Konzept 6): Selbstständigkeit und Aktionsklassen, die bestätigt werden */
 export type AgentMode = 'auto' | 'confirm_critical' | 'confirm_all';
 export type AgentActionClass = 'finalize' | 'distribute' | 'send_external' | 'close' | 'restructure' | 'plan' | 'assign' | 'schedule' | 'foreign';
@@ -1064,7 +1069,7 @@ export interface Meeting {
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
-export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** bei „alle“: auch in persönlichen Projekten (sonst dort nur per Auswahl) */ personalScope?: boolean }
+export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** bei „alle“: auch in persönlichen Projekten (sonst dort nur per Auswahl) */ personalScope?: boolean }
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** von der PL für ihr Projekt angelegt */ projectBound?: { id: string; label: string } | null; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
-export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; error: string | null; createdAt: string }
+export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; error: string | null; createdAt: string }

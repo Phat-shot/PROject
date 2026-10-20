@@ -156,7 +156,8 @@ test('Regel K: Beispiele aus dem Konzept (Sperre gewinnt, Ausnahme nur „Person
   await clearRules();
   // Unbekannte und noch nicht geprüfte Funktionen nimmt die Verwaltung nicht an
   assert.equal((await t.api(admin).put('/ai/policies', { feature: 'assist.zaubern', effect: 'deny' })).statusCode, 400);
-  assert.equal((await t.api(admin).put('/ai/policies', { feature: 'agent.web', effect: 'allow' })).statusCode, 400);
+  assert.equal((await t.api(admin).put('/ai/policies', { feature: 'agent.web', effect: 'allow' })).statusCode, 200, 'Online-Recherche ist freischaltbar (P8)');
+  await t.api(admin).put('/ai/policies', { feature: 'agent.web', effect: null });
   assert.equal((await t.api(admin).put('/ai/policies', { feature: 'assist', effect: 'deny', userId: max, groupId: g1 })).statusCode, 400);
   // Regeländerungen stehen im Audit
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'ai.policy.set' and details->>'feature' = 'agent.chat'`));
@@ -239,7 +240,7 @@ test('Vorschau „Wirkung für Person X in Projekt Y“ mit Spur; Fähigkeiten m
   assert.ok(!eff.features.some((x: any) => x.feature === 'agent.run'), 'Agentenfunktionen nur für Agenten');
   assert.ok(!eff.features.some((x: any) => x.feature === 'agent.web'), 'noch nicht geprüfte Funktionen fehlen');
   const effAgent = (await t.api(admin).get(`/ai/policies/effective?userId=${morton.id}&projectId=${web()}`)).json();
-  assert.deepEqual(effAgent.features.map((x: any) => x.feature).sort(), ['agent.assign', 'agent.chat', 'agent.close', 'agent.distribute', 'agent.finalize', 'agent.foreign', 'agent.mail', 'agent.order', 'agent.plan', 'agent.restructure', 'agent.run', 'agent.schedule', 'agent.send_external', 'agent.workflow', 'mail.triage']);
+  assert.deepEqual(effAgent.features.map((x: any) => x.feature).sort(), ['agent.assign', 'agent.chat', 'agent.close', 'agent.distribute', 'agent.finalize', 'agent.foreign', 'agent.mail', 'agent.order', 'agent.plan', 'agent.restructure', 'agent.run', 'agent.schedule', 'agent.send_external', 'agent.web', 'agent.workflow', 'mail.triage']);
   assert.equal((await t.api(max).get(`/ai/policies/effective?userId=${t.ids.users.max}`)).statusCode, 403);
   // Ziele für die Matrix: persönliche Projekte nur als „persönlich (Eigentümer)“
   const targets = (await t.api(admin).get('/ai/policy-targets')).json();

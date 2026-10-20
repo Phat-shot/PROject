@@ -20,6 +20,8 @@ import { askQuestion, answerQuestion, type QuestionRow } from '../questions.js';
 import type { AgentActionClass, EffectiveAgentPolicy } from '@projekttool/shared';
 import type { AiConfig } from './client.js';
 import { actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
+import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
+import type { ExternalWindow } from '@projekttool/shared';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -59,6 +61,7 @@ export type AgentAction =
   | { type: 'create_subproject'; title: string; responsible?: string | null; startDate?: string | null; dueDate?: string | null }
   | { type: 'create_milestone'; title: string; dueDate: string; subproject?: string | null }
   | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null }
+  | { type: 'research'; text: string }
   | { type: 'none'; reason?: string };
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
@@ -91,8 +94,8 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
@@ -138,6 +141,10 @@ export interface RunCtx {
   account: AccountRow | null; canMail: boolean; viewAccount: (AccountRow & { view_id: string; use: string }) | null; signature: string;
   isPl: boolean; canPlan: boolean; myTps: string[]; code: string; policy: EffectiveAgentPolicy; folderAccess: Map<string, 'write' | 'read' | 'none'>; doneColumns: Set<string>;
   tokens: { input: number; output: number }; checkIds: string[];
+  /** Online-Recherche dieses Laufs: Quellen (für den Abschnitt „Quellen“ an Seiten), ihre IDs und die Zahl der Suchen */
+  webSources: WebSource[]; webSourceIds: string[]; webSearches: number;
+  /** Arbeitszeitfenster für Mails nach außen */
+  window: ExternalWindow;
 }
 export interface HeldAction { action: AgentAction; classes: AgentActionClass[]; label: string; base: Record<string, unknown> }
 export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean }
@@ -171,7 +178,8 @@ export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetc
   const canPlan = isPl || Boolean(m.can_edit_plan);
   const myTps: string[] = (await db.query(`select id from subprojects where project_id = $1 and responsible_user_id = $2`, [task.project_id, agent.id])).rows.map((r: any) => r.id);
   const policy = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: task.project_id, taskId: task.id });
-  return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [] };
+  const window = await externalWindow(db, agent.org_id);
+  return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [], webSources: [], webSourceIds: [], webSearches: 0, window };
 }
 
 /** Gate (Konzept 6.4): Klasse bestimmen, KI-Freigaben, Ablehnungssperre (14 Tage), dann run oder hold nach der Policy. */
@@ -247,6 +255,8 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
   const held: HeldAction[] = [];
   let forceDraft = false; let policyNote = '';
   const pageTitle = (id: string) => pages.rows.find((p: any) => p.id === id)?.title ?? null;
+  /** Seiten aus diesem Lauf bekommen den Abschnitt „Quellen“ der Recherche angehängt. */
+  const withSources = (md: string) => (ctx.webSources.length && !/##\s*Quellen/.test(md) ? `${md.replace(/\s+$/, '')}${sourcesSection(ctx.webSources, now)}` : md);
     const applied: AgentAction[] = [];
     let mailsSent = 0;
     let chats = 0;
@@ -284,10 +294,19 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
      * Mail an Nicht-Interne: direkt über das Projektkonto nur mit „darf Mails senden“, Prüfergebnis pass und nicht beim ersten
      * Kontakt (unknown_external); sonst Entwurf zur Freigabe (ohne Projektkonto über die Ansicht).
      */
-    const deliverMail = async (aud: Audience, g: GuardResult, to: string[], reply: { inReplyTo?: string | null; references?: string | null } = {}): Promise<'sent' | 'draft' | 'failed'> => {
-      if (account && canMail && !forceDraft && g.result === 'pass' && aud.audience !== 'unknown_external') {
+    const deliverMail = async (aud: Audience, g: GuardResult, to: string[], reply: { inReplyTo?: string | null; references?: string | null } = {}): Promise<'sent' | 'draft' | 'failed' | 'scheduled'> => {
+      const sendable = Boolean(account && canMail && !forceDraft && g.result === 'pass' && aud.audience !== 'unknown_external');
+      if (sendable && !inWindow(ctx.window, now)) {
+        // Arbeitszeitfenster: außerhalb wird der Versand auf den nächsten Fensterbeginn geplant (der Worker sendet)
+        const at = nextWindowStart(ctx.window, now);
+        const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, in_reply_references, status, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,'scheduled',$10) returning id`, [account!.id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null, reply.references ?? null, at]);
+        await record('mail', aud, g, d.id);
+        await logSys(`Mail an ${to.join(', ')} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}: „${g.subject}“${outNote(aud, g, false)}`);
+        return 'scheduled';
+      }
+      if (sendable) {
         try {
-          await mail.sendFromAccount(account, { to, subject: g.subject, text: g.text, taskId: task.id, inReplyTo: reply.inReplyTo ?? null, references: reply.references ?? null, userId: agent.id, projectId: task.project_id });
+          await mail.sendFromAccount(account!, { to, subject: g.subject, text: g.text, taskId: task.id, inReplyTo: reply.inReplyTo ?? null, references: reply.references ?? null, userId: agent.id, projectId: task.project_id });
           await record('mail', aud, g, null);
           await logSys(`Mail gesendet an ${to.join(', ')}: „${g.subject}“${outNote(aud, g, false)}`);
           return 'sent';
@@ -340,20 +359,22 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         else {
           const folder = a.folder ? await db.maybeOne(`select id from doc_folders where project_id = $1 and lower(name) = lower($2)`, [task.project_id, a.folder]) : null;
           const fid = folder?.id ?? (await db.maybeOne(`select id from doc_folders where project_id = $1 and name = 'Protokolle'`, [task.project_id]))?.id ?? null;
-          const html = mdToHtml(a.text);
+          const html = mdToHtml(withSources(a.text));
           const page = await db.one(`insert into doc_pages (project_id, folder_id, title, content_md, content_html, status, created_by, updated_by) values ($1,$2,$3,$4,$5,'draft',$6,$6) returning *`, [task.project_id, fid, a.title.trim().slice(0, 200), htmlToMd(html), html, agent.id]);
           await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,1,$2,$3,$4,'draft',$5)`, [page.id, page.title, page.content_md, page.content_html, agent.id]);
           await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite angelegt: „${page.title}“ ${publicBase()}/projekte/${task.project_id}/doku/${page.id}`]);
           pages.rows.unshift({ id: page.id, title: page.title, status: 'draft', updated_at: new Date(), folder: a.folder ?? null });
+          if (ctx.webSourceIds.length) await db.query(`update agent_web_sources set page_id = $1 where id = any($2::uuid[]) and page_id is null`, [page.id, ctx.webSourceIds]);
           applied.push({ ...a, pageId: page.id } as any);
         }
       } else if (a.type === 'read_page') errors.push('read_page ohne weitere Aktionen verworfen');
+      else if (a.type === 'research') errors.push('research ohne weitere Aktionen verworfen');
       else if (a.type === 'doc_update') {
         const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
         if (!page || !a.text?.trim()) errors.push(`Seitenänderung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
         else if (page.status === 'final') errors.push(`Seite „${page.title}“ ist final und gesperrt (erst doc_status draft)`);
         else {
-          const html = mdToHtml(a.text);
+          const html = mdToHtml(withSources(a.text));
           const title = a.title?.trim() ? a.title.trim().slice(0, 200) : page.title;
           const u = await db.one(`update doc_pages set title = $2, content_html = $3, content_md = $4, version = version + 1, updated_by = $5, updated_at = now() where id = $1 returning *`, [page.id, title, html, htmlToMd(html), agent.id]);
           await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, agent.id]);
@@ -400,7 +421,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         if (!page || !a.text?.trim()) errors.push(`Seitenergänzung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
         else if (page.status === 'final') errors.push(`Seite „${page.title}“ ist final und gesperrt`);
         else {
-          const html = `${(page.content_html ?? mdToHtml(page.content_md)).replace(/\s+$/, '')}\n${mdToHtml(a.text)}`;
+          const html = `${(page.content_html ?? mdToHtml(page.content_md)).replace(/\s+$/, '')}\n${mdToHtml(withSources(a.text))}`;
           const u = await db.one(`update doc_pages set content_html = $2, content_md = $3, version = version + 1, updated_by = $4, updated_at = now() where id = $1 returning *`, [page.id, html, htmlToMd(html), agent.id]);
           await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, agent.id]);
           await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Doku-Seite ergänzt: „${page.title}“ (Version ${u.version})`]);
@@ -440,6 +461,13 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
             await notifyDraft(account, a.subject, g);
             await logSys(`PDF „${page.title}“ an ${to.join(', ')} wartet als Entwurf auf Freigabe (nicht gesendet)${outNote(aud, g, true)}`);
             applied.push({ ...a, to, text: `[Entwurf zur Freigabe] ${text}` });
+          } else if (!inWindow(ctx.window, now)) {
+            const at = nextWindowStart(ctx.window, now);
+            mailsSent++;
+            const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status, page_id, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,'scheduled',$8,$9) returning id`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, text, page.id, at]);
+            if (g) await record('pdf', aud, g, d.id);
+            await logSys(`PDF „${page.title}“ an ${to.join(', ')} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}${outNote(aud, g, false)}`);
+            applied.push({ ...a, to, text: `[Versand im Arbeitszeitfenster geplant] ${text}` });
           } else {
             try {
               const pdf = await L.pagePdf(db, page, agent.name);
@@ -469,7 +497,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
           mailsSent++;
           const g = await guard({ aud, subject: a.subject, text: a.text, compose: true });
           const r = await deliverMail(aud, g, to);
-          if (r !== 'failed') applied.push({ type: 'mail', to, subject: g.subject, text: r === 'draft' ? `[Entwurf zur Freigabe] ${g.text}` : g.text });
+          if (r !== 'failed') applied.push({ type: 'mail', to, subject: g.subject, text: r === 'draft' ? `[Entwurf zur Freigabe] ${g.text}` : r === 'scheduled' ? `[Versand im Arbeitszeitfenster geplant] ${g.text}` : g.text });
         }
       } else if (a.type === 'reply_origin') {
         const text = String(a.text ?? '').trim();
@@ -489,7 +517,14 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
           const body = g?.text ?? text;
           mailsSent++;
           const accUse = await accountUseIn(db, acc.id, task.project_id);
-          if (accUse?.use === 'project' && m.agent_can_mail && !forceDraft && (!g || (g.result === 'pass' && aud.audience !== 'unknown_external'))) {
+          const direct = accUse?.use === 'project' && m.agent_can_mail && !forceDraft && (!g || (g.result === 'pass' && aud.audience !== 'unknown_external'));
+          if (direct && !inWindow(ctx.window, now)) {
+            const at = nextWindowStart(ctx.window, now);
+            const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, in_reply_references, status, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,'scheduled',$10) returning id`, [acc.id, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null, [o.references_header, o.message_id].filter(Boolean).join(' ') || null, at]);
+            if (g) await record('reply_origin', aud, g, d.id);
+            await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}: „${subject}“${outNote(aud, g, false)}`);
+            applied.push({ type: 'reply_origin', text: `[Versand im Arbeitszeitfenster geplant] ${body}` } as any);
+          } else if (direct) {
             try {
               await mail.sendFromAccount(acc, { to: [o.from_addr], subject, text: body, taskId: task.id, inReplyTo: o.message_id, references: [o.references_header, o.message_id].filter(Boolean).join(' ') || null, userId: agent.id, projectId: task.project_id });
               if (g) await record('reply_origin', aud, g, null);
@@ -623,6 +658,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.publicReason, now);
   const ctx = await loadRunCtx(db, mail, fetchFn, agent, task, m, c, trigger, now);
   const { columns, items, members, folders, pages, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, policy } = ctx;
+  const webOk = await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: task.project_id, cfg: c, now });
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
   const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
   const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing, l.origin, l.copied, ux.use, ux.use_user_id,
@@ -689,7 +725,7 @@ Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im 
 ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
 ${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
-Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren.
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 Agenten-Policy: ${policyText(policy)}
 ${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
@@ -709,9 +745,24 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       j = parseJson(r.text);
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
-      if (!reads.length) break;
-      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page'); break; }
+      const searches = actions.filter((a) => a.type === 'research');
+      if (!reads.length && !searches.length) break;
+      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page' && a.type !== 'research'); break; }
       const texts: string[] = [];
+      // Online-Recherche (Konzept 8): Freigabe, Profil, Suchdienst und Budget prüft webAvailable; Quellen landen in agent_web_sources
+      for (const a of searches.slice(0, 3)) {
+        const q = String((a as any).text ?? '').trim();
+        if (!webOk.ok) { texts.push(`### Recherche „${cut(q, 120)}“: nicht möglich – ${webOk.reason}`); errors.push(`research: ${webOk.reason}`); continue; }
+        if (ctx.webSearches >= webOk.settings.maxPerRun) { texts.push(`### Recherche „${cut(q, 120)}“: Limit je Lauf erreicht (${webOk.settings.maxPerRun} Suchen)`); continue; }
+        const rr = await research(db, c, fetchFn, { question: q, settings: webOk.settings, names: members.rows.map((x: any) => String(x.name)), maxUses: webOk.settings.maxPerRun - ctx.webSearches });
+        ctx.webSearches += rr.searches; inputTokens += rr.inputTokens; outputTokens += rr.outputTokens;
+        if (rr.error) { texts.push(`### Recherche „${cut(rr.query || q, 120)}“: ${rr.error}`); errors.push(`research: ${rr.error}`); continue; }
+        for (const src of rr.sources) {
+          const row = await db.one(`insert into agent_web_sources (org_id, task_id, query, url, title, cited_text) values ($1,$2,$3,$4,$5,$6) returning id`, [agent.org_id, task.id, cut(rr.query, 300), src.url, src.title, src.citedText]);
+          ctx.webSourceIds.push(row.id); ctx.webSources.push(src);
+        }
+        texts.push(`### Recherche „${cut(rr.query, 120)}“ (${rr.searches} Suche${rr.searches === 1 ? '' : 'n'})\n${cut(rr.text, 6000) || '(kein Text)'}\nQuellen:\n${rr.sources.map((x, i) => `[${i + 1}] ${x.title ?? x.url} – ${x.url}`).join('\n') || '–'}`);
+      }
       for (const a of reads.slice(0, 4)) {
         const pid = (a as any).pageId;
         const page = await db.maybeOne(`select id, title, status, version, content_md, content_html, folder_id from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
@@ -720,8 +771,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         const md = page.content_html ? htmlToMd(page.content_html) : page.content_md ?? '';
         texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
       }
-      const others = actions.filter((a) => a.type !== 'read_page');
-      extra += `\n\nGelesene Seiten (Markdown):\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten.`;
+      const others = actions.filter((a) => a.type !== 'read_page' && a.type !== 'research');
+      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
       actions = [];
     }
     const res = await applyAgentActions(ctx, actions, { hold: true });
@@ -733,6 +784,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
+    if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
+    if (ctx.webSourceIds.length) await db.query(`update agent_web_sources set run_id = $1 where id = any($2::uuid[])`, [run.id, ctx.webSourceIds]);
     // Angehaltene Aktionen: Vorschläge an einer Frage approval (Karte im Chat, Meldung, Log, Warten des Agenten)
     if (res.held.length) await holdProposals(ctx, res.held, run.id);
     // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen

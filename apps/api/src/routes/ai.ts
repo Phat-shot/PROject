@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { parseAgentPolicy } from '../ai/agentPolicy.js';
+import { parseWindow } from '../ai/web.js';
 import { decideProposals } from '../ai/agentApproval.js';
 import type { AiFeature, AiProposal, User, AgentPolicy } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
@@ -51,14 +52,35 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check'; agentPolicy?: AgentPolicy | null } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check'; agentPolicy?: AgentPolicy | null; web?: Record<string, unknown> | null; externalWindow?: Record<string, unknown> | null } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     requireAiAdmin(user);
     const b = req.body ?? {};
+    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     // Agenten-Policy des Mandanten: Vorgabe (mode, confirm) und Grenzen (maxMode, lockedConfirm) für alle Projekte
     let agentPolicy: AgentPolicy | undefined;
     if (b.agentPolicy !== undefined) { try { agentPolicy = parseAgentPolicy(b.agentPolicy, { limits: true, workflows: true }); } catch (e: any) { throw badRequest(e.message); } }
-    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
+    // Online-Recherche: Suchdienst für lokale Profile (Schlüssel versiegelt, null löscht ihn), Grenzen, Domains (allowed oder blocked, nicht beides)
+    let web: Record<string, unknown> | undefined;
+    if (b.web !== undefined) {
+      const w: any = b.web ?? {}; const curW: any = cur.web ?? {};
+      if (w.provider !== undefined && !['none', 'searxng', 'brave'].includes(w.provider)) throw badRequest('Online-Recherche: provider none, searxng oder brave');
+      const dom = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x).trim().toLowerCase().replace(/^https?:\/\//, '').replace(/\/.*$/, '')).filter(Boolean).slice(0, 50) : undefined);
+      const allowed = dom(w.allowedDomains); const blocked = dom(w.blockedDomains);
+      if (allowed?.length && blocked?.length) throw badRequest('Online-Recherche: entweder erlaubte oder gesperrte Domains, nicht beides');
+      const url = w.url === undefined ? curW.url : w.url ? String(w.url).trim().replace(/\/+$/, '') : null;
+      if (url && !/^https?:\/\//.test(url)) throw badRequest('Online-Recherche: Adresse mit http(s)://');
+      web = { provider: w.provider ?? curW.provider ?? 'none', url, apiKey: w.apiKey === null ? null : typeof w.apiKey === 'string' && w.apiKey.trim() ? seal(w.apiKey.trim()) : curW.apiKey ?? null,
+        maxPerRun: w.maxPerRun !== undefined ? Math.max(1, Math.min(20, Number(w.maxPerRun) || 5)) : curW.maxPerRun ?? 5, dailyPerAgent: w.dailyPerAgent !== undefined ? Math.max(0, Math.min(500, Number(w.dailyPerAgent) || 0)) : curW.dailyPerAgent ?? 20,
+        allowedDomains: allowed ?? (blocked?.length ? [] : curW.allowedDomains ?? []), blockedDomains: blocked ?? (allowed?.length ? [] : curW.blockedDomains ?? []) };
+    }
+    let externalWindow: Record<string, unknown> | undefined;
+    if (b.externalWindow !== undefined) {
+      const w = parseWindow(b.externalWindow ?? {});
+      if (!w) throw badRequest('Arbeitszeitfenster: enabled, days, from, to');
+      if (w.from >= w.to) throw badRequest('Arbeitszeitfenster: Beginn vor Ende');
+      externalWindow = w as unknown as Record<string, unknown>;
+    }
     if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
     if (b.enabled !== undefined && typeof b.enabled !== 'boolean') throw badRequest('Notaus: enabled true oder false');
     // Eigene Agenten der PL: Budget je Agent höchstens das Mandantenbudget; ob sie erlaubt sind, ist die Regel pl.agents (KI-Freigaben)
@@ -66,7 +88,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (b.ownLlm !== undefined && !['off', 'personal', 'all'].includes(b.ownLlm)) throw badRequest('Eigenes LLM: off, personal oder all');
     if (b.externalGuard !== undefined && !['strict', 'check'].includes(b.externalGuard)) throw badRequest('Außenprüfung: strict oder check');
     const clamp = (v: unknown) => Math.max(0, Math.min(10000, Number(v) || 0));
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}), ...(agentPolicy !== undefined ? { agentPolicy } : {}) } })]);
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}), ...(agentPolicy !== undefined ? { agentPolicy } : {}), ...(web !== undefined ? { web } : {}), ...(externalWindow !== undefined ? { externalWindow } : {}) } })]);
+    if (web !== undefined || externalWindow !== undefined) await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { web: web ? { ...web, apiKey: undefined, keySet: Boolean(web.apiKey) } : undefined, externalWindow } });
     if (agentPolicy !== undefined) await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.policy', objectType: 'org', objectId: user.orgId, details: agentPolicy as Record<string, unknown> });
     // Der frühere Schalter „Eigene Agenten der PL“ ist die Regel pl.agents für den Mandanten
     if (typeof b.plAgents?.enabled === 'boolean') await setAiPolicy(db, user, { projectId: null, userId: null, groupId: null, feature: 'pl.agents', effect: b.plAgents.enabled ? 'allow' : 'deny' });
@@ -176,7 +199,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const v = validProfile(b);
     const scope = validScope(b.projectScope ?? 'all');
     if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scope !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true]);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
@@ -205,7 +228,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, cur.id, b.projectIds);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
-    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff]);
+    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff, typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search)]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, thinkingOff, keyChanged: b.apiKey !== undefined } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id) };
   });

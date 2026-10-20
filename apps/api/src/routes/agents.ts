@@ -147,10 +147,17 @@ export async function agentRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id);
     if (req.query.taskId) await requireTask(db, user, req.query.taskId);
     const rows = await db.query(`select r.*, u.name as agent_name, t.title as task_title, t.number as task_number from agent_runs r join users u on u.id = r.agent_user_id left join tasks t on t.id = r.task_id where r.project_id = $1 and ($2::uuid is null or r.task_id = $2) and ${visibleSubprojectSql(3)} order by r.created_at desc limit 100`, [req.params.id, req.query.taskId ?? null, user.id]);
-    return { runs: rows.rows.map((r: any) => ({ id: r.id, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], proposed: r.proposed ?? null, inputTokens: r.input_tokens, outputTokens: r.output_tokens, error: r.error, createdAt: r.created_at })) };
+    return { runs: rows.rows.map((r: any) => ({ id: r.id, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], proposed: r.proposed ?? null, inputTokens: r.input_tokens, outputTokens: r.output_tokens, webSearches: r.web_searches ?? 0, error: r.error, createdAt: r.created_at })) };
   });
 
   // PL: Agent an einem Arbeitspaket pausieren/fortsetzen oder sofort laufen lassen
+  /** Quellen der Online-Recherche am Arbeitspaket (Konzept 8). */
+  app.get<{ Params: { id: string } }>('/tasks/:id/web-sources', async (req) => {
+    const user = requireUser(req);
+    const { task } = await requireTask(db, user, req.params.id);
+    const rows = await db.query(`select * from agent_web_sources where task_id = $1 order by retrieved_at desc limit 100`, [task.id]);
+    return { sources: rows.rows.map((r: any) => ({ id: r.id, runId: r.run_id, taskId: r.task_id, pageId: r.page_id, query: r.query, url: r.url, title: r.title, citedText: r.cited_text, retrievedAt: r.retrieved_at })) };
+  });
   app.post<{ Params: { id: string }; Body: { paused: boolean } }>('/tasks/:id/agent-pause', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);

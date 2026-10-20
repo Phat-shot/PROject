@@ -13,6 +13,7 @@ import { answerQuestion, type QuestionRow } from '../questions.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
+import { webAvailable } from './web.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -383,7 +384,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     project ? [scope.projectIds, [...known.keys()]] : [scope.projectIds, [...known.keys()], msg.user_id, agent.id]) : { rows: [] as any[] };
   const agentMember = cmdProject ? await db.maybeOne(`select agent_can_mail from project_members where project_id = $1 and user_id = $2`, [cmdProject.id, agent.id]) : null;
   const canMail = Boolean(agentMember?.agent_can_mail) && Boolean(cmdProject && (await projectAccount(db, cmdProject.id)));
-  const web = cmdProject ? await aiAllowed(db, { userId: agent.id, projectId: cmdProject.id, feature: 'agent.web', budget: false }) : null;
+  const web = cmdProject ? await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: cmdProject.id, cfg, now }) : null;
   const ctxCmd: CommandCtx = { db, agent, sender: { id: msg.user_id, name: msg.user_name, orgId: agent.org_id }, project: cmdProject, projects: scope.projects, channelId: channel.id, threadId, messageId: msg.id, now, policy };
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
@@ -391,7 +392,7 @@ Thema: ${theme}
 Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: bei order das Über-AP (parent) nennen oder nachfragen' : ''}
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
-` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.allowed ? 'freigegeben' : `nicht freigegeben${web ? ` (${web.publicReason})` : ''}`}.
+` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
 ${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
