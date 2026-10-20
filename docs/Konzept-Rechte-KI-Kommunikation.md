@@ -379,7 +379,7 @@ Eine Frage ist ein eigenes Objekt (`questions`). Chat-Nachricht, Benachrichtigun
 Dabei gilt:
 
 - Übersprungen werden der Fragende selbst, Agenten, Externe (`responsible_email`, `contactEmail`), Inaktive und Personen ohne Sicht auf das AP.
-- Bei eingeschränkten TPs und in persönlichen Projekten entfällt der Projektkanal.
+- Bei eingeschränkten TPs und in persönlichen Projekten entfällt der Projektkanal als Stufe (keine Systembeiträge der Meldungen; der Kanal selbst existiert, 18.1 Nr. 7).
 - Bei `approval` bleiben nur Personen, die die Klasse freigeben dürfen (6.5).
 - Stufe 0 ist der erste verbliebene Eintrag. Das ist dasselbe Prinzip wie heute in agent.ts:169-178, das in die Funktion umzieht.
 - Die KI darf mit `to` eine Stufe direkt wählen (`tp`, `pl`, `projekt` oder die Mailadresse einer Person aus der Kette).
@@ -1503,7 +1503,7 @@ Ziel: dieselbe Basis, nur minimale Abweichungen, jede Abweichung an genau einer 
 
 Alles andere (Board, Plan, Doku, Besprechungen, Kalender, Workflows, Zeiten, Ressourcen, Agenten, Regeln, Fragen) ist identisch und wird nicht gesondert behandelt. Hauptkonzept 4 (Zeile „Projektkanal bei persönlichen Projekten“) wird an Nr. 7 angeglichen.
 
-### 18.2 Umsetzung
+### 18.2 Umsetzung (Schritt C, umgesetzt)
 
 - `src/projectPolicy.ts` exportiert beides: `projectPolicy(p: {personal: boolean; created_by: string})` mit den neun Entscheidungen als Felder, und benannte SQL-Fragmente (`SQL.notPersonal`, `SQL.isPersonal(alias)`, `PROJECT_LABEL_SQL` dorthin verschoben), weil mehrere Stellen SQL-Klauseln sind.
 - Web: `useProjectPolicy(detail.project)` liefert die Entscheidungen und die Beschriftungstexte (MembersView:190, ProjectsPage:64), damit auch Texte nur einmal stehen.

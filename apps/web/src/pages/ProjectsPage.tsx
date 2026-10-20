@@ -6,6 +6,7 @@ import { api, fmtDate } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
 import { Modal, roleLabel, useAsync } from '../components/ui';
+import { useProjectPolicy } from '../lib/useProjectPolicy';
 
 export function ProjectsPage() {
   const { user } = useAuth();
@@ -23,10 +24,11 @@ export function ProjectsPage() {
         <div className="grid cols-3 proj-cards">
           {data?.projects.map((p) => {
             const s = p.stats;
+            const badge = useProjectPolicy(p).badge;
             const total = s ? s.open + s.done : 0;
             return (
               <Link key={p.id} to={`/projekte/${p.id}`} className="card">
-                <div className="row between"><span className="badge">{p.key}</span><span className="row" style={{ gap: 4 }}>{p.personal && <span className="badge" title="Nur du und KI-Agenten">persönlich</span>}{p.status === 'archived' && <span className="badge">archiviert</span>}<span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></span></div>
+                <div className="row between"><span className="badge">{p.key}</span><span className="row" style={{ gap: 4 }}>{badge && <span className="badge" title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge">archiviert</span>}<span className={`badge ${p.myRole}`}>{roleLabel[p.myRole ?? '']}</span></span></div>
                 <h2 className="mt">{p.name}</h2>
                 <p className="muted small">{p.description}</p>
                 {s && p.status === 'active' && <>
@@ -49,6 +51,7 @@ export function ProjectsPage() {
 
 function CreateProject({ personalOnly = false, onClose, onCreated }: { personalOnly?: boolean; onClose: () => void; onCreated: () => void }) {
   const [personal, setPersonal] = useState(personalOnly);
+  const policy = useProjectPolicy({ personal });
   const [key, setKey] = useState('');
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
@@ -58,20 +61,20 @@ function CreateProject({ personalOnly = false, onClose, onCreated }: { personalO
   const tpl = templates.data?.templates.find((t) => t.id === templateId);
   const { busy, error, run } = useAsync();
   return (
-    <Modal title={personal ? 'Persönliches Projekt' : 'Neues Projekt'} onClose={onClose}>
+    <Modal title={policy.scaffold.title} onClose={onClose}>
       <div className="form">
         <label className="check"><input type="checkbox" checked={personal} disabled={personalOnly} onChange={(e) => setPersonal(e.target.checked)} /> Persönlich (Assistent): nur du und KI-Agenten</label>
-        {personal && <p className="muted small">Startet leer. Weitere Personen und Einladungen sind gesperrt, sichtbar nur für dich; der Org-Admin sieht im Audit keine Inhalte und verwaltet die Konten nicht. Agenten nimmst du unter Einstellungen › Mitglieder auf oder legst eigene an (wenn freigegeben). Mit einem Ordner „KI Bearbeiten“ im Postfach legt die Projekt-KI aus Mails direkt Aufgaben und Termine an.</p>}
+        {policy.scaffold.hint && <p className="muted small">{policy.scaffold.hint}</p>}
         <label className="field"><span>Kürzel</span><input type="text" value={key} onChange={(e) => setKey(e.target.value.toUpperCase())} placeholder="z. B. CRM" /></label>
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /></label>
-        {!personal && templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
+        {policy.scaffold.template && templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
           <label className="field"><span>Vorlage</span><select value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">– keine, Standardspalten –</option>{templates.data.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
           {tpl && <label className="field"><span>Projektstart (Termine der Vorlage sind relativ dazu)</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>}
         </div>}
-        {!personal && tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
+        {policy.scaffold.template && tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, personal, templateId: personal ? null : templateId || null, startDate: !personal && tpl ? startDate : null }); onCreated(); })}>Anlegen</button></div>
+        <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.post('/projects', { key, name, description, personal, templateId: policy.scaffold.template ? templateId || null : null, startDate: policy.scaffold.template && tpl ? startDate : null }); onCreated(); })}>Anlegen</button></div>
         <p className="muted small">Du wirst PL. Die Projekt-Mailadresse ergibt sich aus dem angebundenen Projektkonto.</p>
       </div>
     </Modal>

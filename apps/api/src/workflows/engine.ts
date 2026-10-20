@@ -5,6 +5,7 @@ import { notifyMany } from '../notify.js';
 import { newMailCode, resolveProjectLead } from '../tasks/service.js';
 import { audit } from '../audit.js';
 import { badRequest } from '../errors.js';
+import { projectPolicy, TEXT } from '../projectPolicy.js';
 
 /**
  * Workflow-Engine: ein Lauf arbeitet seine Schritte der Reihe nach ab. Der Startpunkt ist der Start des Laufs,
@@ -221,9 +222,10 @@ async function createStepTask(db: Db, run: any, step: WorkflowStep, steps: Workf
 }
 
 async function sendStepMail(db: Db, mail: MailService, run: any, step: WorkflowStep, steps: WorkflowStep[], state: StepState[], idx: number, vars: Record<string, string>): Promise<string> {
+  const policy = projectPolicy(await db.one(`select personal from projects where id = $1`, [run.project_id]));
   const account = (await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [run.project_id]))
-    ?? (await db.maybeOne<AccountRow>(`select a.* from mail_accounts a join projects p on p.org_id = a.org_id where p.id = $1 and a.type = 'org' order by a.created_at limit 1`, [run.project_id]));
-  if (!account) throw new Error('Kein Projekt- oder Mandantenkonto für den Mail-Schritt');
+    ?? (policy.mail.orgFallback ? await db.maybeOne<AccountRow>(`select a.* from mail_accounts a join projects p on p.org_id = a.org_id where p.id = $1 and a.type = 'org' order by a.created_at limit 1`, [run.project_id]) : null);
+  if (!account) throw new Error(policy.mail.orgFallback ? 'Kein Projekt- oder Mandantenkonto für den Mail-Schritt' : TEXT.noOrgFallback);
   const to = new Set<string>(step.to ?? []);
   if (step.toStarter && run.started_by) { const u = await db.maybeOne(`select email from users where id = $1`, [run.started_by]); if (u) to.add(u.email); }
   if (step.toPl) { const lead = await resolveProjectLead(db, run.project_id); if (lead.email) to.add(lead.email); }

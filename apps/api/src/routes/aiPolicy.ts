@@ -5,7 +5,8 @@ import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { hasOrgRight, requireProject } from '../rights.js';
 import { orgAiSettings } from '../ai/client.js';
-import { aiAllowed, aiCapabilities, featureLabel, PROJECT_LABEL_SQL, resolveRules, setAiPolicy } from '../ai/policy.js';
+import { aiAllowed, aiCapabilities, featureLabel, resolveRules, setAiPolicy } from '../ai/policy.js';
+import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
 
 const mapRule = (r: any): AiPolicyRule => ({
   id: r.id, projectId: r.project_id, userId: r.user_id, groupId: r.group_id, feature: r.feature, effect: r.effect, note: r.note ?? null, setBy: r.set_by ?? null, setByName: r.set_by_name ?? null,

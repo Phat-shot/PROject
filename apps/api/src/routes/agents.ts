@@ -8,6 +8,7 @@ import { hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '
 import { orgAiSettings, projectProfiles } from '../ai/client.js';
 import { aiAllowed, aiError } from '../ai/policy.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
+import { projectLabelSql, SQL } from '../projectPolicy.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
@@ -42,9 +43,9 @@ export async function agentRoutes(app: FastifyInstance) {
     const rows = await db.query(
       `select u.*,
         -- Persönliche Projekte: nur „persönlich (Eigentümer)“, kein Kürzel und kein Name
-        coalesce((select json_agg(case when p.personal then json_build_object('id', p.id, 'key', '–', 'name', 'persönlich (' || coalesce(o.name, '?') || ')') else json_build_object('id', p.id, 'key', p.key, 'name', p.name) end)
+        coalesce((select json_agg(case when ${SQL.isPersonal('p')} then json_build_object('id', p.id, 'key', '–', 'name', ${projectLabelSql('p', 'o')}) else json_build_object('id', p.id, 'key', p.key, 'name', p.name) end)
           from project_members m join projects p on p.id = m.project_id left join users o on o.id = p.created_by where m.user_id = u.id and p.status = 'active'), '[]'::json) as projects,
-        (select case when p.personal then 'persönliches Projekt von ' || coalesce(o.name, '?') else p.key || ' ' || p.name end from projects p left join users o on o.id = p.created_by where p.id = u.agent_project_id) as bound_label,
+        (select ${projectLabelSql('p', 'o')} from projects p left join users o on o.id = p.created_by where p.id = u.agent_project_id) as bound_label,
         (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at
        from users u where u.org_id = $1 and u.kind = 'agent' order by u.name`, [user.orgId]);
     return { agents: rows.rows.map(mapAgent) };

@@ -10,6 +10,7 @@ import { ORG_RIGHTS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
 import { setRules } from '../rules.js';
+import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen); ?all=1 mit Deaktivierten (Org-Admin, zum Reaktivieren)
@@ -231,7 +232,7 @@ export async function userRoutes(app: FastifyInstance) {
     let projectRole: 'member' | 'reader' | null = null;
     if (projectId) {
       await requireProject(app.db, user, projectId, 'pl');
-      if (await app.db.maybeOne(`select 1 from projects where id = $1 and personal`, [projectId])) throw forbidden('In persönliche Projekte lädt man niemanden ein');
+      if (!projectPolicy(await app.db.one(`select personal from projects where id = $1`, [projectId])).members.invitations) throw forbidden(TEXT.noInvitations);
       projectRole = b.projectRole === 'reader' ? 'reader' : 'member';
     } else if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin oder ein PL für sein Projekt');
     const { email, name } = b;
@@ -428,11 +429,11 @@ export async function userRoutes(app: FastifyInstance) {
       return { entries: rows.rows.map(mapAudit) };
     }
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
-    // Persönliche Projekte: Aktion, Person und Zeit ja, Inhaltsdetails nein (auch bei Einträgen ohne Projekt zu Agenten des Projekts)
+    // Projekte ohne Admin-Details (projectPolicy.adminAccess.auditDetails): Aktion, Person und Zeit ja, Inhaltsdetails nein (auch bei Einträgen ohne Projekt zu Agenten des Projekts)
     const rows = await app.db.query(
       `select a.*, u.name as user_name,
-         (exists (select 1 from projects p where p.id = a.project_id and p.personal)
-          or exists (select 1 from users ag join projects p on p.id = ag.agent_project_id where ag.id::text = a.object_id::text and p.personal and a.object_type = 'user')) as redact
+         (exists (select 1 from projects p where p.id = a.project_id and ${SQL.isPersonal('p')})
+          or exists (select 1 from users ag join projects p on p.id = ag.agent_project_id where ag.id::text = a.object_id::text and ${SQL.isPersonal('p')} and a.object_type = 'user')) as redact
        from audit_log a left join users u on u.id = a.user_id
        where a.org_id = $1 order by a.created_at desc limit 1000`,
       [user.orgId]

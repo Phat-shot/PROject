@@ -16,6 +16,7 @@ import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escal
 import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
 import { profileOf } from '../outbound.js';
+import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
@@ -43,6 +44,7 @@ export function mapProject(r: any): Project {
 }
 
 export async function projectRoutes(app: FastifyInstance) {
+  const policyOfProject = async (projectId: string) => projectPolicy(await app.db.one(`select personal from projects where id = $1`, [projectId]));
   const db = app.db;
 
   app.get('/projects', async (req) => {
@@ -65,10 +67,11 @@ export async function projectRoutes(app: FastifyInstance) {
   app.post<{ Body: { key: string; name: string; description?: string; mailAddress?: string; templateId?: string | null; startDate?: string | null; personal?: boolean } }>('/projects', async (req) => {
     const user = requireUser(req);
     const personal = Boolean(req.body?.personal);
-    // Persönliches Projekt (Assistent): Projektersteller und Org-Admin immer, alle anderen, wenn der Mandant es erlaubt
-    const allowAll = personal && user.kind !== 'agent' && Boolean((await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.personalProjects);
-    if (!['org_admin', 'project_creator'].includes(user.globalRole) && !allowAll) throw forbidden(personal ? 'Persönliche Projekte sind im Mandanten nicht freigegeben (Verwaltung)' : 'Nur Projektersteller dürfen Projekte anlegen');
+    const policy = projectPolicy({ personal });
+    const denied = createProjectReason(user, personal, Boolean((await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.personalProjects));
+    if (denied) throw forbidden(denied);
     const { key, name, description, mailAddress, templateId, startDate } = req.body ?? ({} as any);
+    if (templateId && !policy.scaffold.template) throw badRequest(TEXT.noTemplate);
     const template = templateId ? await db.maybeOne(`select * from project_templates where id = $1 and org_id = $2`, [templateId, user.orgId]) : null;
     if (templateId && !template) throw badRequest('Vorlage nicht gefunden');
     if (startDate && !/^\d{4}-\d{2}-\d{2}$/.test(startDate)) throw badRequest('Projektstart als YYYY-MM-DD');
@@ -88,8 +91,7 @@ export async function projectRoutes(app: FastifyInstance) {
     for (const [i, [name, kind]] of DEFAULT_COLUMNS.entries()) {
       await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
     }
-    // Persönlich: leer starten (nur Spalten), Ordner legt man selbst oder ein Agent an
-    if (!personal) await createDefaultFolders(db, p.id);
+    if (policy.scaffold.defaultFolders) await createDefaultFolders(db, p.id);
     if (template) await applyTemplate(db, p.id, template.spec ?? {}, startDate ?? new Date().toISOString().slice(0, 10));
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, template: template?.name ?? null, personal } });
     return { project: { ...mapProject(p), myRole: 'pl' } };
@@ -143,7 +145,7 @@ export async function projectRoutes(app: FastifyInstance) {
       await db.query(`update projects set ai_profile_id = $2 where id = $1`, [req.params.id, b.aiProfileId ?? null]);
     }
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
-    if (b.visibility === 'org' && (await db.maybeOne(`select 1 from projects where id = $1 and personal`, [req.params.id]))) throw badRequest('Persönliche Projekte sind nur für Mitglieder sichtbar');
+    if (b.visibility === 'org' && !(await policyOfProject(req.params.id)).visibility.org) throw badRequest(TEXT.noOrgVisibility);
     if (b.reporting) {
       const cur = reportingOf((await db.one(`select reporting from projects where id = $1`, [req.params.id])).reporting);
       const { lastRunOn, lastPageId, ...incoming } = b.reporting as any;
@@ -230,7 +232,7 @@ export async function projectRoutes(app: FastifyInstance) {
       const target = await db.maybeOne(`select id, kind, agent_project_id from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
       const proj = await db.one(`select personal, created_by from projects where id = $1`, [req.params.id]);
-      if (proj.personal && target.kind !== 'agent' && target.id !== proj.created_by) throw forbidden('Persönliches Projekt: nur der Ersteller und KI-Agenten');
+      if (projectPolicy(proj).members.onlyOwnerAndAgents && target.kind !== 'agent' && target.id !== proj.created_by) throw forbidden(TEXT.membersOnlyOwnerAndAgents);
       if (target.agent_project_id && target.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
       // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar, keine KI-Freigabe
       const isAgent = target.kind === 'agent';
@@ -282,7 +284,7 @@ export async function projectRoutes(app: FastifyInstance) {
   app.put<{ Params: { id: string; groupId: string }; Body: { role: 'member' | 'reader'; canEditPlan?: boolean; canApprove?: boolean; canFinalize?: boolean; canUseAi?: boolean } }>('/projects/:id/groups/:groupId', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    if ((await db.one(`select personal from projects where id = $1`, [req.params.id])).personal) throw forbidden('Persönliche Projekte nehmen keine Gruppen auf');
+    if (!(await policyOfProject(req.params.id)).members.groups) throw forbidden(TEXT.noGroups);
     const g = await db.maybeOne(`select id, name from groups where id = $1 and org_id = $2`, [req.params.groupId, user.orgId]);
     if (!g) throw notFound('Gruppe nicht gefunden');
     const b = req.body ?? ({} as any);
@@ -317,7 +319,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const rows = await db.query(
       `select p.id, p.key, p.name, p.status, u.id as lead_id, u.name as lead_name, u.active as lead_active from projects p
          left join project_members m on m.project_id = p.id and m.role = 'pl' and not m.is_deputy left join users u on u.id = m.user_id
-       where p.org_id = $1 and p.kind = 'project' and not p.personal order by p.status, p.key`,
+       where p.org_id = $1 and p.kind = 'project' and ${SQL.notPersonal('p')} order by p.status, p.key`,
       [user.orgId]
     );
     return { projects: rows.rows.map((r: any): AdminProject => ({ id: r.id, key: r.key, name: r.name, status: r.status, lead: r.lead_id ? { userId: r.lead_id, name: r.lead_name, active: Boolean(r.lead_active) } : null })) };
@@ -330,7 +332,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const p = await db.maybeOne(`select id, key, name, personal, kind from projects where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!p || p.kind !== 'project') throw notFound('Projekt nicht gefunden');
-    if (p.personal) throw forbidden('Persönliche Projekte gehören ihrem Ersteller');
+    if (!projectPolicy(p).adminAccess.lead) throw forbidden(TEXT.adminNoLead);
     const target = await db.maybeOne(`select id, name from users where id = $1 and org_id = $2 and active and kind = 'person'`, [req.body?.userId, user.orgId]);
     if (!target) throw badRequest('Verantwortliche PL ist eine aktive Person des Mandanten');
     if (target.id === user.id) throw forbidden('Der Org-Admin bestimmt eine andere Person zur verantwortlichen PL (kein Zugriff auf Projektinhalte über die Verwaltung)');

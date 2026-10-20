@@ -8,13 +8,14 @@ import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiConfigFor, aiStatus, complete, MODELS, projectProfiles } from '../ai/client.js';
-import { aiError, ownLlmAllowed, ownLlmReason, PROJECT_LABEL_SQL, setAiPolicy } from '../ai/policy.js';
+import { aiError, ownLlmAllowed, ownLlmReason, setAiPolicy } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
 import { notify } from '../notify.js';
 import { seal } from '../secrets.js';
+import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
 
 function mapProposal(r: any): AiProposal {
   return { id: r.id, projectId: r.project_id, kind: r.kind, mailId: r.mail_id, taskId: r.task_id, pageId: r.page_id, payload: r.payload ?? {}, status: r.status, createdBy: r.created_by, createdByName: r.created_by_name ?? null, decidedBy: r.decided_by, decidedAt: r.decided_at, note: r.note, createdAt: r.created_at, taskTitle: r.task_title ?? null, pageTitle: r.page_title ?? null, mailSubject: r.mail_subject ?? null };

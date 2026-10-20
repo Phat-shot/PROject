@@ -21,6 +21,7 @@ import { dispatch, notifyMany } from '../notify.js';
 import { checkHint } from '../outbound.js';
 import { newShareToken } from '../docs/share.js';
 import { pagePdf, storePagePdf } from '../docs/layout.js';
+import { projectPolicy, SQL } from '../projectPolicy.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -66,13 +67,13 @@ const LINKED = `coalesce((select json_agg(l.task_id) from mail_task_links l wher
 export async function mailRoutes(app: FastifyInstance) {
   const db = app.db;
 
-  /** Konto verwalten: persönlich der Eigentümer, Org-Postfach der Org-Admin, Projektkonto die PL und der Org-Admin (nicht bei persönlichen Projekten). */
+  /** Konto verwalten: persönlich der Eigentümer, Org-Postfach der Org-Admin, Projektkonto die PL und der Org-Admin (soweit projectPolicy.adminAccess.accounts). */
   async function canManageAccount(user: User, account: AccountRow): Promise<boolean> {
     if (account.type === 'personal') return account.owner_user_id === user.id;
     if (account.type === 'org') return user.globalRole === 'org_admin';
     const m = await getMembership(db, account.project_id!, user.id);
     if (m?.role === 'pl') return true;
-    return user.globalRole === 'org_admin' && !(await db.maybeOne(`select 1 from projects where id = $1 and personal`, [account.project_id]));
+    return user.globalRole === 'org_admin' && projectPolicy(await db.one(`select personal from projects where id = $1`, [account.project_id])).adminAccess.accounts;
   }
 
   async function loadView(viewId: string) {
@@ -106,7 +107,7 @@ export async function mailRoutes(app: FastifyInstance) {
     const rows = await db.query(
       `select a.*, (select count(*)::int from mail_views v where v.account_id = a.id) as view_count from mail_accounts a
        where a.org_id = $1 and (a.owner_user_id = $2 or a.project_id in (select project_id from project_members where user_id = $2 and role = 'pl')
-         or (a.type <> 'personal' and $3 and not exists (select 1 from projects p where p.id = a.project_id and p.personal))) order by a.type, a.name`,
+         or (a.type <> 'personal' and $3 and not exists (select 1 from projects p where p.id = a.project_id and ${SQL.isPersonal('p')}))) order by a.type, a.name`,
       [user.orgId, user.id, user.globalRole === 'org_admin']
     );
     return { accounts: rows.rows.map(mapAccount) };
@@ -480,7 +481,7 @@ export async function mailRoutes(app: FastifyInstance) {
     for (const v of rows.rows) {
       const m = await getMembership(db, v.project_id, user.id);
       const rights = await getViewRights(db, v.id, user, m);
-      const manage = v.account_type === 'personal' ? v.owner_user_id === user.id : m?.role === 'pl' || (user.globalRole === 'org_admin' && !v.project_personal);
+      const manage = v.account_type === 'personal' ? v.owner_user_id === user.id : m?.role === 'pl' || (user.globalRole === 'org_admin' && projectPolicy({ personal: v.project_personal }).adminAccess.accounts);
       if (rights.canRead || manage) views.push({ ...mapView(v, rights), projectKey: v.project_key, canManage: manage });
     }
     return { views };

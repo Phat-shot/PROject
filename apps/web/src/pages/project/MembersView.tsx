@@ -19,6 +19,7 @@ import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import { AiFolderDialog } from './MailAi';
 import { ProjectNotifyCard } from '../../components/NotifyRules';
 import type { AgentUser, AiFeatureDef, DocPage, DocTemplate, Group, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
+import { useProjectPolicy } from '../../lib/useProjectPolicy';
 
 export function MembersView() {
   const { detail, reload } = useProject();
@@ -157,7 +158,7 @@ export function MembersCard() {
   const { error, run } = useAsync();
   const dialog = useDialog();
   const pid = detail.project.id;
-  const personal = Boolean(detail.project.personal);
+  const policy = useProjectPolicy(detail.project);
   const groups = detail.groups ?? [];
   const groupsOf = (userId: string) => groups.filter((g) => g.memberIds.includes(userId));
   const groupLabel = (g: ProjectGroup) => `${g.name} (${roleLabel[g.role]})`;
@@ -168,7 +169,7 @@ export function MembersCard() {
   };
   return (
     <div className="card" id="mitglieder">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <span className="row">{!personal && <button className="btn sm" onClick={() => setGroup('new')}>Gruppe hinzufügen</button>}<button className="btn primary sm" onClick={() => setInvite(true)}>Hinzufügen</button></span>}</div>
+      <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <span className="row">{policy.members.groups && <button className="btn sm" onClick={() => setGroup('new')}>Gruppe hinzufügen</button>}<button className="btn primary sm" onClick={() => setInvite(true)}>Hinzufügen</button></span>}</div>
       {error && <div className="error mb">{error}</div>}
       <table className="table"><thead><tr><th>Name</th><th>Projektrolle</th><th>Einzelrechte</th><th>Herkunft</th><th /></tr></thead><tbody>
         {detail.members.map((m) => {
@@ -187,9 +188,9 @@ export function MembersCard() {
           );
         })}
       </tbody></table>
-      {personal && <p className="notice small mt">Persönliches Projekt: nur du und KI-Agenten. Weitere Personen, Gruppen und Einladungen sind gesperrt.</p>}
+      {policy.members.notice && <p className="notice small mt">{policy.members.notice}</p>}
       <MyRights />
-      {!personal && (isPl || groups.length > 0) && <>
+      {policy.members.groups && (isPl || groups.length > 0) && <>
         <h3 className="mt">Gruppen im Projekt</h3>
         {groups.length === 0
           ? <p className="muted small">Noch keine Gruppen. Eine Gruppe macht ihre Personen zu Mitgliedern oder Lesern (höchste Rolle zählt, Einzelrechte addieren sich); ein Direkteintrag überschreibt die Gruppen. PL und Stellvertretung sind immer einzelne Personen.</p>
@@ -202,7 +203,7 @@ export function MembersCard() {
             </tr>)}
           </tbody></table>}
       </>}
-      {isPl && !personal && <InviteCard />}
+      {isPl && policy.members.invitations && <InviteCard />}
       {edit && <RoleForm member={edit} onClose={() => setEdit(null)} />}
       {invite && <RoleForm onClose={() => setInvite(false)} />}
       {group && <GroupForm group={group === 'new' ? null : group} onClose={() => setGroup(null)} />}
@@ -271,8 +272,8 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
   const me = detail.project.myMembership;
   const isPrimary = me.role === 'pl' && !me.isDeputy;
   const dialog = useDialog();
-  // Agenten anderer Projekte (von deren PL angelegt) sind nicht wählbar; im persönlichen Projekt nur Agenten
-  const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!detail.project.personal || u.kind === 'agent'));
+  // Agenten anderer Projekte (von deren PL angelegt) sind nicht wählbar; nach Projektregel ggf. nur Agenten
+  const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!useProjectPolicy(detail.project).members.onlyOwnerAndAgents || u.kind === 'agent'));
   const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
   const { busy, error, run } = useAsync();
   const picked = users.find((u) => u.id === f.userId);

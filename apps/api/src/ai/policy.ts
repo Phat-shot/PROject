@@ -5,6 +5,7 @@ import { audit } from '../audit.js';
 import { HttpError } from '../errors.js';
 import { getViewRights, mapMembership } from '../rights.js';
 import { aiConfigForAgent, aiConfigForProfile, aiConfigForProject, orgAiSettings, profileConfig, type AiConfig, type AiProfileRow } from './client.js';
+import { PROJECT_LABEL_SQL, projectPolicy } from '../projectPolicy.js';
 
 /**
  * KI-Freigaben: einziger Prüfweg für jede KI-Nutzung. aiAllowed() prüft in fester Reihenfolge, die erste Sperre gewinnt:
@@ -34,8 +35,7 @@ export interface AiQuery {
 
 export const KILLSWITCH_TEXT = 'KI im Mandanten abgeschaltet (Notaus)';
 export const NO_AI_RIGHT = 'Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)';
-/** Projektname für Org-Admin und Begründungen (Aliase p = projects, ow = Ersteller); persönliche Projekte nur als „persönlich (Eigentümer)“. */
-export const PROJECT_LABEL_SQL = `case when p.personal then 'persönlich (' || coalesce(ow.name, '?') || ')' else p.key || ' ' || p.name end`;
+export { PROJECT_LABEL_SQL };
 
 export const featureLabel = (k: string): string => AI_FEATURES.find((x) => x.key === k)?.label ?? AI_CATEGORIES.find((x) => x.key === k)?.label ?? (k === '*' ? 'alle Funktionen' : k);
 const featureDef = (k: string) => AI_FEATURES.find((x) => x.key === k) as { key: string; label: string; who: 'person' | 'agent' | 'both'; defaultDeny?: boolean } | undefined;
@@ -192,7 +192,7 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
   if (isAgent) {
     cfg = await aiConfigForAgent(db, subj.id, project?.id ?? null);
     if (!cfg) {
-      const base = project?.personal ? await aiConfigForAgent(db, subj.id, null) : null;
+      const base = project && projectPolicy(project).ai.orgProfilesNeedRelease ? await aiConfigForAgent(db, subj.id, null) : null;
       return deny('profile', base ? `Profil ${base.name} im persönlichen Projekt nicht freigegeben (Verwaltung › KI-Profile: „auch in persönlichen Projekten“ oder Auswahl)` : `Kein freigegebenes KI-Profil für ${subj.name} (Verwaltung › KI-Agenten)`, true);
     }
     pass('profile', `Profil ${cfg.name}`);
@@ -259,8 +259,7 @@ export async function aiCapabilities(db: Db, user: User, projectId: string): Pro
 /** Profilachse: erlaubt der Mandant eigene LLMs für diese Projektart (aus, nur persönliche, alle)? */
 export async function ownLlmAllowed(db: Db, orgId: string, projectId: string): Promise<boolean> {
   const s = await orgAiSettings(db, orgId);
-  const p = await db.one(`select personal from projects where id = $1`, [projectId]);
-  return s.ownLlm === 'all' || (s.ownLlm === 'personal' && Boolean(p.personal));
+  return projectPolicy(await db.one(`select personal from projects where id = $1`, [projectId])).ai.ownLlm(s.ownLlm);
 }
 /** Eigenes LLM einbinden, umkonfigurieren oder als Projekt-KI wählen: Profilachse und Freigabe pl.own_llm für die PL; null = erlaubt. */
 export async function ownLlmReason(db: Db, user: User, projectId: string): Promise<string | null> {

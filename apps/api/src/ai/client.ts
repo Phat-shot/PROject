@@ -4,6 +4,7 @@ import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { unseal } from '../secrets.js';
 import { checkAi, orgRuleAllows, type AiQuery } from './policy.js';
+import { SQL } from '../projectPolicy.js';
 
 /**
  * Modellanbindung je Mandant (Verwaltung › KI): Anthropic über das offizielle SDK oder ein lokales LLM mit
@@ -53,8 +54,8 @@ export async function orgAiSettings(db: Db, orgId: string): Promise<{ enabled: b
  * erlaubt (aus / nur persönliche / alle); gesperrte und inaktive nie.
  */
 export const PROJECT_PROFILE_SQL = `a.org_id = p.org_id and a.active and not a.admin_blocked and (
-    (a.project_id is null and ((a.project_scope = 'all' and (not p.personal or a.personal_scope)) or exists (select 1 from ai_profile_projects x where x.profile_id = a.id and x.project_id = p.id and a.project_scope in ('all', 'selected'))))
-    or (a.project_id = p.id and (case coalesce(o.settings->'ai'->>'ownLlm', 'personal') when 'all' then true when 'personal' then p.personal else false end)))`;
+    (a.project_id is null and ((a.project_scope = 'all' and (${SQL.notPersonal('p')} or a.personal_scope)) or exists (select 1 from ai_profile_projects x where x.profile_id = a.id and x.project_id = p.id and a.project_scope in ('all', 'selected'))))
+    or (a.project_id = p.id and (case coalesce(o.settings->'ai'->>'ownLlm', 'personal') when 'all' then true when 'personal' then ${SQL.isPersonal('p')} else false end)))`;
 
 export async function projectProfiles(db: Db, projectId: string): Promise<{ id: string; name: string; provider: AiProvider; model: string; own: boolean }[]> {
   const r = await db.query(`select a.id, a.name, a.provider, a.model, a.project_id from projects p join orgs o on o.id = p.org_id join ai_profiles a on ${PROJECT_PROFILE_SQL} where p.id = $1 order by a.project_id nulls first, a.name`, [projectId]);
@@ -101,7 +102,7 @@ export async function aiConfigForProject(db: Db, projectId: string): Promise<AiC
 export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: string | null): Promise<AiConfig | null> {
   const r = await db.maybeOne<AiProfileRow & { agent_thinking: 'off' | 'on' | null; agent_project_id: string | null }>(`select a.*, u.thinking_mode as agent_thinking, u.agent_project_id from users u join ai_profiles a on a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) where u.id = $1`, [agentUserId]);
   if (r?.agent_project_id ? !(await profileAvailableInProject(db, r.agent_project_id, r.id)) : r?.project_id) return null;
-  if (r && !r.agent_project_id && projectId && !(await db.maybeOne(`select 1 from projects p where p.id = $1 and (not p.personal or $2 or exists (select 1 from ai_profile_projects x where x.profile_id = $3 and x.project_id = p.id))`, [projectId, Boolean(r.personal_scope), r.id]))) return null;
+  if (r && !r.agent_project_id && projectId && !(await db.maybeOne(`select 1 from projects p where p.id = $1 and (${SQL.notPersonal('p')} or $2 or exists (select 1 from ai_profile_projects x where x.profile_id = $3 and x.project_id = p.id))`, [projectId, Boolean(r.personal_scope), r.id]))) return null;
   const cfg = profileConfig(r);
   if (cfg && cfg.provider === 'local' && r?.agent_thinking) cfg.enableThinking = r.agent_thinking === 'on';
   return cfg;

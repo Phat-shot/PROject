@@ -8,6 +8,7 @@ import { requireProject, requireTask } from '../rights.js';
 import { resolveAll, resolveRule, rulesAt, setRules, UUID, type RuleInput } from '../rules.js';
 import { eventContext, recipientsOf } from '../notify.js';
 import { digestHourOf } from '../notifyMail.js';
+import { projectPolicy } from '../projectPolicy.js';
 
 /**
  * Benachrichtigungsregeln je Ebene (Regel N): Org (Org-Admin, mit Digest-Stunde), Projekt (PL; Mitglieder lesen), AP (PL,
@@ -74,7 +75,7 @@ export async function notifyRuleRoutes(app: FastifyInstance) {
         people.push({ id: uid, name: await name(uid), role, roleLabel: NOTIFY_ROLES.find((r) => r.key === role)?.label ?? (role.startsWith('group:') ? 'Gruppe' : role.startsWith('user:') ? 'Person' : role), mail: mine.value.mail, chat: mine.value.chat });
       }
       const open = rule.value.recipients.flatMap((r) => r.split('|')).filter((r) => ['participants', 'mentioned', 'requester'].includes(r) || (!ctx.task && ['responsible', 'parent_responsible', 'subproject_lead'].includes(r)));
-      events.push({ event: e.key, label: e.label, rule, people, projectChannel: toProjectChannel || (rule.value.chat === 'project' && !ctx.project.personal && !ctx.task?.restricted), perEvent: open.map((r) => NOTIFY_ROLES.find((x) => x.key === r)?.label ?? r), caller: e.recipientsText.includes('Aufrufstelle') ? e.recipientsText : null });
+      events.push({ event: e.key, label: e.label, rule, people, projectChannel: toProjectChannel || (rule.value.chat === 'project' && projectPolicy(ctx.project).channelPosts && !ctx.task?.restricted), perEvent: open.map((r) => NOTIFY_ROLES.find((x) => x.key === r)?.label ?? r), caller: e.recipientsText.includes('Aufrufstelle') ? e.recipientsText : null });
     }
     return { taskId: ctx.task?.id ?? null, events };
   });

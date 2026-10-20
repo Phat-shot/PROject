@@ -82,7 +82,7 @@ test('Eigene Agenten der PL: nur mit Freigabe, nur freigegebene Profile, Budget 
   assert.equal((await t.api(max).patch(`/projects/${pid}/agents/${morton.id}`, { dailyBudget: 8, persona: 'freundlich' })).json().agent.dailyBudget, 8);
   // Org-Admin: sieht ihn, darf deaktivieren, nicht gestalten
   const listed = (await t.api(admin).get('/agents')).json().agents.find((a: any) => a.id === morton.id);
-  assert.match(listed.projectBound.label, /persönliches Projekt von Max Keller/);
+  assert.match(listed.projectBound.label, /^persönlich \(Max Keller\)$/, 'eine Beschriftung für alle Org-Sichten');
   assert.equal((await t.api(admin).patch(`/agents/${morton.id}`, { persona: 'vom Admin' })).statusCode, 403);
   assert.equal((await t.api(admin).patch(`/agents/${morton.id}`, { active: false })).json().agent.active, false);
   assert.equal((await t.api(admin).get(`/projects/${pid}/agents`)).statusCode, 403, 'keine Projektinhalte');

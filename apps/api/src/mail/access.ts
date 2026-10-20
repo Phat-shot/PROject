@@ -1,6 +1,7 @@
 import type { MailViewRights, User } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { canSeeSubproject, getMembership, getViewRights } from '../rights.js';
+import { projectPolicy, TEXT } from '../projectPolicy.js';
 
 /** Leserecht an einer Mail über ihre Ansichten (oder über eine Kopie in einem Arbeitspaket); liefert die vereinigten Rechte. */
 export async function mailAccess(db: Db, user: User, mailId: string): Promise<{ ok: boolean; viewIds: string[]; rights: MailViewRights }> {
@@ -26,12 +27,12 @@ export async function mailAccess(db: Db, user: User, mailId: string): Promise<{ 
   }
 
 
-export const PERSONAL_MAIL_ONLY = 'Persönliche Projekte nehmen nur Mails aus eigenen Postfächern auf (persönliche Konten des Eigentümers, Projektkonto des Projekts)';
+export const PERSONAL_MAIL_ONLY = TEXT.mailOwnOnly;
 
-/** Persönliche Projekte sehen nur eigene Postfächer: persönliche Konten des Eigentümers und das Projektkonto des Projekts; alle anderen Projekte jedes Konto. */
+/** Projekte mit projectPolicy.mail.ownOnly sehen nur eigene Postfächer: persönliche Konten des Eigentümers und das Projektkonto des Projekts; alle anderen jedes Konto. */
 export async function accountAllowedInProject(db: Db, account: { type: string; owner_user_id: string | null; project_id: string | null }, projectId: string): Promise<boolean> {
   const p = await db.maybeOne(`select personal, created_by from projects where id = $1`, [projectId]);
-  if (!p?.personal) return true;
+  if (!p || !projectPolicy(p).mail.ownOnly) return true;
   return (account.type === 'personal' && account.owner_user_id === p.created_by) || (account.type === 'project' && account.project_id === projectId);
 }
 

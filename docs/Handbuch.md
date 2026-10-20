@@ -232,9 +232,17 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 ## 14. Persönliches Projekt (Assistent)
 
-- Anlegen unter Projekte mit „Persönlich“: Projektersteller immer, alle anderen, wenn der Org-Admin es erlaubt (Verwaltung › Mandant). Startet leer (nur Spalten).
-- Nur der Ersteller (PL) und KI-Agenten; weitere Personen und Einladungen sind gesperrt, sichtbar nur für Mitglieder.
-- Der Org-Admin sieht im Audit-Export Aktion, Person und Zeit, aber keine Details, und verwaltet die Projektkonten dieses Projekts nicht.
+Ein persönliches Projekt ist ein normales Projekt (Board, Plan, Doku, Besprechungen, Kalender, Workflows, Zeiten, Agenten, Regeln) mit genau diesen Abweichungen:
+
+1. Anlegen unter Projekte mit „Persönlich“: Projektersteller immer, alle anderen, wenn der Org-Admin es erlaubt (Verwaltung › Mandant); KI-Agenten nie.
+2. Mitglieder: nur der Ersteller (PL) und KI-Agenten; weitere Personen, Gruppen und Einladungen sind gesperrt.
+3. Sichtbar nur für Mitglieder („Organisation“ ist nicht wählbar).
+4. Der Org-Admin hat keinen Inhaltszugriff, verwaltet die Projektkonten nicht, sieht das Projekt nicht in der Verwaltungsliste, bestimmt keine neue PL und bekommt im Audit-Export Aktion, Person und Zeit, aber keine Details.
+5. Postfächer: nur eigene (siehe unten); Workflow-Mailschritte fallen nicht auf das Organisationspostfach zurück.
+6. KI: eigenes LLM je Mandantenschalter; Org-Profile nur mit Freigabe (siehe unten).
+7. Meldungen schreiben keine Systembeiträge in den Projektkanal (der Kanal selbst bleibt für Agenten-Gespräche).
+8. Startet leer: keine Standardordner, keine Vorlage.
+9. In Org-Sichten (KI-Agenten, KI-Regeln, Audit) heißt es nur „persönlich (Name)“.
 - **Nur eigenes LLM:** Org-Profile stehen im persönlichen Projekt nur bereit, wenn der Org-Admin sie dafür freigibt („auch in persönlichen Projekten“ oder Auswahl); Agenten der Org laufen dort nur mit einem solchen Profil. Das eigene LLM gilt, wenn der Mandant es erlaubt.
 - **Nur eigene Postfächer:** Ansichten, Verknüpfungen, Kopien, APs, Log-Einträge und Doku aus Mails gibt es nur aus deinen persönlichen Konten und dem Projektkonto dieses Projekts. Das Organisationspostfach und Mails aus anderen Projekten bleiben draußen, auch per Plus-Adresse; Entwürfe gehen nicht über das Organisationspostfach. Eine Ansicht auf das Organisationspostfach legt in normalen Projekten nur der Org-Admin an.
 - Typischer Aufbau: eigenes Postfach als persönliches Konto, Ansicht ins Projekt, **Ordner „KI Bearbeiten“** einrichten, eigenen Agenten anlegen (oder aufnehmen) und als stellv. PL einsetzen. Mails in den Ordner legen: Die Projekt-KI macht daraus Aufgaben und Termine und gibt dem Agenten, was er selbst erledigen kann; zum Abschluss beantwortet er die Ursprungsmail als Entwurf, den du freigibst.

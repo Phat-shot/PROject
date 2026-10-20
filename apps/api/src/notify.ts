@@ -5,6 +5,7 @@ import { canSeeSubproject, groupRecipients } from './rights.js';
 import { appendDocEntry, resolveRule } from './rules.js';
 import { loadTask, resolveProjectLead } from './tasks/service.js';
 import { localParts } from './localTime.js';
+import { projectPolicy } from './projectPolicy.js';
 
 export interface NotifyInput {
   userId: string;
@@ -151,7 +152,7 @@ export async function dispatch(db: Db, d: DispatchInput): Promise<string[]> {
     const label = NOTIFY_EVENTS.find((e) => e.key === d.event)?.label ?? d.event;
     const meta = { event: d.event, type: d.type, link: d.link ?? null, ref: d.ref ?? null };
     const actor = d.actorId ? await db.maybeOne(`select id, kind from users where id = $1`, [d.actorId]) : null;
-    if ((rule.value.chat === 'project' || toProjectChannel) && !p.personal && !task?.restricted && !d.chatted) {
+    if ((rule.value.chat === 'project' || toProjectChannel) && projectPolicy(p).channelPosts && !task?.restricted && !d.chatted) {
       await systemMessage(db, { channelId: await projectChannelId(db, p.org_id, p.id), authorId: actor?.id ?? null, body: postText(d), meta });
     } else if (d.thread && rule.value.chat !== 'off' && !d.chatted) {
       await systemMessage(db, { channelId: d.thread.channelId, threadId: d.thread.messageId, authorId: actor?.id ?? null, body: postText(d), meta });

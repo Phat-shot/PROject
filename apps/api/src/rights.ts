@@ -2,6 +2,7 @@ import type { Membership, OrgRight, ProjectRole, User, MailViewRights } from '@p
 import { ROLE_RANK } from '@projekttool/shared';
 import type { Db } from './db.js';
 import { badRequest, forbidden, HttpError, notFound } from './errors.js';
+import { SQL } from './projectPolicy.js';
 
 export function mapMembership(row: any): Membership {
   return {
@@ -159,7 +160,7 @@ export async function syncProjectGroups(db: Db, scope: { projectId?: string; use
     from project_groups pg
     join group_members gm on gm.group_id = pg.group_id
     join users u on u.id = gm.user_id and u.active and u.kind = 'person'
-    join projects p on p.id = pg.project_id and not p.personal
+    join projects p on p.id = pg.project_id and ${SQL.notPersonal('p')}
     where ${inScope('pg.project_id', 'gm.user_id')}
     group by pg.project_id, gm.user_id`;
   await db.query(

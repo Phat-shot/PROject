@@ -19,6 +19,7 @@ import { AnalyticsView } from './project/AnalyticsView';
 import { MeetingsView } from './project/MeetingsView';
 import { useOpenChat } from '../components/Messenger';
 import { api } from '../lib/api';
+import { useProjectPolicy } from '../lib/useProjectPolicy';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
@@ -84,6 +85,7 @@ function ProjectBody() {
   const { timeTracking } = useAuth();
   const id = detail.project.id;
   const p = detail.project;
+  const badge = useProjectPolicy(p).badge;
   const base = `/projekte/${id}`;
   // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt nur die Unterreiter des aktuellen Bereichs
   const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
@@ -104,7 +106,7 @@ function ProjectBody() {
   const taskId = params.get('task');
   return (
     <>
-      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{p.personal && <span className="badge" style={{ marginLeft: 8 }} title="Nur du und KI-Agenten">persönlich</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
+      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{badge && <span className="badge" style={{ marginLeft: 8 }} title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
       <Routes>
         <Route index element={<Navigate to={`${base}/board`} replace />} />
         <Route path="board" element={<BoardView />} />
