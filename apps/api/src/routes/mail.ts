@@ -14,7 +14,7 @@ import { accountKind, accountBoundToProject, accountRights, accountUseIn, accoun
 import { projectLabelSql } from '../projectPolicy.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
-import { decideProposals, enqueueForNewMail, suggestAgent } from '../ai/mailAi.js';
+import { decideProposals, enqueueForNewMail, moveMailTo, suggestAgent } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
 import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
@@ -1251,6 +1251,14 @@ export async function mailRoutes(app: FastifyInstance) {
     await notifyMany(db, targets, { projectId, type: 'mail.approval', title: `Freigabe wartet: ${subject}`, body: `Entwurf von ${author.name}`, link: `/projekte/${projectId}/mail/freigaben` }, author.id);
   }
 
+  async function archiveParkedMail(account: AccountRow, messageId: string, user: User, projectId: string | null) {
+    const m = await db.maybeOne(`select * from mails where account_id = $1 and message_id = $2 and not outgoing`, [account.id, messageId]);
+    if (!m || !/in arbeit$/i.test(String(m.folder))) return;
+    if (await db.maybeOne(`select 1 from questions where status = 'open' and context->>'mailId' = $1`, [m.id])) return;
+    const path = await moveMailTo(db, app.mail, m, 'Archiv');
+    await audit(db, { orgId: user.orgId, projectId, userId: user.id, action: 'mail.archive', objectType: 'mail', objectId: m.id, details: { from: m.folder, to: path, reason: 'Antwort gesendet' } });
+  }
+
   async function doSend(draftId: string, user: User, account: AccountRow, references: string | null) {
     const d = await db.one(`select * from mail_drafts where id = $1`, [draftId]);
     // Angehaltener PDF-Versand: das PDF der Seite wird beim Senden erzeugt, nur solange die Seite final ist
@@ -1264,6 +1272,8 @@ export async function mailRoutes(app: FastifyInstance) {
       if (page && pdf) await storePagePdf(db, page, pdf, user.id);
       await db.query(`update mail_drafts set status = 'sent', sent_at = now(), sent_by = $2, error = null, updated_at = now() where id = $1`, [draftId, user.id]);
       await db.query(`update outbound_checks set decided_by = $2, decided_at = now() where mail_draft_id = $1 and decided_at is null`, [draftId, user.id]);
+      // Abschluss: eine vom Agenten nach „In Arbeit“ gelegte Mail (Antwort ausstehend) wandert mit der gesendeten Antwort ins Archiv, sofern keine Rückfrage dazu offen ist
+      if (d.in_reply_to) await archiveParkedMail(account, d.in_reply_to, user, d.project_id).catch((e) => app.log.warn(`[mail] Archiv nach Antwort: ${e?.message ?? e}`));
       return res;
     } catch (e: any) {
       await db.query(`update mail_drafts set status = 'failed', error = $2, updated_at = now() where id = $1`, [draftId, String(e?.message ?? e)]);

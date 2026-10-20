@@ -123,6 +123,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - **Workflow-Schritte an KI-Agenten** (Workflows › Schritt › Zuständig „KI-Agent“): der Agent wird zuständig und läuft sofort; sperrt die KI-Freigabe „Workflow-Schritte übernehmen“ oder die Agenten-Policy (Workflow-Schritte aus), geht der Schritt mit Hinweis an die Projektleitung.
 - **Mail-Rückfrage** (Projekteinstellungen › Projekt, Vorgabe unter Verwaltung › Mandant): Nennt die Mail-KI zu einer neuen Mail offene Punkte (fehlende Angaben, Widersprüche, Entscheidungen), fragt der Projektagent nach, statt zu raten: **PL fragen** (Standard) stellt eine Entscheidung per Chat-Karte mit „Klar / Infos kommen“, „Im Projekt fragen“ und „Beim Absender rückfragen“; **im Projekt fragen** stellt die Frage direkt im Projektkanal mit der Frist (Standard 48 h, danach Weitergabe über die Kette); **beim Absender rückfragen** lässt den Agenten die Ursprungsmail über die Außengrenze beantworten; **aus** schreibt die Punkte nur ins Log. Ohne Projektagent (Ordner „KI Bearbeiten“ einer Person) stehen offene Punkte im Log des Arbeitspakets und in der Meldung; bei Vorschlägen in der Meldung.
 - Jede Mail wird je Projekt einmal bearbeitet; Läufe zählen gegen das Tagesbudget des Agenten und stehen im Audit.
+- **Abschluss:** Legt der Agent eine Mail nach „In Arbeit“ (Antwort ausstehend) und wird der Antwortentwurf später gesendet, wandert die Mail ins Archiv, sobald keine Rückfrage mehr offen ist (Audit „Antwort gesendet“).
 
 ## 7. Doku
 

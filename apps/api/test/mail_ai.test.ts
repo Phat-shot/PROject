@@ -77,6 +77,11 @@ test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner di
   const check = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [draft.id]);
   assert.deepEqual([check.channel, check.audience, check.result], ['draft', 'task_external', 'pass']);
   assert.equal((await t.db.one(`select folder from mails where id = $1`, [mail.id])).folder, 'In Arbeit');
+  // Abschluss: gesendete Antwort ohne offene Rückfrage legt die geparkte Mail ins Archiv
+  const sent = await t.api(pl).post(`/mail/drafts/${draft.id}/send`);
+  assert.equal(sent.statusCode, 200, sent.body);
+  assert.match((await t.db.one(`select folder from mails where id = $1`, [mail.id])).folder, /^Archive$/);
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'mail.archive' and object_id = $1 and details->>'reason' = 'Antwort gesendet'`, [mail.id]));
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'mail.ai'`, [t.ids.users.pl]));
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and agent_user_id = $2`, [task.id, agent.id]), 'Agent legt sofort los');
   // Kein zweiter Lauf
