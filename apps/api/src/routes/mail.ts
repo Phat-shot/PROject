@@ -462,7 +462,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!(await mailAllowedInProject(db, mail.id, m.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (foreignPersonal(await accountUseIn(db, mail.account_id, m.projectId), user)) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
     const agent = await suggestAgent(db, m.projectId, mail.account_id);
-    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › Projekt) oder Agent an der Mail-Ansicht setzen');
+    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › KI) oder Agent an der Mail-Ansicht setzen');
     if (agent.role !== 'pl') throw badRequest(`${agent.name} ist Mitglied, nicht (stellvertretende) Projektleitung: nur „Vorschläge zur Mail“`);
     // Freigabe jetzt; das Tagesbudget hält den Lauf nur zurück
     const gate = await aiConfigFor(db, { userId: agent.id, projectId: m.projectId, feature: 'agent.mail', budget: false });
@@ -522,7 +522,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!(await mailAllowedInProject(db, mail.id, m.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
     if (foreignPersonal(await accountUseIn(db, mail.account_id, m.projectId), user)) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
     const agent = await suggestAgent(db, m.projectId, mail.account_id);
-    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › Projekt) oder Agent an der Mail-Ansicht setzen');
+    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › KI) oder Agent an der Mail-Ansicht setzen');
     const gate = await aiConfigFor(db, { userId: agent.id, projectId: m.projectId, feature: 'mail.triage', budget: false });
     if (!gate.cfg) throw aiError(gate.decision);
     const view = await db.maybeOne(`select v.id from mail_views v join mail_view_matches x on x.view_id = v.id where x.mail_id = $1 and v.project_id = $2 order by v.created_at limit 1`, [mail.id, m.projectId]);
@@ -1228,7 +1228,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (await db.maybeOne(`select 1 from mail_account_uses where account_id = $1 and use = 'personal'`, [a.id])) throw forbidden('Persönliche Konten teilt nur der Eigentümer');
     const org = await db.maybeOne(`select id from mail_account_uses where account_id = $1 and use = 'org'`, [a.id]);
     if (org) { if (!(await canManageAccount(user, a))) throw forbidden('Das Organisationspostfach teilt nur der Org-Admin'); return { id: org.id, use: 'org' }; }
-    throw forbidden('Konto ist in diesem Projekt nicht gebunden (Projekteinstellungen › Mail: Konto anbinden)');
+    throw forbidden('Konto ist in diesem Projekt nicht gebunden (Projekt › Einstellungen › Mail: Konto anbinden)');
   }
 
   /** Mail, die eine Person selbst sendet oder zur Freigabe einreicht: Außenprüfung als Hinweis (protokolliert, blockiert nie). */

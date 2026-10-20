@@ -225,7 +225,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     const attendees = cur.attendees as MeetingAttendee[];
     if (!attendees.length) throw badRequest('Keine Teilnehmer');
     const account = await projectAccount(db, cur.project_id);
-    if (!account) throw badRequest('Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekteinstellungen › Mail).');
+    if (!account) throw badRequest('Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekt › Einstellungen › Mail).');
     const project = await db.one(`select key, name from projects where id = $1`, [cur.project_id]);
     const seq = Number((cur.external ?? {}).sequence ?? 0);
     const rooms = await db.query(`select r.name, r.email, r.kind from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = $1 and r.kind <> 'person' order by r.name`, [cur.id]);
@@ -287,7 +287,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (cur.tentative) throw badRequest('Termin ist vorläufig: erst bestätigen, dann in den Kalender übernehmen');
     const target = req.body?.target;
     const t = (await targetsOf(user)).find((x) => x.key === target);
-    if (!t) throw badRequest('Kalenderziel nicht eingerichtet (Benutzereinstellungen › Kalender bzw. Konfiguration › Mit Microsoft 365/Google verbinden)');
+    if (!t) throw badRequest('Kalenderziel nicht eingerichtet (Meine Einstellungen › Kalender bzw. Mail › Mit Microsoft 365/Google verbinden)');
     const project = await db.one(`select key from projects where id = $1`, [cur.project_id]);
     const ev: PushEvent = { uid: `meeting-${cur.id}@project`, title: `${project.key} ${cur.title}`, startsAt: new Date(cur.starts_at), endsAt: new Date(cur.ends_at), location: cur.location, description: `${cur.description ?? ''}\n${publicBase()}/projekte/${cur.project_id}/besprechungen`.trim(), attendees: (cur.attendees as MeetingAttendee[]).map((a) => ({ email: a.email, name: a.name })) };
     const external = cur.external ?? {};

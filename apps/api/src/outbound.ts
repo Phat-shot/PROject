@@ -87,7 +87,7 @@ export function profileOf(v: any): ExternalProfile {
   return { name: s(v?.name, 200), address: s(v?.address, 500), access: s(v?.access, 1000), contacts };
 }
 
-/** Stufe der Außenprüfung (Verwaltung › KI): strict = neu formulieren und prüfen, check = nur prüfen. */
+/** Stufe der Außenprüfung (Verwaltung › Mail): strict = neu formulieren und prüfen, check = nur prüfen. */
 export async function externalGuardLevel(db: Db, orgId: string): Promise<'strict' | 'check'> {
   return (await orgAiSettings(db, orgId)).externalGuard;
 }

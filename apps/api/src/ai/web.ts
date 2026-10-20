@@ -30,7 +30,7 @@ export async function webAvailable(db: Db, q: { agentId: string; agentName: stri
   const d = await aiAllowed(db, { userId: q.agentId, projectId: q.projectId, feature: 'agent.web', budget: false, now: q.now });
   if (!d.allowed) return { ok: false, reason: d.publicReason };
   const p = await db.maybeOne(`select web_search, org_id from ai_profiles where id = $1`, [q.cfg.profileId]);
-  if (!p?.web_search) return { ok: false, reason: `Profil ${q.cfg.name} ohne Online-Recherche (Verwaltung › KI-Profile)` };
+  if (!p?.web_search) return { ok: false, reason: `Profil ${q.cfg.name} ohne Online-Recherche (Verwaltung › KI › LLMs)` };
   const settings = await webSettings(db, p.org_id);
   if (q.cfg.provider === 'local' && settings.provider === 'none') return { ok: false, reason: `kein Suchdienst für lokale Profile (Verwaltung › KI › Online-Recherche: SearXNG oder Brave)` };
   if (q.cfg.provider === 'local' && !settings.url && settings.provider === 'searxng') return { ok: false, reason: 'SearXNG ohne Adresse (Verwaltung › KI › Online-Recherche)' };

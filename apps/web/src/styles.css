@@ -81,7 +81,7 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
 .topbar { display: flex; align-items: center; gap: 12px; padding: 12px 20px; background: var(--surface); border-bottom: 1px solid var(--border); position: sticky; top: 0; z-index: 5; }
 .topbar h1 { margin: 0; flex: 1; }
 .topbar .tabs { display: flex; gap: 4px; }
-.topbar .tabs a { padding: 6px 10px; border-radius: 6px; color: var(--muted); }
+.topbar .tabs a { padding: 6px 10px; border-radius: 6px; color: var(--muted); white-space: nowrap; }
 .topbar .tabs a.active { background: var(--primary-soft); color: var(--primary); font-weight: 600; }
 .content { padding: 20px; flex: 1; }
 .content.flush { padding: 0; }

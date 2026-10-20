@@ -103,7 +103,7 @@ export async function resolveRules(db: Db, q: { orgId: string; userId: string | 
   const org = best(rows.filter((r) => !r.project_id && !r.user_id && !r.group_id), f);
   if (org) return decide(org, 'org');
   const def = featureDef(f);
-  const text = def?.defaultDeny ? `Standard: gesperrt, bis die Verwaltung „${def.label}“ freigibt (Verwaltung › KI-Freigaben)` : 'Keine Regel: Standard erlaubt';
+  const text = def?.defaultDeny ? `Standard: gesperrt, bis die Verwaltung „${def.label}“ freigibt (Verwaltung › KI › KI-Freigaben)` : 'Keine Regel: Standard erlaubt';
   return { effect: def?.defaultDeny ? 'deny' : 'allow', rule: null, level: 'default', text, publicText: text };
 }
 
@@ -199,7 +199,7 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
     if (!cfg) return deny('profile', 'LLM unvollständig, inaktiv oder vom Org-Admin gesperrt', true);
     pass('profile', `Eigenes LLM ${cfg.name}`);
   } else if (f.startsWith('assist.')) {
-    if (!project!.ai_profile_id) return deny('profile', 'KI im Projekt nicht aktiv: keine Projekt-KI gewählt (Einstellungen › Projekt › Projekt-KI)', true);
+    if (!project!.ai_profile_id) return deny('profile', 'KI im Projekt nicht aktiv: kein LLM der Assistenz gewählt (Einstellungen › KI)', true);
     cfg = await aiConfigForProject(db, project!.id);
     if (!cfg) return deny('profile', 'Kein freigegebenes KI-Profil im Projekt (Freigabe entzogen oder LLM gesperrt; die PL wählt ein anderes)', true);
     pass('profile', `Projekt-KI ${cfg.name}`);

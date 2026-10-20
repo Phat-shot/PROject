@@ -136,7 +136,7 @@ const SCHEMA = {
   }
 };
 
-/** Schreibstil aus der Persona (Verwaltung › KI-Agenten); ohne Persona sachlich, kurz, auf Deutsch, im Team Du, nach außen Sie. Die Regeln oben gehen dem Stil vor. */
+/** Schreibstil aus der Persona (Verwaltung › KI › KI-Agenten); ohne Persona sachlich, kurz, auf Deutsch, im Team Du, nach außen Sie. Die Regeln oben gehen dem Stil vor. */
 export function styleText(persona: string | null | undefined): string {
   const p = (persona ?? '').trim();
   return p ? `Dein Schreibstil für Log, Mails, Doku und Chat: ${p}. Der Stil ändert nichts an den Regeln oben (keine erfundenen Fakten, nur Aktionen aus der Liste).` : 'Du schreibst sachlich, kurz und auf Deutsch; im Team Du, nach außen Sie.';
