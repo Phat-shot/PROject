@@ -63,7 +63,7 @@ async function send(db: Db, mail: MailService, account: any, u: any, rows: any[]
   const base = publicBase();
   const lines = rows.map((n: any) => `• ${n.project_key ? `[${n.project_key}] ` : ''}${n.title}${n.body ? ` – ${n.body}` : ''}${n.link ? `\n  ${base}${n.link}` : ''}`);
   const subject = rows.length === 1 ? `PROject: ${rows[0].title}` : `PROject: ${rows.length} neue Meldungen`;
-  const text = `Guten Tag ${u.name},\n\n${isDigest ? 'Ihre Meldungen aus PROject seit dem letzten Digest:' : 'Neue Meldungen aus PROject:'}\n\n${lines.join('\n\n')}\n\nEinstellung ändern: ${base}/einstellungen/benutzer\n`;
+  const text = `Guten Tag ${u.name},\n\n${isDigest ? 'Ihre Meldungen aus PROject seit dem letzten Digest:' : 'Neue Meldungen aus PROject:'}\n\n${lines.join('\n\n')}\n\nEinstellung ändern: ${base}/einstellungen/benachrichtigungen\n`;
   try {
     const attachments = [];
     for (const n of rows.filter((x: any) => x.attach && x.ref_type === 'page' && x.ref_id)) {

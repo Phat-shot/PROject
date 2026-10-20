@@ -9,6 +9,8 @@ interface AuthState {
   /** Zeiterfassung mandantenweit aktiv */
   timeTracking: boolean;
   loading: boolean;
+  /** Benutzer und Mandanten-Einstellungen neu laden (nach dem Speichern in der Verwaltung) */
+  refresh: () => Promise<void>;
   /** Löst mit { mfaRequired, challenge } auf, wenn ein zweiter Faktor nötig ist */
   login: (email: string, password: string) => Promise<{ mfaRequired?: boolean; challenge?: string } | void>;
   loginTotp: (challenge: string, code: string) => Promise<void>;
@@ -29,7 +31,7 @@ function initialTheme(): 'light' | 'dark' | 'system' {
   return 'system';
 }
 
-const Ctx = createContext<AuthState>({ user: null, orgName: '', orgSettings: {}, timeTracking: true, loading: true, login: async () => {}, loginTotp: async () => {}, logout: async () => {}, setUser: () => {} });
+const Ctx = createContext<AuthState>({ user: null, orgName: '', orgSettings: {}, timeTracking: true, loading: true, refresh: async () => {}, login: async () => {}, loginTotp: async () => {}, logout: async () => {}, setUser: () => {} });
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -53,7 +55,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await api.post('/auth/logout');
     setUser(null);
   };
-  return <Ctx.Provider value={{ user, orgName, orgSettings, timeTracking: orgSettings.timeTracking !== false, loading, login, loginTotp, logout, setUser }}>{children}</Ctx.Provider>;
+  const refresh = async () => { try { apply(await api.get<{ user: User; orgName: string; orgSettings?: OrgSettings }>('/auth/me')); } catch { /* bleibt beim alten Stand */ } };
+  return <Ctx.Provider value={{ user, orgName, orgSettings, timeTracking: orgSettings.timeTracking !== false, loading, refresh, login, loginTotp, logout, setUser }}>{children}</Ctx.Provider>;
 }
 
 export const useAuth = () => useContext(Ctx);

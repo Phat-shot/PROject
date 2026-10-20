@@ -58,10 +58,12 @@ export async function oauthRoutes(app: FastifyInstance) {
 
   // Rückruf vom Anbieter: Code tauschen, Adresse lesen, Konto anlegen oder Token eines bestehenden Kontos erneuern
   app.get<{ Params: { provider: string }; Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>('/oauth/callback/:provider', async (req, reply) => {
-    const back = '/einstellungen/konfiguration';
+    // Zurück dorthin, wo das Konto gepflegt wird: eigene Konten, Verwaltung › Mail oder Projekt › Einstellungen › Mail
+    let back = '/einstellungen/mail';
     const p = oauthProviders().find((x) => x.key === req.params.provider);
     if (!p) throw notFound('OAuth2-Anbieter nicht konfiguriert');
     const st = await takeState(req.query.state);
+    if (st?.purpose.kind === 'mail') back = st.purpose.type === 'project' && st.purpose.projectId ? `/projekte/${st.purpose.projectId}/einstellungen/mail` : st.purpose.type === 'org' ? '/verwaltung/mail' : '/einstellungen/mail';
     if (!st || st.purpose.kind !== 'mail' || !st.userId) return reply.redirect(failTo(back, 'Anmeldung abgelaufen oder ungültig, bitte erneut verbinden'));
     if (req.query.error || !req.query.code) return reply.redirect(failTo(back, req.query.error_description ?? req.query.error ?? 'Vom Anbieter abgelehnt'));
     const purpose = st.purpose;

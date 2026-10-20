@@ -4,7 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
-import { AccountForm, OAuthStartDialog, kindLabel, useLabel } from '../MailAccountsPage';
+import { AccountForm, OAuthStartDialog, kindLabel, useLabel } from '../../components/mail/Accounts';
 import { useAiStatus } from '../../lib/useAi';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';

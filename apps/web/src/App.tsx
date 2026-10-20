@@ -11,8 +11,7 @@ import { ChatPage } from './pages/ChatPage';
 import { HelpPage } from './pages/HelpPage';
 import { WorkflowsPage, WorkflowRunPage } from './pages/WorkflowsPage';
 import { ProjectPage } from './pages/ProjectPage';
-import { MailAccountsPage } from './pages/MailAccountsPage';
-import { AdminPage } from './pages/AdminPage';
+import { AdminPage } from './pages/admin/AdminPage';
 import { SharePage } from './pages/SharePage';
 import { SetupPage } from './pages/SetupPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
@@ -58,15 +57,16 @@ export default function App() {
         <Route path="/hilfe/:doc?" element={<HelpPage />} />
         <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/workflows/laeufe/:rid" element={<WorkflowRunPage />} />
-        <Route path="/einstellungen/benutzer" element={<UserSettingsPage />} />
-        <Route path="/einstellungen/konfiguration" element={<MailAccountsPage />} />
+        <Route path="/einstellungen/benutzer" element={<Navigate to="/einstellungen/allgemein" replace />} />
+        <Route path="/einstellungen/konfiguration" element={<Navigate to="/einstellungen/mail" replace />} />
+        <Route path="/einstellungen/*" element={<UserSettingsPage />} />
         <Route path="/projekte" element={<ProjectsPage />} />
         <Route path="/projekte/aufgaben" element={<KeepQuery to="/dashboard/arbeitspakete" />} />
         <Route path="/projekte/postfach" element={<Navigate to="/postfach" replace />} />
         <Route path="/meine-aufgaben" element={<Navigate to="/dashboard" replace />} />
-        <Route path="/einstellungen/mail-konten" element={<Navigate to="/einstellungen/konfiguration" replace />} />
-        <Route path="/mail-konten" element={<Navigate to="/einstellungen/konfiguration" replace />} />
-        <Route path="/verwaltung" element={<AdminPage />} />
+        <Route path="/einstellungen/mail-konten" element={<Navigate to="/einstellungen/mail" replace />} />
+        <Route path="/mail-konten" element={<Navigate to="/einstellungen/mail" replace />} />
+        <Route path="/verwaltung/*" element={<AdminPage />} />
         <Route path="/projekte/:id/*" element={<ProjectPage />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>

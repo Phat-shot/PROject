@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import type { MailAccount, MailAccountUse, Project } from '@projekttool/shared';
-import { api, fmtDateTime } from '../lib/api';
-import { useData } from '../lib/useData';
-import { useAuth } from '../lib/auth';
-import { TopBar } from '../components/Layout';
-import { Modal, useAsync, useDialog } from '../components/ui';
+import { api, fmtDateTime } from '../../lib/api';
+import { useData } from '../../lib/useData';
+import { useAuth } from '../../lib/auth';
+import { Modal, useAsync, useDialog } from '../ui';
 
 interface TestResult { imap: { ok: boolean; error?: string; folders?: string[] }; smtp: { ok: boolean; error?: string } }
-interface OAuthProvider { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }
+export interface OAuthProvider { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }
+export type AccountKind = 'personal' | 'project' | 'central' | 'org';
+/** Geltungsbereich der Kontenliste: eigene Konten (Meine Einstellungen › Mail), Konten der Organisation (Verwaltung › Mail) oder alle (Übersicht des Org-Admins). */
+export type AccountsScope = 'personal' | 'org' | 'all';
+const SCOPE_KINDS: Record<AccountsScope, AccountKind[]> = { personal: ['personal'], org: ['central', 'org'], all: [] };
+const SCOPE_TITLE: Record<AccountsScope, string> = { personal: 'Meine Konten', org: 'Postfächer der Organisation', all: 'Alle Konten des Mandanten' };
+const SCOPE_HINT: Record<AccountsScope, string> = {
+  personal: 'Eigene Konten (IMAP oder Microsoft 365/Google). Ansichten darauf teilst nur du; als PL holst du ein Konto in dein Projekt. Konten werden nie als Ganzes geteilt, nur gefilterte Ansichten.',
+  org: 'Das Org-Postfach (genau eines; Systemmails wie Einladungen, Digest, Passwort; keine Projekte) und zentrale Postfächer für mehrere Projekte: der Org-Admin pflegt sie und bietet sie Projekten an oder gibt sie für alle Projekte frei, dann holt die PL sie selbst ins Projekt.',
+  all: 'Übersicht aller Konten: Projektpostfächer pflegt die PL in den Projekteinstellungen, persönliche Konten die Person. Art und Verwalter ändert nur der Org-Admin.'
+};
 const OAUTH_LABEL = { microsoft: 'Microsoft 365', google: 'Google' } as const;
 
 /** Verwalter in einem Wort (Person: „ich“ oder „Person“, Projekt mit Kürzel, sonst Organisation). */
@@ -36,7 +45,8 @@ export const KIND_HINT: Record<string, string> = {
 };
 export const managedByParam = (a: MailAccount) => (a.managedBy?.kind === 'user' ? 'me' : a.managedBy?.kind === 'project' ? `project&projectId=${a.managedBy.projectId}` : 'org');
 
-export function MailAccountsPage() {
+/** Kontenliste mit Anlegen, OAuth, Testen, Sync, Bindungen; welche Konten erscheinen und welche Arten sich anlegen lassen, bestimmt der Geltungsbereich. */
+export function AccountsCard({ scope }: { scope: AccountsScope }) {
   const { user } = useAuth();
   const accounts = useData<{ accounts: MailAccount[] }>('/mail/accounts');
   const projects = useData<{ projects: Project[] }>('/projects');
@@ -53,7 +63,7 @@ export function MailAccountsPage() {
   // Rückkehr von Microsoft/Google: Ergebnis einmal anzeigen, Parameter entfernen
   useEffect(() => {
     const ok = params.get('connected'); const err = params.get('oauthError');
-    if (ok) setMsg({ kind: 'ok', text: `${ok} verbunden. Jetzt im Projekt unter Mail eine Ansicht anlegen.` });
+    if (ok) setMsg({ kind: 'ok', text: `${ok} verbunden. Ansichten legst du in den Projekteinstellungen unter Mail an.` });
     if (err) setMsg({ kind: 'err', text: `Verbindung fehlgeschlagen: ${err}` });
     if (ok || err) { params.delete('connected'); params.delete('oauthError'); setParams(params, { replace: true }); }
   }, []);
@@ -68,19 +78,22 @@ export function MailAccountsPage() {
     const r = await api.post<TestResult>('/mail/accounts/test', { accountId: a.id });
     setMsg({ kind: r.imap.ok && r.smtp.ok ? 'ok' : 'err', text: `IMAP: ${r.imap.ok ? `ok (${r.imap.folders?.length ?? 0} Ordner)` : r.imap.error} · SMTP: ${r.smtp.ok ? 'ok' : r.smtp.error}` });
   });
+  const me = user?.id;
+  const inScope = (a: MailAccount) => scope === 'all' ? true : scope === 'org' ? a.kind === 'org' || a.kind === 'central' : (a.managedBy?.kind === 'user' && a.managedBy.userId === me) || (a.uses ?? []).some((u) => u.use === 'personal' && u.userId === me);
+  const list = (accounts.data?.accounts ?? []).filter(inScope);
+  const kinds = SCOPE_KINDS[scope];
   return (
     <>
-      <TopBar title="Mail-Konten">
-        {oauth.data?.providers.map((p) => <button key={p.key} className="btn" onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}
-        <button className="btn primary" onClick={() => setCreate(true)}>Konto anbinden</button>
-      </TopBar>
-      <div className="content">
         <div className="card">
-          <p className="muted small">Vier Arten von Postfächern: das <strong>Org-Postfach</strong> (genau eines; Systemmails wie Einladungen, Digest, Passwort; nur der Org-Admin, keine Projekte), <strong>zentrale Postfächer</strong> der Organisation für mehrere Projekte (der Org-Admin pflegt sie und bietet sie Projekten an oder gibt sie für alle Projekte frei, dann holt die PL sie selbst ins Projekt), <strong>Projektpostfächer</strong>, die genau einem Projekt gehören und die seine PL pflegt, und <strong>persönliche Konten</strong>. Je Projekt ist ein Postfach Standard für ausgehende Mails (Antwortadresse, Agenten, Einladungen, Berichte). Konten werden nie als Ganzes geteilt, nur gefilterte Ansichten mit eigenen Rechten; gespeichert werden nur Treffer.</p>
+          <div className="row between mb"><h2 style={{ margin: 0 }}>{SCOPE_TITLE[scope]}</h2>{kinds.length > 0 && <span className="row">
+            {oauth.data?.providers.map((p) => <button key={p.key} className="btn sm" onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}
+            <button className="btn primary sm" onClick={() => setCreate(true)}>Konto anbinden</button>
+          </span>}</div>
+          <p className="muted small">{SCOPE_HINT[scope]}</p>
           {error && <div className="error mb">{error}</div>}
           {msg && <div className={`${msg.kind === 'ok' ? 'success' : msg.kind === 'warn' ? 'notice' : 'error'} mb`}>{msg.text}</div>}
           <table className="table"><thead><tr><th>Konto</th><th>Art</th><th>Projekte</th><th>Anbindung</th><th>Ansichten</th><th>Letzter Sync</th><th /></tr></thead><tbody>
-            {accounts.data?.accounts.map((a) => (
+            {list.map((a) => (
               <tr key={a.id}>
                 <td>{a.name}<div className="muted small">{a.address}</div></td>
                 <td className="small"><span title={KIND_HINT[a.kind ?? 'personal']}>{kindLabel(a, user?.id, projects.data?.projects ?? [])}</span>
@@ -100,11 +113,10 @@ export function MailAccountsPage() {
               </tr>
             ))}
           </tbody></table>
-          {accounts.data?.accounts.length === 0 && <div className="empty">Noch kein Konto.</div>}
+          {accounts.data && list.length === 0 && <div className="empty">Noch kein Konto.</div>}
         </div>
-      </div>
-      {oauthStart && <OAuthStartDialog provider={oauthStart} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setOauthStart(null)} />}
-      {create && <AccountForm hasOrgMailbox={(accounts.data?.accounts ?? []).some((a) => a.kind === 'org')} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setCreate(false)} onSaved={async () => { setCreate(false); await accounts.reload(); }} />}
+      {oauthStart && <OAuthStartDialog provider={oauthStart} kinds={kinds} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setOauthStart(null)} />}
+      {create && <AccountForm kinds={kinds} hasOrgMailbox={(accounts.data?.accounts ?? []).some((a) => a.kind === 'org')} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setCreate(false)} onSaved={async () => { setCreate(false); await accounts.reload(); }} />}
       {edit && <AccountForm existing={edit} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await accounts.reload(); }} />}
       {useFor && <UseDialog account={useFor} projects={projects.data?.projects ?? []} onClose={() => setUseFor(null)} onSaved={async () => { setUseFor(null); await accounts.reload(); }} />}
       {managerFor && <ManagerDialog account={managerFor} projects={projects.data?.projects ?? []} onClose={() => setManagerFor(null)} onSaved={async () => { setManagerFor(null); await accounts.reload(); }} />}
@@ -163,9 +175,11 @@ export function ManagerDialog({ account, projects, onClose, onSaved }: { account
 }
 
 /** OAuth2-Start: Typ und Projekt wählen, dann Weiterleitung zu Microsoft/Google; das Konto entsteht beim Rückruf. */
-export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: { provider: OAuthProvider; projects: Project[]; onClose: () => void; fixedProject?: Project }) {
+export function OAuthStartDialog({ provider, projects, onClose, fixedProject, kinds }: { provider: OAuthProvider; projects: Project[]; onClose: () => void; fixedProject?: Project; /** anlegbare Arten (Standard: alle, die der Rolle offenstehen) */ kinds?: AccountKind[] }) {
   const { user } = useAuth();
-  const [type, setType] = useState<'me' | 'project' | 'central' | 'org'>(fixedProject ? 'project' : 'me');
+  const allowed = (k: AccountKind) => !kinds || kinds.length === 0 || kinds.includes(k);
+  const first: 'me' | 'project' | 'central' | 'org' = fixedProject ? 'project' : allowed('personal') ? 'me' : allowed('central') ? 'central' : allowed('org') ? 'org' : 'project';
+  const [type, setType] = useState<'me' | 'project' | 'central' | 'org'>(first);
   const [projectId, setProjectId] = useState(fixedProject?.id ?? projects[0]?.id ?? '');
   const [name, setName] = useState('');
   const href = `/api/oauth/start?provider=${provider.key}&managedBy=${type === 'central' ? 'org' : type}&kind=${type === 'me' ? 'personal' : type}${type === 'project' ? `&projectId=${projectId}` : ''}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
@@ -173,7 +187,7 @@ export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: 
     <Modal title={`Mit ${provider.label} verbinden`} onClose={onClose}>
       <div className="form">
         {fixedProject ? <div className="field"><span>Projektkonto für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name}</span></div> : (
-          <label className="field"><span>Art des Postfachs</span><select value={type} onChange={(e) => setType(e.target.value as any)}><option value="me">Persönlich: eigenes Konto (Meine Konten)</option><option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>{user?.globalRole === 'org_admin' && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{user?.globalRole === 'org_admin' && <option value="org">Org-Postfach: Systemmails (Einladungen, Digest, Passwort)</option>}</select></label>
+          <label className="field"><span>Art des Postfachs</span><select value={type} onChange={(e) => setType(e.target.value as any)}>{allowed('personal') && <option value="me">Persönlich: eigenes Konto (Meine Konten)</option>}{allowed('project') && <option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>}{user?.globalRole === 'org_admin' && allowed('central') && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{user?.globalRole === 'org_admin' && allowed('org') && <option value="org">Org-Postfach: Systemmails (Einladungen, Digest, Passwort)</option>}</select></label>
         )}
         {!fixedProject && type === 'project' && <label className="field"><span>Projekt</span><select value={projectId} onChange={(e) => setProjectId(e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename (leer = Name aus dem Konto)</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -185,11 +199,13 @@ export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: 
 }
 
 /** Konto anbinden/bearbeiten; mit fixedProject nur als Projektkonto dieses Projekts (aus den Projekteinstellungen). */
-export function AccountForm({ existing, projects, onClose, onSaved, fixedProject, hasOrgMailbox = false }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void>; fixedProject?: Project; hasOrgMailbox?: boolean }) {
+export function AccountForm({ existing, projects, onClose, onSaved, fixedProject, hasOrgMailbox = false, kinds }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void>; fixedProject?: Project; hasOrgMailbox?: boolean; /** anlegbare Arten (Standard: alle, die der Rolle offenstehen) */ kinds?: AccountKind[] }) {
   const { user } = useAuth();
   const isAdmin = user?.globalRole === 'org_admin';
+  const allowed = (k: AccountKind) => !kinds || kinds.length === 0 || kinds.includes(k);
+  const firstKind: AccountKind = fixedProject ? 'project' : allowed('personal') ? 'personal' : allowed('central') ? 'central' : allowed('org') ? 'org' : 'project';
   const [f, setF] = useState({
-    kind: (fixedProject ? 'project' : 'personal') as 'personal' | 'project' | 'central' | 'org', offeredToAll: true, projectId: fixedProject?.id ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
+    kind: firstKind, offeredToAll: true, projectId: fixedProject?.id ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
     imapHost: existing?.imapHost ?? '', imapPort: existing?.imapPort ?? 993, imapUser: existing?.imapUser ?? '', imapPassword: '', imapSecure: existing?.imapSecure ?? true,
     smtpHost: existing?.smtpHost ?? '', smtpPort: existing?.smtpPort ?? 587, smtpUser: existing?.smtpUser ?? '', smtpPassword: '', smtpSecure: existing?.smtpSecure ?? false
   });
@@ -201,7 +217,7 @@ export function AccountForm({ existing, projects, onClose, onSaved, fixedProject
     <Modal title={existing ? `Konto bearbeiten: ${existing.name}` : 'Mail-Konto anbinden'} onClose={onClose}>
       <div className="form cols-2">
         {!existing && fixedProject && <div className="field full"><span>Projektpostfach für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name} · das erste Projektpostfach wird Standard, seine Adresse Projekt-Mailadresse</span></div>}
-        {!existing && !fixedProject && <label className="field"><span>Art des Postfachs</span><select value={f.kind} onChange={(e) => set('kind', e.target.value)}><option value="personal">Persönlich: eigenes Konto (Meine Konten)</option><option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>{isAdmin && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{isAdmin && <option value="org" disabled={hasOrgMailbox}>Org-Postfach: Systemmails (Einladungen, Digest, Passwort){hasOrgMailbox ? ' · gibt es schon' : ''}</option>}</select></label>}
+        {!existing && !fixedProject && (kinds?.length ?? 2) > 1 && <label className="field"><span>Art des Postfachs</span><select value={f.kind} onChange={(e) => set('kind', e.target.value)}>{allowed('personal') && <option value="personal">Persönlich: eigenes Konto (Meine Konten)</option>}{allowed('project') && <option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>}{isAdmin && allowed('central') && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{isAdmin && allowed('org') && <option value="org" disabled={hasOrgMailbox}>Org-Postfach: Systemmails (Einladungen, Digest, Passwort){hasOrgMailbox ? ' · gibt es schon' : ''}</option>}</select></label>}
         {!existing && !fixedProject && f.kind === 'central' && <label className="check full" title="Jede PL darf das Postfach in ihr Projekt holen (nicht in persönliche Projekte); sonst bietet der Org-Admin es einzelnen Projekten an"><input type="checkbox" checked={f.offeredToAll} onChange={(e) => set('offeredToAll', e.target.checked)} /> für alle Projekte wählbar</label>}
         {!existing && !fixedProject && f.kind === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename</span><input type="text" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
@@ -227,7 +243,7 @@ export function AccountForm({ existing, projects, onClose, onSaved, fixedProject
           {f.provider === 'imap' && !existing?.oauthProvider && <button className="btn" disabled={busy || !f.imapHost || !f.smtpHost} onClick={() => void run(async () => setTest(await api.post<TestResult>('/mail/accounts/test', { ...payload(), accountId: existing?.id })))}>Verbindung testen</button>}
           <button className="btn primary" disabled={busy || !f.name || !f.address} onClick={() => void run(async () => { if (existing) await api.patch(`/mail/accounts/${existing.id}`, payload()); else await api.post('/mail/accounts', payload()); await onSaved(); })}>{existing ? 'Speichern' : 'Anbinden'}</button>
         </div>
-        <p className="muted small full">Nach dem Anbinden im Projekt unter Mail eine Ansicht anlegen (Filter nach Absender, Betreff, Ordner). Erst dann werden Mails geladen; gespeichert werden nur Treffer. Bei one.com: IMAP imap.one.com:993 SSL, SMTP send.one.com:587 STARTTLS, Benutzer = volle Adresse.</p>
+        <p className="muted small full">Nach dem Anbinden im Projekt unter Einstellungen › Mail eine Ansicht anlegen (Filter nach Absender, Betreff, Ordner). Erst dann werden Mails geladen; gespeichert werden nur Treffer. Bei one.com: IMAP imap.one.com:993 SSL, SMTP send.one.com:587 STARTTLS, Benutzer = volle Adresse.</p>
       </div>
     </Modal>
   );

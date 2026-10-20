@@ -30,16 +30,16 @@ beforeEach(() => {
 });
 
 describe('Seitenleiste: Menüpunkt Verwaltung', () => {
-  it('sehen Org-Admin, Org-Rechte KI und Gruppen sowie Verwalter einer Gruppe', () => {
-    for (const u of [{ globalRole: 'org_admin' as const }, { orgRights: ['ai_admin' as const] }, { orgRights: ['groups_admin' as const] }, { managesGroups: true }]) {
+  it('sehen Org-Admin, Org-Rechte KI, Gruppen und Ressourcen sowie Verwalter einer Gruppe', () => {
+    for (const u of [{ globalRole: 'org_admin' as const }, { orgRights: ['ai_admin' as const] }, { orgRights: ['groups_admin' as const] }, { orgRights: ['resources_admin' as const] }, { managesGroups: true }]) {
       const { unmount } = renderAs(u);
       expect(screen.getByRole('link', { name: 'Verwaltung' }), JSON.stringify(u)).toHaveAttribute('href', '/verwaltung');
       unmount();
     }
   });
 
-  it('nicht ohne Recht (Pool-Ressourcen haben noch keine Karte)', () => {
-    for (const u of [{}, { managesGroups: false }, { orgRights: ['resources_admin' as const] }]) {
+  it('nicht ohne Recht', () => {
+    for (const u of [{}, { managesGroups: false }]) {
       const { unmount } = renderAs(u);
       expect(screen.queryByRole('link', { name: 'Verwaltung' }), JSON.stringify(u)).not.toBeInTheDocument();
       unmount();

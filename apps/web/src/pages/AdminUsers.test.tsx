@@ -14,7 +14,9 @@ let extra: Partial<User> = {};
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: me, globalRole: me === 'u0' ? 'org_admin' : 'user', ...extra } }) }));
 vi.mock('../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('../components/Layout', () => ({ TopBar: () => null }));
-import { AdminPage, GroupsCard, ProjectLeadsCard, UsersCard } from './AdminPage';
+import { MemoryRouter } from 'react-router-dom';
+import { AdminPage } from './admin/AdminPage';
+import { GroupsCard, ProjectLeadsCard, UsersCard } from './admin/People';
 
 const person = (id: string, name: string, extra: Partial<User> = {}): User => ({ id, orgId: 'o1', email: `${id}@demo.local`, name, globalRole: 'user', orgRights: [], active: true, kind: 'person', ...extra });
 const users: User[] = [
@@ -118,7 +120,7 @@ describe('Verwaltung ohne Org-Admin: nur die passenden Karten', () => {
 
   it('Gruppenverwaltung (Org-Recht) sieht alle Gruppen, keine Benutzer, keine KI', async () => {
     me = 'u1'; extra = { orgRights: ['groups_admin'] };
-    render(<AdminPage />);
+    render(<MemoryRouter initialEntries={['/verwaltung']}><AdminPage /></MemoryRouter>);
     expect(await screen.findByText('Berechtigungsgruppen')).toBeInTheDocument();
     expect(await screen.findByRole('button', { name: '+ Gruppe' })).toBeInTheDocument();
     expect(screen.queryByText('Benutzer')).not.toBeInTheDocument();
@@ -127,7 +129,7 @@ describe('Verwaltung ohne Org-Admin: nur die passenden Karten', () => {
 
   it('Verwalter einer Gruppe sieht nur seine Gruppe', async () => {
     me = 'u2'; extra = { managesGroups: true };
-    render(<AdminPage />);
+    render(<MemoryRouter initialEntries={['/verwaltung']}><AdminPage /></MemoryRouter>);
     expect(await screen.findByText('Bau')).toBeInTheDocument();
     expect(screen.getByText('Berechtigungsgruppen')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '+ Gruppe' })).not.toBeInTheDocument();
@@ -135,7 +137,7 @@ describe('Verwaltung ohne Org-Admin: nur die passenden Karten', () => {
 
   it('ohne Org-Recht und ohne Gruppe: keine Karte', () => {
     me = 'u1'; extra = { managesGroups: false };
-    render(<AdminPage />);
+    render(<MemoryRouter initialEntries={['/verwaltung']}><AdminPage /></MemoryRouter>);
     expect(screen.queryByText('Berechtigungsgruppen')).not.toBeInTheDocument();
   });
 });

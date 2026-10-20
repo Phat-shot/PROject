@@ -809,3 +809,11 @@ body:has(.drawer) .chat-fab { display: none; }
 .chip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); vertical-align: middle; }
 .chip .dot.tentative { background: var(--warn); }
 .chip .dot.busy { background: var(--danger); }
+
+/* Einstellungsseiten (Konzept Einstellungen 4.1): eine Spalte, Reiter in der Kopfzeile, Cards je Abschnitt */
+.content.settings { max-width: 1100px; }
+.settings .settings-tab { gap: 12px; }
+.settings .settings-tab > .card + .card { margin-top: 0; }
+.settings select.inherited, .settings input.inherited { color: var(--muted); font-style: italic; }
+.settings .readonly-note { margin: 0 0 8px; }
+.settings h3 { margin: 14px 0 6px; }

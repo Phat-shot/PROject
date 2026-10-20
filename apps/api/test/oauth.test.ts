@@ -63,7 +63,7 @@ test('OAuth2 Microsoft: Start prüft Rechte und leitet mit State weiter, Rückru
   const state2 = new URL(start2.headers.location as string).searchParams.get('state')!;
   const cb = await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=good&state=${state2}` });
   assert.equal(cb.statusCode, 302);
-  assert.equal(cb.headers.location, 'https://project.example/einstellungen/konfiguration?connected=petra%40contoso.com');
+  assert.equal(cb.headers.location, `https://project.example/projekte/${t.ids.projects.web}/einstellungen/mail?connected=petra%40contoso.com`);
   const acc = await t.db.one<AccountRow>(`select * from mail_accounts where address = 'petra@contoso.com'`);
   assert.equal(acc.provider, 'graph');
   assert.equal(acc.oauth_provider, 'microsoft');

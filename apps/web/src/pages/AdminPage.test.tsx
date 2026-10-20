@@ -9,7 +9,7 @@ vi.mock('../lib/useAi', () => ({ invalidateAi: vi.fn(async () => undefined), use
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: 'u0', globalRole: 'org_admin' } }) }));
 vi.mock('../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('../components/Layout', () => ({ TopBar: () => null }));
-import { AiPolicyCard } from './AdminPage';
+import { AiPolicyCard } from './admin/Ai';
 
 describe('KI-Freigaben: Matrix', () => {
   const listing = { rules: [] as unknown[], killswitch: false, stoppedAgents: [] };

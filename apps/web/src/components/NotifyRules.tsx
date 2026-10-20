@@ -169,15 +169,20 @@ export function OrgNotifyCard() {
   const targets: RuleTargets = { groups: groups.data?.groups ?? [], users: (users.data?.users ?? []).filter((u) => u.kind !== 'agent') };
   const put = (body: Record<string, unknown>) => run(async () => d.setData(await api.put<RulesListing & { digestHour: number }>('/org/notification-rules', body)));
   return (
-    <div className="card">
-      <div className="row between"><h2 style={{ margin: 0 }}>Kommunikation</h2>
+    <>
+      <div className="card">
+        <h2>Tages-Digest</h2>
+        <p className="muted small">Meldungen mit Mail-Modus „Digest“ gehen einmal täglich zu dieser Stunde (Europe/Berlin) über das Org-Postfach; gilt für alle Personen des Mandanten.</p>
+        {error && <div className="error mb">{error}</div>}
         <label className="row small">Tages-Digest um
           <select aria-label="Digest-Stunde" value={d.data.digestHour} disabled={busy} onChange={(e) => void put({ digestHour: Number(e.target.value) })} style={{ width: 'auto' }}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}</select> Uhr</label>
       </div>
-      <p className="muted small">Wer bei welchem Ereignis benachrichtigt wird und wie: In der App immer, dazu Chat, Mail (sofort, Digest oder aus) und Log. Projekte, Arbeitspakete und Personen erben und dürfen abweichen; ein Schloss sperrt das Feld für alle Ebenen darunter. Innerhalb einer Ebene geht die Zeile einer Klasse der Zeile „Alle Klassen“ vor.</p>
-      {error && <div className="error mb">{error}</div>}
-      <RulesMatrix level="org" data={d.data} canEdit={!busy} targets={targets} onSave={(rules) => put({ rules })} />
-    </div>
+      <div className="card">
+        <h2>Benachrichtigungsregeln</h2>
+        <p className="muted small">Wer bei welchem Ereignis benachrichtigt wird und wie: In der App immer, dazu Chat, Mail (sofort, Digest oder aus) und Log. Projekte, Arbeitspakete und Personen erben und dürfen abweichen; ein Schloss sperrt das Feld für alle Ebenen darunter. Innerhalb einer Ebene geht die Zeile einer Klasse der Zeile „Alle Klassen“ vor.</p>
+        <RulesMatrix level="org" data={d.data} canEdit={!busy} targets={targets} onSave={(rules) => put({ rules })} />
+      </div>
+    </>
   );
 }
 
@@ -194,7 +199,7 @@ export function ProjectNotifyCard({ projectId, members }: { projectId: string; m
   const docOn = (e: string): RuleItem => { const it = itemOf(d.data!.rules.find((r) => r.event === e), e); it.channels!.doc = true as unknown as string; return it; };
   return (
     <>
-      <p className="muted small">Erbt von der Org (Verwaltung › Kommunikation); 🔒 Org heißt gesperrt. Als PL weichst du für dieses Projekt ab und sperrst Felder für Arbeitspakete und Personen. Chat „Projektkanal“ gilt nie bei eingeschränkten Teilprojekten.</p>
+      <p className="muted small">Erbt von der Org (<Link to="/verwaltung/benachrichtigungen">Verwaltung › Benachrichtigungen</Link>); 🔒 Org heißt gesperrt. Als PL weichst du für dieses Projekt ab und sperrst Felder für Arbeitspakete und Personen. Chat „Projektkanal“ gilt nie bei eingeschränkten Teilprojekten.</p>
       {error && <div className="error mb">{error}</div>}
       <RulesMatrix level="project" data={d.data} canEdit={d.data.canEdit && !busy} targets={targets} onSave={save} />
       <div className="row mt small" style={{ flexWrap: 'wrap' }}>
