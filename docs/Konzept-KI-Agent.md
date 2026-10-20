@@ -77,7 +77,8 @@ Regeln:
   3. **Termine** (die nächsten, mit Datum).
   4. **Blocker** oder „keine“.
   Keine Log-Wiedergabe, keine Aufzählung aller APs, nichts wiederholen, was der Fragende sieht.
-- **Bezug nennen**: Stammt das Thema aus dem Verlauf, beginnt die Antwort mit „Zu WEB-12:“.
+- **Bezug nennen**: Stammt das Thema aus dem Verlauf, setzt das System „Zu WEB-12:“ vor die Antwort, aber nur, wenn das Modell `onTopic` meldet (die Antwort betrifft das Thema).
+- **Kontextbasiert antworten**: Gruß, Smalltalk, allgemeine Frage oder Bitte ohne Projektbezug → Antwort wie eine Kollegin, ohne Projektanhang (`onTopic=false`); offene Fragen werden nie ungefragt erwähnt (Nachfassen macht das System); Projektinhalte nur, wenn die Nachricht danach fragt oder sich darauf bezieht.
 - **Rückfragen**: eine Frage je Nachricht, mit gewünschtem Termin und Optionen, wenn es welche gibt.
 - **Nie**: „Ich habe … vermerkt/gesendet/angelegt“, wenn keine Aktion ausgeführt wurde (`claimCheck` ersetzt den Satz; die Systemkarte nennt das Ausgeführte).
 - **Log**: sachlich, kurz, was/wer/bis wann/Beleg. Die Persona gilt für Chat, Mail und Seiten, nicht für das Log.

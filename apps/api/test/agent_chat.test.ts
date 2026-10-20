@@ -209,7 +209,8 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   await say(max, cid, 'Und bis wann?');
   p = prompts.at(-1)!;
   assert.match(p, /\(zuletzt im Verlauf genannt\)/);
-  assert.ok(p.includes(`Beginne deine Antwort mit „Zu WEB-${t4.number}:“`));
+  assert.ok(p.includes(`Das Thema stammt aus dem Verlauf (WEB-${t4.number})`));
+  assert.ok((await lastReply(cid)).startsWith(`Zu WEB-${t4.number}:`), 'Bezugszeile setzt das System');
   assert.ok(p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste'));
 
   // Projektname: nur ERP, ohne die eigenen Arbeitspakete aus WEB

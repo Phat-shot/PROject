@@ -34,9 +34,10 @@ import { webAvailable } from './web.js';
  * persönlicher Regeln, die volle Begründung bekommt der Absender als Meldung.
  */
 const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['reply', 'notes', 'answers', 'commands'],
+  type: 'object', additionalProperties: false, required: ['reply', 'onTopic', 'notes', 'answers', 'commands'],
   properties: {
     reply: { type: 'string', description: 'Antwort im Chat: kurz, im vorgegebenen Schreibstil, ohne Unterschrift' },
+    onTopic: { type: 'boolean', description: 'true, wenn die Antwort das Thema (Projekt oder Arbeitspaket) betrifft; false bei Gruß, Smalltalk, allgemeinen Fragen oder Bitten ohne Projektbezug' },
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
@@ -415,13 +416,13 @@ Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${cmdProjec
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
-${personalDocs}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
+${personalDocs}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Bezugszeile „Zu …:“${openQs.rows.length ? '; erinnere höchstens in einem Satz daran, worauf du wartest' : ''}.` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine Antwort mit „Zu ${scope.refs[0] ?? scope.projects[0]?.key}:“.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
+${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
@@ -440,7 +441,10 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
     }
     // claimCheck: Behauptungen ohne ausgeführte Aktion ersetzt das System; Kennungen ohne Freigabe bekommen die feste Absage voran
     const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0 || notedCmd, acted);
-    const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${checked.text}`;
+    // Bezugszeile setzt das System: nur bei einem Thema aus dem Verlauf und nur, wenn die Antwort es betrifft (onTopic; fehlt das Feld, gilt ja)
+    const onTopic = (j as any).onTopic !== false && !small;
+    const refLine = scope.how === 'history' && onTopic && scope.refs[0] && !/^Zu\s/.test(checked.text) ? `Zu ${scope.refs[0]}: ` : '';
+    const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}`;
     await post(reply);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
