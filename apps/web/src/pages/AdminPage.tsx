@@ -10,6 +10,7 @@ import { Modal, useAsync, useDialog } from '../components/ui';
 import { invalidateAi, useAiStatus } from '../lib/useAi';
 import { useAuth } from '../lib/auth';
 import { OrgNotifyCard } from '../components/NotifyRules';
+import { AgentPolicyEditor } from '../components/AgentPolicy';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
@@ -358,6 +359,9 @@ function AiCard() {
           <option value="check">nur prüfen</option>
         </select></div>
       <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
+      <h3 className="mt">Agenten-Policy des Mandanten</h3>
+      <p className="muted small">Vorgabe für alle Projekte: Selbstständigkeit (ohne Angabe „Rückfrage bei wichtigen Schritten“; Bestandsprojekte stehen auf „Selbstständig“) und Grenzen, die kein Projekt unterschreiten kann. Die PL stellt je Projekt, Agent und Arbeitspaket weiter ein; gesperrte Klassen regeln die KI-Freigaben (agent.finalize, agent.send_external, agent.close …).</p>
+      <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
       {edit && (
         <Modal title={edit === 'new' ? 'KI-Profil anlegen' : `Profil: ${edit.name}`} onClose={() => setEdit(null)}>
           <div className="form cols-2">

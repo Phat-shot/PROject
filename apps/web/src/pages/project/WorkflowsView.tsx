@@ -11,7 +11,7 @@ import type { ProjectContact } from '@projekttool/shared';
 export type StepType = 'task' | 'timer' | 'wait' | 'mail';
 export interface WorkflowStep {
   key: string; type: StepType; title: string; description?: string | null;
-  responsible?: 'starter' | 'pl' | 'user' | 'email' | 'previous'; responsibleUserId?: string | null; responsibleEmail?: string | null; dueDays?: number | null; checklist?: string[]; priority?: string; waitForDone?: boolean;
+  responsible?: 'starter' | 'pl' | 'user' | 'email' | 'previous' | 'agent'; responsibleUserId?: string | null; responsibleEmail?: string | null; dueDays?: number | null; checklist?: string[]; priority?: string; waitForDone?: boolean;
   hours?: number | null; days?: number | null;
   waitKind?: 'approval' | 'mail'; mailSubject?: string | null; mailFrom?: string | null;
   to?: string[]; toStarter?: boolean; toPl?: boolean; toPrevious?: boolean; subject?: string | null; text?: string | null;
@@ -24,7 +24,7 @@ export const STEP_LABEL: Record<StepType, string> = { task: 'Arbeitspaket', time
 const STEP_ICON: Record<StepType, string> = { task: '☐', timer: '⏱', wait: '⏳', mail: '✉' };
 
 export function stepSummary(s: WorkflowStep): string {
-  if (s.type === 'task') return `${s.title} · ${s.responsible === 'starter' ? 'Starter' : s.responsible === 'user' ? 'Benutzer' : s.responsible === 'email' ? s.responsibleEmail : s.responsible === 'previous' ? 'Zuständige des vorigen AP' : 'geerbt (PL)'}${s.dueDays != null ? ` · fällig +${s.dueDays} Tage` : ''}${s.waitForDone === false ? ' · ohne Warten' : ''}`;
+  if (s.type === 'task') return `${s.title} · ${s.responsible === 'starter' ? 'Starter' : s.responsible === 'user' ? 'Benutzer' : s.responsible === 'agent' ? 'KI-Agent' : s.responsible === 'email' ? s.responsibleEmail : s.responsible === 'previous' ? 'Zuständige des vorigen AP' : 'geerbt (PL)'}${s.dueDays != null ? ` · fällig +${s.dueDays} Tage` : ''}${s.waitForDone === false ? ' · ohne Warten' : ''}`;
   if (s.type === 'timer') return `${(s.days ?? 0) > 0 ? `${s.days} Tage ` : ''}${(s.hours ?? 0) > 0 ? `${s.hours} Std.` : ''}`.trim() || 'Timer';
   if (s.type === 'wait') return s.waitKind === 'mail' ? `Mail${s.mailSubject ? ` „${s.mailSubject}“` : ''}${s.mailFrom ? ` von ${s.mailFrom}` : ''}` : 'Freigabe durch die PL';
   return `${s.subject ?? ''} → ${[...(s.to ?? []), s.toStarter && 'Starter', s.toPl && 'PL', s.toPrevious && 'Zuständige des vorigen AP'].filter(Boolean).join(', ')}`;
@@ -126,7 +126,7 @@ export function StartRunDialog({ def, standalone, columnId, subprojectId, onClos
 const newStep = (type: StepType, n: number): WorkflowStep => ({ key: `s${n}`, type, title: type === 'task' ? '' : type === 'timer' ? 'Warten' : type === 'wait' ? 'Freigabe' : 'Abschlussmail', responsible: 'pl', waitForDone: true, hours: type === 'timer' ? 24 : null, days: null, waitKind: 'approval', to: [], toPl: type === 'mail', checklist: [] });
 
 /** Editor: Schrittliste mit Typ-spezifischen Feldern, verschiebbar. */
-export function WorkflowEditor({ existing, members, contacts, save: persist, onClose, onSaved }: { existing: WorkflowDef | null; members: { id: string; name: string }[]; contacts: ProjectContact[]; save: (body: Record<string, unknown>) => Promise<unknown>; onClose: () => void; onSaved: () => unknown }) {
+export function WorkflowEditor({ existing, members, agents = [], contacts, save: persist, onClose, onSaved }: { existing: WorkflowDef | null; members: { id: string; name: string }[]; agents?: { id: string; name: string }[]; contacts: ProjectContact[]; save: (body: Record<string, unknown>) => Promise<unknown>; onClose: () => void; onSaved: () => unknown }) {
   const [name, setName] = useState(existing?.name ?? '');
   const [desc, setDesc] = useState(existing?.description ?? '');
   const [active, setActive] = useState(existing?.active ?? true);
@@ -164,8 +164,9 @@ export function WorkflowEditor({ existing, members, contacts, save: persist, onC
                 <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
                   <label className="field"><span>Zuständig</span>
                     <select value={s.responsible ?? 'pl'} onChange={(e) => upd(i, { responsible: e.target.value as WorkflowStep['responsible'] })}>
-                      <option value="pl">geerbt (Teilprojekt/PL)</option><option value="starter">wer den Lauf startet</option><option value="user">bestimmter Benutzer (muss im Zielprojekt Mitglied sein)</option><option value="email">extern (Kontakt/Mail)</option><option value="previous">Zuständige des vorigen Arbeitspakets</option>
+                      <option value="pl">geerbt (Teilprojekt/PL)</option><option value="starter">wer den Lauf startet</option><option value="user">bestimmter Benutzer (muss im Zielprojekt Mitglied sein)</option><option value="email">extern (Kontakt/Mail)</option><option value="previous">Zuständige des vorigen Arbeitspakets</option><option value="agent">KI-Agent (muss im Zielprojekt Mitglied sein; sperrbar über KI-Freigabe und Agenten-Policy, dann an die PL)</option>
                     </select></label>
+                  {s.responsible === 'agent' && <label className="field"><span>KI-Agent</span><select value={s.responsibleUserId ?? ''} onChange={(e) => upd(i, { responsibleUserId: e.target.value || null })}><option value="">– wählen –</option>{agents.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>}
                   {s.responsible === 'user' && <label className="field"><span>Benutzer</span><select value={s.responsibleUserId ?? ''} onChange={(e) => upd(i, { responsibleUserId: e.target.value || null })}><option value="">– wählen –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>}
                   {s.responsible === 'email' && <label className="field"><span>Mail-Adresse</span><input type="email" list={`wf-contacts-${i}`} value={s.responsibleEmail ?? ''} onChange={(e) => upd(i, { responsibleEmail: e.target.value })} /><datalist id={`wf-contacts-${i}`}>{contacts.map((c) => <option key={c.email} value={c.email}>{contactLabel(c)}</option>)}</datalist></label>}
                   <label className="field"><span>Fällig nach Tagen</span><input type="number" min={0} value={s.dueDays ?? ''} onChange={(e) => upd(i, { dueDays: e.target.value === '' ? null : Number(e.target.value) })} style={{ width: 90 }} /></label>

@@ -15,6 +15,7 @@ export function mapMembership(row: any): Membership {
     canFinalize: row.can_finalize,
     canUseAi: row.can_use_ai,
     agentCanMail: row.agent_can_mail !== false,
+    agentPolicy: row.agent_policy ?? null,
     origin: row.origin === 'group' ? 'group' : 'direct'
   };
 }

@@ -32,6 +32,7 @@ export function WorkflowsPage() {
   const active = runs.filter((r) => r.status === 'active');
   const finished = runs.filter((r) => r.status !== 'active');
   const members = (users.data?.users ?? []).filter((u) => u.kind !== 'agent').map((u) => ({ id: u.id, name: u.name }));
+  const agents = (users.data?.users ?? []).filter((u) => u.kind === 'agent' && u.active !== false).map((u) => ({ id: u.id, name: u.name }));
   return (
     <>
       <TopBar title="Workflows" />
@@ -66,7 +67,7 @@ export function WorkflowsPage() {
         {active.length === 0 && <div className="muted small">Keine aktiven Läufe.</div>}
         {active.map((r) => <RunRow key={r.id} r={r} showProject onOpen={() => nav(`/workflows/laeufe/${r.id}`)} />)}
         {finished.length > 0 && <><h2 className="mt">Abgeschlossen</h2>{finished.slice(0, 40).map((r) => <RunRow key={r.id} r={r} showProject onOpen={() => nav(`/workflows/laeufe/${r.id}`)} />)}</>}
-        {edit && <WorkflowEditor existing={edit === 'new' ? null : edit} members={members} contacts={[]} save={async (body) => { if (edit === 'new') await api.post('/workflows', body); else await api.patch(`/workflows/${edit.id}`, body); }} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); }} />}
+        {edit && <WorkflowEditor existing={edit === 'new' ? null : edit} members={members} agents={agents} contacts={[]} save={async (body) => { if (edit === 'new') await api.post('/workflows', body); else await api.patch(`/workflows/${edit.id}`, body); }} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await d.reload(); }} />}
         {startIn && project && <ProjectScope projectId={project.id}><StartRunDialog def={startIn} columnId={null} subprojectId={null} onClose={() => setStartIn(null)} onStarted={async (r) => { setStartIn(null); await d.reload(); nav(`/workflows/laeufe/${r.id}`); }} /></ProjectScope>}
         {start && <StartIsolatedDialog def={start} onClose={() => setStart(null)} onStarted={async (r) => { setStart(null); await d.reload(); nav(`/workflows/laeufe/${r.id}`); }} />}
       </div>

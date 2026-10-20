@@ -106,7 +106,7 @@ export async function askQuestion(db: Db, a: AskInput): Promise<{ question: Ques
   // Meldungen: an den Adressaten, im Projektkanal an alle Mitglieder mit Sicht auf das AP (ohne Agenten, ohne Fragenden)
   const recipients: string[] = target.userId ? [target.userId] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active and u.kind <> 'agent' and m.role <> 'reader'`, [task.project_id])).rows.map((r: any) => r.user_id);
   const link = `/chat/${channelId}?thread=${msg.id}&msg=${msg.id}`;
-  const label = a.kind === 'confirm' ? 'Bestätigung' : a.kind === 'decision' ? 'Entscheidung' : a.kind === 'external_referral' ? 'Rückfrage von extern' : 'Frage';
+  const label = a.kind === 'confirm' ? 'Bestätigung' : a.kind === 'decision' ? 'Entscheidung' : a.kind === 'external_referral' ? 'Rückfrage von extern' : a.kind === 'approval' ? 'Freigabe' : 'Frage';
   const type = a.type ?? `question.${a.kind}`; const title = a.title ?? `${label} von ${a.asker.name} zu ${code(task)}`;
   for (const u of recipients) {
     if (u === a.asker.id || (!target.userId && !(await canSeeSubproject(db, u, task.subproject_id)))) continue;
@@ -124,7 +124,7 @@ export async function askQuestion(db: Db, a: AskInput): Promise<{ question: Ques
   return { question: q };
 }
 
-export interface AnswerInput { source: 'chat' | 'task' | 'meeting' | 'mail' | 'system'; userId: string | null; text: string; option?: string | null; messageId?: string | null; commentId?: string | null; now?: Date }
+export interface AnswerInput { source: 'chat' | 'task' | 'meeting' | 'mail' | 'system'; userId: string | null; text: string; option?: string | null; messageId?: string | null; commentId?: string | null; now?: Date; /** Anlass des Folgelaufs des fragenden Agenten (Standard answer) */ trigger?: string }
 
 /** Meldungen zur Frage und ihren Vorgängern erledigen (für alle Empfänger). */
 async function resolveNotifications(db: Db, q: QuestionRow, suffix?: string) {
@@ -165,7 +165,7 @@ export async function answerQuestion(db: Db, q: QuestionRow, a: AnswerInput): Pr
     if (w && w.questionId === r.id) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
     // Folgeschritt zum Thema der Frage (Mail-Rückfrage: im Projekt fragen, beim Absender nachfragen) ersetzt den Lauf „answer“
     const handled = await onQuestionAnswered(db, r, a);
-    if (asker.kind === 'agent' && !handled) queueAgentRun(task.id, 'answer');
+    if (asker.kind === 'agent' && !handled) queueAgentRun(task.id, a.trigger ?? 'answer');
   }
   await audit(db, { orgId: r.org_id, projectId: r.project_id, userId: a.userId, action: 'question.answer', objectType: 'question', objectId: r.id, details: { source: a.source, option: a.option ?? null } });
   return r;
@@ -267,8 +267,10 @@ export function mapQuestion(r: any) {
     remindAt: r.remind_at ?? null, escalateAt: r.escalate_at ?? null, remindedAt: r.reminded_at ?? null,
     answeredBy: r.answered_by ?? null, answeredByName: r.answered_by_name ?? null, answeredAt: r.answered_at ?? null, answerSource: r.answer_source ?? null, answerText: r.answer_text ?? null, answerOption: r.answer_option ?? null,
     cancelReason: r.cancel_reason ?? null, createdAt: r.created_at, taskCode: r.task_code ?? null, taskTitle: r.task_title ?? null, projectKey: r.project_key ?? null,
-    context: r.context ?? null
+    context: r.context ?? null,
+    proposals: r.proposals ?? null
   };
 }
-export const QUESTION_SELECT = `select q.*, ab.name as asked_by_name, ad.name as addressee_name, an.name as answered_by_name, p.key as project_key, case when t.id is null then null else p.key || '-' || t.number end as task_code, t.title as task_title
+export const QUESTION_SELECT = `select q.*, ab.name as asked_by_name, ad.name as addressee_name, an.name as answered_by_name, p.key as project_key, case when t.id is null then null else p.key || '-' || t.number end as task_code, t.title as task_title,
+    (select json_agg(json_build_object('id', x.id, 'status', x.status, 'class', x.action_class, 'label', x.payload->>'label', 'seq', x.seq) order by x.seq) from ai_proposals x where x.question_id = q.id) as proposals
   from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id left join users ab on ab.id = q.asked_by left join users ad on ad.id = q.addressee_id left join users an on an.id = q.answered_by`;

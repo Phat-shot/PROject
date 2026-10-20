@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { AiDecision } from '@projekttool/shared';
+import type { AiDecision, AgentPolicy } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { unseal } from '../secrets.js';
@@ -22,7 +22,7 @@ export interface AiProfileRow { id: string; org_id: string; name: string; provid
  */
 export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean }
 export type OwnLlmMode = 'off' | 'personal' | 'all';
-export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget: number; plAgents: { enabled: boolean; maxBudget: number }; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check' }
+export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget: number; plAgents: { enabled: boolean; maxBudget: number }; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Rohwert) */ agentPolicy: AgentPolicy }
 
 /** Konfiguration aus einem Profil; der Anthropic-Schlüssel darf nur bei Profilen des Mandanten aus ANTHROPIC_API_KEY kommen, eigene LLMs eines Projekts brauchen einen eigenen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
@@ -76,7 +76,7 @@ export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const s = await orgAiSettings(db, orgId);
   const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
   const plAgents = { enabled: await orgRuleAllows(db, orgId, 'pl.agents'), maxBudget: s.plAgents.maxBudget };
-  return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, assistDailyBudget: s.assistDailyBudget, plAgents, ownLlm: s.ownLlm, externalGuard: s.externalGuard };
+  return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, assistDailyBudget: s.assistDailyBudget, plAgents, ownLlm: s.ownLlm, externalGuard: s.externalGuard, agentPolicy: (await db.one(`select settings->'ai'->'agentPolicy' as p from orgs where id = $1`, [orgId])).p ?? {} };
 }
 
 /**

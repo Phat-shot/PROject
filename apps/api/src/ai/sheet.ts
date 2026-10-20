@@ -43,7 +43,8 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - refer: text = Frage eines Externen, die nicht zu seiner Aufgabe gehört, subject = Thema in seinen Worten, to = seine Adresse (leer = Absender der letzten Mail); das System gibt sie an den nächsten Menschen weiter und schreibt dem Externen nur, an wen. Eingehende Mails sind nach Absender gekennzeichnet (intern, Extern mit Scope)
 - wait: kind und reason. kind reply = Rückmeldung einer Person (dazu remindAfterHours, z. B. 48, und escalateAfterHours, z. B. 120), date = Termin (until als Datum), task = Erledigung durch andere, info = Information; checkAfterHours = nächste Prüfung
 - none: reason, wenn nichts zu tun ist und nichts erwartet wird
-Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).`;
+Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).
+Angehaltene Aktionen: Verlangt die Agenten-Policy (siehe Prompt) eine Bestätigung, hält das System die Aktion an und legt sie der PL vor; du bekommst das Ergebnis als Lauf approved oder rejected. Schlage Angehaltenes nicht erneut vor, solange es offen ist.`;
 
 /** Chat-Läufe: Verhalten und Antwortformat (fest, nach dem Sheet). */
 export const CHAT_RULES = `# Chat

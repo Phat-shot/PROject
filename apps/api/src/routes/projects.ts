@@ -18,6 +18,8 @@ import type { ReportingPolicy } from '@projekttool/shared';
 import { profileOf } from '../outbound.js';
 import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
+import { effectiveAgentPolicy, parseAgentPolicy } from '../ai/agentPolicy.js';
+import type { AgentPolicy } from '@projekttool/shared';
 import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
@@ -45,6 +47,7 @@ export function mapProject(r: any): Project {
     agentMail: (['off', 'triage', 'process'].includes(r.agent_mail) ? r.agent_mail : 'off') as AgentMailMode,
     // Rohwert des Projekts; die Detailroute liefert die wirksame Einstellung mit Vererbung
     mailInquiry: inquiryOf(r.mail_inquiry) ?? undefined,
+    agentPolicy: r.agent_policy && typeof r.agent_policy === 'object' ? (r.agent_policy as AgentPolicy) : {},
     myRole: r.my_role ?? undefined
   };
 }
@@ -233,6 +236,37 @@ export async function projectRoutes(app: FastifyInstance) {
     const p = await db.one(`update projects set agent_user_id = $2, agent_mail = $3 where id = $1 returning *`, [req.params.id, agentId, agentId ? mode : 'off']);
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.agent', objectType: 'project', objectId: p.id, details: { agentUserId: agentId, agentMail: agentId ? mode : 'off' } });
     return { project: { ...mapProject(p), mailInquiry: await effectiveMailInquiry(db, p.id) } };
+  });
+
+  /** Agenten-Policy (Konzept 6): wirksame Werte mit Herkunft für einen Agenten und optional ein Arbeitspaket; Rohwerte der Ebenen für die PL. */
+  app.get<{ Params: { id: string }; Querystring: { agentId?: string; taskId?: string } }>('/projects/:id/agent-policy', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id);
+    const effective = await effectiveAgentPolicy(db, { agentId: req.query.agentId || null, projectId: req.params.id, taskId: req.query.taskId || null });
+    const p = await db.one(`select p.agent_policy, o.settings->'ai'->'agentPolicy' as org_policy from projects p join orgs o on o.id = p.org_id where p.id = $1`, [req.params.id]);
+    const agents = (await db.query(`select m.user_id, u.name, m.agent_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id])).rows.map((r: any) => ({ userId: r.user_id, name: r.name, policy: r.agent_policy ?? null }));
+    return { effective, project: (p.agent_policy ?? {}) as AgentPolicy, org: (p.org_policy ?? {}) as AgentPolicy, agents, canEdit: m.role === 'pl' };
+  });
+  app.put<{ Params: { id: string }; Body: AgentPolicy }>('/projects/:id/agent-policy', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    let v: AgentPolicy;
+    try { v = parseAgentPolicy(req.body ?? {}, { limits: true, workflows: true }); } catch (e: any) { throw badRequest(e.message); }
+    await db.query(`update projects set agent_policy = $2::jsonb where id = $1`, [req.params.id, JSON.stringify(v)]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.policy', objectType: 'project', objectId: req.params.id, details: v as Record<string, unknown> });
+    return { project: (await db.one(`select agent_policy from projects where id = $1`, [req.params.id])).agent_policy as AgentPolicy, effective: await effectiveAgentPolicy(db, { projectId: req.params.id }) };
+  });
+  /** Policy eines Agenten im Projekt (nur mode, confirm, workflows; null = erben). */
+  app.put<{ Params: { id: string; userId: string }; Body: AgentPolicy | null }>('/projects/:id/members/:userId/agent-policy', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const m = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.user_id = $2 and u.kind = 'agent'`, [req.params.id, req.params.userId]);
+    if (!m) throw notFound('Agent ist kein Mitglied des Projekts');
+    let v: AgentPolicy | null;
+    try { v = req.body === null || req.body === undefined || !Object.keys(req.body).length ? null : parseAgentPolicy(req.body, { limits: false, workflows: true }); } catch (e: any) { throw badRequest(e.message); }
+    await db.query(`update project_members set agent_policy = $3::jsonb where project_id = $1 and user_id = $2`, [req.params.id, req.params.userId, v ? JSON.stringify(v) : null]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.policy', objectType: 'membership', objectId: req.params.userId, details: (v ?? { inherit: true }) as Record<string, unknown> });
+    return { policy: v, effective: await effectiveAgentPolicy(db, { agentId: req.params.userId, projectId: req.params.id }) };
   });
 
   app.put<{ Params: { id: string }; Body: ExternalProfile }>('/projects/:id/external-profile', async (req) => {

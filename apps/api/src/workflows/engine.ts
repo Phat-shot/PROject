@@ -7,6 +7,9 @@ import { audit } from '../audit.js';
 import { badRequest } from '../errors.js';
 import { projectPolicy, TEXT } from '../projectPolicy.js';
 import { orgAccount, projectAccount } from '../mail/accounts.js';
+import { aiAllowed } from '../ai/policy.js';
+import { effectiveAgentPolicy } from '../ai/agentPolicy.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 
 /**
  * Workflow-Engine: ein Lauf arbeitet seine Schritte der Reihe nach ab. Der Startpunkt ist der Start des Laufs,
@@ -20,8 +23,8 @@ export interface WorkflowStep {
   title: string;
   /** task: Beschreibung (Platzhalter {{projekt}}, {{workflow}}, {{lauf}}, {{starter}}, {{datum}}, eigene {{vars}}) */
   description?: string | null;
-  /** task: starter (wer den Lauf gestartet hat), pl (geerbt), user, email, previous (Zuständige des vorigen Arbeitspakets) */
-  responsible?: 'starter' | 'pl' | 'user' | 'email' | 'previous';
+  /** task: starter (wer den Lauf gestartet hat), pl (geerbt), user, email, previous (Zuständige des vorigen Arbeitspakets), agent (KI-Agent; sperrbar über KI-Freigabe agent.workflow und Agenten-Policy, sonst Rückfall auf die PL) */
+  responsible?: 'starter' | 'pl' | 'user' | 'email' | 'previous' | 'agent';
   responsibleUserId?: string | null;
   responsibleEmail?: string | null;
   dueDays?: number | null;
@@ -65,10 +68,11 @@ export function validateSteps(raw: unknown): WorkflowStep[] {
     const step: WorkflowStep = { key, type, title };
     if (type === 'task') {
       step.description = s.description ? String(s.description).slice(0, 5000) : null;
-      step.responsible = ['starter', 'pl', 'user', 'email', 'previous'].includes(s.responsible) ? s.responsible : 'pl';
-      step.responsibleUserId = step.responsible === 'user' ? String(s.responsibleUserId ?? '') || null : null;
+      step.responsible = ['starter', 'pl', 'user', 'email', 'previous', 'agent'].includes(s.responsible) ? s.responsible : 'pl';
+      step.responsibleUserId = step.responsible === 'user' || step.responsible === 'agent' ? String(s.responsibleUserId ?? '') || null : null;
       step.responsibleEmail = step.responsible === 'email' ? String(s.responsibleEmail ?? '').trim().toLowerCase() || null : null;
       if (step.responsible === 'user' && !step.responsibleUserId) throw badRequest(`Schritt ${i + 1}: Benutzer wählen`);
+      if (step.responsible === 'agent' && !step.responsibleUserId) throw badRequest(`Schritt ${i + 1}: KI-Agent wählen`);
       if (step.responsible === 'email' && !step.responsibleEmail) throw badRequest(`Schritt ${i + 1}: Mail-Adresse fehlt`);
       step.dueDays = s.dueDays === null || s.dueDays === undefined || s.dueDays === '' ? null : Math.max(0, Math.round(num(s.dueDays)));
       step.checklist = Array.isArray(s.checklist) ? s.checklist.map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 30) : [];
@@ -206,6 +210,19 @@ async function createStepTask(db: Db, run: any, step: WorkflowStep, steps: Workf
   else if (step.responsible === 'user') userId = step.responsibleUserId ?? null;
   else if (step.responsible === 'email') email = step.responsibleEmail ?? null;
   else if (step.responsible === 'previous') ({ userId, email } = await responsibleOfTask(db, previousTaskId(steps, state, idx)));
+  // Schritt an einen KI-Agenten: aktives Mitglied, KI-Freigabe „Workflow-Schritte übernehmen“ und Agenten-Policy erlauben es; sonst an die PL mit Hinweis
+  let agentNote: string | null = null; let agentId: string | null = null;
+  if (step.responsible === 'agent') {
+    const a = step.responsibleUserId ? await db.maybeOne(`select u.id, u.name from users u join project_members m on m.user_id = u.id and m.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [step.responsibleUserId, run.project_id]) : null;
+    if (!a) agentNote = 'Der vorgesehene KI-Agent ist nicht aktiv oder kein Mitglied; der Schritt geht an die Projektleitung.';
+    else {
+      const d = await aiAllowed(db, { userId: a.id, projectId: run.project_id, feature: 'agent.workflow', budget: false });
+      const pol = d.allowed ? await effectiveAgentPolicy(db, { agentId: a.id, projectId: run.project_id }) : null;
+      if (!d.allowed) agentNote = `Der Schritt war für ${a.name} (KI-Agent) vorgesehen: ${d.publicReason}; er geht an die Projektleitung.`;
+      else if (pol && !pol.workflows) agentNote = `Der Schritt war für ${a.name} (KI-Agent) vorgesehen; die Agenten-Policy (${pol.origin.workflows}) lässt Workflow-Schritte nicht zu; er geht an die Projektleitung.`;
+      else { userId = a.id; agentId = a.id; }
+    }
+  }
   if (userId && !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [run.project_id, userId]))) userId = null;
   const due = step.dueDays !== null && step.dueDays !== undefined ? new Date(now.getTime() + step.dueDays * 24 * H).toISOString().slice(0, 10) : null;
   const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from tasks where column_id = $1`, [col.id]);
@@ -218,7 +235,13 @@ async function createStepTask(db: Db, run: any, step: WorkflowStep, steps: Workf
   for (const [i, c] of (step.checklist ?? []).entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [r.id, fill(c, vars).slice(0, 300), i]);
   if (email) await db.query(`insert into project_contacts (project_id, email) values ($1,$2) on conflict do nothing`, [run.project_id, email]);
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [r.id, run.started_by ?? (await resolveProjectLead(db, run.project_id)).userId, `Aus Workflow „${run.def_name}“ (Lauf „${run.name}“, Schritt ${idx + 1}: ${step.title})`]).catch(() => undefined);
-  if (userId) await notifyMany(db, [userId], { projectId: run.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${title}`, body: `Workflow „${run.name}“`, link: `/projekte/${run.project_id}/board?task=${r.id}` });
+  if (agentNote) {
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [r.id, run.started_by ?? (await resolveProjectLead(db, run.project_id)).userId, agentNote]).catch(() => undefined);
+    const lead = await resolveProjectLead(db, run.project_id);
+    if (lead.userId) await notifyMany(db, [lead.userId], { projectId: run.project_id, type: 'task.assigned', title: `Workflow-Schritt an dich: ${title}`, body: agentNote, link: `/projekte/${run.project_id}/board?task=${r.id}` });
+  }
+  if (agentId) queueAgentRun(r.id, 'assigned');
+  else if (userId) await notifyMany(db, [userId], { projectId: run.project_id, type: 'task.assigned', title: `Dir zugewiesen: ${title}`, body: `Workflow „${run.name}“`, link: `/projekte/${run.project_id}/board?task=${r.id}` });
   return r.id;
 }
 

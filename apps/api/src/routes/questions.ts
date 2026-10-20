@@ -3,6 +3,7 @@ import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, requireProject, requireTask } from '../rights.js';
 import { answerQuestion, canAnswer, cancelQuestions, mapQuestion, QUESTION_SELECT, type QuestionRow } from '../questions.js';
+import { decideProposals } from '../ai/agentApproval.js';
 
 /**
  * Offene Fragen: Liste für mich (Glocke „Offen für mich“, Dashboard), je Arbeitspaket (TaskDrawer), beantworten (Adressat, jedes
@@ -62,6 +63,22 @@ export async function questionRoutes(app: FastifyInstance) {
     const c = q.task_id ? await db.one(`insert into task_comments (task_id, user_id, body, question_id) values ($1,$2,$3,$4) returning id`, [q.task_id, user.id, answer, q.id]) : null;
     const r = await answerQuestion(db, q, { source: 'task', userId: user.id, text: answer, option, commentId: c?.id ?? null });
     if (!r) throw badRequest('Frage ist nicht mehr offen');
+    return { question: mapQuestion(await db.one(`${QUESTION_SELECT} where q.id = $1`, [q.id])) };
+  });
+
+  // Bestätigung angehaltener Agentenaktionen (Frage approval): einzelne oder alle Vorschläge bestätigen bzw. ablehnen (Grund Pflicht)
+  app.post<{ Params: { id: string }; Body: { approve?: string[] | 'all'; reject?: string[] | 'all'; reason?: string } }>('/questions/:id/decide', async (req) => {
+    const user = requireUser(req);
+    if (user.kind === 'agent') throw forbidden('Bestätigen dürfen Personen');
+    const q = await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
+    if (!q) throw notFound('Frage nicht gefunden');
+    if (q.kind !== 'approval') throw badRequest('Keine Freigabefrage');
+    const pending = (await db.query(`select id from ai_proposals where question_id = $1 and status = 'pending' order by seq`, [q.id])).rows.map((r: any) => r.id as string);
+    const pick = (v: string[] | 'all' | undefined) => (v === 'all' ? pending : Array.isArray(v) ? v.filter((id) => pending.includes(id)) : []);
+    const approve = pick(req.body?.approve); const reject = pick(req.body?.reject).filter((id) => !approve.includes(id));
+    if (!approve.length && !reject.length) throw badRequest('Nichts zu entscheiden');
+    if (reject.length) await decideProposals(db, app.mail, app.fetchFn, { ids: reject, approve: false, reason: req.body?.reason ?? null, user });
+    if (approve.length) await decideProposals(db, app.mail, app.fetchFn, { ids: approve, approve: true, user });
     return { question: mapQuestion(await db.one(`${QUESTION_SELECT} where q.id = $1`, [q.id])) };
   });
 

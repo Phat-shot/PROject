@@ -5,7 +5,8 @@ import { MailAiRunCard } from './MailAi';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { aiBlocked, useAiStatus } from '../../lib/useAi';
-import { useAsync } from '../../components/ui';
+import { PromptModal, useAsync } from '../../components/ui';
+import { classLabel } from '../../components/AgentPolicy';
 import { useProject } from '../ProjectPage';
 
 /**
@@ -27,6 +28,7 @@ export function AiView() {
   const [question, setQuestion] = useState('');
   const [answer, setAnswer] = useState<{ answer: string; sources: { type: 'task' | 'page' | 'mail'; id: string; title: string }[] } | null>(null);
   const [edits, setEdits] = useState<Record<string, string>>({});
+  const [rejecting, setRejecting] = useState<AiProposal | null>(null);
   const runs = useData<{ runs: AgentRun[] }>(`/projects/${pid}/agent-runs`);
   const mailAi = useData<{ runs: MailAiRun[] }>(`/projects/${pid}/mail-ai`);
   const { busy, error, run } = useAsync();
@@ -39,7 +41,7 @@ export function AiView() {
       const body = p.kind === 'task_update' ? { logEntry: edits[p.id] } : { section: edits[p.id] };
       await api.post(`/ai/proposals/${p.id}/approve`, body);
       await reloadTasks();
-    } else await api.post(`/ai/proposals/${p.id}/reject`, {});
+    } else { if (p.kind === 'agent_action') { setRejecting(p); return; } await api.post(`/ai/proposals/${p.id}/reject`, {}); }
     await props.reload();
   });
   const srcLink = (s: { type: string; id: string; title: string }) => s.type === 'task' ? <button key={s.id} className="btn sm link" onClick={() => openTask(s.id)}>{s.title}</button> : s.type === 'page' ? <Link key={s.id} className="btn sm link" to={`${base}/doku/${s.id}`}>{s.title}</Link> : <Link key={s.id} className="btn sm link" to={`${base}/mail/mail/${s.id}`}>{s.title}</Link>;
@@ -58,13 +60,16 @@ export function AiView() {
         <div className="row between"><h2 style={{ margin: 0 }}>Vorschläge zur Freigabe</h2><span className="row" style={{ gap: 2 }}><button className={`chip ${status === 'pending' ? 'on' : ''}`} onClick={() => setStatus('pending')}>offen</button><button className={`chip ${status === 'all' ? 'on' : ''}`} onClick={() => setStatus('all')}>alle</button></span></div>
         <p className="muted small">Essenz einer Mail als Log-Eintrag, Status- oder Terminänderung im Arbeitspaket oder als Abschnitt einer Seite. Entsteht im Postfach über „KI: Essenz …“; angewendet wird erst nach Freigabe{props.data?.canApprove ? ' (du darfst freigeben)' : ' durch PL oder Personen mit Freigaberecht'}.</p>
         {props.data?.proposals.length === 0 && <div className="empty">Keine {status === 'pending' ? 'offenen ' : ''}Vorschläge.</div>}
+        {rejecting && <PromptModal title="Ablehnen" label="Grund (Pflicht; dieselbe Aktion wird 14 Tage nicht erneut vorgeschlagen)" submitLabel="Ablehnen" onClose={() => setRejecting(null)} onSubmit={(v) => { const p = rejecting; setRejecting(null); if (v.trim()) void run(async () => { await api.post(`/ai/proposals/${p.id}/reject`, { note: v.trim() }); await props.reload(); }); }} />}
         {props.data?.proposals.map((p) => (
           <div key={p.id} className={`ai-proposal ${p.status}`}>
             <div className="row between">
-              <div><span className="badge">{p.kind === 'task_update' ? 'Arbeitspaket' : 'Seite'}</span> <strong>{p.kind === 'task_update' ? <button className="btn sm link" onClick={() => p.taskId && openTask(p.taskId)}>{p.taskTitle ?? '–'}</button> : <Link className="btn sm link" to={`${base}/doku/${p.pageId}`}>{p.pageTitle ?? '–'}</Link>}</strong>{p.mailSubject && <span className="muted small"> · aus Mail <Link to={`${base}/mail/mail/${p.mailId}`}>{p.mailSubject}</Link></span>}</div>
-              <span className="muted small">{p.createdByName ?? '–'} · {fmtDateTime(p.createdAt)} {p.status !== 'pending' && <span className={`badge ${p.status === 'approved' ? 'ok' : 'warn'}`}>{p.status === 'approved' ? 'angewendet' : 'abgelehnt'}</span>}</span>
+              <div><span className="badge">{p.kind === 'task_update' ? 'Arbeitspaket' : p.kind === 'agent_action' ? 'Agent' : 'Seite'}</span> <strong>{p.kind === 'page_append' ? <Link className="btn sm link" to={`${base}/doku/${p.pageId}`}>{p.pageTitle ?? '–'}</Link> : <button className="btn sm link" onClick={() => p.taskId && openTask(p.taskId)}>{p.taskTitle ?? '–'}</button>}</strong>{p.mailSubject && <span className="muted small"> · aus Mail <Link to={`${base}/mail/mail/${p.mailId}`}>{p.mailSubject}</Link></span>}</div>
+              <span className="muted small">{p.createdByName ?? '–'} · {fmtDateTime(p.createdAt)} {p.status !== 'pending' && <span className={`badge ${p.status === 'approved' ? 'ok' : 'warn'}`}>{({ approved: p.kind === 'agent_action' ? 'ausgeführt' : 'angewendet', rejected: 'abgelehnt', stale: 'veraltet', failed: 'fehlgeschlagen', expired: 'abgelaufen', withdrawn: 'zurückgezogen' } as Record<string, string>)[p.status] ?? p.status}</span>}</span>
             </div>
-            {p.kind === 'task_update' ? (
+            {p.kind === 'agent_action' ? (
+              <div className="mt small"><strong>{p.payload.label}</strong>{p.actionClass && <span className="muted"> · {classLabel(p.actionClass)}</span>}{p.result && p.status !== 'approved' && <div className="muted">{p.result}</div>}<div className="muted">Angehalten nach der Agenten-Policy; Bestätigen führt mit den Rechten des Agenten aus.</div></div>
+            ) : p.kind === 'task_update' ? (
               <div className="mt">
                 {p.payload.summary && <div><strong>{p.payload.summary}</strong></div>}
                 {(p.payload.columnName || p.payload.dueDate) && <div className="small">{p.payload.columnName && <span className="badge">Status → {p.payload.columnName}</span>} {p.payload.dueDate && <span className="badge">Termin → {p.payload.dueDate}</span>}</div>}
@@ -74,7 +79,7 @@ export function AiView() {
             ) : (
               <div className="mt">{p.status === 'pending' && props.data?.canApprove ? <textarea rows={8} value={edits[p.id] ?? p.payload.section ?? ''} onChange={(e) => setEdits({ ...edits, [p.id]: e.target.value })} /> : <pre className="small" style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{p.payload.section}</pre>}</div>
             )}
-            {p.status === 'pending' && props.data?.canApprove && <div className="row mt"><button className="btn primary sm" disabled={busy} onClick={() => void decide(p, true)}>Anwenden</button><button className="btn sm" disabled={busy} onClick={() => void decide(p, false)}>Ablehnen</button></div>}
+            {p.status === 'pending' && props.data?.canApprove && <div className="row mt"><button className="btn primary sm" disabled={busy} onClick={() => void decide(p, true)}>{p.kind === 'agent_action' ? 'Bestätigen' : 'Anwenden'}</button><button className="btn sm" disabled={busy} onClick={() => void decide(p, false)}>Ablehnen</button></div>}
             {p.note && <div className="muted small mt">Ablehnung: {p.note}</div>}
           </div>
         ))}

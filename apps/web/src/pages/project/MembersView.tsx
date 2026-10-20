@@ -10,6 +10,9 @@ import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
 import { HealthDialog } from '../PortfolioPage';
 import { PromptModal } from '../../components/ui';
+import { AgentPolicyEditor, EffectivePolicyText, modeLabel } from '../../components/AgentPolicy';
+import type { AgentPolicy, EffectiveAgentPolicy } from '@projekttool/shared';
+import { AGENT_MODES } from '@projekttool/shared';
 import { InlineText } from './TaskDrawer';
 import { AI_FEATURES, LABEL_COLORS } from '@projekttool/shared';
 import { useProject, type MemberRow } from '../ProjectPage';
@@ -80,6 +83,7 @@ export function MembersView() {
               <dt>Projekt-KI (LLM)</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
               <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /></dd>
               <dt>Mail-Rückfrage</dt><dd><MailInquirySelect readOnly={!isPl} /></dd>
+              <dt>Agenten-Policy</dt><dd><ProjectAgentPolicy readOnly={!isPl} /></dd>
             </dl>
             {isPl && detail.project.status === 'active' && <div className="row mt">
               <button className="btn sm" title="Spalten, Labels, Teilprojekte, Meilensteine, Ordner und Regeln als Vorlage für neue Projekte" onClick={() => setAsTemplate(true)}>Als Vorlage speichern</button>
@@ -638,6 +642,25 @@ function MailInquirySelect({ readOnly = false }: { readOnly?: boolean }) {
       {!v.inherited && v.mode !== 'off' && <label className="row small" style={{ gap: 4 }}>Frist <input type="number" min={1} max={720} value={hours ?? String(v.waitHours)} style={{ width: 70 }} onChange={(e) => setHours(e.target.value)} onBlur={() => { const h = Number(hours); if (hours !== null && Number.isInteger(h) && h >= 1 && h <= 720 && h !== v.waitHours) save(v.mode, h); else setHours(null); }} /> h</label>}
     </span>
     <span className="muted small">Nennt die Mail-KI zu einer neuen Mail offene Punkte, fragt der Projektagent nach, statt zu raten. Ohne Projektagent stehen sie im Log des Arbeitspakets.</span>
+    {error && <span className="error small">{error}</span>}</span>;
+}
+
+/**
+ * Agenten-Policy des Projekts (Konzept 6): Selbstständigkeit und zu bestätigende Schritte für alle Agenten im Projekt, Grenzen für
+ * Agenten und Arbeitspakete, Workflow-Schritte. Vorgabe und Grenzen des Mandanten gelten darüber.
+ */
+function ProjectAgentPolicy({ readOnly = false }: { readOnly?: boolean }) {
+  const { detail, reload } = useProject();
+  const d = useData<{ effective: EffectiveAgentPolicy; project: AgentPolicy; org: AgentPolicy; agents: { userId: string; name: string; policy: AgentPolicy | null }[]; canEdit: boolean }>(`/projects/${detail.project.id}/agent-policy`);
+  const [open, setOpen] = useState(false);
+  const { error, run } = useAsync();
+  if (!d.data) return null;
+  const agents = d.data.agents;
+  return <span className="stack" style={{ gap: 4 }}>
+    <span className="row"><EffectivePolicyText e={d.data.effective} />{!readOnly && <button className="btn sm link" onClick={() => setOpen((o) => !o)}>{open ? 'schließen' : 'ändern'}</button>}</span>
+    {open && <AgentPolicyEditor value={d.data.project} limits workflows inheritFrom="Mandant" effective={d.data.effective} onSave={async (v) => { await api.put(`/projects/${detail.project.id}/agent-policy`, v); setOpen(false); await d.reload(); await reload(); }} />}
+    {agents.length > 0 && <span className="small stack" style={{ gap: 2 }}>{agents.map((a) => <span key={a.userId} className="row" style={{ gap: 6 }}><span className="muted">{a.name}:</span>{readOnly ? <span>{a.policy?.mode ? modeLabel(a.policy.mode) : 'erbt'}</span> : <select value={a.policy?.mode ?? ''} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put(`/projects/${detail.project.id}/members/${a.userId}/agent-policy`, e.target.value ? { mode: e.target.value } : null); await d.reload(); })}><option value="">erbt vom Projekt</option>{AGENT_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select>}</span>)}</span>}
+    <span className="muted small">Grundmenge (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei; Angehaltenes legt der Agent der PL als Karte vor. Je Arbeitspaket lässt sich die Selbstständigkeit im Arbeitspaket setzen, der Zugriff auf Doku-Ordner am Ordner.</span>
     {error && <span className="error small">{error}</span>}</span>;
 }
 

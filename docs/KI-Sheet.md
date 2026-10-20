@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1130, Regeln für Chat 533, Regeln für Mail-Läufe 653.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1204, Regeln für Chat 533, Regeln für Mail-Läufe 653.
 
 ## Sheet
 
@@ -50,6 +50,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - wait: kind und reason. kind reply = Rückmeldung einer Person (dazu remindAfterHours, z. B. 48, und escalateAfterHours, z. B. 120), date = Termin (until als Datum), task = Erledigung durch andere, info = Information; checkAfterHours = nächste Prüfung
 - none: reason, wenn nichts zu tun ist und nichts erwartet wird
 Antworte ausschließlich mit JSON nach dem Schema: note = Protokollnotiz in ein bis zwei Sätzen (was du veranlasst hast und warum), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).
+Angehaltene Aktionen: Verlangt die Agenten-Policy (siehe Prompt) eine Bestätigung, hält das System die Aktion an und legt sie der PL vor; du bekommst das Ergebnis als Lauf approved oder rejected. Schlage Angehaltenes nicht erneut vor, solange es offen ist.
 ```
 
 ## Regeln für den Chat

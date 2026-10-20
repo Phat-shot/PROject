@@ -325,6 +325,8 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
 
   await db.query(`insert into audit_log (org_id, project_id, user_id, action, object_type, object_id, details) values ($1,$2,$3,'seed','system',null,'{"note":"Demodaten angelegt"}')`, [org.id, web.id, admin]);
 
+  // Demo-Projekte verhalten sich wie Bestandsprojekte (Entscheidung 6): Agenten selbstständig; neue Projekte starten mit Rückfrage bei wichtigen Schritten
+  await db.query(`update projects set agent_policy = '{"mode":"auto"}'::jsonb where org_id = $1`, [org.id]);
   return { org: org.id, users: { admin, pl, anna, max, leser }, projects: { web: web.id, erp: erp.id }, accounts: { project: projAcc.id, personal: persAcc.id }, views: { project: projView.id, agentur: agenturView.id, hosting: hostingView.id }, tasks: { t4: t4.id, t4Code: t4.mail_code, t2: t2.id } };
 }
 

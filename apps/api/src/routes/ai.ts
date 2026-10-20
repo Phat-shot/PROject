@@ -1,5 +1,7 @@
 import type { FastifyInstance } from 'fastify';
-import type { AiFeature, AiProposal, User } from '@projekttool/shared';
+import { parseAgentPolicy } from '../ai/agentPolicy.js';
+import { decideProposals } from '../ai/agentApproval.js';
+import type { AiFeature, AiProposal, User, AgentPolicy } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -18,7 +20,8 @@ import { seal } from '../secrets.js';
 import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
 
 function mapProposal(r: any): AiProposal {
-  return { id: r.id, projectId: r.project_id, kind: r.kind, mailId: r.mail_id, taskId: r.task_id, pageId: r.page_id, payload: r.payload ?? {}, status: r.status, createdBy: r.created_by, createdByName: r.created_by_name ?? null, decidedBy: r.decided_by, decidedAt: r.decided_at, note: r.note, createdAt: r.created_at, taskTitle: r.task_title ?? null, pageTitle: r.page_title ?? null, mailSubject: r.mail_subject ?? null };
+  return { id: r.id, projectId: r.project_id, kind: r.kind, mailId: r.mail_id, taskId: r.task_id, pageId: r.page_id, payload: r.payload ?? {}, status: r.status, createdBy: r.created_by, createdByName: r.created_by_name ?? null, decidedBy: r.decided_by, decidedAt: r.decided_at, note: r.note, createdAt: r.created_at, taskTitle: r.task_title ?? null, pageTitle: r.page_title ?? null, mailSubject: r.mail_subject ?? null,
+    actionClass: r.action_class ?? null, seq: r.seq ?? 0, questionId: r.question_id ?? null, agentRunId: r.agent_run_id ?? null, result: r.result ?? null };
 }
 
 /**
@@ -48,10 +51,13 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check' } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check'; agentPolicy?: AgentPolicy | null } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     requireAiAdmin(user);
     const b = req.body ?? {};
+    // Agenten-Policy des Mandanten: Vorgabe (mode, confirm) und Grenzen (maxMode, lockedConfirm) für alle Projekte
+    let agentPolicy: AgentPolicy | undefined;
+    if (b.agentPolicy !== undefined) { try { agentPolicy = parseAgentPolicy(b.agentPolicy, { limits: true, workflows: true }); } catch (e: any) { throw badRequest(e.message); } }
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
     if (b.enabled !== undefined && typeof b.enabled !== 'boolean') throw badRequest('Notaus: enabled true oder false');
@@ -60,7 +66,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (b.ownLlm !== undefined && !['off', 'personal', 'all'].includes(b.ownLlm)) throw badRequest('Eigenes LLM: off, personal oder all');
     if (b.externalGuard !== undefined && !['strict', 'check'].includes(b.externalGuard)) throw badRequest('Außenprüfung: strict oder check');
     const clamp = (v: unknown) => Math.max(0, Math.min(10000, Number(v) || 0));
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}) } })]);
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}), ...(agentPolicy !== undefined ? { agentPolicy } : {}) } })]);
+    if (agentPolicy !== undefined) await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.policy', objectType: 'org', objectId: user.orgId, details: agentPolicy as Record<string, unknown> });
     // Der frühere Schalter „Eigene Agenten der PL“ ist die Regel pl.agents für den Mandanten
     if (typeof b.plAgents?.enabled === 'boolean') await setAiPolicy(db, user, { projectId: null, userId: null, groupId: null, feature: 'pl.agents', effect: b.plAgents.enabled ? 'allow' : 'deny' });
     if (b.enabled !== undefined && b.enabled !== (cur.enabled !== false)) await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.killswitch', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled } });
@@ -292,6 +299,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const p = await db.maybeOne(`select * from ai_proposals where id = $1`, [req.params.id]);
     if (!p) throw notFound('Vorschlag nicht gefunden');
     if (p.status !== 'pending') throw badRequest('Vorschlag ist bereits entschieden');
+    if (p.kind === 'agent_action') { const rows = await decideProposals(db, app.mail, app.fetchFn, { ids: [p.id], approve: true, user }); return { ok: true, proposal: rows[0] ? mapProposal(rows[0]) : null }; }
     await canApprove(user, p.project_id);
     await canSeeProposal(user, p);
     const b = req.body ?? {};
@@ -336,6 +344,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const p = await db.maybeOne(`select * from ai_proposals where id = $1`, [req.params.id]);
     if (!p) throw notFound('Vorschlag nicht gefunden');
     if (p.status !== 'pending') throw badRequest('Vorschlag ist bereits entschieden');
+    if (p.kind === 'agent_action') { await decideProposals(db, app.mail, app.fetchFn, { ids: [p.id], approve: false, reason: req.body?.note ?? null, user }); return { ok: true }; }
     await canApprove(user, p.project_id);
     await canSeeProposal(user, p);
     await db.query(`update ai_proposals set status = 'rejected', decided_by = $2, decided_at = now(), note = $3 where id = $1`, [p.id, user.id, req.body?.note?.trim() || null]);

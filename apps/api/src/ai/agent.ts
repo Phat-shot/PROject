@@ -17,6 +17,9 @@ import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessa
 import { audienceOf, audienceText, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 import { USE_LATERAL, accountUseIn, projectAccount } from '../mail/accounts.js';
 import { askQuestion, answerQuestion, type QuestionRow } from '../questions.js';
+import type { AgentActionClass, EffectiveAgentPolicy } from '@projekttool/shared';
+import type { AiConfig } from './client.js';
+import { actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -128,131 +131,122 @@ const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').t
 
 export interface AgentRunResult { runId: string | null; taskId: string; status: 'ok' | 'error' | 'skipped'; actions: AgentAction[]; error?: string }
 
+
+export interface RunCtx {
+  db: Db; mail: MailService; fetchFn: typeof fetch; agent: { id: string; name: string; org_id: string; persona?: string | null; email: string }; task: any; m: any; cfg: AiConfig; now: Date; trigger: string;
+  columns: { rows: any[] }; items: { rows: any[] }; pages: { rows: any[] }; folders: { rows: any[] }; members: { rows: any[] }; pls: any[];
+  account: AccountRow | null; canMail: boolean; viewAccount: (AccountRow & { view_id: string; use: string }) | null; signature: string;
+  isPl: boolean; canPlan: boolean; myTps: string[]; code: string; policy: EffectiveAgentPolicy; folderAccess: Map<string, 'write' | 'read' | 'none'>; doneColumns: Set<string>;
+  tokens: { input: number; output: number }; checkIds: string[];
+}
+export interface HeldAction { action: AgentAction; classes: AgentActionClass[]; label: string; base: Record<string, unknown> }
+export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean }
+
+/** Arbeitspaket mit Spalte, Projekt, Teilprojekt und Über-AP, wie es Lauf und Bestätigung brauchen. */
+export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
+  return db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
+}
+
 /**
- * Ein Lauf für ein Arbeitspaket. trigger beschreibt den Anlass (assigned, mail, comment, due, daily, manual). Vorher prüft
- * aiConfigFor (agent.run): ist der Agent gesperrt, wird der Lauf ohne LLM-Aufruf als übersprungen protokolliert (höchstens
- * einmal je Arbeitspaket und Tag); ein aufgebrauchtes Tagesbudget überspringt still.
+ * Kontext für das Ausführen von Aktionen (Lauf und Bestätigung nutzen denselben): Rechte, Konten, Doku mit Agentenzugriff,
+ * Spalten, Tasks, Mitglieder, wirksame Agenten-Policy. Ordner mit Zugriff „kein“ sind für den Agenten unsichtbar.
  */
-export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, taskId: string, trigger: string, now = new Date()): Promise<AgentRunResult> {
-  const task = await db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
-  if (!task) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Arbeitspaket nicht gefunden' };
-  const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
-  if (!m) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Agent ist kein Mitglied' };
-  const { cfg: c, decision } = await aiConfigFor(db, { userId: agent.id, projectId: task.project_id, feature: 'agent.run', taskId: task.id, now });
-  if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.publicReason, now);
+export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, task: any, m: any, cfg: AiConfig, trigger: string, now: Date): Promise<RunCtx> {
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
-  const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
-  const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
-  const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing, l.origin, l.copied, ux.use, ux.use_user_id,
-      exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
-    from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where l.task_id = $1 order by l.origin desc, m.date desc limit 6`, [task.id, task.project_id]);
-  // Eingehende Mails nach Absenderklasse (Regel E): Externe erfahren nur, was zu ihrer Aufgabe gehört
-  const code = `${task.project_key}-${task.number}`;
-  const senderClass = new Map<string, string>();
-  for (const x of mails.rows as any[]) {
-    if (x.outgoing || senderClass.has(x.from_addr)) continue;
-    const a = (await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [x.from_addr] })).audience;
-    senderClass.set(x.from_addr, a === 'internal' ? 'intern' : a === 'outside' ? `Org-Benutzer ohne Zugriff (outside), Scope ${code}` : a === 'task_external' ? `Extern (task_external), Scope ${code}` : 'Extern ohne Bezug zum AP (unknown_external)');
-  }
   const members = await db.query(`select m.user_id, u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
-  const folders = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
-  const pages = await db.query(`select p.id, p.title, p.status, p.updated_at, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 40`, [task.project_id]);
+  const folderAccess = await folderAccessMap(db, task.project_id);
+  const foldersAll = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
+  const folders = { rows: foldersAll.rows.filter((f: any) => folderAccess.get(f.id) !== 'none') };
+  const pagesAll = await db.query(`select p.id, p.title, p.status, p.updated_at, p.folder_id, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 60`, [task.project_id]);
+  const pages = { rows: pagesAll.rows.filter((p: any) => !p.folder_id || folderAccess.get(p.folder_id) !== 'none').slice(0, 40) };
   const pls = members.rows.filter((x: any) => x.role === 'pl' && !x.is_deputy);
-  // Inhalt aus persönlichen Konten nur, wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt)
-  const humans = members.rows.filter((x: any) => x.kind !== 'agent').map((x: any) => x.user_id);
-  const bodyOk = (x: any) => mailBodyOk(x, humans);
-  const today = now.toISOString().slice(0, 10);
   const account = await projectAccount(db, task.project_id);
   const canMail = Boolean(m.agent_can_mail) && Boolean(account);
   // Ohne Standard-Projektkonto (z. B. persönliches Projekt): Konto einer Ansicht des Projekts, Mails dann nur als Entwurf (persönliche Bindung: der Eigentümer sendet)
   const viewAccount = account ? null : await db.maybeOne<AccountRow & { view_id: string; use: string }>(`select a.*, v.id as view_id, u.use from mail_views v join mail_accounts a on a.id = v.account_id join mail_account_uses u on u.id = v.use_id where v.project_id = $1 order by (u.use = 'personal') desc, v.created_at limit 1`, [task.project_id]);
-  const signature = String((await db.one(`select signature from users where id = $1`, [agent.id])).signature ?? '').trim();
-  const openQs = await db.query(`select q.id, q.body, q.created_at, u.name as to_name from questions q left join users u on u.id = q.addressee_id where q.task_id = $1 and q.asked_by = $2 and q.status = 'open' order by q.created_at`, [task.id, agent.id]);
-  // Zuständigkeit (direkt oder geerbt) und Planungsrahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt, Teilprojekt-Verantwortung in ihren Teilprojekten
-  const eff = await db.one(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as eff, pt.responsible_user_id as parent_resp, s.name as sp_name from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.id]);
-  const basis = task.responsible_user_id === agent.id ? 'direkt zugewiesen' : eff.eff === agent.id ? (eff.parent_resp === agent.id ? `geerbt vom Arbeitspaket ${task.project_key}-${task.parent_number}` : `geerbt vom Teilprojekt „${eff.sp_name}“, für das du verantwortlich bist`) : 'nicht deine Zuständigkeit (Lauf von Hand gestartet)';
+  const u = await db.one(`select signature, email from users where id = $1`, [agent.id]);
+  const signature = String(u.signature ?? '').trim();
   const isPl = m.role === 'pl';
   const canPlan = isPl || Boolean(m.can_edit_plan);
   const myTps: string[] = (await db.query(`select id from subprojects where project_id = $1 and responsible_user_id = $2`, [task.project_id, agent.id])).rows.map((r: any) => r.id);
-  const subprojects = await db.query(`select s.id, s.name, s.start_date, s.end_date, u.name as resp from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 and (not s.restricted or s.responsible_user_id = $2 or $3) order by s.position, s.created_at`, [task.project_id, agent.id, isPl]);
-  const apScope = canPlan ? null : task.subproject_id;
-  const aps = await db.query(
-    `select t.number, t.title, t.start_date, t.due_date, c.name as column_name, c.is_done, t.responsible_user_id, t.responsible_email, eu.name as eff_name, s.name as sp_name,
-       (select count(*)::int from tasks x where x.parent_id = t.id and x.deleted_at is null) as subs
-     from tasks t join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS} left join users eu on eu.id = (${EFFECTIVE_RESPONSIBLE_SQL})
-     where t.project_id = $1 and t.parent_id is null and t.deleted_at is null and t.archived_at is null and ($2::uuid is null or t.subproject_id = $2) and ${visibleSubprojectSql(3)}
-     order by (t.subproject_id is not distinct from $4) desc, s.position nulls last, t.position limit 40`, [task.project_id, apScope, agent.id, task.subproject_id]);
-  const milestones = canPlan || myTps.length ? await db.query(`select m.name, m.date, s.name as sp from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 order by m.date limit 20`, [task.project_id]) : { rows: [] as any[] };
-  const events = await db.query(`select title, starts_at, location, tentative from meetings where project_id = $1 and starts_at >= $2 and starts_at < $3 order by starts_at limit 15`, [task.project_id, new Date(now.getTime() - 86400_000), new Date(now.getTime() + 45 * 86400_000)]);
-  // Ansprechpartner für Rückfragen und Zusagen: Stufe 0 der Kette (Zuständige des Über-AP, Teilprojekt-Verantwortung, verantwortliche PL)
-  const contact: any = (await contactChain(db, task, { exclude: [agent.id] }))[0] ?? null;
-  // Belegt-Zeiten des Ansprechpartners aus anderen Projekten (Termine, an denen er teilnimmt oder die er angelegt hat; ohne Titel), damit Terminvorschläge geprüft werden können
-  const busy = contact ? await db.query(`select m.starts_at, m.ends_at from meetings m where m.project_id <> $2 and (m.created_by = $1 or m.attendees @> jsonb_build_array(jsonb_build_object('userId', $1::text))) and m.starts_at >= now() and m.starts_at < now() + interval '45 days' order by m.starts_at limit 20`, [contact.id, task.project_id]) : { rows: [] as any[] };
-  // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
-  const dms = await db.query(
-    `select m.body, m.created_at, case when m.kind = 'system' then 'System' else u.name end as name, m.user_id = $1 and m.kind = 'user' as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
-       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 left join users u on u.id = m.user_id
-     where m.deleted_at is null and m.created_at > now() - interval '7 days'
-       and exists (select 1 from chat_channel_members o join project_members pm on pm.user_id = o.user_id and pm.project_id = $2 where o.channel_id = c.id and o.user_id <> $1)
-     order by m.created_at desc limit 10`, [agent.id, task.project_id]);
-  const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
-  const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
-  // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
-  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
-  const prompt = `Heute: ${today}
-${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
-Beschreibung: ${cut(task.description, 2000) || '–'}
-${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
-${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
-${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}
-Log (neueste zuerst):
-${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
-${dms.rows.length ? `Chat (deine Direktnachrichten mit Projektmitgliedern, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}\n` : ''}Mails zum Arbeitspaket:
-${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
-Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
-Doku-Seiten (neueste zuerst):
-${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
-Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
-Deine Zuständigkeit: ${basis}.
-Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}
-Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
-${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
-${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
-Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
-Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren.
-Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
-${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
+  const policy = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: task.project_id, taskId: task.id });
+  return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [] };
+}
 
-Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
-  try {
-    const errors: string[] = [];
-    let extra = '';
-    let inputTokens = 0; let outputTokens = 0; let model = '';
-    let j: any = {};
-    let actions: AgentAction[] = [];
-    // Leserunden: read_page liefert Seiteninhalte, danach entscheidet das Modell erneut (max. zwei Leserunden)
-    for (let round = 0; round < 3; round++) {
-      // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum
-      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
-      inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
-      j = parseJson(r.text);
-      actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
-      const reads = actions.filter((a) => a.type === 'read_page');
-      if (!reads.length) break;
-      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page'); break; }
-      const texts: string[] = [];
-      for (const a of reads.slice(0, 4)) {
-        const pid = (a as any).pageId;
-        const page = await db.maybeOne(`select id, title, status, version, content_md, content_html from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
-        if (!page) { texts.push(`- pageId ${pid ?? '?'}: nicht gefunden`); continue; }
-        const md = page.content_html ? htmlToMd(page.content_html) : page.content_md ?? '';
-        texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
-      }
-      const others = actions.filter((a) => a.type !== 'read_page');
-      extra += `\n\nGelesene Seiten (Markdown):\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten.`;
-      actions = [];
+/** Gate (Konzept 6.4): Klasse bestimmen, KI-Freigaben, Ablehnungssperre (14 Tage), dann run oder hold nach der Policy. */
+export async function gateAction(ctx: RunCtx, a: any, opts: { hold: boolean; approvedBy?: string | null }): Promise<{ verdict: 'run' | 'hold' | 'deny'; classes: AgentActionClass[]; reason: string }> {
+  const classes = classifyAction(a, { task: ctx.task, agentEmail: ctx.agent.email, doneColumns: ctx.doneColumns, pageStatus: (id) => ctx.pages.rows.find((p: any) => p.id === id)?.status ?? null });
+  if (!classes.length) return { verdict: 'run', classes, reason: '' };
+  const label = actionLabel(a, { pageTitle: (id) => ctx.pages.rows.find((p: any) => p.id === id)?.title ?? null });
+  const denied = classes.find((k) => ctx.policy.denied[k]);
+  if (denied) return { verdict: 'deny', classes, reason: `${label}: gesperrt durch KI-Freigabe „${classLabel(denied)}“ (${ctx.policy.denied[denied]})` };
+  if (!opts.approvedBy) {
+    const rej = await ctx.db.maybeOne(`select p.decided_at, u.name from ai_proposals p left join users u on u.id = p.decided_by where p.project_id = $1 and p.task_id = $2 and p.fingerprint = $3 and p.status = 'rejected' and p.decided_at > now() - interval '14 days' order by p.decided_at desc limit 1`, [ctx.task.project_id, ctx.task.id, actionFingerprint(a)]);
+    if (rej) return { verdict: 'deny', classes, reason: `${label}: am ${new Date(rej.decided_at).toLocaleDateString('de-DE')} von ${rej.name ?? 'einer Person'} abgelehnt; nicht erneut vorschlagen (14 Tage)` };
+  }
+  if (opts.hold && classes.some((k) => ctx.policy.confirm.includes(k))) return { verdict: 'hold', classes, reason: '' };
+  return { verdict: 'run', classes, reason: '' };
+}
+
+/** Agentenzugriff auf Doku-Ordner (write, read, none; vererbt): Schreiben nur in write, Lesen nicht in none. */
+export function docAccessError(ctx: RunCtx, a: any): string | null {
+  const acc = (folderId: string | null | undefined) => (folderId ? ctx.folderAccess.get(folderId) ?? 'write' : 'write');
+  const page = (id: unknown) => ctx.pages.rows.find((p: any) => p.id === String(id ?? ''));
+  const folderByName = (name: unknown) => ctx.folders.rows.find((f: any) => String(f.name).toLowerCase() === String(name ?? '').trim().toLowerCase());
+  switch (a?.type) {
+    case 'doc_create': { const f = a.folder ? folderByName(a.folder) : null; if (a.folder && !f) return null; if (f && acc(f.id) !== 'write') return `Ordner „${f.name}“: Agenten dürfen dort nicht schreiben`; return null; }
+    case 'doc_update': case 'doc_append': case 'doc_status': { const p = page(a.pageId); if (p && acc(p.folder_id) !== 'write') return `Seite „${p.title}“: Agenten dürfen im Ordner „${p.folder ?? ''}“ nicht schreiben`; return null; }
+    case 'doc_move': { const p = page(a.pageId); if (p && acc(p.folder_id) !== 'write') return `Seite „${p.title}“: Agenten dürfen im Ordner „${p.folder ?? ''}“ nicht schreiben`; const f = folderByName(a.folder); if (f && acc(f.id) !== 'write') return `Ordner „${f.name}“: Agenten dürfen dort nicht schreiben`; return null; }
+    default: return null;
+  }
+}
+
+/** Stand, auf den sich eine angehaltene Aktion bezieht (Seitenversion und -status, Spalte, Zuständigkeit, Termine); weicht er bei der Bestätigung ab, ist der Vorschlag veraltet. */
+export async function baseOf(ctx: RunCtx, a: any): Promise<Record<string, unknown>> {
+  const { db, task } = ctx;
+  switch (a?.type) {
+    case 'doc_status': case 'doc_send_pdf': { const p = await db.maybeOne(`select version, status from doc_pages where id = $1`, [a.pageId]); return p ? { pageVersion: p.version, pageStatus: p.status } : {}; }
+    case 'set_status': return { columnId: task.column_id };
+    case 'assign': case 'set_dates': {
+      const n = Number(String(a.ref ?? '').split('-').pop()) || (a.type === 'set_dates' ? task.number : 0);
+      const t = n ? await db.maybeOne(`select responsible_user_id, responsible_email, start_date, due_date from tasks where project_id = $1 and number = $2`, [task.project_id, n]) : null;
+      return t ? { responsibleUserId: t.responsible_user_id, responsibleEmail: t.responsible_email, startDate: dateStr(t.start_date), dueDate: dateStr(t.due_date) } : {};
     }
+    default: return {};
+  }
+}
+
+/**
+ * Angehaltene Aktionen eines Laufs (Konzept 6.5): je Aktion ein Vorschlag (ai_proposals, kind agent_action) und eine Frage approval an
+ * die PL mit Karte im Chat; das Warten des Agenten zeigt auf die Frage. PDF-Versand hängt am Final-Setzen derselben Seite.
+ */
+async function holdProposals(ctx: RunCtx, held: HeldAction[], runId: string | null): Promise<string | null> {
+  const { db, agent, task, now } = ctx;
+  const body = `Bitte bestätigen:\n${held.map((h, i) => `${i + 1}) ${h.label}`).join('\n')}`;
+  const r = await askQuestion(db, { taskId: task.id, asker: agent, kind: 'approval', to: 'pl', body, now, type: 'approval', title: `${agent.name} braucht eine Bestätigung: ${task.title}`, context: { topic: 'agent_approval' } });
+  if ('error' in r) { await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Angehaltene Aktionen nicht vorgelegt: ${r.error}`]); return null; }
+  const ids: string[] = [];
+  for (const [i, h] of held.entries()) {
+    const a: any = h.action;
+    const dep = a.type === 'doc_send_pdf' ? held.findIndex((x, j) => j < i && (x.action as any).type === 'doc_status' && (x.action as any).pageId === a.pageId) : -1;
+    const row = await db.one(
+      `insert into ai_proposals (org_id, project_id, kind, task_id, page_id, payload, status, created_by, agent_run_id, question_id, action_class, seq, depends_on, fingerprint)
+       values ($1,$2,'agent_action',$3,$4,$5,'pending',$6,$7,$8,$9,$10,$11,$12) returning id`,
+      [agent.org_id, task.project_id, task.id, a.pageId && /^[0-9a-f-]{36}$/.test(String(a.pageId)) ? a.pageId : null, JSON.stringify({ action: a, label: h.label, base: h.base }), agent.id, runId, r.question.id, h.classes[0] ?? null, i, dep >= 0 ? ids[dep] : null, actionFingerprint(a)]);
+    ids.push(row.id);
+    await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.action.proposed', objectType: 'ai_proposal', objectId: row.id, details: { class: h.classes, label: h.label, questionId: r.question.id } });
+  }
+  return r.question.id;
+}
+
+/** Aktionen eines Agenten ausführen (Lauf mit hold = anhalten nach Policy; Bestätigung mit approvedBy ohne Anhalten). */
+export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
+  const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
+  const errors: string[] = [];
+  const held: HeldAction[] = [];
+  let forceDraft = false; let policyNote = '';
+  const pageTitle = (id: string) => pages.rows.find((p: any) => p.id === id)?.title ?? null;
     const applied: AgentAction[] = [];
     let mailsSent = 0;
     let chats = 0;
@@ -269,14 +263,13 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, taskId: task.id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben`, actorId: agent.id });
     };
     // Informationsgrenze: Mails an Nicht-Interne laufen über outbound.ts (Neuformulierung, Prüfung, Protokoll)
-    const checkIds: string[] = [];
     const guard = async (q: { aud: Audience; subject: string; text: string; compose: boolean; keepSubject?: boolean; pageIds?: string[] }) => {
       const g = await guardOutbound(db, c, fetchFn, { projectId: task.project_id, taskId: task.id, ...q });
-      inputTokens += g.inputTokens; outputTokens += g.outputTokens;
+      ctx.tokens.input += g.inputTokens; ctx.tokens.output += g.outputTokens;
       return g;
     };
     const record = async (channel: 'mail' | 'reply_origin' | 'pdf', aud: Audience, g: GuardResult, draftId: string | null) => {
-      checkIds.push(await recordCheck(db, { orgId: agent.org_id, projectId: task.project_id, taskId: task.id, channel, aud, result: g.result, findings: g.findings, withheld: g.withheld, mailDraftId: draftId, userId: agent.id }));
+      ctx.checkIds.push(await recordCheck(db, { orgId: agent.org_id, projectId: task.project_id, taskId: task.id, channel, aud, result: g.result, findings: g.findings, withheld: g.withheld, mailDraftId: draftId, userId: agent.id }));
     };
     /** Zusatz im Versandstatus: Empfängerklasse, Zurückgehaltenes und warum es ein Entwurf ist. */
     const outNote = (aud: Audience, g: GuardResult | null, draft: boolean) => {
@@ -292,7 +285,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
      * Kontakt (unknown_external); sonst Entwurf zur Freigabe (ohne Projektkonto über die Ansicht).
      */
     const deliverMail = async (aud: Audience, g: GuardResult, to: string[], reply: { inReplyTo?: string | null; references?: string | null } = {}): Promise<'sent' | 'draft' | 'failed'> => {
-      if (account && canMail && g.result === 'pass' && aud.audience !== 'unknown_external') {
+      if (account && canMail && !forceDraft && g.result === 'pass' && aud.audience !== 'unknown_external') {
         try {
           await mail.sendFromAccount(account, { to, subject: g.subject, text: g.text, taskId: task.id, inReplyTo: reply.inReplyTo ?? null, references: reply.references ?? null, userId: agent.id, projectId: task.project_id });
           await record('mail', aud, g, null);
@@ -309,10 +302,20 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, account ? null : viewAccount!.view_id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null]);
       await record('mail', aud, g, d.id);
       await notifyDraft(acc, g.subject, g);
-      await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${g.subject}“${outNote(aud, g, true)}`);
+      await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${g.subject}“${outNote(aud, g, true)}${policyNote}`);
       return 'draft';
     };
     for (const a of actions) {
+      forceDraft = false; policyNote = '';
+      // Agenten-Policy: gesperrte Klassen werden nicht ausgeführt, zu bestätigende angehalten (Mails nach außen laufen als Entwurf zur Freigabe)
+      const gate = await gateAction(ctx, a, opts);
+      if (gate.verdict === 'deny') { errors.push(gate.reason); await logSys(`Nicht ausgeführt: ${gate.reason}`); continue; }
+      if (gate.verdict === 'hold') {
+        if (gate.classes.every((k) => k === 'send_external')) { forceDraft = true; policyNote = ' · Agenten-Policy: Mails nach außen gibt eine Person frei (Mail › Freigaben)'; }
+        else { held.push({ action: a, classes: gate.classes, label: actionLabel(a, { pageTitle }), base: await baseOf(ctx, a) }); continue; }
+      }
+      const docErr = docAccessError(ctx, a);
+      if (docErr) { errors.push(docErr); continue; }
       if (a.type === 'comment' && a.text?.trim()) {
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, a.text.trim()]);
         applied.push(a);
@@ -486,7 +489,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
           const body = g?.text ?? text;
           mailsSent++;
           const accUse = await accountUseIn(db, acc.id, task.project_id);
-          if (accUse?.use === 'project' && m.agent_can_mail && (!g || (g.result === 'pass' && aud.audience !== 'unknown_external'))) {
+          if (accUse?.use === 'project' && m.agent_can_mail && !forceDraft && (!g || (g.result === 'pass' && aud.audience !== 'unknown_external'))) {
             try {
               await mail.sendFromAccount(acc, { to: [o.from_addr], subject, text: body, taskId: task.id, inReplyTo: o.message_id, references: [o.references_header, o.message_id].filter(Boolean).join(' ') || null, userId: agent.id, projectId: task.project_id });
               if (g) await record('reply_origin', aud, g, null);
@@ -498,7 +501,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
             const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, view?.id ?? null, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null]);
             if (g) await record('reply_origin', aud, g, d.id);
             await notifyDraft(acc, subject, g);
-            await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“${outNote(aud, g, true)}`);
+            await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“${outNote(aud, g, true)}${policyNote}`);
             applied.push({ type: 'reply_origin', text: `[Entwurf zur Freigabe] ${body}` } as any);
           }
         }
@@ -603,11 +606,135 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     }
     // Warten endet nur, wenn keine eigene Frage am AP mehr offen ist (die Frage hält den Wartezustand bis zur Antwort)
     if (!waited && !(await db.maybeOne(`select 1 from questions where task_id = $1 and asked_by = $2 and status = 'open'`, [task.id, agent.id]))) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+  return { applied, errors, held, waited };
+}
+
+/**
+ * Ein Lauf für ein Arbeitspaket. trigger beschreibt den Anlass (assigned, mail, comment, due, daily, manual). Vorher prüft
+ * aiConfigFor (agent.run): ist der Agent gesperrt, wird der Lauf ohne LLM-Aufruf als übersprungen protokolliert (höchstens
+ * einmal je Arbeitspaket und Tag); ein aufgebrauchtes Tagesbudget überspringt still.
+ */
+export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, taskId: string, trigger: string, now = new Date()): Promise<AgentRunResult> {
+  const task = await loadTaskForAgent(db, taskId);
+  if (!task) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Arbeitspaket nicht gefunden' };
+  const m = await db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [task.project_id, agent.id]);
+  if (!m) return { runId: null, taskId, status: 'skipped', actions: [], error: 'Agent ist kein Mitglied' };
+  const { cfg: c, decision } = await aiConfigFor(db, { userId: agent.id, projectId: task.project_id, feature: 'agent.run', taskId: task.id, now });
+  if (!c) return decision.stage === 'budget' ? { runId: null, taskId, status: 'skipped', actions: [], error: decision.reason } : logSkippedRun(db, agent, task.project_id, task.id, trigger, decision.publicReason, now);
+  const ctx = await loadRunCtx(db, mail, fetchFn, agent, task, m, c, trigger, now);
+  const { columns, items, members, folders, pages, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, policy } = ctx;
+  const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
+  const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
+  const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing, l.origin, l.copied, ux.use, ux.use_user_id,
+      exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
+    from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where l.task_id = $1 order by l.origin desc, m.date desc limit 6`, [task.id, task.project_id]);
+  // Eingehende Mails nach Absenderklasse (Regel E): Externe erfahren nur, was zu ihrer Aufgabe gehört
+  const code = `${task.project_key}-${task.number}`;
+  const senderClass = new Map<string, string>();
+  for (const x of mails.rows as any[]) {
+    if (x.outgoing || senderClass.has(x.from_addr)) continue;
+    const a = (await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [x.from_addr] })).audience;
+    senderClass.set(x.from_addr, a === 'internal' ? 'intern' : a === 'outside' ? `Org-Benutzer ohne Zugriff (outside), Scope ${code}` : a === 'task_external' ? `Extern (task_external), Scope ${code}` : 'Extern ohne Bezug zum AP (unknown_external)');
+  }
+  // Inhalt aus persönlichen Konten nur, wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt)
+  const humans = members.rows.filter((x: any) => x.kind !== 'agent').map((x: any) => x.user_id);
+  const bodyOk = (x: any) => mailBodyOk(x, humans);
+  const today = now.toISOString().slice(0, 10);
+  const openQs = await db.query(`select q.id, q.body, q.created_at, u.name as to_name from questions q left join users u on u.id = q.addressee_id where q.task_id = $1 and q.asked_by = $2 and q.status = 'open' order by q.created_at`, [task.id, agent.id]);
+  // Zuständigkeit (direkt oder geerbt) und Planungsrahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt, Teilprojekt-Verantwortung in ihren Teilprojekten
+  const eff = await db.one(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as eff, pt.responsible_user_id as parent_resp, s.name as sp_name from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.id]);
+  const basis = task.responsible_user_id === agent.id ? 'direkt zugewiesen' : eff.eff === agent.id ? (eff.parent_resp === agent.id ? `geerbt vom Arbeitspaket ${task.project_key}-${task.parent_number}` : `geerbt vom Teilprojekt „${eff.sp_name}“, für das du verantwortlich bist`) : 'nicht deine Zuständigkeit (Lauf von Hand gestartet)';
+  const subprojects = await db.query(`select s.id, s.name, s.start_date, s.end_date, u.name as resp from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 and (not s.restricted or s.responsible_user_id = $2 or $3) order by s.position, s.created_at`, [task.project_id, agent.id, isPl]);
+  const apScope = canPlan ? null : task.subproject_id;
+  const aps = await db.query(
+    `select t.number, t.title, t.start_date, t.due_date, c.name as column_name, c.is_done, t.responsible_user_id, t.responsible_email, eu.name as eff_name, s.name as sp_name,
+       (select count(*)::int from tasks x where x.parent_id = t.id and x.deleted_at is null) as subs
+     from tasks t join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS} left join users eu on eu.id = (${EFFECTIVE_RESPONSIBLE_SQL})
+     where t.project_id = $1 and t.parent_id is null and t.deleted_at is null and t.archived_at is null and ($2::uuid is null or t.subproject_id = $2) and ${visibleSubprojectSql(3)}
+     order by (t.subproject_id is not distinct from $4) desc, s.position nulls last, t.position limit 40`, [task.project_id, apScope, agent.id, task.subproject_id]);
+  const milestones = canPlan || myTps.length ? await db.query(`select m.name, m.date, s.name as sp from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 order by m.date limit 20`, [task.project_id]) : { rows: [] as any[] };
+  const events = await db.query(`select title, starts_at, location, tentative from meetings where project_id = $1 and starts_at >= $2 and starts_at < $3 order by starts_at limit 15`, [task.project_id, new Date(now.getTime() - 86400_000), new Date(now.getTime() + 45 * 86400_000)]);
+  // Ansprechpartner für Rückfragen und Zusagen: Stufe 0 der Kette (Zuständige des Über-AP, Teilprojekt-Verantwortung, verantwortliche PL)
+  const contact: any = (await contactChain(db, task, { exclude: [agent.id] }))[0] ?? null;
+  // Belegt-Zeiten des Ansprechpartners aus anderen Projekten (Termine, an denen er teilnimmt oder die er angelegt hat; ohne Titel), damit Terminvorschläge geprüft werden können
+  const busy = contact ? await db.query(`select m.starts_at, m.ends_at from meetings m where m.project_id <> $2 and (m.created_by = $1 or m.attendees @> jsonb_build_array(jsonb_build_object('userId', $1::text))) and m.starts_at >= now() and m.starts_at < now() + interval '45 days' order by m.starts_at limit 20`, [contact.id, task.project_id]) : { rows: [] as any[] };
+  // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
+  const dms = await db.query(
+    `select m.body, m.created_at, case when m.kind = 'system' then 'System' else u.name end as name, m.user_id = $1 and m.kind = 'user' as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
+       join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 left join users u on u.id = m.user_id
+     where m.deleted_at is null and m.created_at > now() - interval '7 days'
+       and exists (select 1 from chat_channel_members o join project_members pm on pm.user_id = o.user_id and pm.project_id = $2 where o.channel_id = c.id and o.user_id <> $1)
+     order by m.created_at desc limit 10`, [agent.id, task.project_id]);
+  const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
+  const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
+  // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
+  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
+  const prompt = `Heute: ${today}
+${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
+Beschreibung: ${cut(task.description, 2000) || '–'}
+${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
+${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
+${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}
+Log (neueste zuerst):
+${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
+${dms.rows.length ? `Chat (deine Direktnachrichten mit Projektmitgliedern, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}\n` : ''}Mails zum Arbeitspaket:
+${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
+Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
+Doku-Seiten (neueste zuerst):
+${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
+Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
+Deine Zuständigkeit: ${basis}.
+Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}
+Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
+${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
+${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
+Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
+Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren.
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
+Agenten-Policy: ${policyText(policy)}
+${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
+
+Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
+  try {
+    const errors: string[] = [];
+    let extra = '';
+    let inputTokens = 0; let outputTokens = 0; let model = '';
+    let j: any = {};
+    let actions: AgentAction[] = [];
+    // Leserunden: read_page liefert Seiteninhalte, danach entscheidet das Modell erneut (max. zwei Leserunden)
+    for (let round = 0; round < 3; round++) {
+      // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum
+      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
+      inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
+      j = parseJson(r.text);
+      actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
+      const reads = actions.filter((a) => a.type === 'read_page');
+      if (!reads.length) break;
+      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page'); break; }
+      const texts: string[] = [];
+      for (const a of reads.slice(0, 4)) {
+        const pid = (a as any).pageId;
+        const page = await db.maybeOne(`select id, title, status, version, content_md, content_html, folder_id from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
+        if (!page) { texts.push(`- pageId ${pid ?? '?'}: nicht gefunden`); continue; }
+        if (page.folder_id && ctx.folderAccess.get(page.folder_id) === 'none') { texts.push(`- pageId ${pid}: kein Zugriff für Agenten (Ordner gesperrt)`); continue; }
+        const md = page.content_html ? htmlToMd(page.content_html) : page.content_md ?? '';
+        texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
+      }
+      const others = actions.filter((a) => a.type !== 'read_page');
+      extra += `\n\nGelesene Seiten (Markdown):\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten.`;
+      actions = [];
+    }
+    const res = await applyAgentActions(ctx, actions, { hold: true });
+    const applied = res.applied; errors.push(...res.errors);
+    inputTokens += ctx.tokens.input; outputTokens += ctx.tokens.output;
+    const checkIds = ctx.checkIds;
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
+    // Angehaltene Aktionen: Vorschläge an einer Frage approval (Karte im Chat, Meldung, Log, Warten des Agenten)
+    if (res.held.length) await holdProposals(ctx, res.held, run.id);
     // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen
     const content = applied.filter((x) => !['none', 'wait', 'read_page', 'chat'].includes(x.type));
     if (content.length) {
@@ -804,6 +931,7 @@ function triggerText(trigger: string, task: any): string {
     case 'overdue': return 'Das Arbeitspaket ist überfällig.';
     case 'changed': return 'Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert (Log, Mail, Status, Termin oder Tasks). Lies die Änderung und handle entsprechend.';
     case 'periodic': return 'Regelmäßige Durchsicht: seit drei Tagen kein Lauf. Prüfe den Stand; ist nichts zu tun und nichts zu erwarten, tu nichts.';
+    case 'approved': return 'Eine Person hat deine angehaltenen Aktionen bestätigt; sie wurden ausgeführt (siehe Log). Mach weiter.';
     case 'rejected': return 'Eine Person hat einen Vorschlag von dir abgelehnt (z. B. einen Mail-Entwurf; Details im Log). Wiederhole ihn nicht unverändert; kläre bei Bedarf per Chat, was anders sein soll.';
     case 'manual': return 'Die Projektleitung hat den Lauf manuell gestartet.';
     default: return trigger;

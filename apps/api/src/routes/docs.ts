@@ -54,29 +54,32 @@ export async function docRoutes(app: FastifyInstance) {
     return { folders: folders.rows.map(mapFolder), pages: pages.rows.map(mapPage), templates: templates.rows.map(mapTemplate).sort((a: any, b: any) => a.name.localeCompare(b.name)) };
   });
 
-  app.post<{ Params: { id: string }; Body: { name: string; parentId?: string | null; distributionList?: string[] } }>('/projects/:id/docs/folders', async (req) => {
+  const ACCESS = ['write', 'read', 'none'];
+  app.post<{ Params: { id: string }; Body: { name: string; parentId?: string | null; distributionList?: string[]; agentAccess?: 'write' | 'read' | 'none' } }>('/projects/:id/docs/folders', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? ({} as any);
     if (!b.name?.trim()) throw badRequest('Name erforderlich');
+    if (b.agentAccess !== undefined && !ACCESS.includes(b.agentAccess)) throw badRequest('Agentenzugriff: write, read oder none');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from doc_folders where project_id = $1`, [req.params.id]);
     const r = await db.one(
-      `insert into doc_folders (project_id, parent_id, name, position, distribution_list) values ($1,$2,$3,$4,$5) returning *`,
-      [req.params.id, b.parentId ?? null, b.name.trim(), pos.p, JSON.stringify(b.distributionList ?? [])]
+      `insert into doc_folders (project_id, parent_id, name, position, distribution_list, agent_access) values ($1,$2,$3,$4,$5,$6) returning *`,
+      [req.params.id, b.parentId ?? null, b.name.trim(), pos.p, JSON.stringify(b.distributionList ?? []), b.agentAccess ?? 'write']
     );
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'folder.create', objectType: 'doc_folder', objectId: r.id, details: { name: b.name } });
     return { folder: mapFolder(r) };
   });
 
-  app.patch<{ Params: { id: string; fid: string }; Body: { name?: string; distributionList?: string[]; parentId?: string | null } }>('/projects/:id/docs/folders/:fid', async (req) => {
+  app.patch<{ Params: { id: string; fid: string }; Body: { name?: string; distributionList?: string[]; parentId?: string | null; agentAccess?: 'write' | 'read' | 'none' } }>('/projects/:id/docs/folders/:fid', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if (b.agentAccess !== undefined && !ACCESS.includes(b.agentAccess)) throw badRequest('Agentenzugriff: write, read oder none');
     const r = await db.maybeOne(
       `update doc_folders set name = coalesce($3, name), distribution_list = coalesce($4::jsonb, distribution_list),
-         parent_id = case when $5 then $6::uuid else parent_id end
+         parent_id = case when $5 then $6::uuid else parent_id end, agent_access = coalesce($7, agent_access)
        where id = $1 and project_id = $2 returning *`,
-      [req.params.fid, req.params.id, b.name ?? null, b.distributionList ? JSON.stringify(b.distributionList) : null, 'parentId' in b, b.parentId ?? null]
+      [req.params.fid, req.params.id, b.name ?? null, b.distributionList ? JSON.stringify(b.distributionList) : null, 'parentId' in b, b.parentId ?? null, b.agentAccess ?? null]
     );
     if (!r) throw notFound('Ordner nicht gefunden');
     // Ordnerseite trägt den Ordnernamen als Titel

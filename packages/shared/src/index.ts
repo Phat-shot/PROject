@@ -58,6 +58,8 @@ export interface Membership {
   canUseAi: boolean;
   /** nur Agenten: darf Mails direkt senden (sonst Entwurf zur Freigabe) */
   agentCanMail?: boolean;
+  /** nur Agenten: Policy im Projekt (null = erben) */
+  agentPolicy?: AgentPolicy | null;
   /** Herkunft (Regel M): Direkteintrag (überschreibt alle Gruppen) oder über Gruppen des Projekts (höchste Rolle, Einzelrechte ODER-verknüpft) */
   origin?: 'direct' | 'group';
 }
@@ -75,6 +77,8 @@ export interface Project {
   /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung, bearbeitet Mails der Projektkonten nach agentMail */
   agentUserId?: string | null;
   agentMail?: AgentMailMode;
+  /** Agenten-Policy des Projekts (Rohwert; wirksam über GET /projects/:id/agent-policy) */
+  agentPolicy?: AgentPolicy;
   mailInquiry?: MailInquiry;
   /** workflow = Mini-Projekt eines isolierten Workflow-Laufs (nicht in Projektlisten) */
   kind?: 'project' | 'workflow';
@@ -150,7 +154,7 @@ export interface OrgSettings {
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
   /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
   notify?: { digestHour?: number };
-  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check' };
+  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy };
 }
 
 /**
@@ -179,15 +183,16 @@ export const AI_FEATURES = [
   { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
   { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both', later: true },
   { key: 'agent.web', category: 'agent', label: 'Online-Recherche', who: 'agent', defaultDeny: true, later: true },
-  { key: 'agent.finalize', category: 'agent', label: 'Final setzen', who: 'agent', later: true },
-  { key: 'agent.distribute', category: 'agent', label: 'PDF an Verteiler', who: 'agent', later: true },
-  { key: 'agent.send_external', category: 'agent', label: 'Mails nach außen', who: 'agent', later: true },
-  { key: 'agent.close', category: 'agent', label: 'Erledigt setzen', who: 'agent', later: true },
-  { key: 'agent.restructure', category: 'agent', label: 'Umstrukturieren', who: 'agent', later: true },
-  { key: 'agent.plan', category: 'agent', label: 'Planen', who: 'agent', later: true },
-  { key: 'agent.assign', category: 'agent', label: 'Zuweisen', who: 'agent', later: true },
-  { key: 'agent.schedule', category: 'agent', label: 'Termine ändern', who: 'agent', later: true },
-  { key: 'agent.foreign', category: 'agent', label: 'Fremde Arbeitspakete', who: 'agent', later: true },
+  { key: 'agent.finalize', category: 'agent', label: 'Final setzen', who: 'agent' },
+  { key: 'agent.distribute', category: 'agent', label: 'PDF an Verteiler', who: 'agent' },
+  { key: 'agent.send_external', category: 'agent', label: 'Mails nach außen', who: 'agent' },
+  { key: 'agent.close', category: 'agent', label: 'Erledigt setzen', who: 'agent' },
+  { key: 'agent.restructure', category: 'agent', label: 'Umstrukturieren', who: 'agent' },
+  { key: 'agent.plan', category: 'agent', label: 'Planen', who: 'agent' },
+  { key: 'agent.assign', category: 'agent', label: 'Zuweisen', who: 'agent' },
+  { key: 'agent.schedule', category: 'agent', label: 'Termine ändern', who: 'agent' },
+  { key: 'agent.foreign', category: 'agent', label: 'Fremde Arbeitspakete', who: 'agent' },
+  { key: 'agent.workflow', category: 'agent', label: 'Workflow-Schritte übernehmen', who: 'agent' },
   { key: 'pl.agents', category: 'pl', label: 'Eigene Agenten der PL', who: 'person', defaultDeny: true },
   { key: 'pl.own_llm', category: 'pl', label: 'Eigenes LLM im Projekt', who: 'person' }
 ] as const satisfies readonly AiFeatureDef[];
@@ -238,7 +243,7 @@ export interface AiCapabilities {
   agents: { id: string; name: string; run: AiCapability; chat: AiCapability }[];
 }
 
-export type AiProposalKind = 'task_update' | 'page_append';
+export type AiProposalKind = 'task_update' | 'page_append' | 'agent_action';
 export interface AiProposal {
   id: string;
   projectId: string;
@@ -247,8 +252,10 @@ export interface AiProposal {
   taskId: string | null;
   pageId: string | null;
   /** task_update: summary, logEntry, columnName, dueDate, questions; page_append: section (Markdown) */
-  payload: { summary?: string; logEntry?: string; columnName?: string | null; dueDate?: string | null; questions?: string[]; section?: string };
-  status: 'pending' | 'approved' | 'rejected';
+  payload: { summary?: string; logEntry?: string; columnName?: string | null; dueDate?: string | null; questions?: string[]; section?: string; /** agent_action: die angehaltene Aktion, ihr Kurztext und der Stand, auf den sie sich bezieht */ action?: Record<string, unknown>; label?: string; base?: Record<string, unknown> };
+  status: 'pending' | 'approved' | 'rejected' | 'stale' | 'failed' | 'expired' | 'withdrawn';
+  /** agent_action: Aktionsklasse, Reihenfolge, Frage approval, Lauf, Ergebnis */
+  actionClass?: AgentActionClass | null; seq?: number; questionId?: string | null; agentRunId?: string | null; result?: string | null; agentName?: string | null;
   createdBy: string | null;
   createdByName: string | null;
   decidedBy: string | null;
@@ -406,6 +413,8 @@ export interface Task {
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
   agentWait?: { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean } | null;
   agentNextCheckAt?: string | null;
+  /** Selbstständigkeit für dieses AP und seine Aufgaben (null = erben) */
+  agentPolicy?: AgentPolicy | null;
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;
@@ -472,11 +481,41 @@ export interface Question {
   cancelReason: string | null; createdAt: string; taskCode: string | null; taskTitle: string | null; projectKey: string | null;
   /** Thema und Bezug (z. B. mail_inquiry mit mailId und openPoints) */
   context?: Record<string, unknown> | null;
+  /** approval: angehaltene Aktionen des Agenten an dieser Frage */
+  proposals?: { id: string; status: string; class: AgentActionClass | null; label: string; seq: number }[] | null;
 }
 /** Mail-Rückfrage je Projekt: bei neuer Mail mit offenen Punkten die PL fragen, im Projekt fragen, beim Absender nachfragen oder nichts */
 export type MailInquiryMode = 'ask_pl' | 'ask_project' | 'ask_sender' | 'off';
 export interface MailInquiry { mode: MailInquiryMode; /** Frist in Stunden, nach der eine Rückfrage im Projekt weitergegeben wird */ waitHours: number; /** vom Mandanten geerbt (Projekt ohne eigene Einstellung) */ inherited?: boolean }
 export type AgentMailMode = 'off' | 'triage' | 'process';
+/** Agenten-Policy (Konzept 6): Selbstständigkeit und Aktionsklassen, die bestätigt werden */
+export type AgentMode = 'auto' | 'confirm_critical' | 'confirm_all';
+export type AgentActionClass = 'finalize' | 'distribute' | 'send_external' | 'close' | 'restructure' | 'plan' | 'assign' | 'schedule' | 'foreign';
+export const AGENT_MODES: { key: AgentMode; label: string }[] = [
+  { key: 'auto', label: 'Selbstständig' },
+  { key: 'confirm_critical', label: 'Rückfrage bei wichtigen Schritten' },
+  { key: 'confirm_all', label: 'Rückfrage bei allem' }
+];
+export const AGENT_ACTION_CLASSES: { key: AgentActionClass; label: string; critical: boolean }[] = [
+  { key: 'finalize', label: 'Final setzen oder aufheben', critical: true },
+  { key: 'distribute', label: 'PDF an Verteiler', critical: true },
+  { key: 'send_external', label: 'Mails nach außen', critical: true },
+  { key: 'close', label: 'Erledigt setzen', critical: true },
+  { key: 'restructure', label: 'Umstrukturieren', critical: true },
+  { key: 'plan', label: 'Planen (Arbeitspakete, Teilprojekte, Meilensteine)', critical: false },
+  { key: 'assign', label: 'Zuweisen an Dritte', critical: false },
+  { key: 'schedule', label: 'Bestehende Termine ändern', critical: false },
+  { key: 'foreign', label: 'Fremde Arbeitspakete ändern', critical: false }
+];
+/** Je Ebene gesetzte Felder; Grenzen (maxMode, lockedConfirm) gelten für tiefere Ebenen; workflows = Workflow-Schritte übernehmen */
+export interface AgentPolicy { mode?: AgentMode; confirm?: AgentActionClass[]; maxMode?: AgentMode; lockedConfirm?: AgentActionClass[]; workflows?: boolean }
+/** Wirksame Policy mit Herkunft je Feld */
+export interface EffectiveAgentPolicy {
+  mode: AgentMode; confirm: AgentActionClass[]; workflows: boolean;
+  origin: { mode: string; confirm: Partial<Record<AgentActionClass, string>>; workflows: string };
+  /** über KI-Freigaben gesperrte Klassen mit Begründung */
+  denied: Partial<Record<AgentActionClass, string>>;
+}
 /** Chat: aus, Systembeitrag im zugehörigen Thread (Frage, Auftrag, Direktnachricht des Agenten) oder im Projektkanal */
 export type NotifyChat = 'off' | 'thread' | 'project';
 export type NotifyMail = 'off' | 'now' | 'digest';
@@ -851,6 +890,8 @@ export interface DocFolder {
   name: string;
   position: number;
   distributionList: string[];
+  /** Zugriff der KI-Agenten: schreiben (Standard), nur lesen, kein Zugriff; vererbt an Unterordner, die strengste Angabe gilt */
+  agentAccess?: 'write' | 'read' | 'none';
   /** Seite des Ordners (Beschreibung); wird beim ersten Öffnen angelegt */
   pageId: string | null;
 }

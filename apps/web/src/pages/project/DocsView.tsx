@@ -281,6 +281,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
   const { detail } = useProject();
   const [name, setName] = useState(existing?.name ?? '');
   const [list, setList] = useState(existing?.distributionList.join(', ') ?? '');
+  const [agentAccess, setAgentAccess] = useState<'write' | 'read' | 'none'>(existing?.agentAccess ?? 'write');
   const { busy, error, run } = useAsync();
   const dialog = useDialog();
   const nav = useNavigate();
@@ -290,9 +291,11 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Verteiler (Mail-Adressen, Komma)</span><input type="text" value={list} onChange={(e) => setList(e.target.value)} placeholder="gf@firma.de, kunde@extern.de" /></label>
         <p className="muted small">Finale Seiten dieses Ordners können als PDF an den Verteiler gesendet werden. Versand über das Projektkonto.</p>
+        <label className="field"><span>Zugriff der KI-Agenten</span><select value={agentAccess} onChange={(e) => setAgentAccess(e.target.value as 'write' | 'read' | 'none')}><option value="write">schreiben (Seiten anlegen, ändern, verschieben)</option><option value="read">nur lesen</option><option value="none">kein Zugriff (auch nicht im Kontext der Agenten)</option></select></label>
+        <p className="muted small">Gilt auch für Unterordner; die strengste Angabe entlang der Ordner gewinnt.</p>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !name} onClick={() => void run(async () => {
-          const body = { name, distributionList: list.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean) };
+          const body = { name, distributionList: list.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean), agentAccess };
           if (existing) await api.patch(`/projects/${detail.project.id}/docs/folders/${existing.id}`, body); else await api.post(`/projects/${detail.project.id}/docs/folders`, body);
           await onSaved();
         })}>Speichern</button>

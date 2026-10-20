@@ -1,4 +1,6 @@
 import type { FastifyInstance } from 'fastify';
+import type { AgentActionClass, AgentMode, AgentPolicy } from '@projekttool/shared';
+import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
 import { randomBytes } from 'node:crypto';
 import type { User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
@@ -157,6 +159,29 @@ export async function agentRoutes(app: FastifyInstance) {
     await db.query(`update tasks set agent_paused = $2 where id = $1`, [t.id, Boolean(req.body?.paused)]);
     await audit(db, { orgId: user.orgId, projectId: t.project_id, userId: user.id, action: 'agent.pause', objectType: 'task', objectId: t.id, details: { paused: Boolean(req.body?.paused) } });
     return { ok: true, paused: Boolean(req.body?.paused) };
+  });
+  /**
+   * Selbstständigkeit für ein Arbeitspaket (gilt auch für seine Aufgaben): die PL frei; mit „Projektplan ändern“ nur verschärfen
+   * (strenger als die ohne AP wirksame Policy); null = erben.
+   */
+  app.put<{ Params: { id: string }; Body: { mode?: AgentMode | null; confirm?: AgentActionClass[] | null } | null }>('/tasks/:id/agent-policy', async (req) => {
+    const user = requireUser(req);
+    const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
+    const m = await requireProject(db, user, t.project_id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert die PL oder das Recht „Projektplan ändern“');
+    let v: AgentPolicy | null;
+    try { v = req.body === null || req.body === undefined || !Object.keys(req.body).length || (req.body.mode === null && !req.body.confirm) ? null : parseAgentPolicy(req.body, { limits: false, workflows: false }); } catch (e: any) { throw badRequest(e.message); }
+    if (m.role !== 'pl') {
+      // Nur verschärfen: mode nicht lascher als ohne AP, confirm nur ergänzen
+      const base = await effectiveAgentPolicy(db, { projectId: t.project_id, taskId: null });
+      if (!v) throw forbidden('Zurücksetzen auf die Vorgabe darf nur die PL');
+      if (v.mode && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(base.mode)) throw forbidden(`Mit „Projektplan ändern“ lässt sich die Selbstständigkeit nur verschärfen (Vorgabe: ${base.mode})`);
+      if (v.confirm && base.confirm.some((k) => !v!.confirm!.includes(k))) throw forbidden('Bestätigungen lassen sich nur ergänzen, nicht entfernen');
+    }
+    await db.query(`update tasks set agent_policy = $2::jsonb where id = $1`, [t.id, v ? JSON.stringify(v) : null]);
+    await audit(db, { orgId: user.orgId, projectId: t.project_id, userId: user.id, action: 'agent.policy', objectType: 'task', objectId: t.id, details: (v ?? { inherit: true }) as Record<string, unknown> });
+    return { policy: v, effective: await effectiveAgentPolicy(db, { agentId: (await agentForTask(db, t.id))?.id ?? null, projectId: t.project_id, taskId: t.id }) };
   });
   app.post<{ Params: { id: string } }>('/tasks/:id/agent-run', async (req) => {
     const user = requireUser(req);

@@ -5,6 +5,7 @@ import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
 import { useDialog } from './ui';
+import { ApprovalCard } from './AgentPolicy';
 
 export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
@@ -149,13 +150,14 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
 function QuestionHead({ q, onChanged }: { q: Question; onChanged: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); setError(null); onChanged(); } catch (e) { setError((e as Error).message); } };
-  const kind = q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'external_referral' ? 'Rückfrage von extern' : 'Frage';
+  const kind = q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'external_referral' ? 'Rückfrage von extern' : q.kind === 'approval' ? 'Freigabe' : 'Frage';
   const status = q.status === 'open' ? 'offen' : q.status === 'answered' ? `beantwortet von ${q.answeredByName ?? '?'}${q.answerSource === 'task' ? ' in der Aufgabe' : q.answerSource === 'meeting' ? ' (Termin bestätigt)' : q.answerSource === 'chat' ? ' im Chat' : ''}` : q.status === 'escalated' ? 'weitergegeben' : `erledigt${q.cancelReason ? `: ${q.cancelReason}` : ''}`;
   return (
     <div className={`question-head ${q.status}`}>
       <div className="row between small"><span><strong>{kind}</strong>{q.taskCode && <> zu <Link to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>{q.taskCode}</Link></>} · {status}</span>
         <span className="row">{q.taskId && <Link className="btn sm link" to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>Im AP öffnen</Link>}{q.status === 'open' && <button className="btn sm link" title="Frage ohne Antwort schließen" onClick={() => void act(() => api.post(`/questions/${q.id}/cancel`, {}))}>Erledigt</button>}</span></div>
       {q.status === 'open' && q.options && q.options.length > 0 && <div className="row mt" style={{ gap: 6 }}>{q.options.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void act(() => api.post(`/questions/${q.id}/answer`, { option: o.key }))}>{o.label}</button>)}</div>}
+      {q.kind === 'approval' && <ApprovalCard q={q} onChanged={onChanged} />}
       {q.status === 'answered' && q.answerText && <div className="small muted mt">{q.answerOption && q.options ? `${q.options.find((o) => o.key === q.answerOption)?.label ?? q.answerOption}: ` : ''}{q.answerText}</div>}
       {error && <div className="error small mt">{error}</div>}
     </div>
