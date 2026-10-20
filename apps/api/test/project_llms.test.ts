@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
+import { readFile } from 'node:fs/promises';
 import { aiConfigForAgent, aiConfigForProject } from '../src/ai/client.js';
+import { aiAllowed } from '../src/ai/policy.js';
 
 /** Lokales LLM: antwortet „bereit“ und meldet Token. */
 const fakeFetch: typeof fetch = async (input, init) => {
@@ -84,8 +86,10 @@ test('Neues Projekt ohne Agent; Agenten der PL nur auf Projekt-LLMs, Agenten des
   assert.equal((await t.db.one(`select count(*)::int as c from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent'`, [pers])).c, 0, 'startet ohne Agent');
   await t.api(admin).put('/ai/settings', { plAgents: { enabled: true, maxBudget: 10 } });
   const lid = (await t.db.one(`select id from ai_profiles where project_id = $1`, [pers])).id;
-  const pol = (await t.api(pl).get(`/projects/${pers}/agents`)).json().policy;
-  assert.deepEqual(pol.profiles.map((p: any) => p.name).sort(), ['Mein Qwen', 'Qwen'], 'freigegeben + eigenes, nicht „Nur ERP“');
+  const polNames = async () => (await t.api(pl).get(`/projects/${pers}/agents`)).json().policy.profiles.map((p: any) => p.name).sort();
+  assert.deepEqual(await polNames(), ['Mein Qwen'], 'persönliches Projekt: Org-Profil „alle“ nur mit „auch in persönlichen Projekten“');
+  await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: true });
+  assert.deepEqual(await polNames(), ['Mein Qwen', 'Qwen'], 'freigegeben + eigenes, nicht „Nur ERP“');
   assert.equal((await t.api(pl).post(`/projects/${pers}/agents`, { name: 'X', aiProfileId: erpOnly })).statusCode, 400);
   const a = (await t.api(pl).post(`/projects/${pers}/agents`, { name: 'Assi', aiProfileId: lid })).json().agent;
   assert.equal(a.aiProfileId, lid);
@@ -125,4 +129,46 @@ test('Eigenes Anthropic-LLM eines Projekts nutzt nie ANTHROPIC_API_KEY; Verbindu
   } finally {
     delete process.env.ANTHROPIC_API_KEY;
   }
+});
+
+test('Persönliche Projekte: Org-Profile nur mit „auch in persönlichen Projekten“ oder Auswahl; Org-Agenten dort nur mit solchem Profil; Bestand per Migration', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const pers = (await t.db.one(`select id from projects where key = 'PERS'`)).id;
+  await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'all', personalScope: false });
+  const names = async () => (await t.api(pl).get(`/projects/${pers}/llms`)).json().available.map((x: any) => x.name);
+  assert.ok(!(await names()).includes('Qwen'), 'ohne Flag nicht im persönlichen Projekt');
+  assert.ok((await t.api(pl).get(`/projects/${t.ids.projects.web}/llms`)).json().available.some((x: any) => x.name === 'Qwen'), 'normales Projekt unverändert');
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'selected', projectIds: [], personalScope: true })).statusCode, 400, 'Flag nur bei „alle“');
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: true })).statusCode, 200);
+  assert.ok((await names()).includes('Qwen'), 'mit Flag');
+  assert.equal((await t.api(admin).get('/ai/status')).json().profiles.find((p: any) => p.id === orgLlm).personalScope, true);
+  // Auswahl statt Flag
+  await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: false });
+  assert.ok(!(await names()).includes('Qwen'));
+  await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'selected', projectIds: [pers, t.ids.projects.web] });
+  assert.ok((await names()).includes('Qwen'), 'per Auswahl');
+  // Org-Agent: in normalen Projekten läuft er mit seinem Profil (auch scope none), im persönlichen nur mit Freigabe
+  const agentsOnly = (await t.db.one(`select id from ai_profiles where name = 'Nur Agenten'`)).id;
+  const orgi = (await t.api(admin).post('/agents', { name: 'Orgi', aiProfileId: agentsOnly })).json().agent;
+  assert.equal((await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${orgi.id}`, { role: 'member' })).statusCode, 200);
+  assert.equal((await t.api(pl).put(`/projects/${pers}/members/${orgi.id}`, { role: 'member' })).statusCode, 200);
+  assert.equal((await aiAllowed(t.db, { userId: orgi.id, projectId: t.ids.projects.web, feature: 'agent.run', budget: false })).allowed, true, 'normales Projekt: Profil none sperrt nicht');
+  const denied = await aiAllowed(t.db, { userId: orgi.id, projectId: pers, feature: 'agent.run', budget: false });
+  assert.equal(denied.allowed, false);
+  assert.match(denied.reason, /im persönlichen Projekt nicht freigegeben/);
+  assert.equal(await aiConfigForAgent(t.db, orgi.id, pers), null);
+  assert.ok(await aiConfigForAgent(t.db, orgi.id, null));
+  await t.api(admin).patch(`/ai/profiles/${agentsOnly}`, { projectScope: 'selected', projectIds: [pers] });
+  assert.equal((await aiAllowed(t.db, { userId: orgi.id, projectId: pers, feature: 'agent.run', budget: false })).allowed, true, 'per Auswahl');
+  // Migration: ein persönliches Projekt, das ein „alle“-Profil als Projekt-KI nutzt, behält es als Auswahl
+  await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'all', projectIds: [], personalScope: false });
+  await t.db.query(`update projects set ai_profile_id = $2 where id = $1`, [pers, orgLlm]);
+  await t.db.query(`delete from ai_profile_projects where profile_id = $1`, [orgLlm]);
+  await t.db.query(`delete from audit_log where action = 'ai.profile.personal_scope.migrated'`);
+  assert.equal(await aiConfigForProject(t.db, pers), null, 'vor der Migration ohne Freigabe');
+  await t.db.exec(await readFile(new URL('../migrations/048_profile_personal_scope.sql', import.meta.url), 'utf8'));
+  assert.ok(await t.db.maybeOne(`select 1 from ai_profile_projects where profile_id = $1 and project_id = $2`, [orgLlm, pers]), 'Bestand als Auswahl');
+  assert.ok(await aiConfigForProject(t.db, pers), 'Projekt-KI läuft weiter');
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'ai.profile.personal_scope.migrated' and org_id = $1`, [t.ids.org]));
 });

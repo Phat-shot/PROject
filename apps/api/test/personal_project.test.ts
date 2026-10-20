@@ -62,6 +62,9 @@ test('Eigene Agenten der PL: nur mit Freigabe, nur freigegebene Profile, Budget 
   assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA })).statusCode, 403, 'nicht freigegeben');
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 40, plAgents: { enabled: true, maxBudget: 10 } });
   assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileB })).statusCode, 400, 'Profil im Projekt nicht freigegeben');
+  // „alle Projekte“ gilt im persönlichen Projekt erst mit „auch in persönlichen Projekten“
+  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA })).statusCode, 400, 'ohne personalScope nicht im persönlichen Projekt');
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${profileA}`, { personalScope: true })).statusCode, 200);
   assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 11 })).statusCode, 400, 'Budget über dem Deckel');
   const r = await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 5, role: 'pl', persona: 'knapp', signature: 'Morton\nfür Max' });
   assert.equal(r.statusCode, 200, r.body);

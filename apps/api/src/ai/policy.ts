@@ -190,8 +190,11 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
   // 3 Profil: die Profilachse (Freigabe je Profil, eigenes LLM, Sperre durch den Org-Admin) bleibt, wie sie ist
   let cfg: AiConfig | null = null;
   if (isAgent) {
-    cfg = await aiConfigForAgent(db, subj.id);
-    if (!cfg) return deny('profile', `Kein freigegebenes KI-Profil für ${subj.name} (Verwaltung › KI-Agenten)`, true);
+    cfg = await aiConfigForAgent(db, subj.id, project?.id ?? null);
+    if (!cfg) {
+      const base = project?.personal ? await aiConfigForAgent(db, subj.id, null) : null;
+      return deny('profile', base ? `Profil ${base.name} im persönlichen Projekt nicht freigegeben (Verwaltung › KI-Profile: „auch in persönlichen Projekten“ oder Auswahl)` : `Kein freigegebenes KI-Profil für ${subj.name} (Verwaltung › KI-Agenten)`, true);
+    }
     pass('profile', `Profil ${cfg.name}`);
   } else if (f === 'pl.own_llm' && q.profileId) {
     cfg = profileConfig(await db.maybeOne<AiProfileRow>(`select * from ai_profiles where id = $1 and project_id = $2`, [q.profileId, project!.id]));

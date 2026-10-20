@@ -167,7 +167,8 @@ export async function aiRoutes(app: FastifyInstance) {
     const b: any = req.body ?? {};
     const v = validProfile(b);
     const scope = validScope(b.projectScope ?? 'all');
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope]);
+    if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scope !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
@@ -188,7 +189,11 @@ export async function aiRoutes(app: FastifyInstance) {
       return { ok: true, adminBlocked: b.adminBlocked };
     }
     const v = validProfile(b, cur);
-    if (b.projectScope !== undefined) await db.query(`update ai_profiles set project_scope = $2 where id = $1`, [cur.id, validScope(b.projectScope)]);
+    const scopeNow = b.projectScope !== undefined ? validScope(b.projectScope) : cur.project_scope;
+    if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scopeNow !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
+    if (b.projectScope !== undefined) await db.query(`update ai_profiles set project_scope = $2 where id = $1`, [cur.id, scopeNow]);
+    if (b.personalScope !== undefined) await db.query(`update ai_profiles set personal_scope = $2 where id = $1`, [cur.id, b.personalScope]);
+    else if (scopeNow !== 'all' && cur.personal_scope) await db.query(`update ai_profiles set personal_scope = false where id = $1`, [cur.id]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, cur.id, b.projectIds);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
