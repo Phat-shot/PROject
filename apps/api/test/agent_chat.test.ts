@@ -306,3 +306,38 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(Projekt dieses Kanals\\)`));
   assert.match(p, new RegExp(`Kennzahlen zu WEB-${t4.number}:`));
 });
+
+test('Ohne Kontext: Gruß ohne Projektbezug bekommt keine Projektinfos; mit persönlichem Projekt nur dessen Doku und Arbeitspakete, Verlauf zählt dann nicht', async () => {
+  const admin = await t.login('admin@demo.local');
+  const max = await t.login('max@demo.local');
+  const agent = await t.db.one(`select id from users where name = 'Chatty' and kind = 'agent'`);
+  const cid = (await t.api(max).post('/chat/dm', { userId: agent.id })).json().channelId;
+  const say = async (body: string) => { const r = await t.api(max).post(`/chat/channels/${cid}/messages`, { body }); assert.equal(r.statusCode, 200, r.body); await flushAgentRuns(); return prompts.at(-1)!; };
+  // Max hat zwei gemeinsame Projekte (WEB, ERP) und noch kein persönliches: „hi“ → kein Projektbezug, keine Kennzahlen, keine Arbeitspakete
+  let p = await say('hi Chatty');
+  assert.match(p, /Thema: kein Projektbezug in der Nachricht/);
+  assert.ok(!p.includes('Kennzahlen zu') && !p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste'), 'keine Projektinfos');
+  assert.match(p, /nur ein Gruß oder eine Kurzmeldung/);
+  // Persönliches Projekt von Max mit Chatty als Mitglied und einer Doku-Seite
+  assert.equal((await t.api(admin).put('/org/settings', { personalProjects: true })).statusCode, 200);
+  // Org-Profil von Chatty auch in persönlichen Projekten freigeben, sonst ist der Agent dort gesperrt
+  const prof = await t.db.one(`select id from ai_profiles where name = 'Qwen' and org_id = $1`, [t.ids.org]);
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${prof.id}`, { personalScope: true })).statusCode, 200);
+  const r = await t.api(max).post('/projects', { key: 'MAXP', name: 'Max Assistent', personal: true });
+  assert.equal(r.statusCode, 200, r.body);
+  const pid = r.json().project.id;
+  assert.equal((await t.api(max).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: false })).statusCode, 200);
+  await t.db.query(`insert into doc_pages (project_id, folder_id, title, content_md, content_html, status, created_by, updated_by) values ($1,null,'Notizen Urlaub','# Urlaub\nFlug am 3.11. ab Frankfurt.','<h1>Urlaub</h1>','draft',$2,$2)`, [pid, t.ids.users.max]);
+  p = await say('hi');
+  assert.match(p, /Thema: Projekt MAXP „Max Assistent“ \(persönliches Projekt des Absenders/);
+  assert.ok(p.includes('Doku im persönlichen Projekt') && p.includes('„Notizen Urlaub“'), 'Doku des persönlichen Projekts');
+  assert.ok(!p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste') && !p.includes('stammt aus dem Verlauf'), 'nichts aus anderen Projekten, kein Verlauf');
+  // Frage ohne Nennung: trotz Verlauf (WEB, ERP) bleibt das persönliche Projekt das Thema, mit passender Seite und Ausschnitt
+  p = await say('Wann geht mein Flug?');
+  assert.match(p, /Thema: Projekt MAXP/);
+  assert.ok(p.includes('Flug am 3.11.'), 'Ausschnitt aus der Suche');
+  assert.ok(!p.includes('Angebot Agentur'));
+  // Ausdrückliche Nennung holt das andere Projekt zurück
+  p = await say('Was läuft gerade in der ERP-Einführung?');
+  assert.match(p, /Thema: Projekt ERP „ERP-Einführung“ \(in der Nachricht genannt\)/);
+});

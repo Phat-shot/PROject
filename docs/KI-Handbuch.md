@@ -137,6 +137,8 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 ## 9. Häufige Fragen
 
+**Warum antwortet er auf „hi“ nicht mit Projektinfos?** Ohne Nennung eines Projekts oder einer Kennung gibt es keinen Projektbezug: Bei einem Gruß antwortet er allgemein; bei einer Frage ohne Nennung nutzt er nur dein persönliches Projekt (Doku und Arbeitspakete), wenn er dort Mitglied ist. Ein anderes Projekt nennst du mit Kennung, Kürzel oder Name.
+
 **Warum gilt mein „hi“ nicht als Antwort?** Grüße und Kurzmeldungen ohne Inhalt beantworten keine offene Frage und stehen nicht im Log; der Agent antwortet nur im Chat und wartet weiter. Kurze Bestätigungen wie „ok“, „passt“ oder „ja“ zählen als Antwort.
 
 **Warum fragt er?** Weil ihm eine Information oder Entscheidung fehlt, die weder in Log, Mails, Chat noch Doku steht, oder weil die Policy für diesen Schritt eine Bestätigung verlangt. Fragen haben ein Thema und eine Frist; nach der Frist fasst er nach und gibt weiter.

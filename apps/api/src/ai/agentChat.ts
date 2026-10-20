@@ -10,6 +10,8 @@ import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 import { isInternal } from '../outbound.js';
 import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
+import { search as knowledgeSearch } from './knowledge.js';
+import { SQL } from '../projectPolicy.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
@@ -69,7 +71,8 @@ const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').t
 const hhmm = (d: string | Date) => new Date(d).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
 
-export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask';
+/** personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (Gruß ohne persönliches Projekt) */
+export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask' | 'personal' | 'general';
 export interface ScopeProject { id: string; key: string; name: string }
 /** Thema einer Chat-Nachricht: Projekte und Arbeitspakete, aus denen der Kontext kommt, und wie es bestimmt wurde. */
 export interface ChatScope {
@@ -119,7 +122,7 @@ function findMentions(text: string, projects: ScopeProject[]): { refs: { project
  * KI-Freigabe (agent.chat) frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
  * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
  */
-export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string }[]; senderId: string; agent: { id: string; org_id: string } }, now = new Date()): Promise<ChatScope> {
+export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string }[]; senderId: string; agent: { id: string; org_id: string; name?: string } }, now = new Date()): Promise<ChatScope> {
   const all: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1 order by key`, [q.agent.org_id])).rows;
   const channelProject = q.channel.kind === 'project' ? all.find((p) => p.id === q.channel.project_id) ?? null : null;
   /** Arbeitspaket zu einer Kennung; null, wenn es fehlt oder einer von beiden es nicht sieht (eingeschränktes Teilprojekt). */
@@ -179,6 +182,13 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   const mine = await resolve(q.message.body);
   if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)) };
   if (ALL_RE.test(q.message.body)) return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
+  // Ohne Kontext nur das persönliche Projekt des Absenders (er ist dort PL, der Agent Mitglied): Infos und Doku von dort, nichts aus anderen Projekten
+  const personal = common.length ? (await db.query(`select p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1 and m.role = 'pl' where ${SQL.isPersonal('p')} and p.id = any($2::uuid[])`, [q.senderId, common.map((p) => p.id)])).rows.map((r: any) => r.id as string) : [];
+  const personalScope = (): ChatScope => ({ how: 'personal', projectIds: personal, taskIds: [], refs: [], hidden: [], projects: common.filter((p) => personal.includes(p.id)) });
+  // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug, auch nicht aus dem Verlauf
+  if (isSmallTalk(q.message.body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope() : { how: 'general', projectIds: [], taskIds: [], refs: [], hidden: [], projects: common };
+  // Mit persönlichem Projekt gilt ohne Nennung immer dieses; ein anderes Projekt nennt man mit Kennung, Kürzel oder Name
+  if (personal.length) return personalScope();
   // Verlauf (neueste zuerst): das zuletzt genannte Arbeitspaket bzw. Projekt, ohne Zeitfenster
   for (const h of q.history) {
     if (h.id === q.message.id) continue;
@@ -319,7 +329,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Kennungen oder Projekte, die der Absender nicht sieht oder in denen einer gesperrt ist: nichts dazu, auch kein Titel
   if (scope.how === 'mentioned' && !scope.projectIds.length) return direct('Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
   // Kein gemeinsames, beidseitig freies Projekt: Hilfe und Hinweis statt Schweigen (ohne LLM-Aufruf)
-  if (!project && scope.how === 'all' && !scope.projects.length) {
+  if (!project && (scope.how === 'all' || scope.how === 'general') && !scope.projects.length) {
     return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');
   }
   // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit den Projektnamen, keine Inhalte
@@ -355,11 +365,20 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const viewerId = project ? null : msg.user_id;
   const figures: string[] = [];
   if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
-  else for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
-  const HOW: Record<ChatScopeHow, string> = { channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Verlauf genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '' };
-  const theme = scope.projects.length
-    ? `${scope.refs.length ? `Arbeitspaket ${scope.refs.join(', ')} in ` : ''}Projekt ${scope.projects.map((p) => `${p.key} „${p.name}“`).join(', ')} (${HOW[scope.how]})`
-    : `kein gemeinsames Projekt mit ${msg.user_name}; du kannst nur allgemein antworten`;
+  else if (scope.how !== 'general') for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
+  const HOW: Record<ChatScopeHow, string> = { channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Verlauf genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
+  const theme = scope.how === 'general'
+    ? `kein Projektbezug in der Nachricht: antworte allgemein, ohne Inhalte, Stände oder Kennzahlen aus Projekten; frag bei Bedarf, worum es geht`
+    : scope.projects.length
+      ? `${scope.refs.length ? `Arbeitspaket ${scope.refs.join(', ')} in ` : ''}Projekt ${scope.projects.map((p) => `${p.key} „${p.name}“`).join(', ')} (${HOW[scope.how]})`
+      : `kein gemeinsames Projekt mit ${msg.user_name}; du kannst nur allgemein antworten`;
+  // Persönliches Projekt ohne weiteren Kontext: passende Doku-Seiten (Suche nach der Nachricht, sonst die neuesten) als Wissensquelle
+  let personalDocs = '';
+  if (scope.how === 'personal' && scope.projectIds.length) {
+    const found = await knowledgeSearch(db, { projectId: scope.projectIds[0], agentId: agent.id, query: msg.body, viewerId: msg.user_id, maxTitles: 8, maxExcerpts: 3 });
+    const pages = found.pages.length ? found.pages : (await db.query(`select p.id, p.title, p.status, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 8`, [scope.projectIds[0]])).rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null as string | null }));
+    personalDocs = pages.length ? `Doku im persönlichen Projekt (${found.pages.length ? 'passend zur Nachricht' : 'neueste Seiten'}; Auskunft nur daraus und aus den Arbeitspaketen unten):\n${pages.map((p) => `- „${p.title}“ (${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 600)}` : ''}`).join('\n')}\n` : '';
+  }
   const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   // Steht die Nachricht schon als Rückmeldung im Log eines Arbeitspakets (Antwort auf eine Frage des Agenten), keine zweite Notiz dazu
   const logged = await db.query(
@@ -374,7 +393,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     `select q.id, q.body, q.created_at, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id
      where q.asked_by = $1 and q.status = 'open' and (q.channel_id = $2) and (q.addressee_id = $3 or q.addressee_id is null) order by q.created_at desc limit 8`, [agent.id, channel.id, msg.user_id]);
   // Steuerung (Konzept 7): Projekt für Befehle, Rolle und Rechte des Absenders, Policy, offene Bestätigungen, weitere APs, Fähigkeiten
-  const cmdProject = project ?? (scope.projects.length === 1 ? scope.projects[0] : null);
+  const cmdProject = project ?? (scope.how !== 'general' && scope.projects.length === 1 ? scope.projects[0] : null);
   const scopeTask = scope.taskIds.length === 1 ? await db.maybeOne(`select * from tasks where id = $1`, [scope.taskIds[0]]) : null;
   const role = cmdProject ? await senderRole(db, msg.user_id, cmdProject.id, scopeTask) : 'none';
   const policy = cmdProject ? await effectiveAgentPolicy(db, { agentId: agent.id, projectId: cmdProject.id, taskId: scopeTask?.id ?? null }) : null;
@@ -396,7 +415,7 @@ Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${cmdProjec
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
-${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
+${personalDocs}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}

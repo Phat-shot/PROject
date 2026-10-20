@@ -94,6 +94,8 @@ Das **Thema** je Nachricht bestimmt das System (`resolveChatScope`), nicht das M
 2. **Direktnachricht**, in dieser Reihenfolge:
    - Nennt die Nachricht Kennungen oder einen Projektnamen/-kürzel: dieses Projekt mit diesen APs (`how='mentioned'`). Kennungen aus einem Projekt, das der Absender nicht sieht oder in dem einer von beiden gesperrt ist: „Dazu kann ich dir hier nichts sagen“, ohne Titel.
    - Sonst, wenn der Agent genau eine offene Frage an diese Person in diesem Kanal hat: deren AP (`how='question'`); bei mehreren bekommt er sie in den Kontext und ordnet mit `answers[]` zu (Regel F Schritt 2).
+   - Gruß oder Kurzmeldung ohne Inhalt (`isSmallTalk`): kein Projektbezug, auch nicht aus dem Verlauf; mit persönlichem Projekt des Absenders (er PL, der Agent Mitglied) dieses (`how='personal'`), sonst allgemein ohne Projektinhalte (`how='general'`).
+   - Sonst mit persönlichem Projekt immer dieses (`how='personal'`): Doku-Seiten (Suche nach der Nachricht) und Arbeitspakete nur von dort; andere Projekte nur bei Nennung.
    - Sonst das zuletzt genannte AP/Projekt des Verlaufs (`how='history'`), ohne Zeitfenster, bis ein neues genannt wird.
    - Ausdrücklich „über alle Projekte“: alle gemeinsamen, beidseitig freien Projekte (`how='all'`), jede Zeile mit Projektkürzel.
    - Ohne Anhaltspunkt bei mehreren gemeinsamen Projekten: Rückfrage mit Auswahl der Projektnamen, keine Inhalte (`how='ask'`); bei genau einem gemeinsamen Projekt: dieses.
