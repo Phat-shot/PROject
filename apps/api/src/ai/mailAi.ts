@@ -18,6 +18,7 @@ import { queueAgentRun, queueMailAi } from './agentEvents.js';
 import { checkHint } from '../outbound.js';
 import { USE_LATERAL } from '../mail/accounts.js';
 import { handleOpenPoints } from './mailInquiry.js';
+import { askMeetingConfirm } from '../questions.js';
 
 /**
  * Mail-KI an einer Ansicht.
@@ -33,7 +34,7 @@ import { handleOpenPoints } from './mailInquiry.js';
  * Vor jedem Lauf gelten die KI-Freigaben des Agenten (agent.mail bzw. mail.triage): gesperrt heißt
  * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
  */
-export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; folder?: string | null; reason?: string | null };
+export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; attendees?: string[] | null; folder?: string | null; reason?: string | null };
 export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number; /** vom Agenten gesendet */ sent?: boolean; /** Versand geplant (Arbeitszeitfenster) */ scheduled?: string }; decidedBy?: string | null };
 
 const TYPES = ['create_ap', 'create_aufgabe', 'link', 'create_event', 'reply_draft', 'move', 'none'];
@@ -43,7 +44,7 @@ const SCHEMA = {
     summary: { type: 'string', description: 'Ein Satz: was veranlasst bzw. vorgeschlagen wird' },
     openPoints: { type: 'array', items: { type: 'string' }, description: 'Stichpunkte, was unklar ist oder fehlt, um die Mail zu bearbeiten; leer, wenn alles klar ist' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'title', 'text', 'ref', 'subproject', 'responsible', 'startDate', 'dueDate', 'items', 'startsAt', 'endsAt', 'location', 'folder', 'reason'],
+      required: ['type', 'title', 'text', 'ref', 'subproject', 'responsible', 'startDate', 'dueDate', 'items', 'startsAt', 'endsAt', 'location', 'attendees', 'folder', 'reason'],
       properties: {
         type: { type: 'string', enum: TYPES },
         title: { type: 'string', description: 'create_ap/create_aufgabe/create_event: Titel; sonst leer' },
@@ -57,6 +58,7 @@ const SCHEMA = {
         startsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM; sonst leer' },
         endsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM oder leer (eine Stunde)' },
         location: { type: 'string', description: 'create_event: Ort oder leer' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'create_event: E-Mails der Personen, die teilnehmen (Mitglieder oder Absender), nie KI-Agenten; sonst leer' },
         folder: { type: 'string', description: 'move: Archiv, In Arbeit oder ein Ordner aus der Liste; sonst leer' },
         reason: { type: 'string', description: 'none: Grund; sonst leer' }
       } } }
@@ -116,7 +118,7 @@ export function actionLabel(a: MailAiAction): string {
     case 'create_ap': return `Arbeitspaket „${a.title ?? ''}“${a.responsible ? ` · ${a.responsible}` : ''}${a.dueDate ? ` · fällig ${a.dueDate}` : ''}`;
     case 'create_aufgabe': return `Aufgabe „${a.title ?? ''}“ in ${a.ref ?? '?'}${a.dueDate ? ` · fällig ${a.dueDate}` : ''}`;
     case 'link': return `Zu ${a.ref ?? '?'}${a.text ? `: ${cut(a.text, 120)}` : ''}`;
-    case 'create_event': return `Termin „${a.title ?? ''}“ ${(a.startsAt ?? '').replace('T', ' ')}${a.location ? ` · ${a.location}` : ''}`;
+    case 'create_event': return `Termin „${a.title ?? ''}“ ${(a.startsAt ?? '').replace('T', ' ')}${a.location ? ` · ${a.location}` : ''}${a.attendees?.length ? ` · mit ${a.attendees.join(', ')}` : ''}`;
     case 'reply_draft': return `Antwort${(a as StoredAction).result?.sent || (a as StoredAction).result?.scheduled ? '' : 'entwurf'}: ${cut(String(a.text ?? '').replace(/\s+/g, ' '), 140)}`;
     case 'move': return `Ablage: ${a.folder ?? 'Archiv'}`;
     default: return `Nichts zu tun${a.reason ? `: ${a.reason}` : ''}`;
@@ -128,6 +130,18 @@ export async function runQueuedMailAi(db: Db, mail: MailService, fetchFn: typeof
   await db.query(`update mail_ai_runs set status = 'queued' where status = 'running' and started_at < now() - interval '15 minutes'`);
   const rows = await db.query(`select id from mail_ai_runs where status = 'queued' and created_at < now() - interval '1 minute' order by created_at limit 10`);
   for (const r of rows.rows) await runMailAi(db, mail, fetchFn, r.id);
+}
+
+/**
+ * Wen eine Mail an dieses Postfach anspricht („du“, „Sie“): persönliches Konto → Eigentümer, Konto mit Verwalter → Verwalter,
+ * sonst die Projektleitung. Nur aktive Personen, nie Agenten.
+ */
+export async function mailboxPeople(db: Db, projectId: string, mail: { account_id: string; use?: string | null; use_user_id?: string | null }): Promise<{ id: string; name: string; email: string }[]> {
+  const byIds = async (ids: string[]) => (await db.query(`select id, name, email from users where id = any($1::uuid[]) and active and kind = 'person' order by name`, [ids])).rows as { id: string; name: string; email: string }[];
+  if (mail.use === 'personal' && mail.use_user_id) { const r = await byIds([mail.use_user_id]); if (r.length) return r; }
+  const acc = await db.maybeOne(`select managed_user_id from mail_accounts where id = $1`, [mail.account_id]);
+  if (acc?.managed_user_id) { const r = await byIds([acc.managed_user_id]); if (r.length) return r; }
+  return (await db.query(`select u.id, u.name, u.email from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind = 'person' and u.active order by m.is_deputy, m.created_at`, [projectId])).rows;
 }
 
 async function userRow(db: Db, id: string | null): Promise<User | null> {
@@ -178,9 +192,11 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
     const members = await db.query(`select u.name, u.email, u.kind, u.persona, m.role, m.is_deputy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active order by u.kind, u.name`, [project.id]);
     const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [m.account_id]);
     const folders = await mailSvc.providerFor(account).listFolders(account).catch(() => []);
+    const people = await mailboxPeople(db, project.id, m);
     const system = `${AGENT_SHEET}\n\n${MAIL_RULES}\n\n${header}`;
     const prompt = `Heute: ${now.toISOString().slice(0, 10)} (${now.toLocaleDateString('de-DE', { weekday: 'long', timeZone: 'Europe/Berlin' })})
 Mail von ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr} an ${(m.to_json ?? []).join(', ')}${(m.cc_json ?? []).length ? `, Cc ${m.cc_json.join(', ')}` : ''}, ${fmtWhen(new Date(m.date))}
+Postfach: ${m.account_address}${m.use === 'personal' ? ' (persönlich)' : m.use === 'project' ? ' (Projektkonto)' : ''} · angesprochen („du“, „Sie“, „ihr“) ist: ${people.map((x) => `${x.name} <${x.email}>`).join(', ') || 'die Projektleitung'}, nicht du
 Betreff: ${m.subject ?? ''}
 ${cut(m.text_body ?? m.snippet, 6000) || '(kein Text)'}
 
@@ -324,8 +340,22 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
       const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + 3600_000) : null;
       if (!starts || !ends || ends <= starts) fail('Beginn oder Ende nicht lesbar');
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [project.id, title, starts])) fail(`„${title}“ steht schon im Kalender`);
+      // Teilnehmer: genannte Personen (Mitglieder per Name/E-Mail, sonst externe Adressen), nie Agenten
+      const attendees: { userId?: string | null; email: string; name?: string | null }[] = [];
+      for (const e of Array.isArray(a.attendees) ? a.attendees : []) {
+        const v = String(e ?? '').trim();
+        const u = v ? await db.maybeOne(`select u.id, u.email, u.name, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active and (lower(u.email) = lower($2) or lower(u.name) = lower($2))`, [project.id, v]) : null;
+        if (u) { if (u.kind !== 'agent') attendees.push({ userId: u.id, email: u.email, name: u.name }); }
+        else if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) attendees.push({ userId: null, email: v.toLowerCase() });
+      }
       // Agent als PL: vorläufig; Vorschlag des Agenten, den eine Person annimmt: bestätigt
-      const ev = await createPlannedEvent(db, pa, { projectId: project.id, title, startsAt: starts!, endsAt: ends!, location: a.location, description: a.text, taskId: state.taskId, confirmedBy: ctx.run.mode === 'triage' ? actor.id : null });
+      const ev = await createPlannedEvent(db, pa, { projectId: project.id, title, startsAt: starts!, endsAt: ends!, location: a.location, description: a.text, taskId: state.taskId, attendees, confirmedBy: ctx.run.mode === 'triage' ? actor.id : null });
+      // Vorläufig: die teilnehmenden Personen (sonst die Person hinter dem Postfach) bestätigen oder lehnen ab
+      if (asAgent) {
+        const ask = attendees.filter((x) => x.userId).map((x) => x.userId!);
+        const to = ask.length ? ask : (await mailboxPeople(db, project.id, mail)).slice(0, 1).map((x) => x.id);
+        for (const u of to) await askMeetingConfirm(db, { orgId: project.org_id, projectId: project.id, taskId: state.taskId, meetingId: ev.id, asker: { id: actor.id, name: actor.name, org_id: project.org_id, kind: 'agent' }, addresseeId: u, body: `Termin bestätigen: „${title}“ ${fmtWhen(starts!)}${a.location ? `, ${a.location}` : ''}? Laut Mail „${cut(mail.subject, 80)}“ von ${mail.from_name ?? mail.from_addr}.${a.text ? ` ${cut(a.text, 300)}` : ''}` });
+      }
       return { meetingId: ev.id };
     }
     case 'reply_draft': {

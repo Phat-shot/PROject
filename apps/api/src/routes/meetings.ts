@@ -4,7 +4,6 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { requireProject, requireTaskRef, visibleSubprojectSql } from '../rights.js';
-import { queueAgentRun } from '../ai/agentEvents.js';
 import * as L from '../docs/layout.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
@@ -15,8 +14,8 @@ import { seal, unseal } from '../secrets.js';
 import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent } from '../calendar/push.js';
 import type { CalendarTarget } from '@projekttool/shared';
 import { projectAccount } from '../mail/accounts.js';
-import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
-import { confirmMeetingBookings, syncMeetingBookings, type Actor as BookingActor } from '../resources/service.js';
+import { cancelQuestions } from '../questions.js';
+import { confirmTentativeMeeting, syncMeetingBookings, type Actor as BookingActor } from '../resources/service.js';
 
 const fmtDe = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -199,19 +198,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (!cur) throw notFound('Besprechung nicht gefunden');
     await requireProject(db, user, cur.project_id, 'member');
     if (user.kind === 'agent') throw forbidden('Termine bestätigt eine Person');
-    if (cur.tentative) {
-      await db.query(`update meetings set tentative = false, confirmed_by = $2, confirmed_at = now(), updated_at = now() where id = $1`, [cur.id, user.id]);
-      await confirmMeetingBookings(db, bookingActor(user), cur.id);
-      const when = new Date(cur.starts_at).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
-      // Offene Bestätigungsfragen zu diesem Termin sind damit beantwortet (Meldungen erledigt, Thread geschlossen, Agent läuft)
-      for (const q of (await db.query<QuestionRow>(`select * from questions where meeting_id = $1 and status = 'open' and kind = 'confirm'`, [cur.id])).rows) await answerQuestion(db, q, { source: 'meeting', userId: user.id, text: `Termin „${cur.title}“ ${when} bestätigt`, option: 'confirm' });
-      const linked = await db.query(`select task_id from meeting_tasks where meeting_id = $1`, [cur.id]);
-      for (const l of linked.rows) {
-        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [l.task_id, user.id, `Termin bestätigt: „${cur.title}“ ${when}`]);
-        queueAgentRun(l.task_id, 'task_changed');
-      }
-      await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.confirm', objectType: 'meeting', objectId: cur.id, details: { title: cur.title } });
-    }
+    await confirmTentativeMeeting(db, bookingActor(user), cur.id);
     return { meeting: mapMeeting(await load(cur.id, user)) };
   });
 

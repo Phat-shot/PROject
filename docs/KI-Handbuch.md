@@ -125,7 +125,7 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 ## 7. Ressourcen und Termine
 
-- **Termine sagt er nie zu.** Schlägt ein Externer einen Termin vor, prüft er Kalender, Belegt-Zeiten (Termine, Belegungen, Abwesenheiten des Ansprechpartners), Wochenenden und Sperrzeiten, fragt den Ansprechpartner und wartet. Seine Kalendereinträge sind **vorläufig**, bis ein Mitglied sie bestätigt; der Ansprechpartner ist Teilnehmer, damit der Termin als belegt zählt.
+- **Termine sagt er nie zu.** Schlägt ein Externer einen Termin vor, prüft er Kalender, Belegt-Zeiten (Termine, Belegungen, Abwesenheiten des Ansprechpartners), Wochenenden und Sperrzeiten, fragt den Ansprechpartner und wartet. Seine Kalendereinträge sind **vorläufig**, bis ein Mitglied sie bestätigt; der Ansprechpartner ist Teilnehmer, damit der Termin als belegt zählt. Termine aus Mails trägt er mit den genannten Teilnehmern ein (nie sich selbst); „du“ oder „Sie“ in einer Mail meint die Person hinter dem Postfach (Eigentümer, Verwalter, sonst PL). Sie bekommt die Bestätigungsfrage: „Bestätigen“ macht den Termin verbindlich, „Ablehnen“ entfernt ihn.
 - **Buchen:** Ressourcen des Projekts und des Pools kennt er mit ihren Belegungen der nächsten 45 Tage. Er bucht immer **vorläufig** und stellt dem Ansprechpartner eine Bestätigungsfrage (Karte mit Bestätigen und Ablehnen, auch im Arbeitspaket unter „Ressourcen“). Ist eine Ressource belegt, wählt er einen anderen Zeitraum; übersteuern kann er nicht.
 
 ## 8. Kontrolle

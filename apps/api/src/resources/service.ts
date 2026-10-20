@@ -273,6 +273,46 @@ export async function confirmMeetingBookings(db: Db, actor: Actor, meetingId: st
   await db.query(`update resource_bookings set tentative = false, confirmed_by = $2, confirmed_at = now(), updated_at = now() where meeting_id = $1 and tentative`, [meetingId, actor.id]);
 }
 
+const meetingWhen = (d: Date | string) => new Date(d).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: LOCAL_TZ });
+
+/**
+ * Vorläufigen Termin (von KI eingetragen) bestätigen: verbindlich samt Belegungen, offene Bestätigungsfragen beantwortet,
+ * Log an den verknüpften Arbeitspaketen, deren Agent läuft. false, wenn er nicht (mehr) vorläufig ist.
+ */
+export async function confirmTentativeMeeting(db: Db, actor: Actor, meetingId: string): Promise<boolean> {
+  const cur = await db.maybeOne(`update meetings set tentative = false, confirmed_by = $2, confirmed_at = now(), updated_at = now() where id = $1 and tentative returning *`, [meetingId, actor.id]);
+  if (!cur) return false;
+  await confirmMeetingBookings(db, actor, cur.id);
+  const when = meetingWhen(cur.starts_at);
+  for (const q of (await db.query<QuestionRow>(`select * from questions where meeting_id = $1 and status = 'open' and kind = 'confirm'`, [cur.id])).rows) await answerQuestion(db, q, { source: 'meeting', userId: actor.id, text: `Termin „${cur.title}“ ${when} bestätigt`, option: 'confirm' });
+  for (const l of (await db.query(`select task_id from meeting_tasks where meeting_id = $1`, [cur.id])).rows) {
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [l.task_id, actor.id, `Termin bestätigt: „${cur.title}“ ${when}`]);
+    queueAgentRun(l.task_id, 'task_changed');
+  }
+  await audit(db, { orgId: actor.orgId, projectId: cur.project_id, userId: actor.id, action: 'meeting.confirm', objectType: 'meeting', objectId: cur.id, details: { title: cur.title } });
+  return true;
+}
+
+/**
+ * Antwort auf die Bestätigungsfrage eines Termins (Karte, Chat): Bestätigen macht ihn verbindlich, Ablehnen entfernt den
+ * vorläufigen Termin. true, wenn der Folgeschritt den Lauf „answer“ ersetzt (Bestätigen startet die Agenten der APs selbst).
+ */
+export async function onMeetingAnswered(db: Db, q: QuestionRow, a: { userId: string | null; option?: string | null; text: string; source: string }): Promise<boolean> {
+  if (!q.meeting_id || q.kind !== 'confirm' || !a.userId || a.source === 'meeting') return false;
+  const u = await db.maybeOne(`select id, name, org_id, kind, global_role, org_rights from users where id = $1`, [a.userId]);
+  if (!u || u.kind === 'agent') return false;
+  const actor: Actor = { id: u.id, name: u.name, orgId: u.org_id, kind: 'person', globalRole: u.global_role, orgRights: u.org_rights ?? [] };
+  const option = a.option ?? (/ablehn|nein|nicht/i.test(a.text) ? 'reject' : /bestätig|ja|ok|passt/i.test(a.text) ? 'confirm' : null);
+  if (option === 'confirm') return confirmTentativeMeeting(db, actor, q.meeting_id);
+  if (option !== 'reject') return false;
+  const tasks = (await db.query(`select task_id from meeting_tasks where meeting_id = $1`, [q.meeting_id])).rows.map((r: any) => r.task_id as string);
+  const cur = await db.maybeOne(`delete from meetings where id = $1 and tentative returning *`, [q.meeting_id]);
+  if (!cur) return false;
+  for (const t of tasks) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [t, actor.id, `Vorläufigen Termin abgelehnt und entfernt: „${cur.title}“ ${meetingWhen(cur.starts_at)}`]);
+  await audit(db, { orgId: actor.orgId, projectId: cur.project_id, userId: actor.id, action: 'meeting.reject', objectType: 'meeting', objectId: cur.id, details: { title: cur.title } });
+  return false;
+}
+
 /** Belegungen mit follow_task folgen Start und Termin des AP (ganztägig); Konflikte werden gemeldet, nicht blockiert. */
 export async function syncTaskBookings(db: Db, actor: Actor, taskId: string): Promise<number> {
   const t = await db.maybeOne(`select id, project_id, start_date, due_date from tasks where id = $1`, [taskId]);

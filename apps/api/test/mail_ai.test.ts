@@ -18,7 +18,7 @@ delete process.env.ANTHROPIC_API_KEY;
 const t = await testApp({ fetchFn: fakeFetch });
 test.after(() => t.close());
 
-const M = (x: Record<string, unknown>) => ({ type: 'none', title: null, text: null, ref: null, subproject: null, responsible: null, startDate: null, dueDate: null, items: null, startsAt: null, endsAt: null, location: null, folder: null, reason: null, ...x });
+const M = (x: Record<string, unknown>) => ({ type: 'none', title: null, text: null, ref: null, subproject: null, responsible: null, startDate: null, dueDate: null, items: null, startsAt: null, endsAt: null, location: null, attendees: null, folder: null, reason: null, ...x });
 const web = () => t.ids.projects.web;
 let agent: any;
 let kiView = '';
@@ -95,6 +95,34 @@ test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner di
   const view = (await t.api(pl).get(`/mail/mails/${mail.id}/ai`)).json().runs;
   assert.equal(view[0].actions.length, 4);
   assert.ok(view[0].actions.every((a: any) => a.status === 'done'));
+});
+
+test('„Du“ in der Mail ist die Person hinter dem Postfach: Termin mit ihr als Teilnehmerin, Bestätigung per Frage, Ablehnen entfernt ihn', async () => {
+  const pl = await t.login('pl@demo.local');
+  const plUser = await t.db.one(`select name, email from users where id = $1`, [t.ids.users.pl]);
+  mailNext = [M({ type: 'create_event', title: 'Begehung', startsAt: '2026-11-11T09:00', attendees: [plUser.email, agent.email] })];
+  calls.length = 0;
+  await inject({ subject: 'Termin Begehung', text: 'Es findet eine Begehung statt am 11.11.2026. Du musst auch teilnehmen.', folder: 'KI Bearbeiten' });
+  const prompt = calls.find((c) => c.messages[0].content.includes('# Mail bearbeiten')).messages[1].content as string;
+  assert.match(prompt, new RegExp(`angesprochen .*${plUser.name} <${plUser.email}>.*, nicht du`), 'Prompt nennt die angesprochene Person');
+  const ev = await t.db.one(`select * from meetings where title = 'Begehung' and project_id = $1`, [web()]);
+  assert.equal(ev.tentative, true);
+  assert.deepEqual(ev.attendees.map((x: any) => x.email), [plUser.email], 'Agent nimmt nicht teil');
+  const q = await t.db.one(`select * from questions where meeting_id = $1 and status = 'open'`, [ev.id]);
+  assert.deepEqual([q.kind, q.addressee_id, q.asked_by], ['confirm', t.ids.users.pl, agent.id]);
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and ref_type = 'question' and ref_id = $2`, [t.ids.users.pl, q.id]));
+  const ok = await t.api(pl).post(`/questions/${q.id}/answer`, { option: 'confirm' });
+  assert.equal(ok.statusCode, 200, ok.body);
+  assert.equal((await t.db.one(`select tentative from meetings where id = $1`, [ev.id])).tentative, false, 'Bestätigen macht den Termin verbindlich');
+
+  // Ohne genannte Teilnehmer fragt der Agent die Person hinter dem Postfach; Ablehnen entfernt den vorläufigen Termin
+  mailNext = [M({ type: 'create_event', title: 'Abnahme', startsAt: '2026-11-12T10:00' })];
+  await inject({ subject: 'Termin Abnahme', text: 'Abnahme am 12.11. um 10 Uhr, kannst du?', folder: 'KI Bearbeiten' });
+  const ev2 = await t.db.one(`select * from meetings where title = 'Abnahme' and project_id = $1`, [web()]);
+  const q2 = await t.db.one(`select * from questions where meeting_id = $1 and status = 'open'`, [ev2.id]);
+  assert.equal(q2.addressee_id, t.ids.users.pl);
+  assert.equal((await t.api(pl).post(`/questions/${q2.id}/answer`, { option: 'reject' })).statusCode, 200);
+  assert.equal(await t.db.maybeOne(`select 1 from meetings where id = $1`, [ev2.id]), null);
 });
 
 test('Autonomer Modus: Agent als stellv. PL mit Senderecht und Policy „Selbstständig“ sendet die Antwort selbst (Außenprüfung bestanden); Info im Chat', async () => {

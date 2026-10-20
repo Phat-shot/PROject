@@ -139,6 +139,30 @@ async function resolveNotifications(db: Db, q: QuestionRow, suffix?: string) {
 }
 
 /**
+ * Bestätigung eines vorläufigen Termins ohne Arbeitspaket-Kette (Termin aus einer Mail): Direktfrage des Agenten an eine Person
+ * mit Bestätigen/Ablehnen; Erinnerung nach der Regel der Klasse confirm, keine Weitergabe. Je Termin und Person höchstens einmal offen.
+ */
+export async function askMeetingConfirm(db: Db, a: { orgId: string; projectId: string; taskId: string | null; meetingId: string; asker: Asker; addresseeId: string; body: string; now?: Date }): Promise<QuestionRow | null> {
+  const now = a.now ?? new Date();
+  if (await db.maybeOne(`select 1 from questions where meeting_id = $1 and addressee_id = $2 and status = 'open'`, [a.meetingId, a.addresseeId])) return null;
+  const t = await timing(db, { orgId: a.orgId, projectId: a.projectId, taskId: a.taskId, event: 'confirm' }, null, now);
+  const options = [{ key: 'confirm', label: 'Bestätigen' }, { key: 'reject', label: 'Ablehnen' }];
+  const channelId = await dmChannel(db, a.orgId, a.asker.id, a.addresseeId);
+  const body = a.body.trim().slice(0, 4000);
+  const msg = await db.one(`insert into chat_messages (channel_id, user_id, body, meta) values ($1,$2,$3,$4) returning id`,
+    [channelId, a.asker.id, body, JSON.stringify({ question: true, kind: 'confirm', options, taskId: a.taskId, link: `/projekte/${a.projectId}/besprechungen` })]);
+  await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, a.asker.id]);
+  const q = await db.one<QuestionRow>(
+    `insert into questions (org_id, project_id, task_id, meeting_id, kind, asked_by, addressee_id, addressee_role, body, options, channel_id, message_id, remind_at)
+     values ($1,$2,$3,$4,'confirm',$5,$6,'contact',$7,$8,$9,$10,$11) returning *`,
+    [a.orgId, a.projectId, a.taskId, a.meetingId, a.asker.id, a.addresseeId, body, JSON.stringify(options), channelId, msg.id, t.remindAt]);
+  await db.query(`update chat_messages set meta = meta || $2::jsonb where id = $1`, [msg.id, JSON.stringify({ questionId: q.id })]);
+  await notify(db, { userId: a.addresseeId, projectId: a.projectId, taskId: a.taskId, type: 'question.confirm', event: 'confirm', title: `Bestätigung von ${a.asker.name}: Termin`, body: cut(body, 300), link: `/chat/${channelId}?thread=${msg.id}&msg=${msg.id}`, ref: { type: 'question', id: q.id }, actorId: a.asker.id, dedupeKey: `q:${q.id}:0`, chatted: true });
+  await audit(db, { orgId: a.orgId, projectId: a.projectId, userId: a.asker.id, action: 'question.ask', objectType: 'question', objectId: q.id, details: { kind: 'confirm', meetingId: a.meetingId, to: a.addresseeId } });
+  return q;
+}
+
+/**
  * Antwort: idempotent (nur offene Fragen). Setzt Status, erledigt die Meldungen, schreibt die Rückmeldung ins Log (bei Antworten
  * aus dem Chat), schließt den Thread mit einer Systemnachricht (bei Antworten aus der Aufgabe oder auf anderem Weg), löscht das
  * Warten des Agenten, wenn es zu dieser Frage gehört, und startet seinen Lauf mit Anlass answer.
@@ -171,7 +195,7 @@ export async function answerQuestion(db: Db, q: QuestionRow, a: AnswerInput): Pr
     // Folgeschritt zum Thema der Frage (Mail-Rückfrage: im Projekt fragen, beim Absender nachfragen) ersetzt den Lauf „answer“
     const handled = await onQuestionAnswered(db, r, a);
     if (asker.kind === 'agent' && !handled) queueAgentRun(task.id, a.trigger ?? 'answer');
-  }
+  } else await onQuestionAnswered(db, r, a);
   await audit(db, { orgId: r.org_id, projectId: r.project_id, userId: a.userId, action: 'question.answer', objectType: 'question', objectId: r.id, details: { source: a.source, option: a.option ?? null } });
   return r;
 }
