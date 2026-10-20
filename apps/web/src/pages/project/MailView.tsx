@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import DOMPurify from 'dompurify';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { AiFeature, MailAiRun, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail, OutboundCheck, OutboundFinding, AudienceClass } from '@projekttool/shared';
@@ -6,7 +6,7 @@ import { AUDIENCE_LABEL } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
-import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
+import { ProjectScope, useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { aiBlocked } from '../../lib/useAi';
 import { refreshMailUnread, useMailUnread } from '../../lib/useMailUnread';
@@ -41,113 +41,111 @@ function useFolders(accountIds: string[]) {
 }
 
 /**
- * Postfach: im Projekt dessen Ansichten, global (/postfach) die vereinigte Sicht aller Postfächer mit Leserecht (jede Mail
- * einmal, Filter je Postfach statt je Projekt-Ansicht). Gleiche Mails, gleicher Gelesen- und Ordnerstand, gleiche Aktionen.
+ * Postfach (nur global, /postfach): vereinigte Sicht aller Postfächer mit Leserecht, jede Mail einmal. Links „Zur Freigabe“
+ * (Entwürfe, auch der KI) und die Ordner; oben Filter nach Postfach und Projekt. Ansichten pflegt die PL in den
+ * Projekteinstellungen; hier wirken sie nur als Leserecht. Alte Projektpfade (/projekte/:id/mail/…) leiten hierher.
  */
-export function MailView({ global = false }: { global?: boolean }) {
-  const scope = useProjectOptional();
-  const projectId = global ? null : scope!.detail.project.id;
-  const base = global ? '/postfach' : `/projekte/${projectId}/mail`;
-  const views = useData<{ views: ViewRow[] }>(global ? '/mail/views' : `/projects/${projectId}/mail/views`);
-  const drafts = useData<{ drafts: MailDraft[] }>(global ? null : `/projects/${projectId}/mail/drafts`);
+export function MailView() {
+  const base = '/postfach';
+  const views = useData<{ views: ViewRow[] }>('/mail/views');
   const nav = useNavigate();
   const loc = useLocation();
-  const [params, setParams] = useSearchParams();
+  const [params] = useSearchParams();
   const folder = params.get('ordner') ?? 'INBOX';
-  const viewId = global ? '' : params.get('ansicht') ?? '';
-  const accountId = global ? params.get('postfach') ?? '' : '';
+  const accountId = params.get('postfach') ?? '';
+  const projectId = params.get('projekt') ?? '';
   const unread = useMailUnread();
   const mobile = useIsMobile();
-  const [navOpen, setNavOpen] = useState(false);
-  const readable = (views.data?.views ?? []).filter((v) => v.myRights.canRead);
+  const all = (views.data?.views ?? []).filter((v) => v.myRights.canRead);
+  const projects = [...new Map(all.map((v) => [v.projectId, { id: v.projectId, key: v.projectKey ?? '' }])).values()].sort((a, b) => a.key.localeCompare(b.key));
+  const readable = all.filter((v) => !projectId || v.projectId === projectId);
   const accountIds = Array.from(new Set(readable.map((v) => v.accountId)));
   const accounts = accountIds.map((id) => readable.find((v) => v.accountId === id)!);
-  const folders = useFolders(accountIds);
+  const folders = useFolders(accountIds.filter((id) => !accountId || id === accountId));
+  const drafts = useData<{ drafts: MailDraft[] }>(`/mail/drafts${projectId ? `?projectId=${projectId}` : ''}`, [loc.pathname]);
   const pending = (drafts.data?.drafts ?? []).filter((d) => d.status === 'pending_approval');
-  const canWrite = global ? readable.some((v) => v.myRights.canDraft || v.myRights.canSend) : scope!.detail.project.myMembership.role !== 'reader';
-  const isPl = !global && scope!.detail.project.myMembership.role === 'pl';
-  const writeTarget = () => {
-    if (!global) return `${base}/neu`;
-    const v = readable.find((x) => x.accountId === accountId && (x.myRights.canDraft || x.myRights.canSend)) ?? readable.find((x) => x.myRights.canDraft || x.myRights.canSend);
-    return v ? `/projekte/${v.projectId}/mail/neu?view=${v.id}` : base;
-  };
+  const canWrite = readable.some((v) => v.myRights.canDraft || v.myRights.canSend);
+  const manage = projectId && (views.data?.views ?? []).some((v) => v.projectId === projectId && v.canManage);
   const inList = loc.pathname === base || loc.pathname.startsWith(`${base}/m/`);
-  const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setNavOpen(false); nav(`${base}?${n.toString()}`); };
-  const curFolder = folders.find((f) => f.path.toLowerCase() === folder.toLowerCase());
-  const curView = readable.find((v) => v.id === viewId);
-  const curAccount = accounts.find((v) => v.accountId === accountId);
-  const kindLabel = (v: ViewRow) => (v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto');
+  const inDrafts = loc.pathname === `${base}/freigaben`;
+  const query = (patch: Record<string, string>) => { const n = new URLSearchParams(params); for (const [k, v] of Object.entries(patch)) { if (v) n.set(k, v); else n.delete(k); } ['reply', 'view', 'ap', 'task', 'to', 'subject', 'body', 'final', 'ai'].forEach((k) => n.delete(k)); return n.toString(); };
+  const go = (patch: Record<string, string>, path = base) => nav(`${path}?${query(patch)}`);
   const label = (f: MailFolder) => (f.specialUse ? FOLDER_LABEL[f.specialUse] : f.name);
+  const kindLabel = (v: ViewRow) => (v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto');
+  const filters = (
+    <div className="mail-filters">
+      <select aria-label="Postfach" value={accountId} onChange={(e) => go({ postfach: e.target.value })}>
+        <option value="">Alle Postfächer{unread.total ? ` (${unread.total})` : ''}</option>
+        {accounts.map((v) => <option key={v.accountId} value={v.accountId}>{v.accountAddress} · {kindLabel(v)}{unread.byAccount?.[v.accountId] ? ` (${unread.byAccount[v.accountId]})` : ''}</option>)}
+      </select>
+      <select aria-label="Projekt" value={projectId} onChange={(e) => go({ projekt: e.target.value, postfach: '' })}>
+        <option value="">Alle Projekte</option>
+        {projects.map((p) => <option key={p.id} value={p.id}>{p.key}{unread.byProject[p.id] ? ` (${unread.byProject[p.id]})` : ''}</option>)}
+      </select>
+    </div>
+  );
   return (
     <div className="mail-layout">
-      {mobile && <div className="mail-mobile-bar">
-        <button className="btn sm" onClick={() => setNavOpen(!navOpen)}>{navOpen ? '▾' : '▸'} {curFolder ? label(curFolder) : 'Posteingang'} · {global ? curAccount?.accountName ?? 'Alle Postfächer' : curView ? curView.name : 'Alle Ansichten'}</button>
-        {canWrite && <button className="btn sm primary right" onClick={() => nav(writeTarget())}>Neue Mail</button>}
-      </div>}
-      {(!mobile || navOpen) && <div className="mail-views">
-        {canWrite && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => nav(writeTarget())}>Neue Mail</button>}
+      {mobile ? <div className="mail-mobile-bar">
+        <select aria-label="Ordner" value={inDrafts ? '__freigaben' : folder} onChange={(e) => (e.target.value === '__freigaben' ? go({}, `${base}/freigaben`) : go({ ordner: e.target.value }))}>
+          <option value="__freigaben">Zur Freigabe ({pending.length})</option>
+          {folders.map((f) => <option key={f.path} value={f.path}>{label(f)}</option>)}
+        </select>
+        {canWrite && <button className="btn sm primary right" onClick={() => go({}, `${base}/neu`)}>Neue Mail</button>}
+      </div> : <div className="mail-views">
+        {canWrite && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => go({}, `${base}/neu`)}>Neue Mail</button>}
+        <div className={`view approve ${inDrafts ? 'active' : ''} ${pending.length ? 'has' : ''}`} onClick={() => go({}, `${base}/freigaben`)} title="Entwürfe von Personen und KI-Agenten, die auf Freigabe warten">
+          <span>Zur Freigabe</span>{pending.length > 0 && <span className="badge warn">{pending.length}</span>}
+        </div>
         <div className="section">Ordner</div>
         {folders.map((f) => (
-          <div key={f.path} className={`view ${inList && folder.toLowerCase() === f.path.toLowerCase() ? 'active' : ''}`} onClick={() => go('ordner', f.path)}>
-            <span>{label(f)}</span>
+          <div key={f.path} className={`view ${inList && folder.toLowerCase() === f.path.toLowerCase() ? 'active' : ''}`} onClick={() => go({ ordner: f.path })}>
+            <span>{label(f)}</span>{f.specialUse === 'inbox' && (accountId ? unread.byAccount?.[accountId] : projectId ? unread.byProject[projectId] : unread.total) ? <span className="badge danger">{accountId ? unread.byAccount?.[accountId] : projectId ? unread.byProject[projectId] : unread.total}</span> : null}
           </div>
         ))}
-        {folders.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>{readable.length === 0 ? 'Keine Ansicht mit Leserecht.' : 'Lade Ordner …'}</div>}
-        {global ? <>
-          <div className="section">Postfächer</div>
-          <div className={`view ${inList && !accountId ? 'active' : ''}`} onClick={() => go('postfach', '')}><span>Alle Postfächer {unread.total > 0 && <span className="badge danger">{unread.total}</span>}</span><span className="acc">{accounts.length} mit Leserecht</span></div>
-          {accounts.map((v) => (
-            <div key={v.accountId} className={`view ${inList && accountId === v.accountId ? 'active' : ''}`} onClick={() => go('postfach', v.accountId)}>
-              <span>{v.accountName} {(unread.byAccount?.[v.accountId] ?? 0) > 0 && <span className="badge danger">{unread.byAccount![v.accountId]}</span>}</span>
-              <span className="acc">{v.accountAddress} · {kindLabel(v)}</span>
-            </div>
-          ))}
-        </> : <>
-          <div className="section">Ansichten</div>
-          <div className={`view ${inList && !viewId ? 'active' : ''}`} onClick={() => go('ansicht', '')}><span>Alle Ansichten</span><span className="acc">{readable.length} mit Leserecht</span></div>
-          {readable.map((v) => (
-            <div key={v.id} className={`view ${inList && viewId === v.id ? 'active' : ''}`} onClick={() => go('ansicht', v.id)}>
-              <span>{v.name}</span>
-              <span className="acc">{v.accountAddress} · {kindLabel(v)}</span>
-            </div>
-          ))}
-        </>}
-        {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen/mail`}>Ansichten und Filter verwalten</Link>}
-        {!global && <>
-          <div className="section">Freigabe-Liste</div>
-          <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => { setNavOpen(false); nav(`${base}/freigaben`); }}>
-            <span>Entwürfe und Freigaben {pending.length > 0 && <span className="badge warn">{pending.length}</span>}</span>
-          </div>
-        </>}
+        {folders.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>{views.data && readable.length === 0 ? 'Kein Postfach mit Leserecht.' : 'Lade Ordner …'}</div>}
+        {manage && <Link className="btn sm link mt" to={`/projekte/${projectId}/einstellungen/mail`}>Ansichten und Filter verwalten</Link>}
       </div>}
       <Routes>
-        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
-        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
-        {!global && <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />}
-        {!global && <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />}
-        <Route path="mail/:mailId" element={<LegacyMail base={base} />} />
-        <Route path=":viewId/:mailId" element={<LegacyMail base={base} />} />
-        <Route path=":viewId" element={<LegacyMail base={base} />} />
+        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} filters={filters} pending={pending.length} />} />
+        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} filters={filters} pending={pending.length} />} />
+        <Route path="freigaben" element={<div className="mail-wide">{filters}<DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} projectId={projectId} /></div>} />
+        <Route path="neu" element={<div className="mail-wide"><ComposeGlobal views={views.data?.views ?? []} onDone={(pid) => { void drafts.reload(); nav(`${base}/freigaben?projekt=${pid}`); }} /></div>} />
+        <Route path="*" element={<Navigate to={base} replace />} />
       </Routes>
     </div>
   );
 }
 
-/** Alte Pfade (/mail/<ansicht>/<mail>, /mail/mail/<mail>) auf die neue Struktur umleiten. */
-function LegacyMail({ base }: { base: string }) {
-  const { viewId, mailId } = useParams();
-  const isView = viewId && viewId !== 'mail';
-  const q = isView ? `?ansicht=${viewId}&ordner=` : '';
-  return <Navigate to={mailId ? `${base}/m/${mailId}${q}` : `${base}${q}`} replace />;
+/** Neue Mail im Postfach: im Projekt der gewählten Ansicht (view), des Filters oder der Antwort; sonst Projekt wählen. */
+function ComposeGlobal({ views, onDone }: { views: ViewRow[]; onDone: (projectId: string) => void }) {
+  const [params, setParams] = useSearchParams();
+  const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
+  const projects = [...new Map(writable.map((v) => [v.projectId, v.projectKey ?? ''])).entries()];
+  const fromView = writable.find((v) => v.id === params.get('view'))?.projectId;
+  const projectId = fromView ?? (writable.some((v) => v.projectId === params.get('projekt')) ? params.get('projekt') : null) ?? (projects.length === 1 ? projects[0][0] : null);
+  if (!views.length) return <div className="mail-detail muted">Lade …</div>;
+  if (!writable.length) return <div className="mail-detail"><div className="empty">Du hast an keinem Postfach Entwurfs- oder Senderecht.</div></div>;
+  if (!projectId) return (
+    <div className="mail-detail">
+      <h2>Neue Mail</h2>
+      <label className="field"><span>Projekt</span>
+        <select value="" onChange={(e) => { const n = new URLSearchParams(params); n.set('projekt', e.target.value); setParams(n, { replace: true }); }}>
+          <option value="">Projekt wählen …</option>{projects.map(([id, key]) => <option key={id} value={id}>{key}</option>)}
+        </select>
+      </label>
+    </div>
+  );
+  return <ProjectScope projectId={projectId}><Compose key={projectId} views={writable.filter((v) => v.projectId === projectId)} onDone={() => onDone(projectId)} /></ProjectScope>;
 }
 
-function InboxList({ base, projectId, folder, viewId, accountId, views, folders, mobile = false }: { base: string; projectId: string | null; folder: string; viewId: string; accountId: string; views: ViewRow[]; folders: MailFolder[]; mobile?: boolean }) {
+function InboxList({ base, projectId, folder, accountId, views, folders, mobile = false, filters, pending }: { base: string; projectId: string; folder: string; accountId: string; views: ViewRow[]; folders: MailFolder[]; mobile?: boolean; filters: ReactNode; pending: number }) {
   const { mailId } = useParams();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const [q, setQ] = useState('');
-  const url = `/mail/inbox?${projectId ? `projectId=${projectId}&` : ''}${folder ? `folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}${accountId ? `&accountId=${accountId}` : ''}`;
-  // Gelesen-Stand gilt je Person für die Mail, egal über welches Projekt sie geöffnet wurde: ändert sich der Zähler (Öffnen anderswo, Abruf), Liste nachladen
+  const url = `/mail/inbox?${projectId ? `projectId=${projectId}&` : ''}${folder ? `folder=${encodeURIComponent(folder)}` : ''}${accountId ? `&accountId=${accountId}` : ''}`;
+  // Gelesen-Stand gilt je Person für die Mail: ändert sich der Zähler (Öffnen anderswo, Abruf), Liste nachladen
   const unreadTotal = useMailUnread().total;
   const list = useData<{ mails: InboxMail[] }>(url, [unreadTotal]);
   const accountCount = new Set(views.filter((v) => v.myRights.canRead).map((v) => v.accountId)).size;
@@ -156,11 +154,16 @@ function InboxList({ base, projectId, folder, viewId, accountId, views, folders,
   // Öffnen gilt als gelesen: Liste und Zähler sofort nachziehen (der Server trägt es beim Laden der Mail ein)
   const open = (id: string) => { nav(`${base}/m/${id}?${params.toString()}`); if (list.data?.mails.some((m) => m.id === id && m.unread)) { list.setData({ mails: list.data.mails.map((m) => (m.id === id ? { ...m, unread: false } : m)) }); setTimeout(refreshMailUnread, 500); } };
   const current = mails.find((m) => m.id === mailId);
+  // Mail außerhalb der Liste (Link aus Meldung, Chat, anderer Ordner): Projekt über ihre Ansichten bestimmen
+  const outside = useData<{ viewIds: string[] }>(mailId && !current && list.data ? `/mail/mails/${mailId}` : null, [mailId]);
+  const pid = current?.projectId ?? views.find((v) => outside.data?.viewIds.includes(v.id) && (!projectId || v.projectId === projectId))?.projectId ?? views.find((v) => outside.data?.viewIds.includes(v.id))?.projectId ?? null;
   const back = `${base}?${params.toString()}`;
   return (
     <>
       {mobile && mailId && <div className="mail-mobile-bar"><button className="btn sm" onClick={() => nav(back)}>← Zur Liste</button></div>}
       {(!mobile || !mailId) && <div className="mail-list">
+        {filters}
+        {pending > 0 && <div className="mail-approve-note" onClick={() => nav(`${base}/freigaben?${params.toString()}`)}>{pending} Entw{pending === 1 ? 'urf wartet' : 'ürfe warten'} auf Freigabe →</div>}
         <div className="row" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
           <input type="text" placeholder="Betreff oder Absender …" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
           <span className="muted small nowrap">{mails.length}</span>
@@ -170,21 +173,19 @@ function InboxList({ base, projectId, folder, viewId, accountId, views, folders,
           <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''} ${m.unread ? 'unread' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
             <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
-            <div className="snippet">{!projectId && (m.projectKeys ?? [m.projectKey]).map((k) => <span key={k} className="badge" style={{ marginRight: 6 }}>{k}</span>)}{m.snippet}{projectId ? !viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span> : !accountId && accountCount > 1 && <span className="muted"> · {m.accountName}</span>}</div>
+            <div className="snippet">{!projectId && (m.projectKeys ?? [m.projectKey]).map((k) => <span key={k} className="badge" style={{ marginRight: 6 }}>{k}</span>)}{m.snippet}{!accountId && accountCount > 1 && <span className="muted"> · {m.accountName}</span>}</div>
           </div>
         ))}
-        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Die PL legt Ansichten unter Einstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}
+        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch kein Postfach mit Leserecht. Die PL legt Ansichten unter Projekteinstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}
       </div>}
-      {mobile && !mailId ? null : mailId && current && !projectId
-        ? <ProjectScope projectId={current.projectId}><MailDetailPanel mailId={mailId} views={views} folders={folders} base={`/projekte/${current.projectId}/mail`} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current.viewId} /></ProjectScope>
-        : mailId && (projectId || current)
-          ? <MailDetailPanel mailId={mailId} views={views} folders={folders} base={base} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current?.viewId} />
-          : <div className="mail-detail muted">{mailId ? 'Lade …' : 'Mail wählen.'}</div>}
+      {mobile && !mailId ? null : mailId && pid
+        ? <ProjectScope projectId={pid}><MailDetailPanel mailId={mailId} views={views} folders={folders} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(back); }} viewHint={current?.viewId} /></ProjectScope>
+        : <div className="mail-detail muted">{mailId ? (outside.error ?? 'Lade …') : 'Mail wählen.'}</div>}
     </>
   );
 }
 
-function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; base: string; onChanged: () => void; onGone: () => void; viewHint?: string }) {
+function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }: { mailId: string; views: ViewRow[]; folders: MailFolder[]; onChanged: () => void; onGone: () => void; viewHint?: string }) {
   const { detail, tasks, reloadTasks, openTask, ai } = useProject();
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; code: string; projectId: string; copied: boolean; origin: boolean; isSubtask: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
@@ -240,7 +241,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
       </div>
       <div className="mail-actions">
         <span className="muted small">Mail:</span>
-        {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
+        {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`/postfach/neu?reply=${m.id}&view=${view.id}&projekt=${detail.project.id}`}>Antworten</Link>}
         {d.data.canModify && (<>
           <button className="btn sm" onClick={() => folderAction(() => api.post(`/mail/mails/${m.id}/archive`))}>Archivieren</button>
           <button className="btn sm danger" onClick={() => void dlg.confirm({ title: 'Mail löschen', text: 'In den Papierkorb des Kontos verschieben? Verknüpfungen mit Arbeitspaketen bleiben.', confirmLabel: 'In Papierkorb', danger: true }).then((ok) => { if (ok) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); })}>Löschen</button>
@@ -272,12 +273,12 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
         <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite</button>
         <button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
-        <Link className="btn sm link" to={`${base}/ki`}>Offene Vorschläge</Link>
+        <Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Offene Vorschläge</Link>
         {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
       </div>
       <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} data={aiRuns} />
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
-      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Offene Vorschläge</Link></div>}
+      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`/projekte/${detail.project.id}/ki`}>Offene Vorschläge</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
           {d.data.links.length > 0 && <>{d.data.links.some((l) => l.origin) ? 'Daraus entstanden / verknüpft' : 'Verknüpft'}: {d.data.links.map((l) => l.projectId === detail.project.id
@@ -548,7 +549,8 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
   );
 }
 
-function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Promise<void> }) {
+/** Zur Freigabe: Entwürfe aller Projekte (KI-Agenten und Personen), wartende zuerst; mit Projektfilter auch die von der Außenprüfung angehaltenen Mails. */
+function DraftsPanel({ drafts, reload, projectId }: { drafts: MailDraft[]; reload: () => Promise<void>; projectId: string }) {
   const { error, run } = useAsync();
   const [edit, setEdit] = useState<MailDraft | null>(null);
   const groups: [string, string][] = [['pending_approval', 'Wartet auf Freigabe'], ['draft', 'Entwürfe'], ['failed', 'Fehlgeschlagen'], ['sent', 'Gesendet']];
@@ -556,10 +558,10 @@ function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Pr
   const held = (d: MailDraft) => d.outbound?.result === 'held' && !d.outbound.decided && d.outbound.channel !== 'draft';
   return (
     <div className="mail-detail">
-      <h2>Entwürfe und Freigaben</h2>
-      <p className="muted small">Vorschläge und Entwürfe ohne Senderecht landen hier. Freigeben darf, wer an der Ansicht das Senderecht hat. Der Worker versendet; alles steht im Audit-Log.</p>
+      <h2>Zur Freigabe</h2>
+      <p className="muted small">Antwortentwürfe der KI-Agenten und Entwürfe ohne Senderecht. Freigeben darf, wer an der Ansicht das Senderecht hat; alles steht im Audit-Log.</p>
       {error && <div className="error mb">{error}</div>}
-      <OutboundHeld onChanged={reload} />
+      {projectId && <ProjectScope projectId={projectId}><OutboundHeld onChanged={reload} /></ProjectScope>}
       {groups.map(([status, label]) => {
         const rows = drafts.filter((d) => d.status === status && !(status !== 'sent' && held(d)));
         if (!rows.length) return null;
@@ -569,7 +571,7 @@ function DraftsPanel({ drafts, reload }: { drafts: MailDraft[]; reload: () => Pr
             <table className="table"><tbody>
               {rows.map((d) => (
                 <tr key={d.id}>
-                  <td><strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}{status !== 'sent' && (d.outbound?.findings.length ?? 0) > 0 && <div className="small mt" style={{ color: 'var(--warn)' }} title={d.outbound!.findings.map((f) => f.text).join('\n')}>Hinweise der Außenprüfung: {d.outbound!.findings.length}</div>}</td>
+                  <td>{d.projectKey && <span className="badge" style={{ marginRight: 6 }}>{d.projectKey}</span>}<strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName}{d.byAgent ? ' (KI-Agent)' : ''} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}{status !== 'sent' && (d.outbound?.findings.length ?? 0) > 0 && <div className="small mt" style={{ color: 'var(--warn)' }} title={d.outbound!.findings.map((f) => f.text).join('\n')}>Hinweise der Außenprüfung: {d.outbound!.findings.length}</div>}</td>
                   <td className="nowrap">
                     {status !== 'sent' && <button className="btn sm" onClick={() => setEdit(d)}>Ansehen</button>}{' '}
                     {(status === 'pending_approval' || status === 'draft' || status === 'failed') && <button className="btn sm primary" onClick={() => void run(async () => { await api.post(`/mail/drafts/${d.id}/send`); await reload(); })}>{status === 'pending_approval' ? 'Freigeben und senden' : 'Senden'}</button>}{' '}

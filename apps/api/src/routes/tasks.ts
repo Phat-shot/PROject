@@ -158,8 +158,18 @@ export async function taskRoutes(app: FastifyInstance) {
   app.get('/my/waiting', async (req) => {
     const user = requireUser(req);
     const ms = await db.query(`select m.*, p.key, p.name from project_members m join projects p on p.id = m.project_id where m.user_id = $1 and p.status = 'active'`, [user.id]);
-    const drafts: any[] = []; const pages: any[] = []; const tasksOut: any[] = [];
+    const drafts: any[] = []; const pages: any[] = []; const tasksOut: any[] = []; const proposals: any[] = []; const mailSuggestions: any[] = [];
     for (const m of ms.rows) {
+      // KI-Vorschläge zur Freigabe (PL oder Recht „Freigeben“) und offene Vorschläge der Mail-KI (PL, persönliche Konten: Eigentümer)
+      if (m.role === 'pl' || m.can_approve) {
+        const c = await db.one(`select count(*)::int as c from ai_proposals where project_id = $1 and status = 'pending'`, [m.project_id]);
+        if (c.c > 0) proposals.push({ projectId: m.project_id, projectKey: m.key, count: c.c });
+      }
+      const sug = await db.query(
+        `select r.mail_id, x.subject, r.created_at from mail_ai_runs r join mails x on x.id = r.mail_id left join mail_account_uses u on u.account_id = x.account_id and u.use = 'personal'
+         where r.project_id = $1 and r.mode = 'triage' and r.actor_user_id is null and exists (select 1 from jsonb_array_elements(r.actions) a where a->>'status' = 'pending')
+           and (case when u.user_id is not null then u.user_id = $2 else $3 end) order by r.created_at desc limit 5`, [m.project_id, user.id, m.role === 'pl']);
+      for (const r of sug.rows) mailSuggestions.push({ mailId: r.mail_id, subject: r.subject, projectId: m.project_id, projectKey: m.key, createdAt: r.created_at });
       if (m.role === 'pl') {
         const c = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [m.project_id]);
         if (c.c > 0) drafts.push({ projectId: m.project_id, projectKey: m.key, count: c.c });
@@ -171,7 +181,7 @@ export async function taskRoutes(app: FastifyInstance) {
       const esc = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and (t.blocked or t.escalation_level > 0)`, [m.project_id]);
       for (const t of esc) if (!t.done && (m.role === 'pl' || t.responsible.userId === user.id)) tasksOut.push({ id: t.id, number: t.number, title: t.title, projectId: t.projectId, projectKey: m.key, blocked: t.blocked, escalationLevel: t.escalationLevel });
     }
-    return { drafts, pagesInReview: pages, tasks: tasksOut };
+    return { drafts, pagesInReview: pages, tasks: tasksOut, proposals, mailSuggestions };
   });
 
   // Meine Arbeit: Projekte, Teilprojekte, Arbeitspakete und Tasks, geklammert nach Hierarchie; nur eigene bzw. geerbte Zuständigkeit (Filter im Client)

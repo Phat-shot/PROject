@@ -864,6 +864,11 @@ export interface MailDetail extends MailSummary {
 
 export interface MailDraft {
   id: string;
+  /** Projekt des Entwurfs (Liste „Zur Freigabe“ über alle Projekte) */
+  projectId?: string | null;
+  projectKey?: string | null;
+  /** von einem KI-Agenten verfasst */
+  byAgent?: boolean;
   accountId: string;
   viewId: string | null;
   taskId: string | null;

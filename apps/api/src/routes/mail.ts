@@ -50,13 +50,13 @@ function mapDraft(r: any): MailDraft {
   return {
     id: r.id, accountId: r.account_id, viewId: r.view_id, taskId: r.task_id, userId: r.user_id, userName: r.user_name ?? '',
     toAddrs: r.to_addrs ?? [], ccAddrs: r.cc_addrs ?? [], subject: r.subject, body: r.body, status: r.status, error: r.error, sentAt: r.sent_at, createdAt: r.created_at,
-    pageId: r.page_id ?? null,
+    pageId: r.page_id ?? null, projectId: r.project_id ?? null, projectKey: r.project_key ?? null, byAgent: r.user_kind === 'agent',
     outbound: c ? { checkId: c.id, channel: c.channel, audience: c.audience, result: c.result, findings: c.findings ?? [], withheld: c.withheld ?? [], decided: Boolean(c.decided_at) } : null
   };
 }
 
 /** Entwurf mit verfassender Person und letzter Außenprüfung. */
-const DRAFT_SELECT = `select d.*, u.name as user_name, (select row_to_json(c) from outbound_checks c where c.mail_draft_id = d.id order by c.created_at desc limit 1) as outbound from mail_drafts d join users u on u.id = d.user_id`;
+const DRAFT_SELECT = `select d.*, u.name as user_name, u.kind as user_kind, (select key from projects where id = d.project_id) as project_key, (select row_to_json(c) from outbound_checks c where c.mail_draft_id = d.id order by c.created_at desc limit 1) as outbound from mail_drafts d join users u on u.id = d.user_id`;
 
 function mapCheck(r: any): OutboundCheck {
   return {
@@ -1056,13 +1056,9 @@ export async function mailRoutes(app: FastifyInstance) {
     return { outbound: hint };
   });
 
-  app.get<{ Params: { id: string } }>('/projects/:id/mail/drafts', async (req) => {
-    const user = requireUser(req);
-    const m = await requireProject(db, user, req.params.id);
-    const rows = await db.query(
-      `${DRAFT_SELECT} where d.project_id = $1 order by d.created_at desc limit 200`,
-      [req.params.id]
-    );
+  /** Entwürfe eines Projekts, die die Person sieht: eigene, mit Senderecht an der Ansicht, ohne Ansicht als PL. */
+  async function draftsOf(user: User, projectId: string, m: Awaited<ReturnType<typeof requireProject>>): Promise<MailDraft[]> {
+    const rows = await db.query(`${DRAFT_SELECT} where d.project_id = $1 order by d.created_at desc limit 200`, [projectId]);
     const out: MailDraft[] = [];
     for (const d of rows.rows) {
       if (d.user_id === user.id) { out.push(mapDraft(d)); continue; }
@@ -1071,7 +1067,21 @@ export async function mailRoutes(app: FastifyInstance) {
         if (r.canSend) out.push(mapDraft(d));
       } else if (m.role === 'pl') out.push(mapDraft(d));
     }
-    return { drafts: out };
+    return out;
+  }
+  app.get<{ Params: { id: string } }>('/projects/:id/mail/drafts', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id);
+    return { drafts: await draftsOf(user, req.params.id, m) };
+  });
+  // Postfach „Zur Freigabe“: Entwürfe über alle aktiven Projekte (optional eines), wartende zuerst, dann neu vor alt
+  app.get<{ Querystring: { projectId?: string } }>('/mail/drafts', async (req) => {
+    const user = requireUser(req);
+    const ps = await db.query(`select p.id from projects p join project_members pm on pm.project_id = p.id and pm.user_id = $1 where p.org_id = $2 and p.status = 'active' ${req.query.projectId ? 'and p.id = $3' : ''}`, req.query.projectId ? [user.id, user.orgId, req.query.projectId] : [user.id, user.orgId]);
+    const out: MailDraft[] = [];
+    for (const p of ps.rows) out.push(...(await draftsOf(user, p.id, await requireProject(db, user, p.id))));
+    out.sort((a, b) => Number(b.status === 'pending_approval') - Number(a.status === 'pending_approval') || new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    return { drafts: out.slice(0, 300) };
   });
 
   app.post<{ Body: { viewId?: string; accountId?: string; projectId: string; taskId?: string | null; checklistItemId?: string | null; to: string[]; cc?: string[]; subject: string; body: string; inReplyTo?: string | null; references?: string | null; send?: boolean } }>('/mail/drafts', async (req) => {

@@ -5,9 +5,9 @@ import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
 import { Tour, tourDone } from './Tour';
-import { useAiStatus } from '../lib/useAi';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useMailUnread } from '../lib/useMailUnread';
+import { refreshOpenForMe, useOpenForMe } from '../lib/useOpenForMe';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
 import { NotifIcon, NotificationItem, sortNotifications, useOpenNotification } from './Notifications';
@@ -17,14 +17,13 @@ import { useOpenChat } from './Messenger';
 const MenuCtx = createContext<() => void>(() => undefined);
 
 const MAX_PINNED = 5;
-const AREAS_AP = ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'];
 function readFlag(key: string): boolean { try { return localStorage.getItem(key) === '1'; } catch { return false; } }
 function writeFlag(key: string, v: boolean) { try { localStorage.setItem(key, v ? '1' : '0'); } catch { /* ignore */ } }
 
 /**
  * Seitenleiste: „PROject“ öffnet das Dashboard. Darunter bis zu fünf angeheftete Projekte (Benutzereinstellung,
- * ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen untereinander aus. Das gewählte Projekt zeigt seine
- * Bereiche (Arbeitspakete, Postfach, Doku, Risiken, KI, Einstellungen für PL). Danach die globalen Bereiche Postfach,
+ * ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen untereinander aus. Ein Klick aufs Projekt öffnet
+ * das Board; die Bereiche des Projekts stehen als Reiter in dessen Kopfzeile. Danach die globalen Bereiche Postfach,
  * Kalender, Workflows und Chat, dann Einstellungen und Verwaltung.
  * Chat am Desktop: Knopf unten rechts und Leisteneintrag öffnen den Messenger als Overlay; mobil die Seite /chat.
  * Unter 900 px liegt die Leiste als Overlay über der Seite und öffnet sich über das Menü-Symbol in der Kopfzeile.
@@ -41,9 +40,9 @@ export function Layout({ children }: { children: ReactNode }) {
   const [tour, setTour] = useState(false);
   const [version, setVersion] = useState('');
   const [chat, setChat] = useState<{ open: boolean; channelId: string | null; threadId: string | null; msgId: string | null }>({ open: false, channelId: null, threadId: null, msgId: null });
-  const ai = useAiStatus();
   const unread = useChatUnread();
   const mailUnread = useMailUnread();
+  const open = useOpenForMe();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -55,6 +54,8 @@ export function Layout({ children }: { children: ReactNode }) {
     setMenu(false);
   }, [loc.pathname]);
   useEffect(() => { if (loc.pathname.startsWith('/chat')) setChat((c) => ({ ...c, open: false })); }, [loc.pathname]);
+  // Zähler „Offen für dich“ nach Seitenwechseln auffrischen (Freigabe erteilt, Frage beantwortet); höchstens alle 10 s
+  useEffect(() => refreshOpenForMe(), [loc.pathname]);
 
   const saved = user?.settings?.pinnedProjects;
   const pinnedIds = (saved ?? projects.slice(0, MAX_PINNED).map((p) => p.id)).filter((id) => projects.some((p) => p.id === id)).slice(0, MAX_PINNED);
@@ -71,28 +72,17 @@ export function Layout({ children }: { children: ReactNode }) {
     setMenu(false);
     setChat((c) => ({ open: true, channelId: channelId === undefined ? c.channelId : channelId, threadId: threadId ?? null, msgId: msgId ?? null }));
   };
-  const isActive = (p: string) => loc.pathname === p || loc.pathname.startsWith(p + '/');
   const projectNav = (p: Project, pin: boolean, tourId?: string) => {
     const base = `/projekte/${p.id}`;
     const sel = currentId === p.id;
     return (
       <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
         <div className="proj-row">
-          <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId}>
-            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
+          <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId} title={`${p.name}: Board öffnen`}>
+            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>{(open.byProject[p.id] ?? 0) > 0 && <span className="badge warn nav-count" title="Offen für dich in diesem Projekt (Dashboard)">{open.byProject[p.id]}</span>}
           </NavLink>
           <button className={`pin ${pin ? 'on' : ''}`} disabled={!pin && pinnedIds.length >= MAX_PINNED} title={pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften'} aria-label={pin ? 'Nicht mehr anheften' : 'Anheften'} onClick={() => void togglePin(p.id)}>{pin ? '★' : '☆'}</button>
         </div>
-        {sel && (
-          <div className="sub2">
-            <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (AREAS_AP.some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
-            <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach{(mailUnread.byProject[p.id] ?? 0) > 0 && <span className="badge danger nav-count" title="ungelesene Mails">{mailUnread.byProject[p.id]}</span>}</NavLink>
-            <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
-            <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
-            {(ai?.enabled || ai?.killswitch) && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
-            <NavLink to={`${base}/einstellungen`} data-tour="p-einstellungen" className={() => (isActive(`${base}/einstellungen`) ? 'active' : '')}>Einstellungen</NavLink>
-          </div>
-        )}
       </div>
     );
   };
@@ -101,7 +91,7 @@ export function Layout({ children }: { children: ReactNode }) {
     <div className="app">
       {menu && <div className="sidebar-backdrop" onClick={() => setMenu(false)} />}
       <nav className={`sidebar ${menu ? 'open' : ''}`}>
-        <div className="brand"><NavLink to="/dashboard" className="brand-link" data-tour="dashboard" title="Dashboard">PROject<small>{orgName}</small></NavLink><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
+        <div className="brand"><NavLink to="/dashboard" className="brand-link" data-tour="dashboard" title="Dashboard">PROject{open.total > 0 && <span className="badge warn nav-count" title="Offen für dich: Fragen, Bestätigungen, KI-Vorschläge, Entwürfe, Prüfungen, Blocker">{open.total}</span>}<small>{orgName}</small></NavLink><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
         <div className="sub projects-nav">
           {pinned.map((p, i) => projectNav(p, true, i === 0 ? 'projekt' : undefined))}
           {current && projectNav(current, false)}
@@ -147,14 +137,15 @@ export function Layout({ children }: { children: ReactNode }) {
   );
 }
 
-export function TopBar({ title, children, tabs }: { title: ReactNode; children?: ReactNode; tabs?: { to: string; label: string; end?: boolean }[] }) {
+/** Kopfzeile; tabsBelow legt viele Reiter (Projektbereiche) in eine eigene Zeile unter Titel, Suche und Glocke. */
+export function TopBar({ title, children, tabs, tabsBelow = false }: { title: ReactNode; children?: ReactNode; tabs?: { to: string; label: string; end?: boolean }[]; tabsBelow?: boolean }) {
   const openMenu = useContext(MenuCtx);
   return (
     <div className="topbar">
       <button className="menu-btn" title="Menü" aria-label="Menü öffnen" onClick={openMenu}>☰</button>
       <h1>{title}</h1>
       {tabs && (
-        <div className="tabs">
+        <div className={`tabs ${tabsBelow ? 'below' : ''}`}>
           {tabs.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end}>
               {t.label}

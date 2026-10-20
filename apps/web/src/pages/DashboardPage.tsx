@@ -11,7 +11,9 @@ import { AllTasksView } from './AllTasksPage';
 import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
 import { useOpenChat } from '../components/Messenger';
-import { NotificationRow, sortNotifications } from '../components/Notifications';
+import { NotifIcon, NotificationRow, sortNotifications } from '../components/Notifications';
+import { useOpenForMe, type Waiting } from '../lib/useOpenForMe';
+import type { NotifyEvent } from '@projekttool/shared';
 
 /**
  * Dashboard (nur global, filterbar nach Projekt über ?projekt=): Reiter Meine Arbeit, Projekte (Ampel, Fortschritt,
@@ -55,10 +57,9 @@ function MyWork({ projectId }: { projectId: string | null }) {
   const { user, timeTracking } = useAuth();
   const work = useData<{ projects: WorkProject[] }>('/my/work');
   const notes = useData<{ notifications: Notification[]; unread: number }>('/notifications');
-  const questions = useData<{ questions: Question[] }>('/questions?status=open');
+  const openForMe = useOpenForMe();
   const openChat = useOpenChat();
-  const myQuestions = (questions.data?.questions ?? []).filter((q) => !projectId || q.projectId === projectId);
-  const waiting = useData<{ drafts: { projectId: string; projectKey: string; count: number }[]; pagesInReview: { id: string; title: string; projectId: string; projectKey: string }[]; tasks: { id: string; number: number; title: string; projectId: string; projectKey: string; blocked: boolean; escalationLevel: number }[] }>('/my/waiting');
+  const myQuestions = openForMe.questions.filter((q) => !projectId || q.projectId === projectId);
   const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>(timeTracking ? '/my/time' : null);
   const { showDone, setShowDone } = useShowDone();
   const t = today();
@@ -84,11 +85,11 @@ function MyWork({ projectId }: { projectId: string | null }) {
   const upcoming = [...open].filter((x) => x.ap.dueDate).sort((a, b) => a.ap.dueDate!.localeCompare(b.ap.dueDate!)).slice(0, 8);
   const h = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')} h`;
   const list = (extra: string) => `/dashboard/arbeitspakete?mine=1${projectId ? `&projekt=${projectId}` : ''}${extra}`;
-  const waitingIn = <T extends { projectId: string }>(xs: T[] | undefined) => (xs ?? []).filter((x) => !projectId || x.projectId === projectId);
   if (projectId) {
     // Im Projekt-Dashboard steht Soll/Ist schon oben; hier nur die eigene Arbeit in diesem Projekt
     return (
       <div className="mt">
+        <OpenForMeList questions={myQuestions} waiting={openForMe.waiting} projectId={projectId} />
         <div className="row mb">
           <h2 style={{ margin: 0 }}>Meine Arbeit in diesem Projekt</h2>
           <span className="muted small">{open.length} offen{overdue.length ? ` · ${overdue.length} überfällig` : ''}{tasksOpen ? ` · ${tasksOpen} Tasks` : ''}</span>
@@ -114,6 +115,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
           <div className={`kpi ${myQuestions.filter((q) => q.kind === 'confirm').length ? 'warn' : ''}`} title="Vorläufige Termine und Buchungen, die du bestätigen sollst"><div className="v">{myQuestions.filter((q) => q.kind === 'confirm').length}</div><div className="l">Bestätigungen für mich</div></div>
           {time.data && time.data.totalMinutes > 0 && <div className="kpi"><div className="v">{h(time.data.totalMinutes)}</div><div className="l">gebucht, 7 Tage</div></div>}
         </div>
+        <OpenForMeList questions={myQuestions} waiting={openForMe.waiting} projectId={null} />
         <div className="grid cols-2 mb">
           <div className="card">
             <h2>Soll / Ist je Projekt</h2>
@@ -135,16 +137,6 @@ function MyWork({ projectId }: { projectId: string | null }) {
             )}
           </div>
           <div className="card">
-            <h2>Wartet auf dich</h2>
-            {waiting.data && waiting.data.drafts.length + waiting.data.pagesInReview.length + waiting.data.tasks.length + myQuestions.length === 0 && <div className="muted small">Nichts offen.</div>}
-            <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
-              {myQuestions.slice(0, 8).map((q) => <li key={q.id}><a href="#" onClick={(e) => { e.preventDefault(); if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); }}><span className="badge">{q.projectKey}</span> {q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : 'Frage'} von {q.askedByName ?? '?'}{q.taskCode ? ` zu ${q.taskCode}` : ''}: {q.body.length > 80 ? `${q.body.slice(0, 80)} …` : q.body}</a></li>)}
-              {waitingIn(waiting.data?.drafts).map((d) => <li key={d.projectId}><Link to={`/projekte/${d.projectId}/mail/freigaben`}><span className="badge">{d.projectKey}</span> {d.count} Mail-Entwürfe zur Freigabe</Link></li>)}
-              {waitingIn(waiting.data?.pagesInReview).map((p) => <li key={p.id}><Link to={`/projekte/${p.projectId}/doku/${p.id}`}><span className="badge">{p.projectKey}</span> Seite „{p.title}“ in Prüfung</Link></li>)}
-              {waitingIn(waiting.data?.tasks).map((x) => <li key={x.id}><Link to={`/projekte/${x.projectId}/board?task=${x.id}`}><span className="tkey">{x.projectKey}-{x.number}</span> {x.title}</Link> {x.blocked && <span className="badge blocked">blockiert</span>}{x.escalationLevel > 0 && <span className="badge danger">Esk. {x.escalationLevel}</span>}</li>)}
-            </ul>
-          </div>
-          <div className="card">
             <h2>Meldungen {notes.data && notes.data.unread > 0 && <span className="badge warn">{notes.data.unread} neu</span>}</h2>
             {sortNotifications(notes.data?.notifications ?? []).slice(0, 6).map((n) => <NotificationRow key={n.id} n={n} onOpened={() => void notes.reload()} />)}
             {notes.data && notes.data.notifications.length === 0 && <div className="muted small">Keine Meldungen.</div>}
@@ -159,5 +151,36 @@ function MyWork({ projectId }: { projectId: string | null }) {
         {work.data && <WorkTree nodes={nodes} reload={work.reload} />}
       </div>
     </>
+  );
+}
+
+/**
+ * „Offen für dich“: alles, was auf eine Entscheidung oder Handlung der Person wartet, als eine Liste unter den Kennzahlen:
+ * Fragen, Entscheidungen und Bestätigungen, KI-Vorschläge, Vorschläge der Mail-KI, Mail-Entwürfe zur Freigabe, Seiten in
+ * Prüfung, blockierte und eskalierte Arbeitspakete. Ersetzt einen eigenen Menüpunkt.
+ */
+function OpenForMeList({ questions, waiting, projectId }: { questions: Question[]; waiting: Waiting | null; projectId: string | null }) {
+  const openChat = useOpenChat();
+  const inP = <T extends { projectId: string }>(xs: T[] | undefined) => (xs ?? []).filter((x) => !projectId || x.projectId === projectId);
+  type Row = { key: string; icon: NotifyEvent; kind: string; projectKey: string; text: string; to?: string; onClick?: () => void; badge?: string };
+  const qKind = (q: Question) => (q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'approval' ? 'Freigabe' : 'Frage');
+  const rows: Row[] = [
+    ...questions.filter((q) => q.kind === 'decision' || q.kind === 'confirm' || q.kind === 'approval').map((q): Row => ({ key: `q${q.id}`, icon: q.kind === 'confirm' ? 'confirm' : q.kind === 'approval' ? 'approval' : 'decision', kind: qKind(q), projectKey: q.projectKey ?? '', text: `${q.askedByName ?? '?'}${q.taskCode ? ` zu ${q.taskCode}` : ''}: ${q.body.length > 110 ? `${q.body.slice(0, 110)} …` : q.body}`, onClick: () => { if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); } })),
+    ...inP(waiting?.proposals).map((p): Row => ({ key: `p${p.projectId}`, icon: 'review', kind: 'KI-Vorschläge', projectKey: p.projectKey, text: `${p.count} Vorschl${p.count === 1 ? 'ag wartet' : 'äge warten'} auf Freigabe`, to: `/projekte/${p.projectId}/ki` })),
+    ...inP(waiting?.drafts).map((d): Row => ({ key: `d${d.projectId}`, icon: 'mail_in', kind: 'Mail-Entwürfe', projectKey: d.projectKey, text: `${d.count} Entw${d.count === 1 ? 'urf wartet' : 'ürfe warten'} auf Freigabe`, to: `/postfach/freigaben?projekt=${d.projectId}` })),
+    ...inP(waiting?.mailSuggestions).map((m): Row => ({ key: `m${m.mailId}`, icon: 'mail_in', kind: 'Mail-KI', projectKey: m.projectKey, text: `Vorschläge zu „${m.subject.length > 80 ? `${m.subject.slice(0, 80)} …` : m.subject}“`, to: `/postfach/m/${m.mailId}?projekt=${m.projectId}` })),
+    ...inP(waiting?.tasks).map((x): Row => ({ key: `t${x.id}`, icon: x.escalationLevel > 0 ? 'escalation' : 'blocked', kind: x.blocked ? 'Blockiert' : 'Eskaliert', projectKey: x.projectKey, text: `${x.projectKey}-${x.number} ${x.title}`, to: `/projekte/${x.projectId}/board?task=${x.id}`, badge: x.escalationLevel > 0 ? `Esk. ${x.escalationLevel}` : undefined })),
+    ...inP(waiting?.pagesInReview).map((p): Row => ({ key: `s${p.id}`, icon: 'review', kind: 'Seite in Prüfung', projectKey: p.projectKey, text: p.title, to: `/projekte/${p.projectId}/doku/${p.id}` })),
+    ...questions.filter((q) => q.kind !== 'decision' && q.kind !== 'confirm' && q.kind !== 'approval').map((q): Row => ({ key: `q${q.id}`, icon: 'question', kind: qKind(q), projectKey: q.projectKey ?? '', text: `${q.askedByName ?? '?'}${q.taskCode ? ` zu ${q.taskCode}` : ''}: ${q.body.length > 110 ? `${q.body.slice(0, 110)} …` : q.body}`, onClick: () => { if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); } }))
+  ];
+  return (
+    <div className="card mb open-for-me">
+      <h2>Offen für dich {rows.length > 0 && <span className="badge warn">{rows.length}</span>}</h2>
+      {waiting && rows.length === 0 && <div className="muted small">Nichts offen.</div>}
+      {rows.map((r) => {
+        const body = <><NotifIcon event={r.icon} /><span className="k">{r.kind}</span>{!projectId && r.projectKey && <span className="badge">{r.projectKey}</span>}<span className="x">{r.text}</span>{r.badge && <span className="badge danger">{r.badge}</span>}</>;
+        return r.to ? <Link key={r.key} className={`ofm ev-${r.icon}`} to={r.to}>{body}</Link> : <a key={r.key} className={`ofm ev-${r.icon}`} href="#" onClick={(e) => { e.preventDefault(); r.onClick?.(); }}>{body}</a>;
+      })}
+    </div>
   );
 }

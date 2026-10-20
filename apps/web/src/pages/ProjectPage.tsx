@@ -1,12 +1,11 @@
 import { createContext, useContext, useEffect, type ReactNode } from 'react';
-import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../lib/auth';
 import type { AiCapabilities, BoardColumn, Label, Membership, Project, ProjectGroup, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { BoardView } from './project/BoardView';
 import { PlanView } from './project/PlanView';
-import { MailView } from './project/MailView';
 import { DocsView } from './project/DocsView';
 import { PROJECT_SETTINGS_TABS, ProjectSettingsPage } from './project/settings/ProjectSettings';
 import { CalendarView } from './project/CalendarView';
@@ -19,6 +18,7 @@ import { MeetingsView } from './project/MeetingsView';
 import { useOpenChat } from '../components/Messenger';
 import { api } from '../lib/api';
 import { useProjectPolicy } from '../lib/useProjectPolicy';
+import { useAiStatus } from '../lib/useAi';
 
 export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
 export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
@@ -86,27 +86,27 @@ function ProjectBody() {
   const p = detail.project;
   const badge = useProjectPolicy(p).badge;
   const base = `/projekte/${id}`;
-  // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt nur die Unterreiter des aktuellen Bereichs
   const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
   const isPl = p.myMembership.role === 'pl';
-  // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt die Unterreiter des Bereichs, bei Einstellungen die Reiter der Einstellungsseite
-  const tabs = ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub)
-    ? [
-        { to: `${base}/board`, label: 'Board' },
-        { to: `${base}/plan`, label: 'Plan' },
-        { to: `${base}/kalender`, label: 'Kalender' },
-        { to: `${base}/besprechungen`, label: 'Besprechungen' },
-        ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
-        { to: `${base}/auswertung`, label: 'Auswertung' }
-      ]
-    : sub === 'einstellungen'
-      ? PROJECT_SETTINGS_TABS.map((t) => ({ to: `${base}/einstellungen/${t.key}`, label: t.label }))
-      : undefined;
-  const area = ['', 'board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
+  const aiStatus = useAiStatus();
+  // Die Leiste zeigt nur Projekte; alle Bereiche des Projekts stehen als Reiter in der Kopfzeile, Einstellungen zuletzt
+  const tabs = [
+    { to: `${base}/board`, label: 'Board' },
+    { to: `${base}/plan`, label: 'Plan' },
+    { to: `${base}/kalender`, label: 'Kalender' },
+    { to: `${base}/besprechungen`, label: 'Besprechungen' },
+    { to: `${base}/doku`, label: 'Doku' },
+    { to: `${base}/raid`, label: 'Risiken' },
+    ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
+    { to: `${base}/auswertung`, label: 'Auswertung' },
+    ...(aiStatus?.enabled || aiStatus?.killswitch ? [{ to: `${base}/ki`, label: 'KI' }] : []),
+    { to: `${base}/einstellungen`, label: 'Einstellungen' }
+  ];
   const taskId = params.get('task');
   return (
     <>
-      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{badge && <span className="badge" style={{ marginLeft: 8 }} title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}<span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {area}</span></>} tabs={tabs} />
+      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{badge && <span className="badge" style={{ marginLeft: 8 }} title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}</>} tabs={tabs} tabsBelow />
+      {sub === 'einstellungen' && <nav className="subtabs">{PROJECT_SETTINGS_TABS.map((t) => <NavLink key={t.key} to={`${base}/einstellungen/${t.key}`}>{t.label}</NavLink>)}</nav>}
       <Routes>
         <Route index element={<Navigate to={`${base}/board`} replace />} />
         <Route path="board" element={<BoardView />} />
@@ -115,7 +115,7 @@ function ProjectBody() {
         <Route path="zeiten" element={<TimeView />} />
         <Route path="auswertung" element={<AnalyticsView />} />
         <Route path="besprechungen" element={<MeetingsView />} />
-        <Route path="mail/*" element={<MailView />} />
+        <Route path="mail/*" element={<MailRedirect />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
         <Route path="einstellungen/*" element={<ProjectSettingsPage />} />
         <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen/personen`} replace />} />
@@ -130,6 +130,18 @@ function ProjectBody() {
       {taskId && <TaskDrawer taskId={taskId} onClose={() => openTask(null)} />}
     </>
   );
+}
+
+/** Postfach gibt es nur global: alte Projektlinks (Liste, Mail, Entwürfe, neue Mail) öffnen es mit Projektfilter. */
+function MailRedirect() {
+  const { detail } = useProject();
+  const loc = useLocation();
+  const id = detail.project.id;
+  const rest = loc.pathname.replace(/^\/projekte\/[^/]+\/mail\/?/, '');
+  const q = new URLSearchParams(loc.search);
+  if (!q.has('projekt')) q.set('projekt', id);
+  const to = rest.startsWith('m/') ? `/postfach/${rest}` : rest === 'freigaben' ? '/postfach/freigaben' : rest === 'neu' ? '/postfach/neu' : rest === 'ki' ? `/projekte/${id}/ki` : '/postfach';
+  return <Navigate to={`${to}?${q.toString()}`} replace />;
 }
 
 /** Chat und Workflows gibt es nur global: alte Projektlinks öffnen den Messenger mit dem Projektkanal bzw. den Lauf. */

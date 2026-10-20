@@ -144,6 +144,14 @@ test('Entwurf ohne Senderecht geht in die Freigabe, PL sendet', async () => {
   const pl = await t.login('pl@demo.local');
   const pending = await t.api(pl).get(`/projects/${t.ids.projects.web}/mail/drafts`);
   assert.ok(pending.json().drafts.some((x: any) => x.id === d.json().draft.id));
+  // Postfach „Zur Freigabe“ über alle Projekte (mit Projektkennung, wartende zuerst) und „Offen für dich“ im Dashboard
+  const global = (await t.api(pl).get('/mail/drafts')).json().drafts;
+  assert.equal(global[0].status, 'pending_approval');
+  assert.ok(global.some((x: any) => x.id === d.json().draft.id && x.projectKey === 'WEB' && x.byAgent === false));
+  assert.ok((await t.api(pl).get(`/mail/drafts?projectId=${t.ids.projects.web}`)).json().drafts.every((x: any) => x.projectId === t.ids.projects.web));
+  const waiting = (await t.api(pl).get('/my/waiting')).json();
+  assert.ok(waiting.drafts.some((x: any) => x.projectId === t.ids.projects.web && x.count >= 1));
+  assert.ok(Array.isArray(waiting.proposals) && Array.isArray(waiting.mailSuggestions));
   const sent = await t.api(pl).post(`/mail/drafts/${d.json().draft.id}/send`);
   assert.equal(sent.statusCode, 200, sent.body);
   assert.equal(sent.json().draft.status, 'sent');

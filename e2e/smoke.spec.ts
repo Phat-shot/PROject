@@ -15,7 +15,7 @@ async function login(page: Page, email = 'pl@demo.local') {
 test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten', async ({ page }) => {
   await login(page);
   // Ein Klick auf das Projekt öffnet direkt die Arbeitspakete (oberster Bereich des Projekts)
-  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await expect(page.locator('.task-card').first()).toBeVisible();
   await page.getByRole('button', { name: /Neues Arbeitspaket/ }).click();
   const title = `E2E ${Date.now()}`;
@@ -35,20 +35,20 @@ test('Suche nach Kennung, Kalender, Doku-Seite und Projekteinstellungen sind err
   await expect(page.locator('.search-results .item').first()).toBeVisible();
   await page.getByRole('link', { name: 'Kalender', exact: true }).click();
   await expect(page.locator('.calendar')).toBeVisible();
-  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.getByRole('link', { name: 'Doku', exact: true }).click();
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.locator('.topbar .tabs').getByRole('link', { name: 'Doku', exact: true }).click();
   await page.locator('.doc-tree .page').first().click();
   await expect(page.locator('.doc-view .doc-actions')).toBeVisible();
-  await page.getByRole('link', { name: 'Einstellungen' }).first().click();
-  await expect(page.locator('.topbar .tabs')).toContainText('Daten');
+  await page.locator('.topbar .tabs').getByRole('link', { name: 'Einstellungen', exact: true }).click();
+  await expect(page.locator('.subtabs')).toContainText('Daten');
   await page.getByRole('link', { name: 'Daten', exact: true }).click();
   await expect(page.locator('.content')).toContainText('Papierkorb');
 });
 
 test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Feldern', async ({ page }) => {
   await login(page);
-  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.getByRole('link', { name: 'Arbeitspakete', exact: true }).click();
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
   await page.locator('.task-card').first().click();
   await expect(page.locator('.drawer')).toContainText('Zuständig');
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
@@ -58,8 +58,8 @@ test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Felder
 
 test('Leser darf nichts anlegen', async ({ page }) => {
   await login(page, 'leser@demo.local');
-  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.getByRole('link', { name: 'Arbeitspakete', exact: true }).click();
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
   await expect(page.getByRole('button', { name: /Neues Arbeitspaket/ })).toHaveCount(0);
 });
 
@@ -69,7 +69,7 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   await expect(page.getByText('Fortschritt je Teilprojekt')).toBeVisible();
   await page.getByRole('link', { name: 'Projekte', exact: true }).click();
   await expect(page.locator('table.portfolio tbody tr')).toHaveCount(1);
-  await page.getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await page.locator('.task-card', { hasText: 'CMS-Auswahl' }).click();
   await expect(page.locator('.drawer')).toContainText('Aufgaben');
   const title = `E2E Aufgabe ${Date.now()}`;
@@ -110,4 +110,18 @@ test('HTML-Mail läuft isoliert: kein Skript, externe Bilder erst auf Klick', as
   expect(await page.evaluate(() => (window as unknown as { __xss?: number }).__xss)).toBeUndefined();
   await page.getByRole('button', { name: 'Bilder laden' }).click();
   await expect(page.getByText('Externe Bilder sind blockiert')).toHaveCount(0);
+});
+
+test('Projekt: Bereiche als Reiter, keine Unterpunkte in der Leiste; altes Projekt-Postfach öffnet das globale mit Filter', async ({ page }) => {
+  await login(page);
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  await expect(page.locator('.task-card').first()).toBeVisible();
+  await expect(page.locator('.topbar .tabs')).toContainText('Risiken');
+  await expect(page.locator('.sidebar .sub2')).toHaveCount(0);
+  const id = page.url().match(/projekte\/([0-9a-f-]{36})/)![1];
+  await page.goto(`/projekte/${id}/mail`);
+  await expect(page).toHaveURL(new RegExp(`/postfach\\?projekt=${id}`));
+  await expect(page.locator('.mail-filters').getByLabel('Projekt')).toHaveValue(id);
+  await page.locator('.mail-views .view.approve').click();
+  await expect(page.locator('.mail-detail h2')).toHaveText('Zur Freigabe');
 });
