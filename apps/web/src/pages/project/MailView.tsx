@@ -9,6 +9,7 @@ import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from 
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { aiBlocked } from '../../lib/useAi';
+import { refreshMailUnread } from '../../lib/useMailUnread';
 import { MailAiBox } from './MailAi';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
@@ -130,7 +131,8 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
   const list = useData<{ mails: InboxMail[] }>(url, [folder, viewId]);
   const needle = q.trim().toLowerCase();
   const mails = (list.data?.mails ?? []).filter((m) => !needle || m.subject.toLowerCase().includes(needle) || m.fromAddr.toLowerCase().includes(needle) || (m.fromName ?? '').toLowerCase().includes(needle));
-  const open = (id: string) => nav(`${base}/m/${id}?${params.toString()}`);
+  // Öffnen gilt als gelesen: Liste und Zähler sofort nachziehen (der Server trägt es beim Laden der Mail ein)
+  const open = (id: string) => { nav(`${base}/m/${id}?${params.toString()}`); if (list.data?.mails.some((m) => m.id === id && m.unread)) { list.setData({ mails: list.data.mails.map((m) => (m.id === id ? { ...m, unread: false } : m)) }); setTimeout(refreshMailUnread, 500); } };
   const current = mails.find((m) => m.id === mailId);
   const back = `${base}?${params.toString()}`;
   return (
@@ -143,7 +145,7 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
         </div>
         {list.error && <div className="error" style={{ margin: 12 }}>{list.error}</div>}
         {mails.map((m) => (
-          <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''}`} onClick={() => open(m.id)}>
+          <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''} ${m.unread ? 'unread' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
             <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
             <div className="snippet">{!projectId && <span className="badge" style={{ marginRight: 6 }}>{m.projectKey}</span>}{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>

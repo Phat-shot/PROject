@@ -21,7 +21,7 @@ Für Projektleitung, Mitglieder und Verwaltung. Dieses Handbuch beschreibt, was 
 | Ressourcen | Räume, Geräte, externe Personen buchen (immer vorläufig, eine Person bestätigt) | übersteuert nie einen Konflikt |
 | Wissen | Überblick über das Projekt, passende Seiten, ähnliche Arbeitspakete; Suche im Projekt; Überschneidungen melden | nur, was er sehen darf |
 | Recherche online | Suchen und Seiten lesen, Quellen an die Seite hängen | nur mit Freigabe; nur lesen, keine Kontaktaufnahme |
-| Mail-Bearbeitung | als (stellvertretende) Projektleitung Mails direkt bearbeiten, als Mitglied vorschlagen (neue Mails der Projektkonten, Ordner „KI Bearbeiten“, „Bearbeiten lassen“, „Vorschläge zur Mail“ mit Antwort per Chat); offene Punkte nachfragen | Inhalte persönlicher Konten nur mit Freigabe |
+| Mail-Bearbeitung | als (stellvertretende) Projektleitung Mails direkt bearbeiten, als Mitglied vorschlagen (neue Mails der Projektkonten, Ordner „KI Bearbeiten“, „Bearbeiten lassen“, „Vorschläge zur Mail“ mit Antwort per Chat); offene Punkte nachfragen; Info an die PL per Chat; Antwort selbst senden nur mit Senderecht, „darf Mails senden“ und Policy „Selbstständig“ nach Außenprüfung | Inhalte persönlicher Konten nur mit Freigabe; erster Kontakt mit Unbekannten immer Entwurf |
 
 ### Was er nie tut
 

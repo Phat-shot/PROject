@@ -814,7 +814,7 @@ export interface MailAiRun {
   actorName: string | null;
   createdAt: string;
   mail?: { id: string; subject: string; fromAddr: string; fromName: string | null; date: string };
-  actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number } }[];
+  actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number; /** Antwort vom Agenten selbst gesendet (Policy Selbstständig, Senderecht, Außenprüfung bestanden) */ sent?: boolean; /** Versand im Arbeitszeitfenster geplant (Zeitpunkt) */ scheduled?: string } }[];
   /** Offene Punkte aus der Mail (Mail-Rückfrage) */
   openPoints?: string[];
 }
@@ -822,6 +822,8 @@ export interface MailAiRun {
 export interface MailSummary {
   id: string;
   accountId: string;
+  /** für die abrufende Person noch nicht geöffnet (nur in Listen) */
+  unread?: boolean;
   folder: string;
   messageId: string | null;
   fromAddr: string;
