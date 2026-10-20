@@ -83,6 +83,7 @@ Die **Grundmenge** (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer
 
 ### Weitere Felder
 
+- **Denktiefe:** schnell (eine Leserunde, knapper Kontext, Denkmodus lokaler Modelle aus), Standard, gründlich (bis zu vier Leserunden, voller Kontext, Denkmodus an; kostet zwei Läufe im Tagesbudget). Mandant und Projekt setzen eine höchste Denktiefe; je Arbeitspaket darf auch „Projektplan ändern“ sie setzen, auch per Chat („WEB-12 gründlich“).
 - **Reichweite:** zugewiesene Arbeitspakete (Standard) oder ganzes Projekt (Projektdurchlauf des Projektagenten).
 - **Überschneidungen:** nachfragen (Standard), aus, oder nutzen (nur bei Selbstständig: Querverweise ohne Rückfrage).
 - **Aufträge im Chat:** Projektleitung und Stellvertretung (Standard), dazu Teilprojekt-Verantwortung, Zuständige unter dem eigenen Arbeitspaket oder alle Mitglieder.

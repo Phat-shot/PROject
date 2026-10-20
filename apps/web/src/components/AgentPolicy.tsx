@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type Question, type SynergyMode } from '@projekttool/shared';
+import { AGENT_ACTION_CLASSES, AGENT_DEPTHS, AGENT_MODES, type AgentActionClass, type AgentDepth, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type Question, type SynergyMode } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { PromptModal, useAsync } from './ui';
 
@@ -7,6 +7,7 @@ import { PromptModal, useAsync } from './ui';
 export const modeLabel = (m: AgentMode | undefined | null) => AGENT_MODES.find((x) => x.key === m)?.label ?? 'erben';
 export const scopeLabel = (s: AgentScope | undefined | null) => (s === 'project' ? 'ganzes Projekt' : 'zugewiesene Arbeitspakete');
 export const synergyLabel = (s: SynergyMode | undefined | null) => ({ off: 'aus', ask: 'nachfragen', use: 'nutzen' }[s ?? 'ask'] ?? 'nachfragen');
+export const depthLabel = (d: AgentDepth | undefined | null) => AGENT_DEPTHS.find((x) => x.key === d)?.label ?? 'Standard';
 export const classLabel = (c: AgentActionClass | string | null | undefined) => AGENT_ACTION_CLASSES.find((x) => x.key === c)?.label ?? String(c ?? '');
 
 /**
@@ -43,6 +44,10 @@ export function AgentPolicyEditor({ value, onSave, limits = false, workflows = t
         <select value={f.scope ?? ''} onChange={(e) => setF({ ...f, scope: (e.target.value || undefined) as AgentScope | undefined })}><option value="">erben{effective ? ` (${scopeLabel(effective.scope)})` : ' (Standard: zugewiesene Arbeitspakete)'}</option><option value="task">zugewiesene Arbeitspakete</option><option value="project">ganzes Projekt (Projektdurchlauf)</option></select></label>
       <label className="field" title="Überschneidungen zwischen Arbeitspaketen: nachfragen stellt die Frage an die Zuständigen bzw. die PL; nutzen (nur bei „Selbstständig“) vermerkt Querverweise direkt"><span>Überschneidungen</span>
         <select value={f.synergies ?? ''} onChange={(e) => setF({ ...f, synergies: (e.target.value || undefined) as SynergyMode | undefined })}><option value="">erben{effective ? ` (${synergyLabel(effective.synergies)})` : ' (Standard: nachfragen)'}</option><option value="off">aus</option><option value="ask">nachfragen</option><option value="use">nutzen (nur bei Selbstständig)</option></select></label>
+      <label className="field" title="schnell: eine Leserunde, knapper Kontext, Denkmodus aus; gründlich: bis zu vier Leserunden, voller Kontext, Denkmodus an, kostet zwei Läufe im Tagesbudget"><span>Denktiefe</span>
+        <select value={f.depth ?? ''} onChange={(e) => setF({ ...f, depth: (e.target.value || undefined) as AgentDepth | undefined })}><option value="">erben{effective ? ` (${depthLabel(effective.depth)})` : ' (Standard)'}</option>{AGENT_DEPTHS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}</select></label>
+      {limits && <label className="field"><span>Höchste Denktiefe für tiefere Ebenen</span>
+        <select value={f.maxDepth ?? ''} onChange={(e) => setF({ ...f, maxDepth: (e.target.value || undefined) as AgentDepth | undefined })}><option value="">keine Grenze</option>{AGENT_DEPTHS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}</select></label>}
       {limits && <label className="field"><span>Uhrzeit des Projektdurchlaufs (werktags, Europe/Berlin)</span>
         <input type="time" value={f.reviewAt ?? ''} onChange={(e) => setF({ ...f, reviewAt: e.target.value || undefined })} placeholder={effective?.reviewAt ?? '06:45'} /></label>}
       {workflows && <label className="field"><span>Workflow-Schritte an Agenten</span>
@@ -63,6 +68,7 @@ export function EffectivePolicyText({ e }: { e: EffectiveAgentPolicy }) {
     {e.chatOrders !== 'pl' && <> · Aufträge im Chat: {e.chatOrders}</>}
     {e.scope === 'project' && <> · Reichweite: ganzes Projekt (Durchlauf {e.reviewAt})</>}
     {e.synergies !== 'ask' && <> · Überschneidungen: {synergyLabel(e.synergies)}</>}
+    {e.depth !== 'standard' && <> · Denktiefe: {depthLabel(e.depth)} <span className="muted">({e.origin.depth})</span></>}
   </span>;
 }
 

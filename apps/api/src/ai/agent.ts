@@ -19,7 +19,7 @@ import { USE_LATERAL, accountUseIn, projectAccount } from '../mail/accounts.js';
 import { askQuestion, answerQuestion, type QuestionRow } from '../questions.js';
 import type { AgentActionClass, EffectiveAgentPolicy } from '@projekttool/shared';
 import type { AiConfig } from './client.js';
-import { actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
+import { DEPTH_LIMITS, actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
 import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
 import type { ExternalWindow } from '@projekttool/shared';
 import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
@@ -71,8 +71,7 @@ export type AgentAction =
   | { type: 'withdraw'; ref: string }
   | { type: 'none'; reason?: string };
 const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task']);
-/** Leserunden: höchstens zwei Runden mit zusammen sechs Zugriffen (read_page, search, read_task); research zählt gegen das Recherche-Budget */
-const MAX_ACCESSES = 6;
+/** Leserunden und Zugriffe je Denktiefe: DEPTH_LIMITS (Standard zwei Runden, sechs Zugriffe; research zählt gegen das Recherche-Budget) */
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
 const H = 3600_000;
@@ -699,10 +698,12 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const { columns, items, members, folders, pages, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, policy } = ctx;
   const webOk = await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: task.project_id, cfg: c, now });
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
-  const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 12`, [task.id]);
+  // Denktiefe (Konzept KI-Agent 3): Umfang von Log, Mails, Kandidaten, Leserunden und Zugriffen; gründlich kostet zwei Läufe
+  const dl = DEPTH_LIMITS[policy.depth];
+  const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit $2`, [task.id, dl.log]);
   const mails = await db.query(`select m.subject, m.from_addr, m.date, m.snippet, m.text_body, m.outgoing, l.origin, l.copied, ux.use, ux.use_user_id,
       exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered
-    from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where l.task_id = $1 order by l.origin desc, m.date desc limit 6`, [task.id, task.project_id]);
+    from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where l.task_id = $1 order by l.origin desc, m.date desc limit $3`, [task.id, task.project_id, dl.mails]);
   // Eingehende Mails nach Absenderklasse (Regel E): Externe erfahren nur, was zu ihrer Aufgabe gehört
   const code = `${task.project_key}-${task.number}`;
   const senderClass = new Map<string, string>();
@@ -748,7 +749,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const found = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: `${task.title} ${cut(task.description, 400)}`, maxTitles: 10, maxExcerpts: 3 });
   const foundPages = found.pages.length ? found.pages : pages.rows.slice(0, 10).map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null }));
   const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
-  const candidates = policy.synergies === 'off' ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: 3 });
+  const candidates = policy.synergies === 'off' || !dl.candidates ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: dl.candidates });
   const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
   const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };
   const digest = await projectDigest(db, { projectId: task.project_id, agentId: agent.id });
@@ -796,7 +797,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
   // Reicht das Kürzen der Abschnitte nicht, fällt zuletzt der Steckbrief aus dem Überblick
   if (fitted.stats.after > limit && digest.brief) { systemBlocks = [sysFixed, sysAgent, digestText({ structure: digest.structure, brief: null })]; system = systemBlocks.join('\n\n'); fitted = fitBudget(sections, limit + estTokens(digestText(digest)) - estTokens(systemBlocks[2])); fitted.stats.trimmed.brief = { from: estTokens(digest.brief), to: 0 }; }
   const prompt = fitted.text;
-  const contextStats = { ...fitted.stats, system: estTokens(system), contextTokens: c.contextTokens ?? 32000, candidates: candidates.length, foundPages: found.pages.length, similar: similar.length, dms: dms.rows.length };
+  const contextStats = { ...fitted.stats, system: estTokens(system), contextTokens: c.contextTokens ?? 32000, candidates: candidates.length, foundPages: found.pages.length, similar: similar.length, dms: dms.rows.length, depth: policy.depth };
+  // Denkmodus lokaler Modelle folgt der Tiefe: schnell aus, gründlich an, sonst wie Profil/Agent
+  const cRun: AiConfig = c.provider === 'local' && policy.depth !== 'standard' ? { ...c, enableThinking: policy.depth === 'deep' } : c;
   try {
     const errors: string[] = [];
     let extra = '';
@@ -805,9 +808,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let actions: AgentAction[] = [];
     // Leserunden: read_page, search und read_task liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
     let accesses = 0;
-    for (let round = 0; round < 3; round++) {
-      // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum
-      const r = await complete(c, fetchFn, { system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
+    for (let round = 0; round <= dl.rounds; round++) {
+      // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum; gründlich bekommt mehr Platz
+      const r = await complete(cRun, fetchFn, { system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: (cRun.enableThinking === true ? 6500 : 2500) + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
       j = parseJson(r.text);
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
@@ -815,11 +818,12 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       const searches = actions.filter((a) => a.type === 'research');
       const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task');
       if (!reads.length && !searches.length && !lookups.length) break;
-      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => !READ_TYPES.has(a.type)); break; }
+      if (round === dl.rounds) { errors.push(`Lesen abgebrochen: mehr als ${dl.rounds === 1 ? 'eine Leserunde' : `${dl.rounds} Leserunden`} (Denktiefe ${policy.depth})`); actions = actions.filter((a) => !READ_TYPES.has(a.type)); break; }
       const texts: string[] = [];
+      if (policy.depth === 'quick' && (searches.length || lookups.length)) texts.push(`- Suche, Recherche und read_task sind in der Denktiefe „schnell“ nicht verfügbar (${searches.length + lookups.length} Anfrage${searches.length + lookups.length === 1 ? '' : 'n'} übersprungen); sag im Log, wenn dir dadurch etwas fehlt`);
       // Projektwissen (Konzept 6.8): Suche und fremde Arbeitspakete nur innerhalb der Sichtbarkeit des Agenten
-      for (const a of lookups) {
-        if (accesses >= MAX_ACCESSES) { texts.push(`- ${a.type}: Zugriffslimit erreicht (${MAX_ACCESSES} je Lauf)`); continue; }
+      for (const a of policy.depth === 'quick' ? [] : lookups) {
+        if (accesses >= dl.accesses) { texts.push(`- ${a.type}: Zugriffslimit erreicht (${dl.accesses} je Lauf)`); continue; }
         accesses++;
         if (a.type === 'search') {
           const q = cut((a as any).text, 200);
@@ -837,7 +841,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         }
       }
       // Online-Recherche (Konzept 8): Freigabe, Profil, Suchdienst und Budget prüft webAvailable; Quellen landen in agent_web_sources
-      for (const a of searches.slice(0, 3)) {
+      for (const a of policy.depth === 'quick' ? [] : searches.slice(0, policy.depth === 'deep' ? 6 : 3)) {
         const q = String((a as any).text ?? '').trim();
         if (!webOk.ok) { texts.push(`### Recherche „${cut(q, 120)}“: nicht möglich – ${webOk.reason}`); errors.push(`research: ${webOk.reason}`); continue; }
         if (ctx.webSearches >= webOk.settings.maxPerRun) { texts.push(`### Recherche „${cut(q, 120)}“: Limit je Lauf erreicht (${webOk.settings.maxPerRun} Suchen)`); continue; }
@@ -852,7 +856,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       }
       for (const a of reads.slice(0, 4)) {
         const pid = (a as any).pageId;
-        if (accesses >= MAX_ACCESSES) { texts.push(`- pageId ${pid ?? '?'}: Zugriffslimit erreicht (${MAX_ACCESSES} je Lauf)`); continue; }
+        if (accesses >= Math.max(dl.accesses, 2)) { texts.push(`- pageId ${pid ?? '?'}: Zugriffslimit erreicht (${Math.max(dl.accesses, 2)} je Lauf)`); continue; }
         accesses++;
         const page = await db.maybeOne(`select id, title, status, version, content_md, content_html, folder_id from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
         if (!page) { texts.push(`- pageId ${pid ?? '?'}: nicht gefunden`); continue; }
@@ -870,8 +874,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const checkIds = ctx.checkIds;
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
-    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
+    const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
     await db.query(`update agent_runs set context_stats = $2 where id = $1`, [run.id, JSON.stringify(contextStats)]);

@@ -235,3 +235,42 @@ test('Workflow-Schritt an einen KI-Agenten: Agent wird zuständig und läuft; ge
   assert.equal(t3.responsible_user_id, null);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like '%Agenten-Policy%Workflow-Schritte nicht zu%'`, [t3.id]));
 });
+
+test('Denktiefe: schnell (eine Leserunde, keine Suche), gründlich (vier Leserunden, kostet zwei Läufe), Grenze maxDepth von Mandant und Projekt, Chat-Befehl policy mit depth', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  await t.api(admin).put('/ai/settings', { agentPolicy: {} });
+  await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto', depth: 'quick' });
+  let e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective;
+  assert.equal(e.depth, 'quick'); assert.equal(e.origin.depth, 'Projekt WEB');
+  const r = await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Tiefe prüfen', columnId: (await t.db.one(`select id from board_columns where project_id = $1 and name = 'Offen'`, [web()])).id, responsibleUserId: agent.id });
+  const tk = r.json().task;
+  await flushAgentRuns();
+  // schnell: Suche und read_task werden übersprungen, nach der ersten Leserunde ist Schluss
+  nextActions = [{ type: 'search', text: 'Nordcloud' }, { type: 'read_page', pageId: page.id }];
+  const before = prompts.length;
+  const run = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), tk.id, 'manual');
+  assert.equal(prompts.length - before, 2, 'eine Leserunde, dann Entscheidung');
+  assert.match(prompts.at(-1) ?? '', /in der Denktiefe „schnell“ nicht verfügbar/);
+  assert.ok(prompts.at(-2)!.includes('Denktiefe: schnell'), 'Policy-Text nennt die Tiefe');
+  assert.equal((await t.db.one(`select cost from agent_runs where id = $1`, [run.runId])).cost, 1);
+  // gründlich kostet zwei Läufe; Mandant begrenzt auf standard
+  await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto', depth: 'deep' });
+  nextActions = [{ type: 'comment', text: 'gründlich geprüft' }];
+  const { agentBudgetLeft } = await import('../src/ai/policy.js');
+  const left0 = await agentBudgetLeft(t.db, { id: agent.id, org_id: t.ids.org });
+  const run2 = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), tk.id, 'manual');
+  assert.equal((await t.db.one(`select cost from agent_runs where id = $1`, [run2.runId])).cost, 2);
+  assert.equal(await agentBudgetLeft(t.db, { id: agent.id, org_id: t.ids.org }), left0 - 2, 'Budget summiert die Kosten');
+  assert.equal((await t.api(admin).put('/ai/settings', { agentPolicy: { maxDepth: 'standard' } })).statusCode, 200);
+  e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective;
+  assert.equal(e.depth, 'standard'); assert.equal(e.origin.depth, 'Mandant begrenzt');
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { depth: 'tief' })).statusCode, 400);
+  // je AP: auch „Projektplan ändern“ darf die Tiefe setzen; die Grenze gilt weiter
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).put(`/tasks/${tk.id}/agent-policy`, { depth: 'quick' })).statusCode, 200);
+  assert.equal((await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective.depth, 'standard', 'AP-Tiefe gilt nur am AP');
+  assert.equal((await t.api(pl).put(`/tasks/${tk.id}/agent-policy`, { depth: 'deep' })).json().effective.depth, 'standard', 'über der Grenze → begrenzt');
+  await t.api(admin).put('/ai/settings', { agentPolicy: {} });
+  await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' });
+});

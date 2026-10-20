@@ -202,7 +202,7 @@ Der Weg im Code bleibt einer: `aiConfigFor()`/`aiAllowed()` für die Freigabe (m
 | D | Regel A mit den Feldern aus 7.1, `effectiveAgentPolicy`, `gateAction`, Bestätigungen, Matrix nach 7.2/7.3, `agent_runs.cost` | P6 |
 | E | Chat-Befehle inkl. `policy` mit `depth`/`off`, Aufträge, Systemkarten, Hauptkonzept 7.2 angepasst | P7 |
 | F | Online-Recherche, `maxWebPerDay`, Arbeitszeitfenster mit geplantem Versand | P8 |
-| G | Wissen, Projektagent, Synergien, Denktiefe (3) | P9 |
+| G | Wissen, Projektagent, Synergien, Denktiefe (3) | P9 (umgesetzt; Denktiefe als Policy-Feld `depth` mit `maxDepth`, `agent_runs.cost`, Chat-Befehl `policy` mit `depth`; ohne `effort`-Parameter für Anthropic) |
 | H | KI-Handbuch, Hilfe in der App | ab P7, je Phase nachgezogen |
 
 Migrationsnummern werden bei der Umsetzung nach `ls apps/api/migrations` vergeben; die Nummern im Hauptkonzept 12 sind seit 045 um eins verschoben.

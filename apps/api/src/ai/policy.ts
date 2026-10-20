@@ -117,7 +117,8 @@ export async function agentBudgetLeft(db: Db, agent: { id: string; org_id: strin
   const settings = await orgAiSettings(db, agent.org_id);
   const own = (await db.maybeOne(`select agent_daily_budget from users where id = $1`, [agent.id]))?.agent_daily_budget;
   const limit = own == null ? settings.agentDailyBudget : Math.min(settings.agentDailyBudget, Number(own));
-  const used = await db.one(`select count(*)::int as c from agent_runs where agent_user_id = $1 and status in ('ok','error') and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
+  // Kosten je Lauf (Denktiefe gründlich = 2) statt Zeilen
+  const used = await db.one(`select coalesce(sum(cost), 0)::int as c from agent_runs where agent_user_id = $1 and status in ('ok','error') and created_at >= $2::date`, [agent.id, now.toISOString().slice(0, 10)]);
   return Math.max(0, limit - used.c);
 }
 

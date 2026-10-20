@@ -19,7 +19,7 @@ import { aiAllowed } from './policy.js';
  */
 export type ChatCommandType = 'order' | 'note' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer';
 export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'];
-export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; reason?: string | null; mail?: boolean | null }
+export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
 export type SenderRole = 'pl' | 'tp' | 'responsible' | 'member' | 'reader' | 'none';
@@ -171,16 +171,21 @@ async function runOne(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
     case 'policy': {
       if (!a.policy) return { type: c.type, status: 'denied', text: `${code}: die Selbstständigkeit setzt nur die PL` };
       const mode = String(c.mode ?? '').trim().toLowerCase().replace(/^selbstständig$/, 'auto').replace(/^(rückfrage bei wichtigen schritten|wichtig)$/, 'confirm_critical').replace(/^(rückfrage bei allem|alles)$/, 'confirm_all');
-      if (!mode) return { type: c.type, status: 'denied', text: `${code}: policy ohne mode` };
+      const depth = String(c.depth ?? '').trim().toLowerCase().replace(/^schnell$/, 'quick').replace(/^(gründlich|tief)$/, 'deep').replace(/^(normal|standard)$/, 'standard');
+      if (!mode && !depth) return { type: c.type, status: 'denied', text: `${code}: policy ohne mode oder depth` };
       let v: any;
-      try { v = parseAgentPolicy({ mode }, { limits: false, workflows: false }); } catch (e: any) { return { type: c.type, status: 'denied', text: `${code}: ${e.message}` }; }
+      try { v = parseAgentPolicy({ ...(mode ? { mode } : {}), ...(depth ? { depth } : {}) }, { limits: false, workflows: false }); } catch (e: any) { return { type: c.type, status: 'denied', text: `${code}: ${e.message}` }; }
+      const curPol = (await db.maybeOne(`select agent_policy from tasks where id = $1`, [task.id]))?.agent_policy ?? {};
+      v = { ...(curPol && typeof curPol === 'object' ? curPol : {}), ...v };
       const base = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: project.id, taskId: null });
       const caps = await db.one(`select p.agent_policy->>'maxMode' as pmax, o.settings->'ai'->'agentPolicy'->>'maxMode' as omax from projects p join orgs o on o.id = p.org_id where p.id = $1`, [project.id]);
-      for (const cap of [caps.pmax, caps.omax]) if (cap && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(cap)) return { type: c.type, status: 'denied', text: `${code}: ${v.mode} unterschreitet die Grenze ${cap} (Mandant/Projekt)` };
+      for (const cap of [caps.pmax, caps.omax]) if (cap && v.mode && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(cap)) return { type: c.type, status: 'denied', text: `${code}: ${v.mode} unterschreitet die Grenze ${cap} (Mandant/Projekt)` };
       await db.query(`update tasks set agent_policy = $2::jsonb where id = $1`, [task.id, JSON.stringify(v)]);
       await audit(db, { orgId: sender.orgId, projectId: project.id, userId: sender.id, action: 'agent.policy', objectType: 'task', objectId: task.id, details: { ...v, via: 'chat' } });
-      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [task.id, sender.id, `Selbstständigkeit für dieses AP: ${v.mode} (per Chat; vorher ${base.mode})`]);
-      return { type: c.type, status: 'ok', text: `${code}: Selbstständigkeit ${v.mode}`, link: lnk, taskId: task.id };
+      const eff = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: project.id, taskId: task.id });
+      const what = [mode ? `Selbstständigkeit ${v.mode}` : '', depth ? `Denktiefe ${eff.depth}${eff.depth !== v.depth ? ` (${v.depth} über der Grenze)` : ''}` : ''].filter(Boolean).join(', ');
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [task.id, sender.id, `Policy für dieses AP: ${what} (per Chat; vorher ${base.mode}, ${base.depth})`]);
+      return { type: c.type, status: 'ok', text: `${code}: ${what}`, link: lnk, taskId: task.id };
     }
     case 'report': {
       if (!a.note) return { type: c.type, status: 'denied', text: `${code}: Berichtswünsche setzen Mitglieder` };

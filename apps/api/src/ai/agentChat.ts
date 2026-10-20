@@ -37,7 +37,7 @@ const SCHEMA = {
     reply: { type: 'string', description: 'Antwort im Chat: kurz, im vorgegebenen Schreibstil, ohne Unterschrift' },
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
-      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'reason', 'mail'], properties: {
+      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
         type: { type: 'string', enum: ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
         ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
@@ -49,6 +49,7 @@ const SCHEMA = {
         every: { type: 'string', description: 'order/report: Zwischenstände each, milestones, daily oder done; sonst leer' },
         level: { type: 'string', description: 'priority: niedrig, normal, hoch oder kritisch; sonst leer' },
         mode: { type: 'string', description: 'policy: auto, confirm_critical oder confirm_all; sonst leer' },
+        depth: { type: 'string', description: 'policy: Denktiefe quick (schnell), standard oder deep (gründlich); sonst leer' },
         reason: { type: 'string', description: 'stop/reject: Grund; sonst leer' },
         mail: { type: 'boolean', description: 'order/report: Zwischenstände und Lieferung auch per Mail an den Auftraggeber' }
       } }

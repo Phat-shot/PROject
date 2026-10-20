@@ -1,4 +1,4 @@
-import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type SynergyMode } from '@projekttool/shared';
+import { AGENT_DEPTHS, type AgentDepth, AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type SynergyMode } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { resolveRules } from './policy.js';
 
@@ -17,6 +17,10 @@ export const DEFAULT_CONFIRM: AgentActionClass[] = AGENT_ACTION_CLASSES.filter((
 export const DEFAULT_MODE: AgentMode = 'confirm_critical';
 export const CHAT_ORDERS: ChatOrdersLevel[] = ['pl', 'tp', 'responsible', 'members'];
 export const classLabel = (c: AgentActionClass) => AGENT_ACTION_CLASSES.find((x) => x.key === c)?.label ?? c;
+export const DEPTH_ORDER: AgentDepth[] = ['quick', 'standard', 'deep'];
+export const depthLabel = (d: AgentDepth) => AGENT_DEPTHS.find((x) => x.key === d)?.label ?? d;
+/** Grenzen je Denktiefe: Leserunden, Zugriffe, Log-Einträge, Mails, Kandidaten, Kosten im Budget */
+export const DEPTH_LIMITS: Record<AgentDepth, { rounds: number; accesses: number; log: number; mails: number; candidates: number; cost: number }> = { quick: { rounds: 1, accesses: 0, log: 8, mails: 5, candidates: 0, cost: 1 }, standard: { rounds: 2, accesses: 6, log: 12, mails: 6, candidates: 3, cost: 1 }, deep: { rounds: 4, accesses: 12, log: 30, mails: 10, candidates: 6, cost: 2 } };
 export const modeLabel = (m: AgentMode) => AGENT_MODES.find((x) => x.key === m)?.label ?? m;
 const stricter = (a: AgentMode, b: AgentMode) => (MODE_ORDER.indexOf(a) >= MODE_ORDER.indexOf(b) ? a : b);
 
@@ -39,6 +43,9 @@ export function parseAgentPolicy(raw: unknown, opts: { limits: boolean; workflow
   if (x.synergies !== undefined && x.synergies !== null && x.synergies !== '') { if (!['off', 'ask', 'use'].includes(x.synergies)) throw new Error('Agenten-Policy: synergies off, ask oder use'); out.synergies = x.synergies; }
   if (opts.limits && x.reviewAt !== undefined && x.reviewAt !== null && x.reviewAt !== '') { if (!/^\d{2}:\d{2}$/.test(String(x.reviewAt))) throw new Error('Agenten-Policy: reviewAt als HH:MM'); out.reviewAt = String(x.reviewAt); }
   if (opts.limits && x.chatOrders !== undefined && x.chatOrders !== null && x.chatOrders !== '') { if (!CHAT_ORDERS.includes(x.chatOrders)) throw new Error('Agenten-Policy: chatOrders muss pl, tp, responsible oder members sein'); out.chatOrders = x.chatOrders; }
+  const depth = (v: unknown, name: string) => { if (v === undefined || v === null || v === '') return undefined; if (!DEPTH_ORDER.includes(v as AgentDepth)) throw new Error(`Agenten-Policy: ${name} muss quick, standard oder deep sein`); return v as AgentDepth; };
+  const d = depth(x.depth, 'depth'); if (d) out.depth = d;
+  if (opts.limits) { const md = depth(x.maxDepth, 'maxDepth'); if (md) out.maxDepth = md; }
   return out;
 }
 
@@ -75,6 +82,11 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
   const w = pick('workflows');
   const co = pick('chatOrders');
   const sc = pick('scope'); const sy = pick('synergies'); const ra = pick('reviewAt');
+  // Denktiefe: tiefste Angabe, begrenzt durch maxDepth von Org und Projekt (Konzept KI-Agent 3)
+  const dp = pick('depth');
+  let depth: AgentDepth = (dp?.value as AgentDepth | undefined) ?? 'standard';
+  let depthOrigin = dp ? dp.origin : 'Standard';
+  for (const [name, cap] of [['Mandant', org.maxDepth], [`Projekt ${p.key}`, project.maxDepth]] as [string, AgentDepth | undefined][]) if (cap && DEPTH_ORDER.indexOf(depth) > DEPTH_ORDER.indexOf(cap)) { depth = cap; depthOrigin = `${name} begrenzt`; }
   // Synergien: in den Rückfrage-Stufen immer nachfragen
   const synergies: SynergyMode = (sy?.value as SynergyMode | undefined) ?? 'ask';
   const denied: Partial<Record<AgentActionClass, string>> = {};
@@ -84,13 +96,14 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
       if (r.effect === 'deny') denied[k] = r.publicText;
     }
   }
-  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', scope: (sc?.value as AgentScope | undefined) ?? 'task', synergies: synergies === 'use' && mode !== 'auto' ? 'ask' : synergies, reviewAt: (ra?.value as string | undefined) ?? '06:45', origin: { mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard', scope: sc ? sc.origin : 'Standard', synergies: sy ? (synergies === 'use' && mode !== 'auto' ? `${sy.origin} (nutzen nur bei Selbstständig)` : sy.origin) : 'Standard' }, denied };
+  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', scope: (sc?.value as AgentScope | undefined) ?? 'task', synergies: synergies === 'use' && mode !== 'auto' ? 'ask' : synergies, reviewAt: (ra?.value as string | undefined) ?? '06:45', depth, origin: { depth: depthOrigin, mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard', scope: sc ? sc.origin : 'Standard', synergies: sy ? (synergies === 'use' && mode !== 'auto' ? `${sy.origin} (nutzen nur bei Selbstständig)` : sy.origin) : 'Standard' }, denied };
 }
 
 /** Text für den variablen Teil des Prompts (nicht ins Sheet, damit der Prefix-Cache bleibt). */
 export function policyText(e: EffectiveAgentPolicy): string {
   const held = e.confirm.filter((k) => !e.denied[k]);
   const parts = [`Selbstständigkeit: ${modeLabel(e.mode)}.`];
+  if (e.depth !== 'standard') parts.push(`Denktiefe: ${depthLabel(e.depth)}${e.depth === 'quick' ? ' (eine Leserunde, knapper Kontext; sag, wenn dir etwas fehlt, statt zu raten)' : ' (bis zu vier Leserunden, voller Kontext)'}.`);
   if (held.length) parts.push(`Bestätigung durch eine Person vor: ${held.map(classLabel).join(', ')} (das System hält diese Aktionen an und legt sie der PL vor; schlage sie trotzdem vor, wenn sie nötig sind, aber nicht erneut, solange sie offen sind).`);
   const den = Object.keys(e.denied) as AgentActionClass[];
   if (den.length) parts.push(`Gesperrt (KI-Freigaben, nicht vorschlagen): ${den.map(classLabel).join(', ')}.`);
