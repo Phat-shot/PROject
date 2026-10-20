@@ -781,3 +781,12 @@ body:has(.drawer) .chat-fab { display: none; }
 .chat-msg.system .chat-body { white-space: pre-wrap; }
 .notif-filter { display: flex; gap: 6px; padding: 6px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; align-items: center; }
 .notif-filter select { width: auto; font-size: 12px; padding: 2px 4px; }
+
+/* Offene Fragen im Chat: hervorgehobene Nachricht (Deep-Link) und Thread-Kopf mit Status */
+.chat-msg.highlight { background: color-mix(in srgb, var(--primary) 14%, var(--surface)); outline: 1px solid var(--primary); }
+.question-head { padding: 8px 10px; margin-bottom: 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface-2); }
+.question-head.open { border-color: var(--warn); }
+.question-head.answered { border-color: var(--ok); }
+.question-head.cancelled, .question-head.escalated { opacity: 0.85; }
+.question-list .q { padding: 6px 0; border-bottom: 1px solid var(--border); }
+.question-list .q:last-child { border-bottom: none; }

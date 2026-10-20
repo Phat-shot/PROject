@@ -241,9 +241,18 @@ test('Sofortlauf bei Zuweisung und Kommentar; Wartezustand mit Wiedervorlage, Na
   await flushAgentRuns();
   const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
   assert.equal(runs[0].trigger, 'comment');
+  // Die Entscheidung der PL ist noch offen (Frage): das Warten zeigt auf die Frage; erst die Antwort beendet es
+  const t4a = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
+  const openQ = (await t.api(pl).get(`/tasks/${taskId}/questions`)).json().questions.find((q: any) => q.kind === 'decision' && q.status === 'open');
+  assert.ok(openQ, 'Entscheidung als offene Frage');
+  assert.equal(t4a.agentWait?.questionId, openQ.id, 'Warten hängt an der Frage');
+  assert.equal((await t.api(pl).post(`/questions/${openQ.id}/answer`, { text: 'Weiter warten, Lieferant kommt KW 47.' })).statusCode, 200);
+  await flushAgentRuns();
   const t4 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
   assert.equal(t4.agentWait, null, 'kein Warten mehr');
   assert.equal(t4.agentNextCheckAt, null);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Weiter warten, Lieferant kommt KW 47.' and question_id = $2`, [taskId, openQ.id]), 'Antwort steht im Log');
+  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'answer'`, [taskId]), 'Agent läuft mit Anlass answer');
   // Eigener Kommentar des Agenten löst keinen Lauf aus
   const countBefore = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
   await flushAgentRuns();

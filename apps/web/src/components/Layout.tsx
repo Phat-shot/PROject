@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { Notification, NotifyEvent, Project } from '@projekttool/shared';
+import type { Notification, NotifyEvent, Project, Question } from '@projekttool/shared';
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -10,6 +10,7 @@ import { useChatUnread } from '../lib/useChatUnread';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
 import { eventLabel, useOpenNotification } from './Notifications';
+import { useOpenChat } from './Messenger';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -38,7 +39,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const [menu, setMenu] = useState(false);
   const [tour, setTour] = useState(false);
   const [version, setVersion] = useState('');
-  const [chat, setChat] = useState<{ open: boolean; channelId: string | null; threadId: string | null }>({ open: false, channelId: null, threadId: null });
+  const [chat, setChat] = useState<{ open: boolean; channelId: string | null; threadId: string | null; msgId: string | null }>({ open: false, channelId: null, threadId: null, msgId: null });
   const ai = useAiStatus();
   const unread = useChatUnread();
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
@@ -63,10 +64,10 @@ export function Layout({ children }: { children: ReactNode }) {
     const r = await api.patch<{ user: NonNullable<typeof user> }>('/me', { settings: { pinnedProjects: next } });
     setUser(r.user);
   };
-  const openChat = (channelId?: string | null, threadId?: string | null) => {
-    if (mobile) { nav(`/chat${channelId ? `/${channelId}` : ''}${threadId ? `?thread=${threadId}` : ''}`); return; }
+  const openChat = (channelId?: string | null, threadId?: string | null, msgId?: string | null) => {
+    if (mobile) { nav(`/chat${channelId ? `/${channelId}` : ''}${threadId ? `?thread=${threadId}${msgId ? `&msg=${msgId}` : ''}` : ''}`); return; }
     setMenu(false);
-    setChat((c) => ({ open: true, channelId: channelId === undefined ? c.channelId : channelId, threadId: threadId ?? null }));
+    setChat((c) => ({ open: true, channelId: channelId === undefined ? c.channelId : channelId, threadId: threadId ?? null, msgId: msgId ?? null }));
   };
   const isActive = (p: string) => loc.pathname === p || loc.pathname.startsWith(p + '/');
   const projectNav = (p: Project, pin: boolean, tourId?: string) => {
@@ -134,7 +135,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="main">{children}</div>
       </MenuCtx.Provider>
       {!mobile && !loc.pathname.startsWith('/chat') && (chat.open
-        ? <div className="messenger-overlay" role="dialog" aria-label="Chat"><Messenger channelId={chat.channelId} threadId={chat.threadId} onSelect={(channelId, threadId) => setChat({ open: true, channelId, threadId: threadId ?? null })} onClose={() => setChat((c) => ({ ...c, open: false }))} onRead={unread.reload} /></div>
+        ? <div className="messenger-overlay" role="dialog" aria-label="Chat"><Messenger channelId={chat.channelId} threadId={chat.threadId} msgId={chat.msgId} onSelect={(channelId, threadId) => setChat({ open: true, channelId, threadId: threadId ?? null, msgId: null })} onClose={() => setChat((c) => ({ ...c, open: false }))} onRead={unread.reload} /></div>
         : <button className="chat-fab" title="Chat öffnen" aria-label="Chat öffnen" onClick={() => openChat()}>
             <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M4 4h16a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-5 4v-4H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z" /></svg>
             <span>Chat</span>{unread.total > 0 && <span className="badge danger">{unread.total}</span>}
@@ -173,9 +174,16 @@ function Bell() {
   const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
   const [filter, setFilter] = useState<{ event: NotifyEvent | ''; projectId: string; unread: boolean }>({ event: '', projectId: '', unread: false });
   const [projects, setProjects] = useState<Project[]>([]);
+  const [tab, setTab] = useState<'all' | 'open'>('all');
+  // Offene Fragen an mich (Reiter „Offen für mich“): bleiben, bis jemand antwortet oder sie abgebrochen werden
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const openChat = useOpenChat();
   const openNotification = useOpenNotification();
   const query = new URLSearchParams({ ...(filter.event ? { event: filter.event } : {}), ...(filter.projectId ? { projectId: filter.projectId } : {}), ...(filter.unread ? { unread: '1' } : {}) }).toString();
-  const load = () => api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData).catch(() => undefined);
+  const load = () => Promise.all([
+    api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData),
+    api.get<{ questions: Question[] }>('/questions?status=open').then((r) => setQuestions(r.questions ?? []))
+  ]).catch(() => undefined);
   useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, [query]);
   useEffect(() => { if (open && !projects.length) api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined); }, [open]);
   const go = async (n: Notification) => {
@@ -188,14 +196,22 @@ function Bell() {
       <button className="btn" title="Benachrichtigungen" aria-label="Benachrichtigungen" onClick={() => setOpen(!open)}>🔔{data.unread > 0 && <span className="dot">{data.unread}</span>}</button>
       {open && (
         <div className="notif-panel">
-          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><strong>Benachrichtigungen</strong>{data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
-          <div className="notif-filter">
+          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span className="row" style={{ gap: 8 }}><button className={`btn sm ${tab === 'all' ? 'primary' : ''}`} onClick={() => setTab('all')}>Alle</button><button className={`btn sm ${tab === 'open' ? 'primary' : ''}`} title="Fragen, Entscheidungen und Bestätigungen, die auf dich warten" onClick={() => setTab('open')}>Offen für mich{questions.length > 0 && <span className="badge" style={{ marginLeft: 4 }}>{questions.length}</span>}</button></span>{tab === 'all' && data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
+          {tab === 'open' && <div className="question-list" style={{ padding: '4px 12px' }}>
+            {questions.length === 0 && <div className="empty" style={{ margin: 12 }}>Nichts offen für dich.</div>}
+            {questions.map((q) => <div key={q.id} className="q notif" role="button" tabIndex={0} onClick={() => { setOpen(false); if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); }}>
+              <div className="t">{q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : 'Frage'} von {q.askedByName ?? '?'}{q.taskCode ? ` zu ${q.taskCode}` : ''}{q.addresseeId ? '' : ' (Projektkanal)'}</div>
+              <div className="b">{q.body.length > 140 ? `${q.body.slice(0, 140)} …` : q.body}</div>
+              <div className="b">{new Date(q.createdAt).toLocaleString('de-DE')}{q.remindAt && q.status === 'open' ? ` · Erinnerung ${new Date(q.remindAt).toLocaleDateString('de-DE')}` : ''}</div>
+            </div>)}
+          </div>}
+          {tab === 'all' && <><div className="notif-filter">
             <select aria-label="Klasse" value={filter.event} onChange={(e) => setFilter({ ...filter, event: e.target.value as NotifyEvent | '' })}><option value="">alle Klassen</option>{NOTIFY_EVENTS.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}</select>
             <select aria-label="Projekt" value={filter.projectId} onChange={(e) => setFilter({ ...filter, projectId: e.target.value })}><option value="">alle Projekte</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.key}</option>)}</select>
             <label className="check small"><input type="checkbox" checked={filter.unread} onChange={(e) => setFilter({ ...filter, unread: e.target.checked })} /> nur ungelesene</label>
           </div>
           {data.notifications.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Benachrichtigungen.</div>}
-          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{eventLabel(n)}{new Date(n.createdAt).toLocaleString('de-DE')}</div></div>)}
+          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{eventLabel(n)}{new Date(n.createdAt).toLocaleString('de-DE')}{n.ref?.type === 'question' && !n.resolvedAt ? ' · offen' : ''}</div></div>)}</>}
         </div>
       )}
     </div>

@@ -72,6 +72,10 @@ export interface Project {
   visibility: 'members' | 'org';
   /** Persönliches Projekt: nur der Ersteller (PL) und KI-Agenten */
   personal?: boolean;
+  /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung, bearbeitet Mails der Projektkonten nach agentMail */
+  agentUserId?: string | null;
+  agentMail?: AgentMailMode;
+  mailInquiry?: MailInquiry;
   /** workflow = Mini-Projekt eines isolierten Workflow-Laufs (nicht in Projektlisten) */
   kind?: 'project' | 'workflow';
   timeTrackingEnabled: boolean;
@@ -141,6 +145,8 @@ export interface OrgSettings {
   timeTracking?: boolean;
   /** Alle Benutzer dürfen ein persönliches Projekt (Assistent) anlegen */
   personalProjects?: boolean;
+  /** Standard der Mail-Rückfrage für Projekte (Konzept 5) */
+  mailInquiry?: MailInquiry;
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
   /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
   notify?: { digestHour?: number };
@@ -452,6 +458,22 @@ export interface Notification {
  */
 export type NotifyEvent = 'question' | 'decision' | 'approval' | 'synergy' | 'confirm' | 'order_request' | 'external_referral' | 'progress' | 'assigned' | 'blocked' | 'escalation' | 'review' | 'mail_in' | 'log' | 'due' | 'chat' | 'booking' | 'info';
 export type NotifyRefType = 'question' | 'chat_channel' | 'chat_thread' | 'task' | 'page' | 'booking';
+
+/** Offene Fragen (Konzept 5): ein Objekt für Chat-Stelle, Meldungen, Log, Warten und Antwort */
+export type QuestionKind = 'question' | 'decision' | 'confirm' | 'approval' | 'synergy' | 'order_request' | 'external_referral';
+export type QuestionStatus = 'open' | 'answered' | 'escalated' | 'cancelled';
+export interface Question {
+  id: string; projectId: string; taskId: string | null; meetingId: string | null; kind: QuestionKind; status: QuestionStatus; level: number; parentId: string | null;
+  askedBy: string; askedByName: string | null; addresseeId: string | null; addresseeName: string | null; addresseeRole: string | null;
+  body: string; options: { key: string; label: string }[] | null; channelId: string | null; messageId: string | null;
+  remindAt: string | null; escalateAt: string | null; remindedAt: string | null;
+  answeredBy: string | null; answeredByName: string | null; answeredAt: string | null; answerSource: 'chat' | 'task' | 'meeting' | 'mail' | 'system' | null; answerText: string | null; answerOption: string | null;
+  cancelReason: string | null; createdAt: string; taskCode: string | null; taskTitle: string | null; projectKey: string | null;
+}
+/** Mail-Rückfrage je Projekt: bei neuer Mail mit offenen Punkten die PL fragen, im Projekt fragen, beim Absender nachfragen oder nichts */
+export type MailInquiryMode = 'ask_pl' | 'ask_project' | 'ask_sender' | 'off';
+export interface MailInquiry { mode: MailInquiryMode; /** Frist in Stunden, nach der eine Rückfrage im Projekt weitergegeben wird */ waitHours: number; /** vom Mandanten geerbt (Projekt ohne eigene Einstellung) */ inherited?: boolean }
+export type AgentMailMode = 'off' | 'triage' | 'process';
 /** Chat: aus, Systembeitrag im zugehörigen Thread (Frage, Auftrag, Direktnachricht des Agenten) oder im Projektkanal */
 export type NotifyChat = 'off' | 'thread' | 'project';
 export type NotifyMail = 'off' | 'now' | 'digest';

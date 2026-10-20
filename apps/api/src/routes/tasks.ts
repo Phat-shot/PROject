@@ -14,6 +14,7 @@ import { LEVEL_LABEL } from '../tasks/escalation.js';
 import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { dispatch } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
+import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -97,6 +98,7 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`update tasks set archived_at = now(), updated_at = now() where id = $1 or (parent_id = $1 and archived_at is null)`, [existing.id]);
+    await cancelQuestions(db, { taskId: existing.id }, `${existing.title} wurde archiviert`, user.id);
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.archive', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
     return { ok: true };
   });
@@ -306,6 +308,8 @@ export async function taskRoutes(app: FastifyInstance) {
         'responsibleEmail' in b, b.responsibleEmail?.trim() || null, b.position ?? null]
     );
     if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
+    // Zuständigkeit wechselt vom fragenden Agenten weg: seine offenen Fragen am AP erledigen sich
+    if ('responsibleUserId' in b && existing.responsible_user_id && b.responsibleUserId !== existing.responsible_user_id && (await db.maybeOne(`select 1 from users where id = $1 and kind = 'agent'`, [existing.responsible_user_id]))) await cancelQuestions(db, { taskId: existing.id, askedBy: existing.responsible_user_id }, 'Zuständigkeit gewechselt', user.id);
     if ('subprojectId' in b) await db.query(`update tasks set subproject_id = $2 where parent_id = $1`, [req.params.id, b.subprojectId ?? null]);
     if (b.predecessorIds) await setPredecessors(req.params.id, existing.project_id, b.predecessorIds);
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
@@ -359,6 +363,7 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     if (!existing.deleted_at) {
       await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), updated_at = now() where id = $1 or (parent_id = $1 and deleted_at is null)`, [existing.id]);
+      await cancelQuestions(db, { taskId: existing.id }, `${existing.title} wurde gelöscht`, user.id);
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.trash', objectType: 'task', objectId: req.params.id, details: { title: existing.title } });
     }
     return { ok: true, trashed: true };
@@ -493,16 +498,20 @@ export async function taskRoutes(app: FastifyInstance) {
 
   // Kommentare
   // Log-Eintrag; visibility external = für Externe sichtbar (eigener Eintrag), Teil des Außenkontexts der Agenten
-  app.post<{ Params: { id: string }; Body: { body: string; visibility?: 'internal' | 'external' } }>('/tasks/:id/comments', async (req) => {
+  app.post<{ Params: { id: string }; Body: { body: string; visibility?: 'internal' | 'external'; questionId?: string | null } }>('/tasks/:id/comments', async (req) => {
     const user = requireUser(req);
     const { task: t } = await requireTask(db, user, req.params.id, 'member');
     if (!req.body?.body?.trim()) throw badRequest('Kommentar leer');
     const members = await db.query(`select m.user_id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [t.project_id]);
     const mentions = extractMentions(req.body.body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
     const visibility = req.body.visibility === 'external' ? 'external' : 'internal';
-    const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions, visibility) values ($1,$2,$3,$4,$5) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions), visibility]);
+    // Antwort auf eine offene Frage am AP (Block „Offene Fragen“): Kommentar wird die Antwort, Frage und Meldungen werden erledigt
+    const q = req.body.questionId ? await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and task_id = $2 and status = 'open'`, [req.body.questionId, t.id]) : null;
+    if (req.body.questionId && !q) throw badRequest('Frage nicht gefunden oder nicht mehr offen');
+    const c = await db.one(`insert into task_comments (task_id, user_id, body, mentions, visibility, question_id) values ($1,$2,$3,$4,$5,$6) returning *`, [req.params.id, user.id, req.body.body.trim(), JSON.stringify(mentions), visibility, q?.id ?? null]);
+    if (q) await answerQuestion(db, q, { source: 'task', userId: user.id, text: req.body.body.trim(), commentId: c.id });
     await touchTask(db, req.params.id);
-    if (user.kind !== 'agent') queueAgentRun(req.params.id, 'comment');
+    if (user.kind !== 'agent' && !q) queueAgentRun(req.params.id, 'comment');
     const task = (await loadTask(db, req.params.id))!;
     const link = `/projekte/${t.project_id}/board?task=${task.id}`;
     // Klasse log: Erwähnte (eigener Typ, geht vor) und Beteiligte (Zuständige und bisherige Kommentatoren); Empfänger nach Regel N
@@ -543,6 +552,7 @@ export async function taskRoutes(app: FastifyInstance) {
 
   /** W6: Wiederholung „nach Erledigung“ erzeugt die nächste Instanz. */
   async function onTaskDone(existing: any, user: { id: string; orgId: string }) {
+    await cancelQuestions(db, { taskId: existing.id }, `${existing.title} ist erledigt`, user.id);
     if (existing.workflow_run_id) await onWorkflowTaskDone(db, app.mail, existing.id);
     const r: Recurrence | null = existing.recurrence ?? null;
     if (!r || r.mode !== 'after_done' || !existing.due_date) return;

@@ -96,7 +96,7 @@ test('Entscheidung des Agenten: Empfänger nach Regel N, Direktnachricht genau a
     `select m.body, m.kind from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members x on x.channel_id = c.id and x.user_id = $2 where m.user_id = $1 order by m.created_at`, [morton.id, userId])).rows;
   next = [A({ type: 'escalate', text: 'Budget für Elektro Süd freigeben?' })];
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
-  const n1 = (await t.db.query(`select * from notifications where type = 'escalation' and ref_id = $1 and body like 'Budget%'`, [ap.id])).rows;
+  const n1 = (await t.db.query(`select n.* from notifications n join questions q on q.id = n.ref_id where n.type = 'escalation' and n.ref_type = 'question' and q.task_id = $1 and n.body like 'Budget%'`, [ap.id])).rows;
   assert.deepEqual(n1.map((n: any) => [n.user_id, n.event, n.mail]), [[U().pl, 'decision', 'now']], 'Standard: verantwortliche PL');
   const budget = (await dmFrom(U().pl)).filter((m: any) => m.body.includes('Budget für Elektro Süd'));
   assert.deepEqual(budget.map((m: any) => m.kind), ['user'], 'Direktnachricht des Agenten, kein zusätzlicher Systembeitrag');
@@ -104,9 +104,12 @@ test('Entscheidung des Agenten: Empfänger nach Regel N, Direktnachricht genau a
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', recipients: ['pl', 'deputy_pl'] }] });
   next = [A({ type: 'escalate', text: 'Termin mit Elektro Süd zusagen?' })];
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
-  const n2 = (await t.db.query(`select user_id from notifications where type = 'escalation' and ref_id = $1 and body like 'Termin%'`, [ap.id])).rows.map((r: any) => r.user_id).sort();
-  assert.deepEqual(n2, [U().pl, U().anna].sort());
-  assert.equal((await dmFrom(U().anna)).filter((m: any) => m.body.includes('Termin mit Elektro Süd')).length, 1, 'Direktnachricht an die Stellvertretung');
+  const n2 = (await t.db.query(`select n.user_id, n.link from notifications n join questions q on q.id = n.ref_id where n.type = 'escalation' and n.ref_type = 'question' and q.task_id = $1 and n.body like 'Termin%'`, [ap.id])).rows;
+  assert.deepEqual(n2.map((r: any) => r.user_id).sort(), [U().pl, U().anna].sort());
+  // Die Frage geht als Thread an die PL (Adressat); die Stellvertretung bekommt die Meldung mit Link zum Arbeitspaket, keine eigene Direktnachricht
+  assert.match(n2.find((r: any) => r.user_id === U().pl).link, /^\/chat\/[0-9a-f-]+\?thread=/);
+  assert.match(n2.find((r: any) => r.user_id === U().anna).link, /board\?task=/);
+  assert.equal((await dmFrom(U().anna)).filter((m: any) => m.body.includes('Termin mit Elektro Süd')).length, 0, 'eine Frage, ein Adressat');
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision' }] });
 });
 

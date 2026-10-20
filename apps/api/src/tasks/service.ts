@@ -244,13 +244,15 @@ export async function touchTask(db: Db, taskId: string) {
   await db.query(`update tasks set last_activity_at = now() where id = $1`, [taskId]);
 }
 
-export interface ChainPerson { id: string; name: string; email: string; why: string }
+export type ChainRole = 'requester' | 'parent_responsible' | 'subproject_lead' | 'pl' | 'deputy_pl' | 'escalation_contact';
+export interface ChainPerson { id: string; name: string; email: string; why: string; role: ChainRole }
 
 /**
  * Regel C (Grundform): Ansprechpartner eines Arbeitspakets bzw. einer Aufgabe in fester Reihenfolge: Zuständige(r) des
  * Über-AP, Teilprojekt-Verantwortung, verantwortliche PL; nur aktive Personen (keine Agenten, keine Externen) mit Sicht auf
  * das AP, exclude (z. B. der fragende Agent) übersprungen. Stufe 0 ist der erste Eintrag (Ansprechpartner der Agenten,
- * Ziel von refer). Ab P5 kommen Auftraggeber, Stellvertretung, Eskalationskontakt und Projektkanal dazu.
+ * Ziel von refer). Dazu Stellvertretung (mit der PL) und Eskalationskontakt; der Projektkanal ist die Stufe danach (questions.ts).
+ * Der Auftraggeber (tasks.requested_by) kommt mit den Aufträgen aus dem Chat hinzu.
  */
 export async function contactChain(db: Db, task: { id: string; project_id: string; parent_id: string | null; subproject_id: string | null }, opts: { exclude?: string[] } = {}): Promise<ChainPerson[]> {
   const t = await db.one(`select p.key, pt.number as parent_number, s.name as sp_name from tasks t join projects p on p.id = t.project_id left join tasks pt on pt.id = t.parent_id left join subprojects s on s.id = t.subproject_id where t.id = $1`, [task.id]);
@@ -258,11 +260,15 @@ export async function contactChain(db: Db, task: { id: string; project_id: strin
   const parentResp = task.parent_id ? (await db.maybeOne(`select case when pt.responsible_user_id is not null then pt.responsible_user_id when pt.responsible_email is not null then null else s.responsible_user_id end as uid from tasks pt left join subprojects s on s.id = pt.subproject_id where pt.id = $1`, [task.parent_id]))?.uid : null;
   const spResp = task.subproject_id ? (await db.maybeOne(`select responsible_user_id as uid from subprojects where id = $1`, [task.subproject_id]))?.uid : null;
   const plId = (await db.maybeOne(`select user_id from project_members where project_id = $1 and role = 'pl' and not is_deputy`, [task.project_id]))?.user_id;
+  // Stellvertretung zusammen mit der PL (menschliche Stellvertreter; Agenten fallen unten heraus), danach der Eskalationskontakt
+  const deputies = (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.is_deputy and u.kind <> 'agent' order by m.created_at`, [task.project_id])).rows.map((r: any) => r.user_id as string);
+  const contactId = (await db.maybeOne(`select escalation->>'contactUserId' as uid from projects where id = $1`, [task.project_id]))?.uid ?? null;
   const out: ChainPerson[] = [];
-  for (const [uid, why] of [[parentResp, `zuständig für ${t.key}-${t.parent_number}`], [spResp, `verantwortlich für Teilprojekt „${t.sp_name}“`], [plId, 'Projektleitung']] as [string | null, string][]) {
+  const steps: [string | null, string, ChainRole][] = [[parentResp, `zuständig für ${t.key}-${t.parent_number}`, 'parent_responsible'], [spResp, `verantwortlich für Teilprojekt „${t.sp_name}“`, 'subproject_lead'], [plId, 'Projektleitung', 'pl'], ...deputies.map((d): [string | null, string, ChainRole] => [d, 'stellvertretende Projektleitung', 'deputy_pl']), [contactId, 'Eskalationskontakt', 'escalation_contact']];
+  for (const [uid, why, role] of steps) {
     if (!uid || opts.exclude?.includes(uid) || out.some((x) => x.id === uid)) continue;
     const u = await db.maybeOne(`select id, name, email from users where id = $1 and kind <> 'agent' and active`, [uid]);
-    if (u && (await canSeeSubproject(db, u.id, task.subproject_id))) out.push({ ...u, why });
+    if (u && (await canSeeSubproject(db, u.id, task.subproject_id))) out.push({ ...u, why, role });
   }
   return out;
 }

@@ -201,7 +201,8 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   assert.ok(c.json().meeting.confirmedAt);
   await flushAgentRuns();
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Termin bestätigt: „Besichtigung Elektriker“%'`, [ap.id]));
-  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'task_changed'`, [ap.id]), 'Agent erfährt die Bestätigung');
+  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'answer'`, [ap.id]), 'Agent erfährt die Bestätigung (Antwort auf seine Bestätigungsfrage)');
+  assert.equal((await t.db.one(`select status, answer_source from questions where meeting_id = $1`, [ev.id])).status, 'answered', 'Bestätigungsfrage ist beantwortet');
 
   // Prompt: Ansprechpartner (Teilprojekt-Verantwortung ist der Agent selbst → PL) und deren Belegt-Zeiten aus anderen Projekten ohne Titel
   const soon = new Date(Date.now() + 7 * 86400_000);

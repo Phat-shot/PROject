@@ -11,7 +11,7 @@ export function ChatPage() {
     <>
       <TopBar title="Chat" />
       <div className="content chat-page full">
-        <Messenger channelId={cid ?? null} threadId={params.get('thread')} onSelect={(c, t) => nav(c ? `/chat/${c}${t ? `?thread=${t}` : ''}` : '/chat', { replace: Boolean(c && c === cid) })} />
+        <Messenger channelId={cid ?? null} threadId={params.get('thread')} msgId={params.get('msg')} onSelect={(c, t) => nav(c ? `/chat/${c}${t ? `?thread=${t}` : ''}` : '/chat', { replace: Boolean(c && c === cid) })} />
       </div>
     </>
   );

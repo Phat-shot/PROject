@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import type { Notification, Project, TimeEntry } from '@projekttool/shared';
+import type { Notification, Project, TimeEntry, Question } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { useAuth } from '../lib/auth';
 import { fmtDate, today } from '../lib/api';
@@ -10,6 +10,7 @@ import { PortfolioView } from './PortfolioPage';
 import { AllTasksView } from './AllTasksPage';
 import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
+import { useOpenChat } from '../components/Messenger';
 import { NotificationRow } from '../components/Notifications';
 
 /**
@@ -54,6 +55,9 @@ function MyWork({ projectId }: { projectId: string | null }) {
   const { user, timeTracking } = useAuth();
   const work = useData<{ projects: WorkProject[] }>('/my/work');
   const notes = useData<{ notifications: Notification[]; unread: number }>('/notifications');
+  const questions = useData<{ questions: Question[] }>('/questions?status=open');
+  const openChat = useOpenChat();
+  const myQuestions = (questions.data?.questions ?? []).filter((q) => !projectId || q.projectId === projectId);
   const waiting = useData<{ drafts: { projectId: string; projectKey: string; count: number }[]; pagesInReview: { id: string; title: string; projectId: string; projectKey: string }[]; tasks: { id: string; number: number; title: string; projectId: string; projectKey: string; blocked: boolean; escalationLevel: number }[] }>('/my/waiting');
   const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>(timeTracking ? '/my/time' : null);
   const { showDone, setShowDone } = useShowDone();
@@ -106,6 +110,8 @@ function MyWork({ projectId }: { projectId: string | null }) {
           <div className={`kpi ${pct < 80 ? 'warn' : 'ok'}`}><div className="v">{pct}%</div><div className="l">im Plan ({inPlan}/{open.length} Soll erreicht)</div></div>
           <div className="kpi"><div className="v">{tasksOpen}</div><div className="l">offene Tasks</div></div>
           <div className={`kpi ${notes.data?.unread ? 'warn' : ''}`}><div className="v">{notes.data?.unread ?? 0}</div><div className="l">ungelesene Meldungen</div></div>
+          <div className={`kpi ${myQuestions.filter((q) => q.kind !== 'confirm').length ? 'warn' : ''}`} title="Fragen und Entscheidungen, die auf deine Antwort warten (Chat-Thread oder Arbeitspaket)"><div className="v">{myQuestions.filter((q) => q.kind !== 'confirm').length}</div><div className="l">offene Fragen an mich</div></div>
+          <div className={`kpi ${myQuestions.filter((q) => q.kind === 'confirm').length ? 'warn' : ''}`} title="Vorläufige Termine und Buchungen, die du bestätigen sollst"><div className="v">{myQuestions.filter((q) => q.kind === 'confirm').length}</div><div className="l">Bestätigungen für mich</div></div>
           {time.data && time.data.totalMinutes > 0 && <div className="kpi"><div className="v">{h(time.data.totalMinutes)}</div><div className="l">gebucht, 7 Tage</div></div>}
         </div>
         <div className="grid cols-2 mb">
@@ -130,8 +136,9 @@ function MyWork({ projectId }: { projectId: string | null }) {
           </div>
           <div className="card">
             <h2>Wartet auf dich</h2>
-            {waiting.data && waiting.data.drafts.length + waiting.data.pagesInReview.length + waiting.data.tasks.length === 0 && <div className="muted small">Nichts offen.</div>}
+            {waiting.data && waiting.data.drafts.length + waiting.data.pagesInReview.length + waiting.data.tasks.length + myQuestions.length === 0 && <div className="muted small">Nichts offen.</div>}
             <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+              {myQuestions.slice(0, 8).map((q) => <li key={q.id}><a href="#" onClick={(e) => { e.preventDefault(); if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); }}><span className="badge">{q.projectKey}</span> {q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : 'Frage'} von {q.askedByName ?? '?'}{q.taskCode ? ` zu ${q.taskCode}` : ''}: {q.body.length > 80 ? `${q.body.slice(0, 80)} …` : q.body}</a></li>)}
               {waitingIn(waiting.data?.drafts).map((d) => <li key={d.projectId}><Link to={`/projekte/${d.projectId}/mail/freigaben`}><span className="badge">{d.projectKey}</span> {d.count} Mail-Entwürfe zur Freigabe</Link></li>)}
               {waitingIn(waiting.data?.pagesInReview).map((p) => <li key={p.id}><Link to={`/projekte/${p.projectId}/doku/${p.id}`}><span className="badge">{p.projectKey}</span> Seite „{p.title}“ in Prüfung</Link></li>)}
               {waitingIn(waiting.data?.tasks).map((x) => <li key={x.id}><Link to={`/projekte/${x.projectId}/board?task=${x.id}`}><span className="tkey">{x.projectKey}-{x.number}</span> {x.title}</Link> {x.blocked && <span className="badge blocked">blockiert</span>}{x.escalationLevel > 0 && <span className="badge danger">Esk. {x.escalationLevel}</span>}</li>)}

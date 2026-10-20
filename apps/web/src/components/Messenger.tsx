@@ -13,7 +13,7 @@ interface Hit { id: string; channelId: string; threadId: string | null; body: st
 interface Person { id: string; name: string; email: string; kind: 'person' | 'agent' }
 
 /** Öffnet den Messenger (Desktop: Overlay unten rechts, mobil: Seite /chat), optional direkt mit Gespräch und Thread. */
-export const MessengerCtx = createContext<(channelId?: string | null, threadId?: string | null) => void>(() => undefined);
+export const MessengerCtx = createContext<(channelId?: string | null, threadId?: string | null, msgId?: string | null) => void>(() => undefined);
 export const useOpenChat = () => useContext(MessengerCtx);
 
 const short = (iso: string | null) => {
@@ -27,8 +27,8 @@ const short = (iso: string | null) => {
  * rechts der Verlauf. Oben die Suche über Gesprächsnamen und Nachrichten. Chat ist der reguläre Weg zwischen
  * Projektbeteiligten; Mail bleibt für Externe.
  */
-export function Messenger({ channelId, threadId, onSelect, onClose, onRead }: {
-  channelId: string | null; threadId?: string | null; onSelect: (channelId: string | null, threadId?: string | null) => void; onClose?: () => void; onRead?: () => void;
+export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRead }: {
+  channelId: string | null; threadId?: string | null; /** Nachricht aus einem Deep-Link (hervorheben) */ msgId?: string | null; onSelect: (channelId: string | null, threadId?: string | null) => void; onClose?: () => void; onRead?: () => void;
 }) {
   const [convs, setConvs] = useState<Conversation[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +87,7 @@ export function Messenger({ channelId, threadId, onSelect, onClose, onRead }: {
           </>}
         </div>
         <div className="msg-pane">
-          {current ? <Conversation c={current} threadId={threadId ?? null} onBack={() => onSelect(null)} onThread={(t) => onSelect(current.channelId, t)} onSent={() => void load()} />
+          {current ? <Conversation c={current} threadId={threadId ?? null} msgId={msgId ?? null} onBack={() => onSelect(null)} onThread={(t) => onSelect(current.channelId, t)} onSent={() => void load()} />
             : channelId && convs ? <div className="muted small" style={{ padding: 24 }}>Gespräch nicht gefunden oder nicht mehr zugänglich.</div>
               : <div className="msg-empty muted small">Gespräch links wählen. Chat ist der Weg zwischen Projektbeteiligten, auch mit KI-Agenten (im Projektkanal per @Name); Mail bleibt für Externe.</div>}
         </div>
@@ -99,7 +99,7 @@ export function Messenger({ channelId, threadId, onSelect, onClose, onRead }: {
 function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join(''); }
 
 /** Verlauf eines Gesprächs; im Projektkanal mit Threads, @Erwähnung über Projektmitglieder (auch Agenten) und Moderation durch die PL. */
-function Conversation({ c, threadId, onBack, onThread, onSent }: { c: Conversation; threadId: string | null; onBack: () => void; onThread: (id: string | null) => void; onSent: () => void }) {
+function Conversation({ c, threadId, msgId, onBack, onThread, onSent }: { c: Conversation; threadId: string | null; msgId: string | null; onBack: () => void; onThread: (id: string | null) => void; onSent: () => void }) {
   const detail = useData<{ project: { myMembership: Membership }; members: { userId: string; name: string; kind?: string }[] }>(c.projectId ? `/projects/${c.projectId}` : null, [c.projectId]);
   const members = useMemo(() => (detail.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.name })), [detail.data]);
   const agentHint = c.partner?.kind === 'agent' ? ' Der Agent antwortet aus seinen Arbeitspaketen.' : '';
@@ -110,7 +110,7 @@ function Conversation({ c, threadId, onBack, onThread, onSent }: { c: Conversati
         <div className="ell"><strong>{c.title}</strong> <span className="muted small">{c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.partner?.kind === 'agent' ? 'KI-Agent' : c.partner?.email}</span></div>
       </div>
       <ChatPane key={c.channelId} channelId={c.channelId} members={members} canModerate={detail.data?.project.myMembership.role === 'pl'}
-        threads={c.kind === 'project'} initialThread={threadId} onSent={onSent} onThreadChange={(t) => { if ((t ?? null) !== threadId) onThread(t); }}
+        threads initialThread={threadId} highlightId={msgId} onSent={onSent} onThreadChange={(t) => { if ((t ?? null) !== threadId) onThread(t); }}
         placeholder={c.kind === 'project' ? `Nachricht an ${c.projectKey} … (@Name erwähnt, Strg+Enter sendet)` : `Nachricht an ${c.title} … (Strg+Enter sendet)`}
         emptyText={c.kind === 'project' ? 'Noch keine Nachrichten im Projektkanal.' : `Noch keine Nachrichten.${agentHint}`} />
     </>

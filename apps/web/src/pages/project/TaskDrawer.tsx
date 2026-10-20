@@ -16,6 +16,8 @@ import { CopyMoveDialog } from './CopyMove';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 import { ReportWish } from '../../components/NotifyRules';
+import { useOpenChat } from '../../components/Messenger';
+import type { Question } from '@projekttool/shared';
 
 interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string; origin: boolean; answered: boolean }
 
@@ -194,6 +196,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} />}
 
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
+
+      <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
 
       <ReportWish taskId={t.id} />
 
@@ -435,6 +439,47 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
         <button className="btn sm primary" disabled={busy || minutes <= 0} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/time`, { taskId, date: f.date, minutes, note: f.note }); setF({ ...f, hours: '', minutes: '', note: '' }); await load(); await onChanged(); })}>Buchen</button>
       </div>}
       {error && <div className="error mt">{error}</div>}
+    </>
+  );
+}
+
+/**
+ * Offene Fragen am Arbeitspaket (von Agenten oder Personen): beantworten in der Aufgabe (Text oder Auswahl), im Chat öffnen,
+ * als erledigt schließen (PL). Beantwortete und erledigte der letzten Zeit stehen eingeklappt darunter.
+ */
+function QuestionsBlock({ taskId, canAnswer, isPl, onChanged }: { taskId: string; canAnswer: boolean; isPl: boolean; onChanged: () => void }) {
+  const data = useData<{ questions: Question[] }>(`/tasks/${taskId}/questions?status=all`, [taskId]);
+  const openChat = useOpenChat();
+  const [answering, setAnswering] = useState<Question | null>(null);
+  const [showDone, setShowDone] = useState(false);
+  const { error, run } = useAsync();
+  const qs = data.data?.questions ?? [];
+  const open = qs.filter((q) => q.status === 'open');
+  const done = qs.filter((q) => q.status !== 'open');
+  if (!qs.length) return null;
+  const kind = (q: Question) => (q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'external_referral' ? 'Rückfrage von extern' : 'Frage');
+  const refresh = async () => { await data.reload(); onChanged(); };
+  return (
+    <>
+      <h3 className="mt">Offene Fragen {open.length > 0 && <span className="badge">{open.length}</span>}</h3>
+      {error && <div className="error small">{error}</div>}
+      {open.length === 0 && <p className="muted small">Keine offenen Fragen.</p>}
+      <div className="question-list">
+        {open.map((q) => <div key={q.id} className="q small">
+          <div><strong>{kind(q)}</strong> von {q.askedByName ?? '?'} an {q.addresseeName ?? 'Projektkanal'} · {fmtDateTime(q.createdAt)}{q.level > 0 ? ` · Stufe ${q.level + 1}` : ''}</div>
+          <div>{q.body}</div>
+          <div className="row mt" style={{ gap: 6 }}>
+            {canAnswer && q.options?.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void run(async () => { await api.post(`/questions/${q.id}/answer`, { option: o.key }); await refresh(); })}>{o.label}</button>)}
+            {canAnswer && <button className="btn sm" onClick={() => setAnswering(q)}>Beantworten</button>}
+            {q.channelId && <button className="btn sm link" onClick={() => openChat(q.channelId, q.messageId, q.messageId)}>Im Chat öffnen</button>}
+            {isPl && <button className="btn sm link" title="Ohne Antwort schließen" onClick={() => void run(async () => { await api.post(`/questions/${q.id}/cancel`, {}); await refresh(); })}>Erledigt</button>}
+          </div>
+        </div>)}
+      </div>
+      {done.length > 0 && <button className="btn sm link" onClick={() => setShowDone(!showDone)}>{showDone ? 'Beantwortete ausblenden' : `${done.length} beantwortet oder erledigt`}</button>}
+      {showDone && <div className="question-list muted small">{done.map((q) => <div key={q.id} className="q">{kind(q)} von {q.askedByName ?? '?'}: {q.body} → {q.status === 'answered' ? `${q.answeredByName ?? '?'}: ${q.answerText ?? q.answerOption ?? ''}` : q.status === 'escalated' ? 'weitergegeben' : `erledigt${q.cancelReason ? ` (${q.cancelReason})` : ''}`}</div>)}</div>}
+      {answering && <PromptModal title={`${kind(answering)} von ${answering.askedByName ?? '?'} beantworten`} label={answering.body} placeholder="Deine Antwort …" submitLabel="Antworten" onClose={() => setAnswering(null)}
+        onSubmit={(v) => void run(async () => { if (!v.trim()) return; await api.post(`/questions/${answering.id}/answer`, { text: v.trim() }); setAnswering(null); await refresh(); })} />}
     </>
   );
 }

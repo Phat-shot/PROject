@@ -9,6 +9,7 @@ import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 import { isInternal } from '../outbound.js';
+import { answerQuestion, type QuestionRow } from '../questions.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -27,12 +28,16 @@ import { isInternal } from '../outbound.js';
  * persönlicher Regeln, die volle Begründung bekommt der Absender als Meldung.
  */
 const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['reply', 'notes'],
+  type: 'object', additionalProperties: false, required: ['reply', 'notes', 'answers'],
   properties: {
     reply: { type: 'string', description: 'Antwort im Chat: kurz, im vorgegebenen Schreibstil, ohne Unterschrift' },
     notes: {
       type: 'array', description: 'Log-Einträge an deinen Arbeitspaketen (taskId aus der Liste), wenn die Nachricht eine Information dazu enthält; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['taskId', 'text'], properties: { taskId: { type: 'string' }, text: { type: 'string' } } }
+    },
+    answers: {
+      type: 'array', description: 'Beantwortet die Nachricht eine deiner offenen Fragen aus dem Kontext: questionId und Kurzfassung der Antwort; sonst leer',
+      items: { type: 'object', additionalProperties: false, required: ['questionId', 'text'], properties: { questionId: { type: 'string' }, text: { type: 'string' } } }
     }
   }
 };
@@ -287,6 +292,10 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   };
   // Kennungen oder Projekte, die der Absender nicht sieht oder in denen einer gesperrt ist: nichts dazu, auch kein Titel
   if (scope.how === 'mentioned' && !scope.projectIds.length) return direct('Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
+  // Kein gemeinsames, beidseitig freies Projekt: Hilfe und Hinweis statt Schweigen (ohne LLM-Aufruf)
+  if (!project && scope.how === 'all' && !scope.projects.length) {
+    return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');
+  }
   // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit den Projektnamen, keine Inhalte
   if (scope.how === 'ask') {
     const names = scope.projects.map((p) => `${p.name} (${p.key})`);
@@ -334,10 +343,14 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   );
   const loggedRefs: string[] = logged.rows.map((x: any) => `${x.key}-${x.number}`);
   for (const x of logged.rows) known.delete(x.task_id);
+  // Offene Fragen des Agenten an den Absender (DM) bzw. im Thread (Regel F Schritt 2): das Modell ordnet Antworten zu
+  const openQs = await db.query(
+    `select q.id, q.body, q.created_at, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id
+     where q.asked_by = $1 and q.status = 'open' and (q.channel_id = $2) and (q.addressee_id = $3 or q.addressee_id is null) order by q.created_at desc limit 8`, [agent.id, channel.id, msg.user_id]);
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Thema: ${theme}
-${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
+${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
@@ -345,8 +358,14 @@ ${scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine A
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
-    const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[] }>(r.text);
+    const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[] }>(r.text);
     const notes = (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);
+    // Antworten auf offene Fragen (nur eigene, hier gestellte): Frage schließen, Log, Lauf am Arbeitspaket (Anlass answer)
+    const answers = (Array.isArray(j.answers) ? j.answers : []).filter((a) => openQs.rows.some((q: any) => q.id === a.questionId)).slice(0, 3);
+    for (const a of answers) {
+      const q = await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and status = 'open'`, [a.questionId]);
+      if (q) await answerQuestion(db, q, { source: 'chat', userId: msg.user_id, text: String(a.text ?? '').trim() || msg.body, messageId: msg.id, now });
+    }
     // claimCheck: Behauptungen ohne ausgeführte Aktion ersetzt das System; Kennungen ohne Freigabe bekommen die feste Absage voran
     const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0);
     const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${checked.text}`;
@@ -355,7 +374,7 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
       queueAgentRun(n.taskId, 'comment');
     }
-    const actions: Record<string, unknown>[] = [{ type: 'chat_reply', text: cut(reply, 300) }, ...notes.map((n) => ({ type: 'chat_note', taskId: n.taskId, text: cut(n.text, 300) }))];
+    const actions: Record<string, unknown>[] = [{ type: 'chat_reply', text: cut(reply, 300) }, ...notes.map((n) => ({ type: 'chat_note', taskId: n.taskId, text: cut(n.text, 300) })), ...answers.map((a) => ({ type: 'chat_answer', questionId: a.questionId, text: cut(a.text, 300) }))];
     if (checked.replaced.length) actions.push({ type: 'claim_check', replaced: checked.replaced.length, text: cut(checked.replaced.join(' | '), 300) });
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens, channel_id) values ($1,$2,$3,null,'chat','ok',$4,$5,$6,$7,$8) returning id`,
       [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);

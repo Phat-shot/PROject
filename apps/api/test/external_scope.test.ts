@@ -437,7 +437,7 @@ test('Kette (Regel C): Über-AP, Teilprojekt-Verantwortung mit Sicht, PL; Agente
   const pl = await t.login('pl@demo.local');
   const chain = async (title: string) => { const x = await t.db.one(`select id, project_id, parent_id, subproject_id from tasks where title = $1`, [title]); return (await contactChain(t.db, x, { exclude: [agent.id] })).map((c) => [c.name, c.why]); };
   const cmsN = (await t.db.one(`select number from tasks where title = 'CMS-Auswahl: Headless vs. klassisch'`)).number;
-  assert.deepEqual(await chain('Angebot Agentur Müller-Design prüfen'), [['Max Keller', 'verantwortlich für Teilprojekt „Konzept & Design“'], ['Petra Lenz', 'Projektleitung']]);
+  assert.deepEqual(await chain('Angebot Agentur Müller-Design prüfen'), [['Max Keller', 'verantwortlich für Teilprojekt „Konzept & Design“'], ['Petra Lenz', 'Projektleitung'], ['Anna Berger', 'stellvertretende Projektleitung']]);
   assert.deepEqual((await chain('Anforderungen der Fachbereiche sammeln'))[0], ['Max Keller', `zuständig für WEB-${cmsN}`], 'Zuständige des Über-AP');
   // Eingeschränktes Teilprojekt: wer es nicht sieht, wird übersprungen
   const vertrag = await t.db.one(`select id from tasks where title = 'Agenturvertrag verhandeln'`);
@@ -571,8 +571,9 @@ test('Hinweise statt Sperre: Abschluss-Antwort mit KI zeigt Fundstellen; Chat-Ag
   const n0 = calls.length;
   await t.api(admin).post(`/chat/channels/${channelId}/messages`, { body: 'Woran arbeitest du gerade?' });
   await flushAgentRuns();
-  const chat = calls.slice(n0).find((c) => String(c.messages[0].content).includes('# Chat'));
-  assert.ok(chat, 'Chat-Lauf');
-  assert.match(String(chat.messages[1].content), /Thema: kein gemeinsames Projekt mit Alex Admin[\s\S]*Deine offenen Arbeitspakete zum Thema:\n– keine –/);
-  assert.ok(!String(chat.messages[1].content).includes('Fliesenarbeiten'));
+  // Ohne gemeinsames Projekt: Hilfe und Hinweis ohne LLM-Aufruf, nichts aus dem Projekt
+  assert.ok(!calls.slice(n0).some((c) => String(c.messages[0].content).includes('# Chat')), 'kein Chat-Lauf nötig');
+  const help = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 order by created_at desc limit 1`, [channelId, agent.id]);
+  assert.match(help.body, /kein gemeinsames Projekt/);
+  assert.ok(!help.body.includes('Fliesenarbeiten'));
 });

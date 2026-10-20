@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
+import type { Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
@@ -17,8 +18,8 @@ const timeLabel = (iso: string) => new Date(iso).toLocaleTimeString('de-DE', { h
  * Holt alle 5 s neue Nachrichten und die Antworten des gerade offenen Threads; „Ältere laden“ blättert zurück.
  * Wer im Projektkanal nur mitliest (implizite Leser), sieht statt der Eingabe einen Hinweis.
  */
-export function ChatPane({ channelId, members, canModerate, placeholder, initialThread, onThreadChange, onSent, emptyText, threads = true }: {
-  channelId: string; members: Member[]; canModerate?: boolean; placeholder?: string; initialThread?: string | null; onThreadChange?: (id: string | null) => void; onSent?: () => void; emptyText?: string; threads?: boolean;
+export function ChatPane({ channelId, members, canModerate, placeholder, initialThread, highlightId, onThreadChange, onSent, emptyText, threads = true }: {
+  channelId: string; members: Member[]; canModerate?: boolean; placeholder?: string; initialThread?: string | null; /** Nachricht aus einem Deep-Link (?msg=): hinscrollen und hervorheben */ highlightId?: string | null; onThreadChange?: (id: string | null) => void; onSent?: () => void; emptyText?: string; threads?: boolean;
 }) {
   const { user } = useAuth();
   const dialog = useDialog();
@@ -33,6 +34,10 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const [reply, setReply] = useState('');
   const [editing, setEditing] = useState<{ id: string; body: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Frage zur Thread-Wurzel (Status, Auswahl, Erledigt): aus GET /chat/messages/:id, bei jedem Thread-Wechsel und nach Antworten neu
+  const [question, setQuestion] = useState<Question | null>(null);
+  const [highlight, setHighlight] = useState<string | null>(highlightId ?? null);
+  const replyBox = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const stickBottom = useRef(true);
   const base = `/chat/channels/${channelId}/messages`;
@@ -45,9 +50,19 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   };
   const loadThread = async (id: string) => {
     try { setReplies((await api.get<Page>(`${base}?thread=${id}`)).messages); } catch (e) { setError((e as Error).message); }
+    try { setQuestion((await api.get<{ question: Question | null }>(`/chat/messages/${id}`)).question); } catch { setQuestion(null); }
   };
   useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (threadRef.current) void loadThread(threadRef.current); }, 5000); return () => clearInterval(h); }, [channelId]);
-  useEffect(() => { threadRef.current = thread; if (thread) void loadThread(thread); else setReplies([]); onThreadChange?.(thread); }, [thread]);
+  useEffect(() => { threadRef.current = thread; if (thread) void loadThread(thread); else { setReplies([]); setQuestion(null); } onThreadChange?.(thread); }, [thread]);
+  // Deep-Link: zur Nachricht scrollen, hervorheben, Fokus ins Antwortfeld des Threads
+  useEffect(() => { setHighlight(highlightId ?? null); }, [highlightId]);
+  useEffect(() => {
+    if (!highlight) return;
+    const el = document.getElementById(`msg-${highlight}`);
+    if (el) { el.scrollIntoView({ block: 'center' }); replyBox.current?.querySelector('textarea, input')?.dispatchEvent(new Event('focus')); (replyBox.current?.querySelector('textarea, input') as HTMLElement | null)?.focus(); }
+    const h = setTimeout(() => setHighlight(null), 4000);
+    return () => clearTimeout(h);
+  }, [highlight, msgs.length, replies.length]);
   // Thread von außen öffnen (z. B. Suchtreffer im Messenger), ohne den Kanal neu zu laden
   useEffect(() => { if (initialThread !== undefined && (initialThread ?? null) !== thread) setThread(initialThread ?? null); }, [initialThread]);
   useEffect(() => { const el = listRef.current; if (el && stickBottom.current) el.scrollTop = el.scrollHeight; }, [msgs.length]);
@@ -79,9 +94,10 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     setEditing(null); await load(); if (thread) await loadThread(thread);
   };
   const system = (m: ChatMessage) => m.kind === 'system';
+  const isQuestion = (m: ChatMessage) => Boolean((m.meta as any)?.questionId);
   const Msg = ({ m, inThread }: { m: ChatMessage; inThread: boolean }) => (
-    <div className={`chat-msg ${!system(m) && m.userId === user?.id ? 'mine' : ''} ${system(m) ? 'system' : ''} ${m.deleted ? 'deleted' : ''}`}>
-      <div className="chat-head">{system(m) && <span className="badge" title="Systembeitrag nach den Benachrichtigungsregeln">System</span>}{(!system(m) || m.userId) && <strong>{m.userName}</strong>}<span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
+    <div id={`msg-${m.id}`} className={`chat-msg ${!system(m) && m.userId === user?.id ? 'mine' : ''} ${system(m) ? 'system' : ''} ${m.deleted ? 'deleted' : ''} ${highlight === m.id ? 'highlight' : ''}`}>
+      <div className="chat-head">{system(m) && <span className="badge" title="Systembeitrag nach den Benachrichtigungsregeln">System</span>}{isQuestion(m) && <span className="badge" title="Offene Frage: Antwort hier im Thread oder im Arbeitspaket">{(m.meta as any).kind === 'confirm' ? 'Bestätigung' : (m.meta as any).kind === 'decision' ? 'Entscheidung' : 'Frage'}</span>}{(!system(m) || m.userId) && <strong>{m.userName}</strong>}<span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
         {!m.deleted && !system(m) && m.userId === user?.id && <button className="btn sm link" title="Bearbeiten" onClick={() => setEditing({ id: m.id, body: m.body })}>✎</button>}
         {!m.deleted && ((!system(m) && m.userId === user?.id) || canModerate) && <button className="btn sm link" title="Löschen" onClick={() => void remove(m)}>✕</button>}
       </div>
@@ -113,14 +129,35 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {thread && (
         <div className="chat-thread">
           <div className="row between mb"><strong>Thread</strong><button className="btn sm" onClick={() => setThread(null)}>✕</button></div>
+          {question && <QuestionHead q={question} onChanged={() => { void loadThread(thread); void load(); }} />}
           {root ? <Msg m={root} inThread /> : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
           <div className="chat-replies">{replies.map((m) => <Msg key={m.id} m={m} inThread />)}</div>
-          {canWrite && <div className="chat-compose">
+          {canWrite && <div className="chat-compose" ref={replyBox}>
             <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten …" onSubmit={() => void send(reply, thread)} />
             <button className="btn primary" disabled={!reply.trim()} onClick={() => void send(reply, thread)}>Antworten</button>
           </div>}
         </div>
       )}
+    </div>
+  );
+}
+
+/**
+ * Thread-Kopf einer Frage: Bezug, Status (offen, beantwortet von … in der Aufgabe, weitergegeben, erledigt), Auswahl als Knöpfe,
+ * „Im AP öffnen“ und „Erledigt“ (fragende Person, Adressat oder PL). Antworten im Thread bleiben möglich.
+ */
+function QuestionHead({ q, onChanged }: { q: Question; onChanged: () => void }) {
+  const [error, setError] = useState<string | null>(null);
+  const act = async (fn: () => Promise<unknown>) => { try { await fn(); setError(null); onChanged(); } catch (e) { setError((e as Error).message); } };
+  const kind = q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'external_referral' ? 'Rückfrage von extern' : 'Frage';
+  const status = q.status === 'open' ? 'offen' : q.status === 'answered' ? `beantwortet von ${q.answeredByName ?? '?'}${q.answerSource === 'task' ? ' in der Aufgabe' : q.answerSource === 'meeting' ? ' (Termin bestätigt)' : q.answerSource === 'chat' ? ' im Chat' : ''}` : q.status === 'escalated' ? 'weitergegeben' : `erledigt${q.cancelReason ? `: ${q.cancelReason}` : ''}`;
+  return (
+    <div className={`question-head ${q.status}`}>
+      <div className="row between small"><span><strong>{kind}</strong>{q.taskCode && <> zu <Link to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>{q.taskCode}</Link></>} · {status}</span>
+        <span className="row">{q.taskId && <Link className="btn sm link" to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>Im AP öffnen</Link>}{q.status === 'open' && <button className="btn sm link" title="Frage ohne Antwort schließen" onClick={() => void act(() => api.post(`/questions/${q.id}/cancel`, {}))}>Erledigt</button>}</span></div>
+      {q.status === 'open' && q.options && q.options.length > 0 && <div className="row mt" style={{ gap: 6 }}>{q.options.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void act(() => api.post(`/questions/${q.id}/answer`, { option: o.key }))}>{o.label}</button>)}</div>}
+      {q.status === 'answered' && q.answerText && <div className="small muted mt">{q.answerOption && q.options ? `${q.options.find((o) => o.key === q.answerOption)?.label ?? q.answerOption}: ` : ''}{q.answerText}</div>}
+      {error && <div className="error small mt">{error}</div>}
     </div>
   );
 }

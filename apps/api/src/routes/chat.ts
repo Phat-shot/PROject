@@ -6,6 +6,7 @@ import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
+import { answerQuestion, canAnswer, FREE_TEXT_KINDS, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -36,8 +37,8 @@ export async function chatRoutes(app: FastifyInstance) {
    */
   async function answeredTask(agentId: string, channelId: string, threadId: string | null, user: any, messageId: string) {
     const last = threadId
-      ? await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.kind = 'user' and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
-      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.kind = 'user' and m.thread_id is null and m.deleted_at is null and m.body ~ '^[A-Z0-9-]{2,12}-[0-9]+ „' and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
+      ? await db.maybeOne(`select m.id, m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.kind = 'user' and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
+      : await db.maybeOne(`select m.id, m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.kind = 'user' and m.thread_id is null and m.deleted_at is null and m.body ~ '^[A-Z0-9-]{2,12}-[0-9]+ „' and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
     const ref = last ? String(last.body).match(/^([A-Z0-9-]{2,12})-(\d+) „/) : null;
     if (!ref) return null;
     if (!threadId) {
@@ -47,7 +48,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const t = await db.maybeOne(`select t.id, t.project_id, t.subproject_id from tasks t join projects p on p.id = t.project_id where p.org_id = $1 and p.key = $2 and t.number = $3 and t.deleted_at is null`, [user.orgId, ref[1], Number(ref[2])]);
     if (!t || !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [t.project_id, user.id])) || !(await canSeeSubproject(db, user.id, t.subproject_id))) return null;
     // Antwort auf eine Rückfrage von extern (refer): endet sie mit „Darf weitergegeben werden.“, wird sie für Externe sichtbar
-    return { ...t, agent_name: last.name, refer: String(last.body).includes(REFER_MARK) };
+    return { ...t, agent_name: last.name, message_id: last.id as string, refer: String(last.body).includes(REFER_MARK) };
   }
 
   /** Projektkanal holen oder anlegen; Mitglied des Projekts nötig. */
@@ -124,6 +125,16 @@ export async function chatRoutes(app: FastifyInstance) {
     return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite };
   });
 
+  // Einzelne Nachricht mit Kanal, Thread-Wurzel und Fragestatus (Deep-Link aus einer Meldung)
+  app.get<{ Params: { mid: string } }>('/chat/messages/:mid', async (req) => {
+    const user = requireUser(req);
+    const m = await db.maybeOne(`${MSG_SELECT} where m.id = $1`, [req.params.mid]);
+    if (!m) throw notFound('Nachricht nicht gefunden');
+    const { channel } = await channelAccess(user, m.channel_id);
+    const q = await db.maybeOne(`${QUESTION_SELECT} where q.message_id = $1`, [m.thread_id ?? m.id]);
+    return { message: mapMessage(m), channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, threadId: m.thread_id ?? m.id, question: q ? mapQuestion(q) : null };
+  });
+
   // Nachricht senden (optional als Antwort in einem Thread)
   app.post<{ Params: { cid: string }; Body: { body: string; threadId?: string | null } }>('/chat/channels/:cid/messages', async (req) => {
     const user = requireUser(req);
@@ -174,9 +185,26 @@ export async function chatRoutes(app: FastifyInstance) {
     } else {
       for (const to of recipients) await notify(db, { userId: to, projectId: null, type: 'chat.dm', title: `Nachricht von ${user.name}`, body: snippet, link: `/chat/${channel.id}${threadId ? `?thread=${threadId}` : ''}`, ref: threadId ? { type: 'chat_thread', id: threadId } : { type: 'chat_channel', id: channel.id }, actorId: user.id });
     }
+    // Regel F: offene Frage zu dieser Nachricht (Thread-Wurzel oder einzige offene Frage des Agenten an die Person in der DM) → Antwort
+    const dmAgent = channel.kind === 'dm' ? [...agents][0] ?? null : null;
+    let matched = await matchQuestion(db, { channelId: channel.id, threadId, userId: user.id, agentId: dmAgent });
+    // Rückfall (mehrere offene Fragen in der DM oder alte Agentennachricht ohne Frage-Objekt): die letzte Frage des Agenten („KEY-n „…“) in diesem Gespräch
+    const fallbacks = new Map<string, any>();
+    if (!matched && (channel.kind === 'dm' || threadId)) for (const a of agents) {
+      const t = await answeredTask(a, channel.id, threadId, user, r.id);
+      if (!t) continue;
+      const q = await db.maybeOne(`select * from questions where message_id = $1 and status = 'open' and kind = any($2::text[])`, [t.message_id, FREE_TEXT_KINDS]);
+      if (q && (q.addressee_id ? q.addressee_id === user.id : await canAnswer(db, q, user.id))) { matched = q; break; }
+      if (await db.maybeOne(`select 1 from questions where message_id = $1`, [t.message_id])) continue; // Bestätigung oder Freigabe: nur per Karte oder Route
+      fallbacks.set(a, t);
+    }
+    if (matched) {
+      await answerQuestion(db, matched, { source: 'chat', userId: user.id, text: body, messageId: r.id });
+      // Rückfrage von extern (refer): endet die Antwort mit „Darf weitergegeben werden.“, wird sie für Externe sichtbar
+      if (matched.kind === 'external_referral' && releasedText(body)) await db.query(`update task_comments set visibility = 'external', body = $2 where question_id = $1 and source = 'chat'`, [matched.id, `Rückmeldung per Chat von ${user.name}: ${releasedText(body)}`]);
+    }
     for (const a of agents) {
-      // Antwort auf eine Frage des Agenten zu einem Arbeitspaket (Direktnachricht oder Thread, beginnt mit der Kennung): Rückmeldung ins Log, Lauf am Arbeitspaket statt Chat-Antwort
-      const t = channel.kind === 'dm' || threadId ? await answeredTask(a, channel.id, threadId, user, r.id) : null;
+      const t = fallbacks.get(a) ?? null;
       if (t) {
         const released = t.refer ? releasedText(body) : null;
         await db.query(`insert into task_comments (task_id, user_id, body, source, visibility) values ($1,$2,$3,'chat',$4)`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${released ?? body}`, released ? 'external' : 'internal']);

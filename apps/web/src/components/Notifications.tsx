@@ -18,7 +18,8 @@ export function useOpenNotification() {
   return async function openNotification(n: Notification) {
     if (!n.readAt) await api.post('/notifications/read', { ids: [n.id] }).catch(() => undefined);
     const m = n.link?.match(/^\/chat\/([0-9a-f-]{36})(?:\?(?:.*&)?thread=([0-9a-f-]{36}))?/);
-    if (m) { openChat(m[1], m[2] ?? null); return; }
+    const msg = n.link?.match(/[?&]msg=([0-9a-f-]{36})/);
+    if (m) { openChat(m[1], m[2] ?? null, msg?.[1] ?? null); return; }
     if (n.ref?.type === 'chat_channel') { openChat(n.ref.id, null); return; }
     if (n.link) nav(n.link);
   };

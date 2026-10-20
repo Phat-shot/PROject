@@ -36,7 +36,7 @@ describe('Meldungen im Dashboard', () => {
     const th = '22222222-2222-4222-8222-222222222222';
     render(<MemoryRouter><NotificationRow n={note({ link: `/chat/${c}?thread=${th}`, readAt: '2026-10-18T11:00:00Z' })} /></MemoryRouter>);
     fireEvent.keyDown(screen.getByRole('button'), { key: 'Enter' });
-    await waitFor(() => expect(openChat).toHaveBeenCalledWith(c, th));
+    await waitFor(() => expect(openChat).toHaveBeenCalledWith(c, th, null));
     expect(post).not.toHaveBeenCalled();
   });
 

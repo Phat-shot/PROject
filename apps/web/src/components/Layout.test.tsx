@@ -11,7 +11,7 @@ vi.mock('../lib/useAi', () => ({ useAiStatus: () => null }));
 vi.mock('../lib/useChatUnread', () => ({ useChatUnread: () => ({ total: 0, reload: vi.fn() }) }));
 vi.mock('../lib/useMedia', () => ({ useIsMobile: () => false }));
 vi.mock('./Tour', () => ({ Tour: () => null, tourDone: () => true }));
-vi.mock('./Messenger', () => ({ Messenger: () => null, MessengerCtx: createContext(() => undefined) }));
+vi.mock('./Messenger', () => ({ Messenger: () => null, MessengerCtx: createContext(() => undefined), useOpenChat: () => vi.fn() }));
 const openNotification = vi.fn(async () => undefined);
 vi.mock('./Notifications', () => ({ useOpenNotification: () => openNotification, eventLabel: (n: { event?: string }) => (n.event && n.event !== 'info' ? `${n.event} · ` : '') }));
 let user: Partial<User> = {};

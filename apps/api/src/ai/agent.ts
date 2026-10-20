@@ -16,6 +16,7 @@ import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { audienceOf, audienceText, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 import { USE_LATERAL, accountUseIn, projectAccount } from '../mail/accounts.js';
+import { askQuestion, answerQuestion, type QuestionRow } from '../questions.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -33,7 +34,9 @@ export type AgentAction =
   | { type: 'reply_origin'; text: string }
   | { type: 'chat'; to: string[] | null; text: string }
   | { type: 'blocked'; reason: string }
-  | { type: 'escalate'; text: string }
+  | { type: 'escalate'; text: string; questionId?: string }
+  | { type: 'ask'; text: string; kind?: 'question' | 'decision' | null; to?: string[] | null; remindAfterHours?: number | null; questionId?: string }
+  | { type: 'resolve'; questionId: string; text?: string | null; reason?: string | null }
   | { type: 'refer'; text: string; subject?: string | null; to?: string[] | null }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
   | { type: 'add_item'; text: string }
@@ -55,7 +58,7 @@ export type AgentAction =
   | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null }
   | { type: 'none'; reason?: string };
 
-export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean }
+export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
 const H = 3600_000;
 const DOC_TRANSITIONS: Record<string, string[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 const clampH = (v: unknown, def: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(24 * 14, Math.max(0.1, n)) : def; };
@@ -83,10 +86,10 @@ const SCHEMA = {
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'refer', 'wait', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; chat: Chat-Nachricht; escalate: Text an die PL; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
@@ -102,14 +105,15 @@ const SCHEMA = {
         endsAt: { type: 'string', description: 'create_event: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         location: { type: 'string', description: 'create_event: Ort; sonst leer' },
         folder: { type: 'string', description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst leer' },
-        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen (nur Nicht-Interne); refer: Adresse des Externen, leer = Absender der letzten Mail; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
+        to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen (nur Nicht-Interne); refer: Adresse des Externen, leer = Absender der letzten Mail; ask: leer = Ansprechpartner (Stufe 0 der Kette), „pl“, „tp“, „projekt“ oder eine E-Mail aus der Kette; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
         subject: { type: 'string', description: 'mail: Betreff; refer: Thema der Frage in Worten des Externen; sonst leer' },
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
-        kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; sonst leer' },
+        kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; ask: question (Information, Termin, Zusage) oder decision (Entscheidung außerhalb deiner Zuständigkeit); sonst leer' },
         checkAfterHours: { type: 'number', description: 'wait: Stunden bis zur nächsten Prüfung; sonst leer' },
         until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); sonst leer' },
-        remindAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zum Nachfassen; sonst leer' },
-        escalateAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst leer' }
+        remindAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zum Nachfassen; ask: gewünschte Frist in Stunden (verkürzt nur den Standard); sonst leer' },
+        escalateAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst leer' },
+        questionId: { type: 'string', description: 'resolve: questionId der offenen Frage aus „Offene Fragen“; sonst leer' }
       } } }
   }
 };
@@ -164,6 +168,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   // Ohne Standard-Projektkonto (z. B. persönliches Projekt): Konto einer Ansicht des Projekts, Mails dann nur als Entwurf (persönliche Bindung: der Eigentümer sendet)
   const viewAccount = account ? null : await db.maybeOne<AccountRow & { view_id: string; use: string }>(`select a.*, v.id as view_id, u.use from mail_views v join mail_accounts a on a.id = v.account_id join mail_account_uses u on u.id = v.use_id where v.project_id = $1 order by (u.use = 'personal') desc, v.created_at limit 1`, [task.project_id]);
   const signature = String((await db.one(`select signature from users where id = $1`, [agent.id])).signature ?? '').trim();
+  const openQs = await db.query(`select q.id, q.body, q.created_at, u.name as to_name from questions q left join users u on u.id = q.addressee_id where q.task_id = $1 and q.asked_by = $2 and q.status = 'open' order by q.created_at`, [task.id, agent.id]);
   // Zuständigkeit (direkt oder geerbt) und Planungsrahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt, Teilprojekt-Verantwortung in ihren Teilprojekten
   const eff = await db.one(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as eff, pt.responsible_user_id as parent_resp, s.name as sp_name from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.id]);
   const basis = task.responsible_user_id === agent.id ? 'direkt zugewiesen' : eff.eff === agent.id ? (eff.parent_resp === agent.id ? `geerbt vom Arbeitspaket ${task.project_key}-${task.parent_number}` : `geerbt vom Teilprojekt „${eff.sp_name}“, für das du verantwortlich bist`) : 'nicht deine Zuständigkeit (Lauf von Hand gestartet)';
@@ -217,7 +222,7 @@ ${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
-${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
+${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
 Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
   try {
@@ -251,6 +256,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const applied: AgentAction[] = [];
     let mailsSent = 0;
     let chats = 0;
+    let asked = 0;
     let waited = false;
     const plan = planner(db, { agent, m, task, canPlan, myTps, now });
     /** Tatsächlicher Versandstatus ins Log (der Agent selbst behauptet keinen Versand). */
@@ -502,11 +508,25 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         await dispatch(db, { event: 'blocked', projectId: task.project_id, taskId: task.id, type: 'escalation', title: `Blockiert (Agent): ${task.title}`, body: a.reason, link: `/projekte/${task.project_id}/board?task=${task.id}`, ref: { type: 'task', id: task.id }, actorId: agent.id, logged: true });
         applied.push(a);
       } else if (a.type === 'escalate' && a.text) {
-        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `An die Projektleitung: ${a.text}`]);
-        // Entscheidung (Klasse decision, Standard: verantwortliche PL); der Chat ist die Direktnachricht des Agenten, die Antwort dort landet im Log
-        const to = await dispatch(db, { event: 'decision', projectId: task.project_id, taskId: task.id, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}`, body: a.text, link: `/projekte/${task.project_id}/board?task=${task.id}`, ref: { type: 'task', id: task.id }, actorId: agent.id, logged: true, chatted: true });
-        for (const u of to) await agentChatMessage(db, agent, { userId: u }, `${task.project_key}-${task.number} „${task.title}“: ${a.text}`, task.project_id);
-        applied.push(a);
+        // Entscheidung der PL: offene Frage der Klasse decision (Chat-Thread, Meldung, Log, Warten, Nachfassen und Weitergabe über die Frage)
+        const r = await askQuestion(db, { taskId: task.id, asker: agent, kind: 'decision', body: String(a.text).trim(), to: 'pl', now, type: 'escalation', title: `${agent.name} braucht eine Entscheidung: ${task.title}` });
+        if ('error' in r) errors.push(`escalate: ${r.error}`);
+        else { applied.push({ ...a, questionId: r.question.id } as any); asked++; }
+      } else if (a.type === 'ask') {
+        // Frage an Interne (Regel C): Adressat aus der Kette oder gewählt; Dedupe am AP; Antwort kommt als Lauf mit Anlass answer
+        const text = String(a.text ?? '').trim();
+        if (!text) errors.push('ask ohne Text verworfen');
+        else if (asked >= 3) errors.push('ask verworfen: mehr als drei Fragen im Lauf');
+        else {
+          const r = await askQuestion(db, { taskId: task.id, asker: agent, kind: a.kind === 'decision' ? 'decision' : 'question', body: text, to: Array.isArray(a.to) ? a.to[0] ?? null : null, dueHours: a.remindAfterHours || null, now });
+          if ('error' in r) errors.push(`ask: ${r.error}`);
+          else { asked++; applied.push({ type: 'ask', text, to: a.to, questionId: r.question.id } as any); }
+        }
+      } else if (a.type === 'resolve') {
+        // Frage auf anderem Weg erledigt (z. B. Antwort kam per Mail): Status, Meldungen und Thread schließen
+        const q = a.questionId ? await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and task_id = $2 and asked_by = $3 and status = 'open'`, [a.questionId, task.id, agent.id]) : null;
+        if (!q) errors.push('resolve: keine offene eigene Frage mit dieser questionId');
+        else { await answerQuestion(db, q, { source: 'mail', userId: null, text: String(a.text ?? a.reason ?? '').trim() || 'auf anderem Weg erledigt', now }); applied.push({ type: 'resolve', questionId: q.id, text: a.text } as any); }
       } else if (a.type === 'refer') {
         // Frage eines Externen außerhalb seiner Aufgabe: an den nächsten Menschen der Kette; der Externe bekommt nur den Verweis
         const q = String(a.text ?? '').trim();
@@ -560,7 +580,11 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         if (a.kind === 'date' && !untilAt) errors.push(`Termin „${a.until ?? ''}“ nicht lesbar, Prüfung nach ${clampH(a.checkAfterHours, 24)} h`);
         const check = untilAt && untilAt.getTime() > now.getTime() ? untilAt : new Date(now.getTime() + clampH(a.checkAfterHours, 24) * H);
         const w: AgentWait = { kind: a.kind, reason: (String(a.reason ?? '').trim() || 'keine Angabe').slice(0, 300), since: keepSince };
-        if (a.kind === 'reply') {
+        const oq = a.kind === 'reply' ? await db.maybeOne(`select id, remind_at, escalate_at, reminded_at from questions where task_id = $1 and asked_by = $2 and status = 'open' order by created_at desc limit 1`, [task.id, agent.id]) : null;
+        if (oq) {
+          // Offene Frage: Nachfassen und Weitergabe laufen über die Frage (runQuestions), das Warten zeigt nur darauf
+          w.questionId = oq.id; w.remindAt = oq.remind_at ? new Date(oq.remind_at).toISOString() : null; w.escalateAt = oq.escalate_at ? new Date(oq.escalate_at).toISOString() : null; w.reminded = Boolean(oq.reminded_at); w.escalated = false;
+        } else if (a.kind === 'reply') {
           const base = new Date(keepSince).getTime();
           w.remindAt = prev?.kind === 'reply' && prev.reminded ? prev.remindAt : new Date(base + clampH(a.remindAfterHours, 48) * H).toISOString();
           w.escalateAt = new Date(base + clampH(a.escalateAfterHours, 120) * H).toISOString();
@@ -577,7 +601,8 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         else if (r.applied) applied.push(r.applied);
       } else if (a.type === 'none') applied.push(a);
     }
-    if (!waited) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+    // Warten endet nur, wenn keine eigene Frage am AP mehr offen ist (die Frage hält den Wartezustand bis zur Antwort)
+    if (!waited && !(await db.maybeOne(`select 1 from questions where task_id = $1 and asked_by = $2 and status = 'open'`, [task.id, agent.id]))) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
@@ -604,7 +629,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
 const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
-  blocked: 'Blockiert', escalate: 'An die PL', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
+  blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
   create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
@@ -744,8 +769,10 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + H) : null;
       if (!starts || !ends || ends <= starts) return { error: `create_event „${title}“: Beginn oder Ende nicht lesbar` };
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [task.project_id, title, starts])) return { error: `create_event: „${title}“ steht schon im Kalender` };
-      await createPlannedEvent(db, actor, { projectId: task.project_id, title, startsAt: starts, endsAt: ends, location: a.location, description: a.text, taskId: task.id });
+      const ev = await createPlannedEvent(db, actor, { projectId: task.project_id, title, startsAt: starts, endsAt: ends, location: a.location, description: a.text, taskId: task.id });
       await log(task.id, `Termin vorläufig im Kalender: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''} (verbindlich erst nach Bestätigung durch eine Person)`);
+      // Bestätigung als Frage (Klasse confirm) an den Ansprechpartner; die Antwort kommt über /meetings/:id/confirm, die Karte oder den Chat
+      await askQuestion(db, { taskId: task.id, asker: agent, kind: 'confirm', body: `Termin bestätigen: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''}?`, meetingId: ev.id, options: [{ key: 'confirm', label: 'Bestätigen' }, { key: 'reject', label: 'Ablehnen' }], now });
       created++;
       return { applied: { type: 'create_event', title, startsAt: starts.toISOString(), endsAt: ends.toISOString(), location: a.location ?? null } };
     }
@@ -765,6 +792,8 @@ function triggerText(trigger: string, task: any): string {
   const w: AgentWait | null = task.agent_wait ?? null;
   switch (trigger) {
     case 'assigned': return 'Das Arbeitspaket wurde dir gerade zugewiesen. Verschaffe dir den Stand und beginne.';
+    case 'answer': return 'Antwort auf deine Frage ist da (siehe Log „Rückmeldung“ und „Offene Fragen“). Werte sie aus und handle; frag nicht erneut, was beantwortet ist.';
+    case 'inquiry': return 'Die PL hat entschieden, wie mit den offenen Punkten der Ursprungsmail umzugehen ist (siehe Log). Setze das um: beim Absender nachfragen (reply_origin) oder weiterarbeiten.';
     case 'comment': return 'Neuer Log-Eintrag oder Kommentar einer Person am Arbeitspaket.';
     case 'task_changed': return 'Eine Person hat das Arbeitspaket oder seine Tasks geändert (Text, Termin, Status). Lies die Änderung und handle entsprechend.';
     case 'mail': case 'reply': return 'Neue Mail zum Arbeitspaket (möglicherweise die erwartete Rückmeldung). Werte sie aus.';
@@ -847,10 +876,10 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
       let trigger: string | null = null;
       let mark: (() => Promise<unknown>) | null = null;
       const w: AgentWait | null = t.agent_wait ?? null;
-      if (w?.kind === 'reply' && w.escalateAt && !w.escalated && now >= new Date(w.escalateAt)) {
+      if (w?.kind === 'reply' && !w.questionId && w.escalateAt && !w.escalated && now >= new Date(w.escalateAt)) {
         trigger = 'escalation_due';
         mark = () => db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, escalated: true })]);
-      } else if (w?.kind === 'reply' && w.remindAt && !w.reminded && now >= new Date(w.remindAt)) {
+      } else if (w?.kind === 'reply' && !w.questionId && w.remindAt && !w.reminded && now >= new Date(w.remindAt)) {
         trigger = 'reminder_due';
         mark = () => db.query(`update tasks set agent_wait = $2 where id = $1`, [t.id, JSON.stringify({ ...w, reminded: true })]);
       } else if (t.agent_next_check_at && now >= new Date(t.agent_next_check_at)) {
