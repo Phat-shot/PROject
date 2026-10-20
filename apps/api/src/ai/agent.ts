@@ -22,6 +22,7 @@ import type { AiConfig } from './client.js';
 import { actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
 import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
 import type { ExternalWindow } from '@projekttool/shared';
+import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
 import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
 
 /**
@@ -61,7 +62,8 @@ export type AgentAction =
   | { type: 'set_dates'; ref?: string | null; startDate?: string | null; dueDate?: string | null }
   | { type: 'create_subproject'; title: string; responsible?: string | null; startDate?: string | null; dueDate?: string | null }
   | { type: 'create_milestone'; title: string; dueDate: string; subproject?: string | null }
-  | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null }
+  | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null; resources?: string[] | null; attendees?: string[] | null }
+  | { type: 'book_resource'; resource: string; startsAt?: string | null; endsAt?: string | null; startDate?: string | null; dueDate?: string | null; text?: string | null }
   | { type: 'research'; text: string }
   | { type: 'search'; text: string }
   | { type: 'read_task'; ref: string }
@@ -102,7 +104,7 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'none'] },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'none'] },
         text: { type: 'string', description: 'comment: Log-Text; research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
@@ -111,12 +113,15 @@ const SCHEMA = {
         title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; sonst leer' },
         ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; sonst leer' },
         responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
-        startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; sonst leer' },
-        dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; sonst leer' },
+        startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; book_resource ganztägig: erster Tag; sonst leer' },
+        dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; book_resource ganztägig: letzter Tag; sonst leer' },
         subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; sonst leer' },
         items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe/create_ap: Tasks (Checkliste); sonst leer' },
-        startsAt: { type: 'string', description: 'create_event: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); sonst leer' },
-        endsAt: { type: 'string', description: 'create_event: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
+        startsAt: { type: 'string', description: 'create_event/book_resource: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); book_resource ganztägig stattdessen startDate/dueDate; sonst leer' },
+        endsAt: { type: 'string', description: 'create_event/book_resource: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
+        resource: { type: 'string', description: 'book_resource: Name der Ressource aus der Liste „Ressourcen“; sonst leer' },
+        resources: { type: 'array', items: { type: 'string' }, description: 'create_event: Namen zu buchender Ressourcen (Raum, Gerät); sonst leer' },
+        attendees: { type: 'array', items: { type: 'string' }, description: 'create_event: E-Mails weiterer Teilnehmer (Mitglieder, Kontakte); der Ansprechpartner ist immer dabei; sonst leer' },
         location: { type: 'string', description: 'create_event: Ort; sonst leer' },
         folder: { type: 'string', description: 'doc_create/doc_move: Ordnername aus der Ordnerliste; folder_create: Name des neuen Ordners; sonst leer' },
         to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen (nur Nicht-Interne); refer: Adresse des Externen, leer = Absender der letzten Mail; ask: leer = Ansprechpartner (Stufe 0 der Kette), „pl“, „tp“, „projekt“ oder eine E-Mail aus der Kette; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
@@ -727,7 +732,10 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   // Ansprechpartner für Rückfragen und Zusagen: Stufe 0 der Kette (Zuständige des Über-AP, Teilprojekt-Verantwortung, verantwortliche PL)
   const contact: any = (await contactChain(db, task, { exclude: [agent.id] }))[0] ?? null;
   // Belegt-Zeiten des Ansprechpartners aus anderen Projekten (Termine, an denen er teilnimmt oder die er angelegt hat; ohne Titel), damit Terminvorschläge geprüft werden können
-  const busy = contact ? await db.query(`select m.starts_at, m.ends_at from meetings m where m.project_id <> $2 and (m.created_by = $1 or m.attendees @> jsonb_build_array(jsonb_build_object('userId', $1::text))) and m.starts_at >= now() and m.starts_at < now() + interval '45 days' order by m.starts_at limit 20`, [contact.id, task.project_id]) : { rows: [] as any[] };
+  const busy = { rows: contact ? (await busyOf(db, contact.id, now, new Date(now.getTime() + 45 * 86400_000))).slice(0, 20).map((x) => ({ starts_at: x.startsAt, ends_at: x.endsAt, kind: x.kind, tentative: x.tentative })) : [] as any[] };
+  // Ressourcen (Konzept 10.5): Projekt und Pool (höchstens 15) mit Belegungen der nächsten 45 Tage ohne Details (höchstens 5 je Ressource); Belegungen dieses AP
+  const resources = await db.query(`select r.id, r.name, r.kind, r.location, (select json_agg(json_build_object('s', b.starts_at, 'e', b.ends_at, 'a', b.all_day, 't', b.tentative) order by b.starts_at) from (select * from resource_bookings b where b.resource_id = r.id and b.ends_at > $2 and b.starts_at < $2::timestamptz + interval '45 days' order by b.starts_at limit 5) b) as busy from resources r where r.org_id = $3 and r.active and (r.project_id = $1 or r.project_id is null) order by (r.project_id is not null) desc, r.kind, r.name limit 15`, [task.project_id, now, agent.org_id]);
+  const apBookings = await db.query(`${BOOKING_SELECT} where b.task_id = $1 or b.task_id = $2 order by b.starts_at limit 10`, [task.id, task.parent_id ?? task.id]);
   // Direktnachrichten mit Menschen dieses Projekts (letzte 7 Tage): Antworten auf Fragen, die der Agent per Chat gestellt hat
   const dms = await db.query(
     `select m.body, m.created_at, case when m.kind = 'system' then 'System' else u.name end as name, m.user_id = $1 and m.kind = 'user' as mine from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm'
@@ -775,7 +783,8 @@ Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlic
     { key: 'aps', text: `Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
 ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}` },
     { key: 'rest', keep: true, text: `${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
-Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
+Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (${contact.name}: Termine, Belegungen, Abwesenheiten, ohne Details): ${busy.rows.map((x: any) => `${x.kind === 'absence' ? 'abwesend ' : ''}${fmtSpan(x.starts_at, x.ends_at)}${x.tentative ? ' (vorläufig)' : ''}`).join(', ')}` : ''}
+Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis eine Person bestätigt): ${resources.rows.map((r: any) => `${r.name} (${{ room: 'Raum', equipment: 'Gerät', scaffold: 'Gerüst', vehicle: 'Fahrzeug', person: 'Person', other: 'Sonstiges' }[String(r.kind)] ?? r.kind}${r.location ? `, ${r.location}` : ''})${Array.isArray(r.busy) && r.busy.length ? ` belegt: ${r.busy.map((b: any) => `${fmtSpan(b.s, b.e, b.a)}${b.t ? ' (vorläufig)' : ''}`).join('; ')}` : ' frei'}`).join('\n  ') || '–'}${apBookings.rows.length ? `\nBelegungen dieses Arbeitspakets: ${apBookings.rows.map((b: any) => `${b.resource_name ?? b.user_name} ${fmtSpan(b.starts_at, b.ends_at, b.all_day)}${b.tentative ? ' (vorläufig)' : ''}`).join('; ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 Agenten-Policy: ${policyText(policy)}
@@ -891,7 +900,7 @@ const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
   blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
-  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen'
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
 function progressText(actions: AgentAction[], note: unknown): string {
@@ -923,7 +932,7 @@ async function unreleasedRecipients(db: Db, page: { id: string; project_id: stri
   return to.filter((x) => !allowed.has(x));
 }
 
-const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event'];
+const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'book_resource'];
 const MAX_CREATE = 15;
 
 /**
@@ -994,6 +1003,7 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       const nd = due ?? dateStr(t.due_date);
       if (ns && nd && ns > nd) return { error: `set_dates ${code(t.number)}: Start ${ns} liegt nach dem Termin ${nd}` };
       await db.query(`update tasks set start_date = $2, due_date = $3 where id = $1`, [t.id, ns, nd]);
+      await syncTaskBookings(db, { id: agent.id, name: agent.name, orgId: agent.org_id, kind: 'agent' }, t.id);
       await log(t.id, `Termin: ${ns ?? '–'} bis ${nd ?? '–'} (gesetzt von ${agent.name})`);
       await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'task.update', objectType: 'task', objectId: t.id, details: { startDate: ns, dueDate: nd } });
       return { applied: { type: 'set_dates', ref: code(t.number), startDate: ns, dueDate: nd } };
@@ -1023,6 +1033,22 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       return { applied: { type: 'create_milestone', title, dueDate: due, subproject: sp?.name ?? null } };
     }
 
+    if (a.type === 'book_resource') {
+      // Belegung immer vorläufig; Bestätigung als Frage confirm mit booking_id an Stufe 0; harter Konflikt geht als Fehler ans Modell
+      const res = await findResourceByName(db, agent.org_id, task.project_id, a.resource);
+      if (!res) return { error: `book_resource: Ressource „${String(a.resource ?? '').trim() || '?'}“ nicht in der Liste` };
+      let starts: Date | null = null; let ends: Date | null = null; let allDay = false;
+      if (start || due) { const r = dayRange(start ?? due!, due ?? start!); starts = r.starts; ends = r.ends; allDay = true; }
+      else { const raw = String(a.startsAt ?? '').trim().replace(' ', 'T'); if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) return { error: `book_resource „${res.name}“: Zeitraum als startDate/dueDate oder startsAt/endsAt angeben` }; starts = parseUntil(raw, now); ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + H) : null; }
+      if (!starts || !ends || ends <= starts) return { error: `book_resource „${res.name}“: Zeitraum nicht lesbar` };
+      try {
+        const r = await createBooking(db, { id: agent.id, name: agent.name, orgId: agent.org_id, kind: 'agent' }, { projectId: task.project_id, resourceId: res.id, taskId: task.id, followTask: false, title: String(a.text ?? '').trim().slice(0, 200) || task.title, note: null, startsAt: starts, endsAt: ends, allDay, tentative: true }, { silent: true });
+        await log(task.id, `${res.name} gebucht ${fmtSpan(starts, ends, allDay)} (vorläufig, bis eine Person bestätigt)`);
+        await askQuestion(db, { taskId: task.id, asker: agent, kind: 'confirm', body: `Belegung bestätigen: ${res.name} ${fmtSpan(starts, ends, allDay)}${a.text ? ` – ${cut(String(a.text), 200)}` : ''}?`, bookingId: r.booking.id, options: [{ key: 'confirm', label: 'Bestätigen' }, { key: 'reject', label: 'Ablehnen' }], now });
+        created++;
+        return { applied: { type: 'book_resource', resource: res.name, startsAt: starts.toISOString(), endsAt: ends.toISOString(), bookingId: r.booking.id } };
+      } catch (e: any) { return { error: e instanceof BookingConflict ? `book_resource „${res.name}“: ${e.message}` : `book_resource: ${String(e?.message ?? e)}` }; }
+    }
     if (a.type === 'create_event') {
       const raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
       if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) return { error: `create_event „${title}“: Beginn als YYYY-MM-DDTHH:MM angeben` };
@@ -1030,8 +1056,15 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + H) : null;
       if (!starts || !ends || ends <= starts) return { error: `create_event „${title}“: Beginn oder Ende nicht lesbar` };
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [task.project_id, title, starts])) return { error: `create_event: „${title}“ steht schon im Kalender` };
-      const ev = await createPlannedEvent(db, actor, { projectId: task.project_id, title, startsAt: starts, endsAt: ends, location: a.location, description: a.text, taskId: task.id });
-      await log(task.id, `Termin vorläufig im Kalender: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''} (verbindlich erst nach Bestätigung durch eine Person)`);
+      // Teilnehmer: Ansprechpartner (Stufe 0) und genannte Adressen; Ressourcen werden vorläufig mitgebucht (Konflikte als Fehler)
+      const contact = (await contactChain(db, task, { exclude: [agent.id] }))[0] ?? null;
+      const attendees: { userId?: string | null; email: string; name?: string | null }[] = contact ? [{ userId: contact.id, email: contact.email, name: contact.name }] : [];
+      for (const e of Array.isArray(a.attendees) ? a.attendees : []) { const who = await resolvePerson(db, task.project_id, actor, e).catch(() => null); if (who && 'userId' in who && who.userId) { const u = await db.one(`select email, name from users where id = $1`, [who.userId]); attendees.push({ userId: who.userId, email: u.email, name: u.name }); } else if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(e))) attendees.push({ userId: null, email: String(e).toLowerCase() }); }
+      const resIds: string[] = []; const resNames: string[] = [];
+      for (const n of Array.isArray(a.resources) ? a.resources : []) { const res = await findResourceByName(db, agent.org_id, task.project_id, n); if (!res) return { error: `create_event: Ressource „${n}“ nicht in der Liste` }; resIds.push(res.id); resNames.push(res.name); }
+      const ev = await createPlannedEvent(db, actor, { projectId: task.project_id, title, startsAt: starts, endsAt: ends, location: a.location || (resNames.length ? resNames[0] : null), description: a.text, taskId: task.id, attendees });
+      const sync = resIds.length ? await syncMeetingBookings(db, { id: agent.id, name: agent.name, orgId: agent.org_id, kind: 'agent' }, ev.id, resIds) : { conflicts: 0 };
+      await log(task.id, `Termin vorläufig im Kalender: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''}${resNames.length ? ` · gebucht: ${resNames.join(', ')}${sync.conflicts ? ` (${sync.conflicts} Konflikt${sync.conflicts === 1 ? '' : 'e'}, bitte prüfen)` : ''}` : ''} (verbindlich erst nach Bestätigung durch eine Person)`);
       // Bestätigung als Frage (Klasse confirm) an den Ansprechpartner; die Antwort kommt über /meetings/:id/confirm, die Karte oder den Chat
       await askQuestion(db, { taskId: task.id, asker: agent, kind: 'confirm', body: `Termin bestätigen: „${title}“ ${fmtWhen(starts)}${a.location ? `, ${a.location}` : ''}?`, meetingId: ev.id, options: [{ key: 'confirm', label: 'Bestätigen' }, { key: 'reject', label: 'Ablehnen' }], now });
       created++;

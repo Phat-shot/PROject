@@ -8,6 +8,7 @@ import { AccountForm, OAuthStartDialog, managerLabel, useLabel } from '../MailAc
 import { useAiStatus } from '../../lib/useAi';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
+import { ResourcesTable } from '../../components/Resources';
 import { HealthDialog } from '../PortfolioPage';
 import { PromptModal } from '../../components/ui';
 import { AgentPolicyEditor, EffectivePolicyText, modeLabel } from '../../components/AgentPolicy';
@@ -54,6 +55,11 @@ export function MembersView() {
           <div className="card" id="kontakte">
             <h2>Kontakte und Stakeholder</h2>
             <ContactsCard />
+          </div>
+          <div className="card" id="ressourcen">
+            <h2>Ressourcen des Projekts</h2>
+            <p className="muted small">Gerüste, Geräte, Räume oder externe Personen (Elektriker) nur für dieses Projekt; Pool-Ressourcen des Mandanten pflegt die Verwaltung. Buchungen im Kalender (Modus „Belegung“), am Arbeitspaket oder an der Besprechung; Konflikte übersteuern nur PL oder „Projektplan ändern“.</p>
+            <ResourcesTable projectId={detail.project.id} canEdit={detail.project.myMembership.role !== 'reader'} canDelete={isPl} />
           </div>
           <div className="card" id="planung">
             <h2>Teilprojekte</h2>

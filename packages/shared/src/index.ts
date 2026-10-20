@@ -626,7 +626,8 @@ export const EVENT_OF_TYPE: Record<string, NotifyEvent> = {
   'page.review': 'review', 'report.review': 'review', 'ai.proposal': 'review', 'workflow.approval': 'review', 'mail.approval': 'review', 'draft.review': 'review', 'outbound.review': 'review',
   'task.comment': 'log', mention: 'log', 'task.due_soon': 'due', 'task.overdue': 'due', 'chat.dm': 'chat', 'chat.mention': 'chat', 'chat.reply': 'chat',
   'external.referral': 'external_referral', 'task.progress': 'progress', 'mail.in': 'mail_in',
-  'report.sent': 'info', 'report.failed': 'info', 'page.external_edit': 'info', 'mail.ai': 'info', 'project.lead': 'info'
+  'report.sent': 'info', 'report.failed': 'info', 'page.external_edit': 'info', 'mail.ai': 'info', 'project.lead': 'info',
+  'booking.conflict': 'booking', 'booking.request': 'booking', 'booking.assigned': 'booking', 'booking.confirmed': 'booking', 'booking.declined': 'booking', 'booking.unconfirmed': 'booking'
 };
 export const eventOfType = (type: string): NotifyEvent => EVENT_OF_TYPE[type] ?? 'info';
 /** Empfängerrollen (dazu group:<id> und user:<id>); Agenten, Inaktive, der Auslöser und Personen ohne Sicht auf das AP fallen immer heraus. */
@@ -1052,6 +1053,23 @@ export interface AuditEntry {
 export const ROLE_RANK: Record<ProjectRole, number> = { reader: 1, member: 2, pl: 3 };
 
 export interface MeetingAttendee { userId?: string | null; email: string; name?: string | null }
+
+// Ressourcen und Personen im Kalender (Konzept 10)
+export type ResourceKind = 'room' | 'equipment' | 'scaffold' | 'vehicle' | 'person' | 'other';
+export const RESOURCE_KINDS: { key: ResourceKind; label: string }[] = [
+  { key: 'room', label: 'Raum' }, { key: 'equipment', label: 'Gerät' }, { key: 'scaffold', label: 'Gerüst' }, { key: 'vehicle', label: 'Fahrzeug' }, { key: 'person', label: 'Person (extern)' }, { key: 'other', label: 'Sonstiges' }
+];
+export interface Resource { id: string; projectId: string | null; projectKey?: string | null; kind: ResourceKind; name: string; description: string | null; location: string | null; email: string | null; phone: string | null; organization: string | null; trade: string | null; approvalGroupId: string | null; approvalGroupName?: string | null; active: boolean; createdBy: string | null; createdAt: string; /** künftige Belegungen (für Deaktivieren statt Löschen) */ futureBookings?: number }
+export type BookingKind = 'booking' | 'absence' | 'block';
+export interface ResourceBooking {
+  id: string; kind: BookingKind; projectId: string | null; projectKey?: string | null; resourceId: string | null; resourceName?: string | null; resourceKind?: ResourceKind | null; userId: string | null; userName?: string | null;
+  meetingId: string | null; taskId: string | null; taskRef?: string | null; taskTitle?: string | null; followTask: boolean; title: string | null; note: string | null; startsAt: string; endsAt: string; allDay: boolean; tentative: boolean;
+  confirmedAt: string | null; createdBy: string | null; createdByName?: string | null; createdAt: string;
+  /** Titel, Projekt und AP nur für Personen mit Sicht auf das Projekt; sonst nur „belegt“ bzw. „abwesend“ */ masked: boolean;
+  /** überschneidet sich mit einer anderen Belegung derselben Ressource bzw. Person (beim Lesen berechnet) */ conflict?: boolean;
+  /** Frage confirm zur Buchung (Agent oder Freigabegruppe) */ questionId?: string | null;
+}
+export interface Availability { status: 'free' | 'tentative' | 'busy'; conflicts: ResourceBooking[] }
 export interface Meeting {
   id: string;
   projectId: string;
@@ -1065,6 +1083,9 @@ export interface Meeting {
   pageId: string | null;
   pageTitle?: string | null;
   attendees: MeetingAttendee[];
+  /** gebuchte Ressourcen (Räume, Geräte, externe Personen) */
+  resourceIds?: string[];
+  resources?: { id: string; name: string; kind: ResourceKind }[];
   inviteSentAt: string | null;
   createdBy: string | null;
   tasks: { id: string; title: string; done: boolean; number?: number | null }[];

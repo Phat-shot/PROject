@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1476, Regeln für Chat 756, Regeln für Mail-Läufe 653, Regeln für den Projektdurchlauf 317.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1577, Regeln für Chat 756, Regeln für Mail-Läufe 653, Regeln für den Projektdurchlauf 317.
 
 ## Sheet
 
@@ -46,7 +46,7 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - create_aufgabe: title, text, ref (Kennung des AP, leer = dieses), startDate, dueDate, responsible, items (Tasks); create_ap: title, text, subproject (leer = dieses Teilprojekt), startDate, dueDate, responsible, items
 - assign: ref, responsible (leer = direkte Zuweisung aufheben, dann gilt die geerbte); set_dates: ref (leer = dieses), startDate, dueDate
 - create_subproject: title, responsible, startDate, dueDate (Ende); create_milestone: title, dueDate, subproject
-- create_event: title, startsAt, endsAt, location, text = vorläufiger Termin im Projektkalender (eine Person bestätigt)
+- create_event: title, startsAt, endsAt, location, text, resources (Namen aus „Ressourcen“), attendees (E-Mails) = vorläufiger Termin im Projektkalender (eine Person bestätigt); der Ansprechpartner ist Teilnehmer. book_resource: resource (Name aus „Ressourcen“), startsAt/endsAt oder ganztägig startDate/dueDate, text = Ressource oder externe Person buchen; immer vorläufig, das System fragt den Ansprechpartner; „belegt“ heißt anderen Zeitraum wählen, nie übersteuern
 - Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin), responsible = E-Mail aus „Projektmitglieder“; höchstens 15 Anlagen je Lauf, jede Anlage steht danach automatisch im Log
 - blocked: reason; escalate: text = Entscheidung für die PL (wird eine Frage der Klasse decision an die PL: Chat, Meldung, Log, Nachfassen)
 - refer: text = Frage eines Externen, die nicht zu seiner Aufgabe gehört, subject = Thema in seinen Worten, to = seine Adresse (leer = Absender der letzten Mail); das System gibt sie an den nächsten Menschen weiter und schreibt dem Externen nur, an wen. Eingehende Mails sind nach Absender gekennzeichnet (intern, Extern mit Scope)

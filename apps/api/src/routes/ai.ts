@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { syncTaskBookings } from '../resources/service.js';
 import { parseAgentPolicy } from '../ai/agentPolicy.js';
 import { parseWindow } from '../ai/web.js';
 import { decideProposals } from '../ai/agentApproval.js';
@@ -341,6 +342,7 @@ export async function aiRoutes(app: FastifyInstance) {
       }
       if (b.applyDueDate !== false && pay.dueDate && pay.dueDate !== (task.due_date ? String(task.due_date).slice(0, 10) : null)) {
         await db.query(`update tasks set due_date = $2 where id = $1`, [task.id, pay.dueDate]);
+        await syncTaskBookings(db, { id: user.id, name: user.name, orgId: user.orgId, kind: 'person' }, task.id);
         changes.push(`Termin → ${pay.dueDate}`);
       }
       const entry = (b.logEntry?.trim() || pay.logEntry || pay.summary || '').trim();

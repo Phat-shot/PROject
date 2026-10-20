@@ -29,6 +29,7 @@ export async function icsRoutes(app: FastifyInstance) {
   const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
   const dt = (iso: string) => iso.replace(/-/g, '');
   const nextDay = (iso: string) => { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1); return d.toISOString().slice(0, 10); };
+  const localDay = (d: any) => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(d));
   const stamp = new Date().toISOString().replace(/[-:]/g, '').slice(0, 15) + 'Z';
 
   const build = (name: string, events: { uid: string; title: string; start: string; end: string; desc?: string; url?: string; timed?: boolean; location?: string | null }[]) => {
@@ -62,7 +63,15 @@ export async function icsRoutes(app: FastifyInstance) {
     );
     const tstamp = (d: any) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
     const base = publicBase();
+    // Belegungen (Konzept 10.7): eigene Belegungen und Abwesenheiten im Gesamt-Feed, die Belegungen des Projekts im Projekt-Feed
+    const bookings = await db.query(
+      projectId
+        ? `select b.*, r.name as resource_name, u.name as user_name, p.key from resource_bookings b left join resources r on r.id = b.resource_id left join users u on u.id = b.user_id join projects p on p.id = b.project_id where b.project_id = $3 and b.ends_at > now() - interval '30 days' and exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2) and p.org_id = $1`
+        : `select b.*, r.name as resource_name, u.name as user_name, p.key from resource_bookings b left join resources r on r.id = b.resource_id left join users u on u.id = b.user_id left join projects p on p.id = b.project_id where b.org_id = $1 and b.user_id = $2 and b.ends_at > now() - interval '30 days'`,
+      projectId ? [userRow.org_id, userRow.id, projectId] : [userRow.org_id, userRow.id]);
+    const bookingEvent = (b: any) => ({ uid: `booking-${b.id}`, title: `${b.tentative ? '(vorläufig) ' : ''}${b.key ? `${b.key} ` : ''}${b.project_id ? `${b.resource_name ?? b.user_name ?? ''}${b.title ? `: ${b.title}` : ''}` : b.user_id ? `Abwesend${b.title && b.title !== 'Abwesenheit' ? `: ${b.title}` : ''}` : `Sperrzeit ${b.resource_name ?? ''}`}`, ...(b.all_day ? { start: localDay(b.starts_at), end: localDay(new Date(new Date(b.ends_at).getTime() - 1)) } : { start: tstamp(b.starts_at), end: tstamp(b.ends_at), timed: true }), url: b.project_id ? `${base}/kalender?ansicht=belegung&datum=${new Date(b.starts_at).toISOString().slice(0, 10)}` : undefined });
     const events = [
+      ...bookings.rows.map(bookingEvent),
       ...meetings.rows.map((m: any) => ({ uid: `meeting-${m.id}`, title: `${m.tentative ? '(vorläufig) ' : ''}${m.key} ${m.title}`, start: tstamp(m.starts_at), end: tstamp(m.ends_at), timed: true, location: m.location, desc: m.description ?? undefined, url: `${base}/projekte/${m.project_id}/besprechungen` })),
       ...tasks.filter((t) => !t.done).map((t) => { const k = keys.get(t.projectId); return { uid: `task-${t.id}`, title: `${k?.key ?? ''}-${t.number} ${t.title}`, start: t.startDate ?? t.dueDate!, end: t.dueDate!, desc: `${k?.name ?? ''} · zuständig ${t.responsible.name ?? t.responsible.email ?? '–'}`, url: `${base}/projekte/${t.projectId}/board?task=${t.id}` }; }),
       ...ms.rows.map((m: any) => ({ uid: `ms-${m.id}`, title: `◆ ${m.key} ${m.name}`, start: dateStr(m.date)!, end: dateStr(m.date)!, url: `${base}/projekte/${m.project_id}/plan` }))
@@ -76,6 +85,19 @@ export async function icsRoutes(app: FastifyInstance) {
     if (!u) return reply.status(404).send('Abo ungültig');
     reply.header('content-type', 'text/calendar; charset=utf-8');
     return reply.send(await feed(u, null));
+  });
+  // Feed einer Ressource (maskiert: Fremde sehen nur „belegt“ bzw. „vorläufig belegt“)
+  app.get<{ Params: { token: string; rid: string } }>('/ics/:token/ressource/:rid.ics', async (req, reply) => {
+    const u = await userByToken(req.params.token);
+    if (!u) return reply.status(404).send('Abo ungültig');
+    const r = await db.maybeOne(`select * from resources where id = $1 and org_id = $2`, [req.params.rid, u.org_id]);
+    if (!r) return reply.status(404).send('Ressource unbekannt');
+    if (r.project_id && !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [r.project_id, u.id]))) return reply.status(404).send('Ressource unbekannt');
+    const rows = await db.query(`select b.*, p.key, exists (select 1 from project_members pm where pm.project_id = b.project_id and pm.user_id = $2) as visible from resource_bookings b left join projects p on p.id = b.project_id where b.resource_id = $1 and b.ends_at > now() - interval '30 days' order by b.starts_at`, [r.id, u.id]);
+    const tstamp = (d: any) => new Date(d).toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
+    const events = rows.rows.map((b: any) => ({ uid: `booking-${b.id}`, title: `${b.tentative ? '(vorläufig) ' : ''}${!b.project_id ? 'Sperrzeit' : b.visible ? `${b.key} ${b.title ?? 'Belegung'}` : 'belegt'}`, ...(b.all_day ? { start: localDay(b.starts_at), end: localDay(new Date(new Date(b.ends_at).getTime() - 1)) } : { start: tstamp(b.starts_at), end: tstamp(b.ends_at), timed: true }) }));
+    reply.header('content-type', 'text/calendar; charset=utf-8');
+    return reply.send(build(`PROject ${r.name}`, events));
   });
   app.get<{ Params: { token: string; pid: string } }>('/ics/:token/projekt/:pid.ics', async (req, reply) => {
     const u = await userByToken(req.params.token);

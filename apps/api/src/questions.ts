@@ -20,7 +20,7 @@ export interface QuestionRow {
   body: string; options: { key: string; label: string }[] | null; channel_id: string | null; message_id: string | null; status: QuestionStatus;
   remind_at: Date | null; escalate_at: Date | null; reminded_at: Date | null;
   answered_by: string | null; answered_at: Date | null; answer_source: string | null; answer_text: string | null; answer_option: string | null;
-  answer_message_id: string | null; answer_comment_id: string | null; cancel_reason: string | null; created_at: Date;
+  answer_message_id: string | null; answer_comment_id: string | null; cancel_reason: string | null; created_at: Date; booking_id?: string | null;
   /** Thema und Bezug (z. B. mail_inquiry: mailId, openPoints, waitHours) */
   context?: Record<string, unknown> | null;
 }
@@ -74,7 +74,7 @@ async function timing(db: Db, q: { orgId: string; projectId: string; taskId: str
 
 export interface AskInput {
   taskId: string; asker: Asker; kind: QuestionKind; body: string; to?: string | null; dueHours?: number | null;
-  meetingId?: string | null; options?: { key: string; label: string }[] | null; level?: number; parentId?: string | null; now?: Date;
+  meetingId?: string | null; /** Belegung, die bestätigt werden soll (Frage confirm) */ bookingId?: string | null; options?: { key: string; label: string }[] | null; level?: number; parentId?: string | null; now?: Date;
   /** Meldungstyp und Titel abweichend vom Standard */
   type?: string; title?: string;
   /** Thema und Bezug für Folgeschritte (z. B. Mail-Rückfrage) */
@@ -104,9 +104,9 @@ export async function askQuestion(db: Db, a: AskInput): Promise<{ question: Ques
     [channelId, a.asker.id, text.slice(0, 8000), JSON.stringify({ question: true, kind: a.kind, options: a.options ?? null, taskId: task.id, link: `/projekte/${task.project_id}/board?task=${task.id}` })]);
   await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, a.asker.id]);
   const q = await db.one<QuestionRow>(
-    `insert into questions (org_id, project_id, task_id, meeting_id, kind, asked_by, addressee_id, addressee_role, level, parent_id, body, options, channel_id, message_id, remind_at, escalate_at, context)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
-    [task.org_id, task.project_id, task.id, a.meetingId ?? null, a.kind, a.asker.id, target.userId, target.role, a.level ?? 0, a.parentId ?? null, body, a.options ? JSON.stringify(a.options) : null, channelId, msg.id, t.remindAt, t.escalateAt, a.context ? JSON.stringify(a.context) : null]);
+    `insert into questions (org_id, project_id, task_id, meeting_id, kind, asked_by, addressee_id, addressee_role, level, parent_id, body, options, channel_id, message_id, remind_at, escalate_at, context, booking_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) returning *`,
+    [task.org_id, task.project_id, task.id, a.meetingId ?? null, a.kind, a.asker.id, target.userId, target.role, a.level ?? 0, a.parentId ?? null, body, a.options ? JSON.stringify(a.options) : null, channelId, msg.id, t.remindAt, t.escalateAt, a.context ? JSON.stringify(a.context) : null, a.bookingId ?? null]);
   await db.query(`update chat_messages set meta = meta || $2::jsonb where id = $1`, [msg.id, JSON.stringify({ questionId: q.id })]);
   // Meldungen: an den Adressaten, im Projektkanal an alle Mitglieder mit Sicht auf das AP (ohne Agenten, ohne Fragenden)
   const recipients: string[] = target.userId ? [target.userId] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active and u.kind <> 'agent' and m.role <> 'reader'`, [task.project_id])).rows.map((r: any) => r.user_id);

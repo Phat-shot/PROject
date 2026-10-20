@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import type { CalendarTarget, DocPage, Meeting, MeetingAttendee } from '@projekttool/shared';
+import type { Availability, CalendarTarget, DocPage, Meeting, MeetingAttendee, Resource } from '@projekttool/shared';
+import { kindLabel } from '../../components/Resources';
 import { api, fmtDateTime, today } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
@@ -46,6 +47,7 @@ export function MeetingsView() {
       {open === m.id && (
         <div className="mt">
           {m.description && <p className="small" style={{ whiteSpace: 'pre-wrap' }}>{m.description}</p>}
+          {(m.resources?.length ?? 0) > 0 && <div className="small"><span className="muted">Ressourcen:</span> {m.resources!.map((r) => `${r.name} (${kindLabel(r.kind)})`).join(', ')}</div>}
           <div className="small"><span className="muted">Teilnehmer:</span> {m.attendees.length ? m.attendees.map((a) => <span key={a.email} className="badge" style={{ marginRight: 4 }} title={a.email}>{a.name ?? a.email}{!a.userId && ' (extern)'}</span>) : '–'}</div>
           {m.tentative && <div className="notice small mt">Vorläufig, von der KI eingetragen. Erst bestätigen, wenn der Termin geklärt ist; danach sind Einladung und Kalenderübernahme möglich. {detail.project.myMembership.role !== 'reader' && <button className="btn sm primary" disabled={busy} onClick={() => void confirm(m)}>Bestätigen</button>}</div>}
           <div className="row mt">
@@ -111,6 +113,9 @@ function ActionItems({ m, onChanged }: { m: Meeting; onChanged: () => Promise<vo
 function MeetingForm({ existing, series, onClose, onSaved }: { existing?: Meeting; series: DocPage[]; onClose: () => void; onSaved: () => Promise<void> }) {
   const { detail } = useProject();
   const contacts = useData<{ contacts: { email: string; name: string | null }[] }>(`/projects/${detail.project.id}/contacts`);
+  const resources = useData<{ resources: Resource[] }>(`/resources?projectId=${detail.project.id}`);
+  const [resourceIds, setResourceIds] = useState<string[]>(existing?.resourceIds ?? []);
+  const [avail, setAvail] = useState<Record<string, Availability['status']>>({});
   const start = existing ? toLocalInput(existing.startsAt) : (() => { const d = new Date(); d.setDate(d.getDate() + 1); d.setHours(10, 0, 0, 0); return toLocalInput(d.toISOString()); })();
   const [f, setF] = useState({ title: existing?.title ?? '', startsAt: start, durationMinutes: existing ? Math.round((new Date(existing.endsAt).getTime() - new Date(existing.startsAt).getTime()) / 60000) : 60, location: existing?.location ?? '', description: existing?.description ?? '', seriesPageId: existing?.seriesPageId ?? '' });
   const [attendees, setAttendees] = useState<MeetingAttendee[]>(existing?.attendees ?? []);
@@ -122,11 +127,20 @@ function MeetingForm({ existing, series, onClose, onSaved }: { existing?: Meetin
   const addExtra = () => { const e = extra.trim().toLowerCase(); if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e) && !has(e)) setAttendees([...attendees, { email: e }]); setExtra(''); };
   const save = () => run(async () => {
     const startsAt = new Date(f.startsAt).toISOString();
-    const body = { title: f.title, startsAt, durationMinutes: Number(f.durationMinutes) || 60, location: f.location, description: f.description, seriesPageId: f.seriesPageId || null, attendees };
+    const body = { title: f.title, startsAt, durationMinutes: Number(f.durationMinutes) || 60, location: f.location, description: f.description, seriesPageId: f.seriesPageId || null, attendees, resourceIds };
     if (existing) await api.patch(`/meetings/${existing.id}`, body); else await api.post(`/projects/${detail.project.id}/meetings`, body);
     await onSaved();
   });
   const sel = useMemo(() => new Set(attendees.map((a) => a.email.toLowerCase())), [attendees]);
+  // Ampel je Ressource für den gewählten Zeitraum (frei, vorläufig, belegt)
+  useEffect(() => {
+    const s = new Date(f.startsAt); if (isNaN(s.getTime())) return;
+    const e = new Date(s.getTime() + (Number(f.durationMinutes) || 60) * 60000);
+    let alive = true;
+    Promise.all((resources.data?.resources ?? []).filter((r) => r.active).map((r) => api.get<Availability>(`/availability?resourceId=${r.id}&startsAt=${s.toISOString()}&endsAt=${e.toISOString()}${existing ? `&excludeMeetingId=${existing.id}` : ''}`).then((a) => [r.id, a.status] as const).catch(() => [r.id, 'free'] as const)))
+      .then((xs) => { if (alive) setAvail(Object.fromEntries(xs)); });
+    return () => { alive = false; };
+  }, [f.startsAt, f.durationMinutes, resources.data, existing]);
   return (
     <Modal title={existing ? 'Besprechung bearbeiten' : 'Besprechung anlegen'} onClose={onClose}>
       <div className="form cols-2">
@@ -136,6 +150,9 @@ function MeetingForm({ existing, series, onClose, onSaved }: { existing?: Meetin
         <label className="field"><span>Ort / Link</span><input type="text" value={f.location} onChange={(e) => set('location', e.target.value)} placeholder="Raum, Teams-Link …" /></label>
         <label className="field"><span>Besprechungsreihe (Protokoll-Vorlage und Ablage)</span><select value={f.seriesPageId} onChange={(e) => set('seriesPageId', e.target.value)}><option value="">keine (Ordner „Protokolle“)</option>{series.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
         <label className="field full"><span>Agenda / Beschreibung</span><textarea rows={3} value={f.description} onChange={(e) => set('description', e.target.value)} /></label>
+        {(resources.data?.resources ?? []).some((r) => r.active) && <div className="field full"><span>Ressourcen <span className="muted">(Raum wird Ort, externe Personen werden Teilnehmer; Ampel: frei · vorläufig · belegt)</span></span>
+          <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>{(resources.data?.resources ?? []).filter((r) => r.active).map((r) => <button key={r.id} type="button" className={`chip ${resourceIds.includes(r.id) ? 'on' : ''}`} title={`${kindLabel(r.kind)}${r.projectId ? '' : ' (Pool)'}${r.location ? ` · ${r.location}` : ''}`} onClick={() => setResourceIds(resourceIds.includes(r.id) ? resourceIds.filter((x) => x !== r.id) : [...resourceIds, r.id])}><span className={`dot ${avail[r.id] ?? 'free'}`} /> {r.name}</button>)}</div>
+        </div>}
         <div className="field full"><span>Teilnehmer</span>
           <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>{detail.members.map((m) => <button key={m.userId} type="button" className={`chip ${sel.has(m.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ userId: m.userId, email: m.email, name: m.name })}>{m.name}</button>)}</div>
           {(contacts.data?.contacts.length ?? 0) > 0 && <div className="row mt" style={{ flexWrap: 'wrap', gap: 4 }}><span className="muted small">Kontakte:</span>{contacts.data!.contacts.map((c) => <button key={c.email} type="button" className={`chip ${sel.has(c.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ email: c.email, name: c.name })}>{c.name ?? c.email}</button>)}</div>}

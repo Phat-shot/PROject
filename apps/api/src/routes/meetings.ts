@@ -16,25 +16,29 @@ import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent } from '.
 import type { CalendarTarget } from '@projekttool/shared';
 import { projectAccount } from '../mail/accounts.js';
 import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
+import { confirmMeetingBookings, syncMeetingBookings, type Actor as BookingActor } from '../resources/service.js';
 
 const fmtDe = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
 const icsEsc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
 
 /** ICS-Einladung (METHOD:REQUEST) zu einer Besprechung; Organisator = Projektkonto oder Ersteller. */
-export function meetingIcs(m: { id: string; title: string; starts_at: Date | string; ends_at: Date | string; location: string | null; description: string | null; attendees: MeetingAttendee[]; project_id: string; tentative?: boolean }, organizer: { email: string; name: string }, sequence = 0): string {
+export function meetingIcs(m: { id: string; title: string; starts_at: Date | string; ends_at: Date | string; location: string | null; description: string | null; attendees: MeetingAttendee[]; project_id: string; tentative?: boolean }, organizer: { email: string; name: string }, sequence = 0, rooms: { name: string; email: string | null; kind?: string }[] = []): string {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PROject//Besprechung//DE', 'CALSCALE:GREGORIAN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
     `UID:meeting-${m.id}@project`, `DTSTAMP:${icsStamp(new Date())}`, `SEQUENCE:${sequence}`, `DTSTART:${icsStamp(new Date(m.starts_at))}`, `DTEND:${icsStamp(new Date(m.ends_at))}`,
     `SUMMARY:${icsEsc(m.title)}`, `ORGANIZER;CN=${icsEsc(organizer.name)}:mailto:${organizer.email}`, ...(m.tentative ? ['STATUS:TENTATIVE'] : [])];
   if (m.location) lines.push(`LOCATION:${icsEsc(m.location)}`);
   lines.push(`DESCRIPTION:${icsEsc(`${m.description ?? ''}\n${publicBase()}/projekte/${m.project_id}/besprechungen`.trim())}`);
   for (const a of m.attendees) lines.push(`ATTENDEE;ROLE=REQ-PARTICIPANT;RSVP=TRUE${a.name ? `;CN=${icsEsc(a.name)}` : ''}:mailto:${a.email}`);
+  // Räume und Geräte als Ressourcen-Teilnehmer (CUTYPE ROOM bzw. RESOURCE), Raumpostfach falls vorhanden
+  for (const r of rooms) lines.push(`ATTENDEE;CUTYPE=${r.kind === 'room' ? 'ROOM' : 'RESOURCE'};ROLE=NON-PARTICIPANT;CN=${icsEsc(r.name)}:mailto:${r.email ?? `resource-${icsEsc(r.name).replace(/[^A-Za-z0-9]/g, '')}@project.invalid`}`);
   lines.push('END:VEVENT', 'END:VCALENDAR');
   return lines.join('\r\n') + '\r\n';
 }
 
 function mapMeeting(r: any): Meeting {
-  return { id: r.id, projectId: r.project_id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), location: r.location, description: r.description, seriesPageId: r.series_page_id, seriesPageTitle: r.series_title ?? null, pageId: r.page_id, pageTitle: r.page_title ?? null, attendees: r.attendees ?? [], inviteSentAt: r.invite_sent_at, createdBy: r.created_by, tasks: r.tasks ?? [], createdAt: r.created_at, tentative: Boolean(r.tentative), confirmedAt: r.confirmed_at ?? null };
+  const res = Array.isArray(r.resources) ? r.resources : [];
+  return { id: r.id, projectId: r.project_id, title: r.title, startsAt: new Date(r.starts_at).toISOString(), endsAt: new Date(r.ends_at).toISOString(), location: r.location, description: r.description, seriesPageId: r.series_page_id, seriesPageTitle: r.series_title ?? null, pageId: r.page_id, pageTitle: r.page_title ?? null, attendees: r.attendees ?? [], resourceIds: res.map((x: any) => x.id), resources: res, inviteSentAt: r.invite_sent_at, createdBy: r.created_by, tasks: r.tasks ?? [], createdAt: r.created_at, tentative: Boolean(r.tentative), confirmedAt: r.confirmed_at ?? null };
 }
 
 /**
@@ -45,7 +49,8 @@ export async function meetingRoutes(app: FastifyInstance) {
   const db = app.db;
   // Aktionspunkte nur aus Teilprojekten, die die Person sieht; userParam = Platzhalternummer der Benutzer-ID
   const SELECT = (userParam: number) => `select m.*, sp.title as series_title, pg.title as page_title,
-      coalesce((select json_agg(json_build_object('id', t.id, 'title', t.title, 'number', t.number, 'done', c.is_done) order by t.created_at) from meeting_tasks mt join tasks t on t.id = mt.task_id join board_columns c on c.id = t.column_id where mt.meeting_id = m.id and t.deleted_at is null and ${visibleSubprojectSql(userParam)}), '[]'::json) as tasks
+      coalesce((select json_agg(json_build_object('id', t.id, 'title', t.title, 'number', t.number, 'done', c.is_done) order by t.created_at) from meeting_tasks mt join tasks t on t.id = mt.task_id join board_columns c on c.id = t.column_id where mt.meeting_id = m.id and t.deleted_at is null and ${visibleSubprojectSql(userParam)}), '[]'::json) as tasks,
+      coalesce((select json_agg(json_build_object('id', r.id, 'name', r.name, 'kind', r.kind) order by r.name) from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = m.id), '[]'::json) as resources
       from meetings m left join doc_pages sp on sp.id = m.series_page_id left join doc_pages pg on pg.id = m.page_id`;
   const load = async (id: string, user: User) => db.maybeOne(`${SELECT(2)} where m.id = $1`, [id, user.id]);
   const parseAttendees = async (projectId: string, raw: any): Promise<MeetingAttendee[]> => {
@@ -62,6 +67,13 @@ export async function meetingRoutes(app: FastifyInstance) {
       out.push({ userId: null, email, name: a?.name?.trim() || c?.name || null });
     }
     return out.filter((a, i, xs) => xs.findIndex((x) => x.email === a.email) === i);
+  };
+  const bookingActor = (user: User): BookingActor => ({ id: user.id, name: user.name, orgId: user.orgId, kind: user.kind === 'agent' ? 'agent' : 'person', globalRole: user.globalRole, orgRights: user.orgRights ?? [] });
+  /** Ressourcen der Besprechung (Konzept 10.4): ein Raum ohne location wird zur location; Person-Ressourcen mit Mailadresse werden Teilnehmer. */
+  const resourceInfo = async (projectId: string, orgId: string, ids: unknown): Promise<{ ids: string[]; room: string | null; persons: MeetingAttendee[] }> => {
+    if (!Array.isArray(ids)) return { ids: [], room: null, persons: [] };
+    const rows = await db.query(`select id, name, kind, email from resources where org_id = $1 and active and (project_id is null or project_id = $2) and id = any($3::uuid[])`, [orgId, projectId, ids.map(String)]);
+    return { ids: rows.rows.map((r: any) => r.id), room: rows.rows.find((r: any) => r.kind === 'room')?.name ?? null, persons: rows.rows.filter((r: any) => r.kind === 'person' && r.email).map((r: any) => ({ userId: null, email: String(r.email).toLowerCase(), name: r.name })) };
   };
   const times = (b: any, cur?: any) => {
     const starts = b.startsAt ? new Date(b.startsAt) : cur ? new Date(cur.starts_at) : null;
@@ -85,11 +97,13 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (!b.title?.trim()) throw badRequest('Titel erforderlich');
     const { starts, ends } = times(b);
     if (b.seriesPageId) { const sp = await db.maybeOne(`select 1 from doc_pages where id = $1 and project_id = $2`, [b.seriesPageId, req.params.id]); if (!sp) throw badRequest('Besprechungsreihe gehört nicht zum Projekt'); }
-    const attendees = await parseAttendees(req.params.id, b.attendees);
+    const ri = await resourceInfo(req.params.id, user.orgId, b.resourceIds);
+    const attendees = (await parseAttendees(req.params.id, b.attendees)).concat(ri.persons).filter((a, i, xs) => xs.findIndex((x) => x.email === a.email) === i);
     const r = await db.one(`insert into meetings (project_id, title, starts_at, ends_at, location, description, series_page_id, attendees, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,
-      [req.params.id, b.title.trim(), starts, ends, b.location?.trim() || null, b.description?.trim() || null, b.seriesPageId ?? null, JSON.stringify(attendees), user.id]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'meeting.create', objectType: 'meeting', objectId: r.id, details: { title: b.title, startsAt: starts.toISOString() } });
-    return { meeting: mapMeeting(await load(r.id, user)) };
+      [req.params.id, b.title.trim(), starts, ends, b.location?.trim() || ri.room, b.description?.trim() || null, b.seriesPageId ?? null, JSON.stringify(attendees), user.id]);
+    const sync = await syncMeetingBookings(db, bookingActor(user), r.id, ri.ids);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'meeting.create', objectType: 'meeting', objectId: r.id, details: { title: b.title, startsAt: starts.toISOString(), resources: ri.ids.length } });
+    return { meeting: mapMeeting(await load(r.id, user)), bookingConflicts: sync.conflicts };
   });
 
   app.patch<{ Params: { id: string }; Body: any }>('/meetings/:id', async (req) => {
@@ -100,11 +114,14 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (cur.created_by !== user.id && m.role !== 'pl') throw forbidden('Nur Ersteller oder PL ändern die Besprechung');
     const b: any = req.body ?? {};
     const { starts, ends } = times(b, cur);
-    const attendees = b.attendees !== undefined ? await parseAttendees(cur.project_id, b.attendees) : (cur.attendees ?? []);
+    const ri = b.resourceIds !== undefined ? await resourceInfo(cur.project_id, user.orgId, b.resourceIds) : null;
+    let attendees: MeetingAttendee[] = b.attendees !== undefined ? await parseAttendees(cur.project_id, b.attendees) : (cur.attendees ?? []);
+    if (ri) attendees = attendees.concat(ri.persons).filter((a, i, xs) => xs.findIndex((x) => x.email === a.email) === i);
     await db.query(`update meetings set title = coalesce($2, title), starts_at = $3, ends_at = $4, location = coalesce($5, location), description = coalesce($6, description), series_page_id = case when $7::text = 'null' then null else coalesce($7::uuid, series_page_id) end, attendees = $8, updated_at = now() where id = $1`,
-      [cur.id, b.title?.trim() || null, starts, ends, b.location ?? null, b.description ?? null, b.seriesPageId === null ? 'null' : b.seriesPageId ?? null, JSON.stringify(attendees)]);
+      [cur.id, b.title?.trim() || null, starts, ends, (b.location ?? null) || (ri && !cur.location ? ri.room : null), b.description ?? null, b.seriesPageId === null ? 'null' : b.seriesPageId ?? null, JSON.stringify(attendees)]);
+    const sync = await syncMeetingBookings(db, bookingActor(user), cur.id, ri ? ri.ids : null);
     await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.update', objectType: 'meeting', objectId: cur.id, details: Object.fromEntries(Object.entries(b).filter(([k]) => k !== 'attendees')) });
-    return { meeting: mapMeeting(await load(cur.id, user)) };
+    return { meeting: mapMeeting(await load(cur.id, user)), bookingConflicts: sync.conflicts };
   });
 
   app.delete<{ Params: { id: string } }>('/meetings/:id', async (req) => {
@@ -184,6 +201,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (user.kind === 'agent') throw forbidden('Termine bestätigt eine Person');
     if (cur.tentative) {
       await db.query(`update meetings set tentative = false, confirmed_by = $2, confirmed_at = now(), updated_at = now() where id = $1`, [cur.id, user.id]);
+      await confirmMeetingBookings(db, bookingActor(user), cur.id);
       const when = new Date(cur.starts_at).toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
       // Offene Bestätigungsfragen zu diesem Termin sind damit beantwortet (Meldungen erledigt, Thread geschlossen, Agent läuft)
       for (const q of (await db.query<QuestionRow>(`select * from questions where meeting_id = $1 and status = 'open' and kind = 'confirm'`, [cur.id])).rows) await answerQuestion(db, q, { source: 'meeting', userId: user.id, text: `Termin „${cur.title}“ ${when} bestätigt`, option: 'confirm' });
@@ -210,7 +228,8 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (!account) throw badRequest('Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekteinstellungen › Mail).');
     const project = await db.one(`select key, name from projects where id = $1`, [cur.project_id]);
     const seq = Number((cur.external ?? {}).sequence ?? 0);
-    const ics = meetingIcs(cur, { email: account.address, name: `${project.key} ${project.name}` }, seq);
+    const rooms = await db.query(`select r.name, r.email, r.kind from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = $1 and r.kind <> 'person' order by r.name`, [cur.id]);
+    const ics = meetingIcs(cur, { email: account.address, name: `${project.key} ${project.name}` }, seq, rooms.rows);
     const starts = new Date(cur.starts_at);
     const text = `${req.body?.text?.trim() ? req.body.text.trim() + '\n\n' : ''}Einladung: ${cur.title}\nTermin: ${fmtDe(starts)} – ${new Date(cur.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}${cur.location ? `\nOrt: ${cur.location}` : ''}${cur.description ? `\n\n${cur.description}` : ''}\n\nProjekt ${project.key} ${project.name}. Der Termin liegt als Kalendereintrag bei.`;
     const r = await app.mail.sendFromAccount(account, { to: attendees.map((a) => a.email), subject: `Einladung: ${cur.title} · ${fmtDe(starts)}`, text, userId: user.id, projectId: cur.project_id, attachments: [{ filename: 'einladung.ics', content: Buffer.from(ics, 'utf8'), contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });

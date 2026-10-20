@@ -15,11 +15,13 @@ export function ContactsCard() {
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   const [f, setF] = useState({ email: '', name: '', role: '', organization: '' });
+  const [msg, setMsg] = useState<string | null>(null);
   const save = (c: ProjectContact, body: Partial<ProjectContact>) => run(async () => { await api.patch(`/projects/${pid}/contacts/${c.id}`, body); await d.reload(); });
   return (
     <div>
       <p className="muted small">Kontakte sind externe Personen ohne Login (Kunde, Lieferant, Dienstleister). Mit Name und Mail angelegt, lassen sie sich wie Mitglieder als zuständig für Arbeitspakete und Tasks wählen; Nachfragen und Berichte gehen per Mail an sie. Adressen, die direkt an Arbeitspaketen eingetragen werden, landen hier automatisch.</p>
       {error && <div className="error mb">{error}</div>}
+      {msg && <div className="muted small mb">{msg}</div>}
       <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Organisation</th><th>Telefon</th><th /></tr></thead><tbody>
         {d.data?.contacts.map((c) => (
           <tr key={c.id} className="inline-row">
@@ -28,7 +30,7 @@ export function ContactsCard() {
             <td><InlineText value={c.role ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { role: v })} /></td>
             <td><InlineText value={c.organization ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { organization: v })} /></td>
             <td><InlineText value={c.phone ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { phone: v })} /></td>
-            <td>{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })}>✕</button>}</td>
+            <td className="nowrap">{canEdit && <button className="btn sm link" title="Als buchbare Person (Ressource vom Typ Person) im Projekt führen, z. B. für Einsatztage" onClick={() => void run(async () => { await api.post('/resources', { kind: 'person', name: c.name ?? c.email, email: c.email, organization: c.organization ?? null, trade: c.role ?? null, projectId: pid }); setMsg(`${c.name ?? c.email} ist jetzt buchbar (Einstellungen › Ressourcen).`); })}>buchbar</button>}{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })}>✕</button>}</td>
           </tr>
         ))}
         {d.data && d.data.contacts.length === 0 && <tr><td colSpan={6} className="muted small">Noch keine Kontakte.</td></tr>}

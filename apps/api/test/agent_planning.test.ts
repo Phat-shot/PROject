@@ -214,7 +214,7 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   const prompt = String(calls.slice(before).find((x) => x.response_format).messages[1].content);
   assert.match(prompt, /Ansprechpartner für Rückfragen und Terminzusagen: Petra Lenz <pl@demo.local> \(Projektleitung\)/);
-  assert.match(prompt, /Belegt \(weitere Termine von Petra Lenz, ohne Details\): /);
+  assert.match(prompt, /Belegt \(Petra Lenz: Termine, Belegungen, Abwesenheiten, ohne Details\): /);
   assert.ok(!prompt.includes('Lenkungskreis geheim'), 'keine fremden Titel');
   await t.db.query(`update project_members set agent_can_mail = true where project_id = $1 and user_id = $2`, [web(), morton.id]);
   // Der erste Kontakt (Adresse ohne Bezug zum AP) bleibt ein Entwurf, bis die PL ihn sendet; danach hat die Adresse Bezug (Mail am AP)

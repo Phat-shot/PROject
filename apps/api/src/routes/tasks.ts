@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { syncTaskBookings } from '../resources/service.js';
 import type { TaskPriority } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
@@ -308,6 +309,7 @@ export async function taskRoutes(app: FastifyInstance) {
         'responsibleEmail' in b, b.responsibleEmail?.trim() || null, b.position ?? null]
     );
     if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
+    if (planChange) await syncTaskBookings(db, { id: user.id, name: user.name, orgId: user.orgId, kind: 'person' }, existing.id);
     // Zuständigkeit wechselt vom fragenden Agenten weg: seine offenen Fragen am AP erledigen sich
     if ('responsibleUserId' in b && existing.responsible_user_id && b.responsibleUserId !== existing.responsible_user_id && (await db.maybeOne(`select 1 from users where id = $1 and kind = 'agent'`, [existing.responsible_user_id]))) await cancelQuestions(db, { taskId: existing.id, askedBy: existing.responsible_user_id }, 'Zuständigkeit gewechselt', user.id);
     if ('subprojectId' in b) await db.query(`update tasks set subproject_id = $2 where parent_id = $1`, [req.params.id, b.subprojectId ?? null]);
@@ -419,6 +421,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (req.body?.apply) {
       for (const c of changes) {
         await db.query(`update tasks set start_date = $2, due_date = $3, updated_at = now() where id = $1`, [c.id, c.from ? c.to : null, c.dueTo]);
+        await syncTaskBookings(db, { id: user.id, name: user.name, orgId: user.orgId, kind: 'person' }, c.id);
       }
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'plan.shift', objectType: 'task', objectId: existing.id, details: { changes } });
       // Betroffene informieren (Zuständige der verschobenen Arbeitspakete)

@@ -44,7 +44,8 @@ async function relatedAddresses(db: Db, taskId: string): Promise<Set<string>> {
      union select responsible_email from checklist_items where task_id in (select id from fam) and responsible_email is not null
      union select m.from_addr from mail_task_links l join mails m on m.id = l.mail_id where l.task_id in (select id from fam)
      union select x from mail_task_links l join mails m on m.id = l.mail_id, jsonb_array_elements_text(m.to_json || m.cc_json) x where l.task_id in (select id from fam)
-     union select a->>'email' from meeting_tasks mt join meetings mm on mm.id = mt.meeting_id, jsonb_array_elements(mm.attendees) a where mt.task_id in (select id from fam)`,
+     union select a->>'email' from meeting_tasks mt join meetings mm on mm.id = mt.meeting_id, jsonb_array_elements(mm.attendees) a where mt.task_id in (select id from fam)
+     union select r.email from resource_bookings b join resources r on r.id = b.resource_id where b.task_id in (select id from fam) and r.kind = 'person' and r.email is not null`,
     [taskId]);
   return new Set(r.rows.map((x: any) => normAddr(x.e)).filter(Boolean));
 }

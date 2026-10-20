@@ -6,6 +6,7 @@ import { TopBar } from '../components/Layout';
 import { useAsync } from '../components/ui';
 import { useData } from '../lib/useData';
 import { MyNotifyCard } from '../components/NotifyRules';
+import { AbsencesCard } from '../components/Resources';
 import QRCode from 'qrcode';
 import { useEffect } from 'react';
 
@@ -50,6 +51,7 @@ export function UserSettingsPage() {
           </div>
           <TotpCard />
           <MyNotifyCard />
+          <AbsencesCard />
           <IcsCard />
           <CaldavCard />
           <div className="card">

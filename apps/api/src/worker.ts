@@ -15,6 +15,7 @@ import { runQuestions } from './questions.js';
 import { expireProposals } from './ai/agentApproval.js';
 import { runScheduledMails } from './ai/scheduledMail.js';
 import { runProjectReviews } from './ai/knowledge.js';
+import { runUnconfirmedBookings } from './resources/service.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig; Empfänger nach Regel N, Standard die zuständige Person) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -83,6 +84,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
         await runEscalations(db, today);
         await runReminders(db, mail, today);
         await runReports(db, mail, today);
+        await runUnconfirmedBookings(db);
         lastDaily = today;
       }
     } catch (e) {

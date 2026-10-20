@@ -1,10 +1,10 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { today } from '../lib/api';
 import { useIsMobile } from '../lib/useMedia';
 
 export interface CalItem {
   id: string;
-  kind: 'task' | 'ms' | 'meeting';
+  kind: 'task' | 'ms' | 'meeting' | 'booking';
   /** Uhrzeit (nur Besprechungen) */
   time?: string;
   title: string;
@@ -17,7 +17,7 @@ export interface CalItem {
   onOpen?: () => void;
 }
 
-type Mode = 'month' | 'week' | 'agenda';
+type Mode = 'month' | 'week' | 'agenda' | 'occupancy';
 const MODES: [Mode, string][] = [['month', 'Monat'], ['week', 'Woche'], ['agenda', 'Agenda']];
 const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x; };
@@ -27,9 +27,9 @@ const monday = (d: Date) => addDays(new Date(d.getFullYear(), d.getMonth(), d.ge
  * Kalender mit Monat, Woche und Agenda. Deadlines und Meilensteine stehen am Tag, Arbeitspakete mit Start
  * erscheinen am Starttag (▶) und in der Wochenansicht an jedem laufenden Tag; Besprechungen mit Uhrzeit. Auf dem Telefon startet die Agenda.
  */
-export function Calendar({ items, hint }: { items: CalItem[]; hint?: string }) {
+export function Calendar({ items, hint, occupancy, initialMode }: { items: CalItem[]; hint?: string; /** Modus „Belegung“ (Konzept 10): Ressourcen und Personen je Tag */ occupancy?: ReactNode; initialMode?: 'occupancy' | null }) {
   const mobile = useIsMobile();
-  const [mode, setMode] = useState<Mode>(() => { try { return (localStorage.getItem('pt_cal_mode') as Mode) || (mobile ? 'agenda' : 'month'); } catch { return mobile ? 'agenda' : 'month'; } });
+  const [mode, setMode] = useState<Mode>(() => { if (initialMode === 'occupancy' && occupancy) return 'occupancy'; try { const m = (localStorage.getItem('pt_cal_mode') as Mode) || (mobile ? 'agenda' : 'month'); return m === 'occupancy' && !occupancy ? 'month' : m; } catch { return mobile ? 'agenda' : 'month'; } });
   const setModeKeep = (m: Mode) => { setMode(m); try { localStorage.setItem('pt_cal_mode', m); } catch { /* ignore */ } };
   const [cursor, setCursor] = useState(() => { const d = new Date(); return new Date(d.getFullYear(), d.getMonth(), d.getDate()); });
   const t = today();
@@ -56,7 +56,7 @@ export function Calendar({ items, hint }: { items: CalItem[]; hint?: string }) {
   const Ev = ({ item, role }: { item: CalItem; role: 'due' | 'start' | 'running' }) => (
     <span className={`ev ${item.kind} ${role} ${item.done ? 'done' : ''} ${!item.done && item.kind === 'task' && item.date < t && role === 'due' ? 'overdue' : ''}`}
       title={`${item.title}${item.start ? ` · ${item.start.split('-').reverse().join('.')} – ${item.date.split('-').reverse().join('.')}` : ''}`} onClick={item.onOpen}>
-      {role === 'start' ? '▶ ' : role === 'running' ? '· ' : item.kind === 'ms' ? '◆ ' : item.kind === 'meeting' ? `${item.time ?? ''} ` : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
+      {role === 'start' ? '▶ ' : role === 'running' ? '· ' : item.kind === 'ms' ? '◆ ' : item.kind === 'meeting' ? `${item.time ?? ''} ` : item.kind === 'booking' ? `▭ ${item.time ?? ''}` : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
     </span>
   );
 
@@ -68,9 +68,10 @@ export function Calendar({ items, hint }: { items: CalItem[]; hint?: string }) {
         <strong style={{ minWidth: 160, textAlign: 'center' }}>{range.label}</strong>
         <button className="btn sm" onClick={() => step(1)}>›</button>
         <button className="btn sm" onClick={() => { const d = new Date(); setCursor(new Date(d.getFullYear(), d.getMonth(), d.getDate())); }}>Heute</button>
-        <span className="row" style={{ gap: 2 }}>{MODES.map(([m, l]) => <button key={m} className={`chip ${mode === m ? 'on' : ''}`} onClick={() => setModeKeep(m)}>{l}</button>)}</span>
+        <span className="row" style={{ gap: 2 }}>{[...MODES, ...(occupancy ? [['occupancy', 'Belegung'] as [Mode, string]] : [])].map(([m, l]) => <button key={m} className={`chip ${mode === m ? 'on' : ''}`} onClick={() => setModeKeep(m)}>{l}</button>)}</span>
         {hint && <span className="muted small">{hint}</span>}
       </div>
+      {mode === 'occupancy' && occupancy}
       {mode === 'agenda' && (
         <div className="cal-agenda">
           {agendaDays.length === 0 && <div className="empty">Keine Termine in diesem Monat.</div>}

@@ -71,9 +71,10 @@ export async function afterAssign(db: Db, actor: PlanActor, projectId: string, t
 }
 
 /** Termin im Projektkalender (Besprechung ohne Einladung), vorläufig bis eine Person ihn bestätigt (confirmedBy: Person hat den Vorschlag angenommen); optional mit dem Arbeitspaket verknüpft. */
-export async function createPlannedEvent(db: Db, actor: PlanActor, p: { projectId: string; title: string; startsAt: Date; endsAt: Date; location?: string | null; description?: string | null; taskId?: string | null; confirmedBy?: string | null }): Promise<{ id: string }> {
-  const r = await db.one(`insert into meetings (project_id, title, starts_at, ends_at, location, description, attendees, created_by, tentative, confirmed_by, confirmed_at) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8::uuid is null,$8,case when $8::uuid is null then null else now() end) returning id`,
-    [p.projectId, p.title.trim().slice(0, 200), p.startsAt, p.endsAt, p.location?.trim().slice(0, 200) || null, p.description?.trim().slice(0, 4000) || null, actor.id, p.confirmedBy ?? null]);
+export async function createPlannedEvent(db: Db, actor: PlanActor, p: { projectId: string; title: string; startsAt: Date; endsAt: Date; location?: string | null; description?: string | null; taskId?: string | null; confirmedBy?: string | null; /** Teilnehmer (Ansprechpartner, genannte Adressen), damit der Termin als belegt zählt */ attendees?: { userId?: string | null; email: string; name?: string | null }[] }): Promise<{ id: string }> {
+  const attendees = (p.attendees ?? []).filter((a, i, xs) => a.email && xs.findIndex((x) => x.email.toLowerCase() === a.email.toLowerCase()) === i);
+  const r = await db.one(`insert into meetings (project_id, title, starts_at, ends_at, location, description, attendees, created_by, tentative, confirmed_by, confirmed_at) values ($1,$2,$3,$4,$5,$6,$9,$7,$8::uuid is null,$8,case when $8::uuid is null then null else now() end) returning id`,
+    [p.projectId, p.title.trim().slice(0, 200), p.startsAt, p.endsAt, p.location?.trim().slice(0, 200) || null, p.description?.trim().slice(0, 4000) || null, actor.id, p.confirmedBy ?? null, JSON.stringify(attendees)]);
   if (p.taskId) await db.query(`insert into meeting_tasks (meeting_id, task_id) values ($1,$2) on conflict do nothing`, [r.id, p.taskId]);
   await audit(db, { orgId: actor.orgId, projectId: p.projectId, userId: actor.id, action: 'meeting.create', objectType: 'meeting', objectId: r.id, details: { title: p.title, startsAt: p.startsAt.toISOString(), by: actor.label } });
   return r;

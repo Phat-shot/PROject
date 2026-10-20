@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Task, TaskComment, TaskRelation } from '@projekttool/shared';
+import type { Resource, ResourceBooking, Task, TaskComment, TaskRelation } from '@projekttool/shared';
+import { BookingForm, BookingRow } from '../../components/Resources';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { QuickMail } from '../../components/QuickMail';
@@ -202,6 +203,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
       <WebSourcesBlock taskId={t.id} />
       <RelationsBlock taskId={t.id} canDecide={canEdit} />
+      <ResourcesBlock task={t} canEdit={canEdit} canForce={isPlHere || Boolean(me.canEditPlan)} />
 
       <ReportWish taskId={t.id} />
 
@@ -452,6 +454,21 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
  * als erledigt schließen (PL). Beantwortete und erledigte der letzten Zeit stehen eingeklappt darunter.
  */
 /** Quellen der Online-Recherche des Agenten (Konzept 8). */
+/** Ressourcen am Arbeitspaket (Konzept 10): Belegungen (Gerüst, Raum, externe Person, Mitglied), buchen, bestätigen, löschen. */
+function ResourcesBlock({ task, canEdit, canForce }: { task: Task; canEdit: boolean; canForce: boolean }) {
+  const { detail } = useProject();
+  const d = useData<{ bookings: ResourceBooking[] }>(`/bookings?taskId=${task.id}`, [task.id]);
+  const resources = useData<{ resources: Resource[] }>(canEdit ? `/resources?projectId=${detail.project.id}` : null, [detail.project.id]);
+  const [book, setBook] = useState(false);
+  const list = d.data?.bookings ?? [];
+  if (!list.length && !canEdit) return null;
+  return <>
+    <h3 className="mt">Ressourcen {list.length > 0 && <span className="badge">{list.length}</span>}{canEdit && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => setBook(true)}>Buchen</button>}</h3>
+    {list.length > 0 && <ul className="small">{list.map((b) => <BookingRow key={b.id} b={b} canDecide={canEdit} canDelete={canEdit && (b.createdBy === detail.project.myMembership.userId || canForce)} onChanged={() => d.reload()} />)}</ul>}
+    {book && <BookingForm projectId={detail.project.id} taskId={task.id} taskDates={{ startDate: task.startDate ?? null, dueDate: task.dueDate ?? null }} resources={resources.data?.resources ?? []} persons={detail.members.filter((m) => m.kind !== 'agent').map((m) => ({ id: m.userId, name: m.name }))} canForce={canForce} onClose={() => setBook(false)} onSaved={async () => { setBook(false); await d.reload(); }} />}
+  </>;
+}
+
 /** Verwandte Arbeitspakete (Konzept 6.7): vom Agenten oder Projektagenten gemeldete Zusammenhänge; entscheiden dürfen PL und Zuständige. */
 function RelationsBlock({ taskId, canDecide }: { taskId: string; canDecide: boolean }) {
   const d = useData<{ relations: TaskRelation[] }>(`/tasks/${taskId}/relations`, [taskId]);

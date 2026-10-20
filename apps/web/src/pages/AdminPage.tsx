@@ -10,6 +10,7 @@ import { Modal, useAsync, useDialog } from '../components/ui';
 import { invalidateAi, useAiStatus } from '../lib/useAi';
 import { useAuth } from '../lib/auth';
 import { OrgNotifyCard } from '../components/NotifyRules';
+import { ResourcesTable } from '../components/Resources';
 import { AgentPolicyEditor } from '../components/AgentPolicy';
 
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
@@ -24,15 +25,17 @@ export function AdminPage() {
   const isAdmin = user?.globalRole === 'org_admin';
   const aiAdmin = isAdmin || Boolean(user?.orgRights?.includes('ai_admin'));
   const groupsAdmin = isAdmin || Boolean(user?.orgRights?.includes('groups_admin'));
+  const resourcesAdmin = isAdmin || Boolean(user?.orgRights?.includes('resources_admin'));
   const users = useData<{ users: User[] }>(isAdmin ? '/users?all=1' : '/users');
   const [create, setCreate] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const { error, run, busy } = useAsync();
   if (!isAdmin) return (
     <>
-      <TopBar title={aiAdmin && !groupsAdmin && !user?.managesGroups ? 'Verwaltung › KI' : 'Verwaltung'} />
+      <TopBar title={aiAdmin && !groupsAdmin && !user?.managesGroups && !resourcesAdmin ? 'Verwaltung › KI' : 'Verwaltung'} />
       <div className="content">
         {(groupsAdmin || user?.managesGroups) && <GroupsCard users={users.data?.users ?? []} canAdmin={groupsAdmin} />}
+        {resourcesAdmin && <PoolResourcesCard />}
         {aiAdmin && <><AiPolicyCard /><AiCard /><ProjectLlmsCard /><AgentsCard /></>}
       </div>
     </>
@@ -47,6 +50,7 @@ export function AdminPage() {
         <ProjectLeadsCard users={users.data?.users ?? []} />
         <PdfStyleCard />
         <OrgNotifyCard />
+        <PoolResourcesCard />
         <AiPolicyCard />
         <AiCard />
         <ProjectLlmsCard />
@@ -67,6 +71,18 @@ export function AdminPage() {
       </div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await users.reload(); }} />}
     </>
+  );
+}
+
+/** Ressourcen-Pool des Mandanten (Konzept 10): Räume, Geräte, Fahrzeuge, externe Personen; Freigabegruppe je Ressource, Sperrzeiten. */
+function PoolResourcesCard() {
+  const groups = useData<{ groups: Group[] }>('/groups');
+  return (
+    <div className="card">
+      <h2>Ressourcen-Pool</h2>
+      <p className="muted small">Für alle Projekte buchbar. Mit Freigabegruppe bleiben Buchungen von Nicht-Mitgliedern der Gruppe vorläufig, bis die Gruppe bestätigt. Löschen geht nur ohne künftige Belegungen, sonst deaktivieren. Kalender › Belegung zeigt die Auslastung.</p>
+      <ResourcesTable projectId={null} canEdit canDelete groups={groups.data?.groups ?? []} />
+    </div>
   );
 }
 
