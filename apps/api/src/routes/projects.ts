@@ -17,6 +17,8 @@ import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
 import { profileOf } from '../outbound.js';
 import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
+import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
+import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
@@ -39,6 +41,10 @@ export function mapProject(r: any): Project {
     visibility: r.visibility ?? 'members',
     personal: Boolean(r.personal),
     kind: r.kind === 'workflow' ? 'workflow' : 'project',
+    agentUserId: r.agent_user_id ?? null,
+    agentMail: (['off', 'triage', 'process'].includes(r.agent_mail) ? r.agent_mail : 'off') as AgentMailMode,
+    // Rohwert des Projekts; die Detailroute liefert die wirksame Einstellung mit Vererbung
+    mailInquiry: inquiryOf(r.mail_inquiry) ?? undefined,
     myRole: r.my_role ?? undefined
   };
 }
@@ -121,7 +127,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const lead = await resolveProjectLead(db, p.id);
     const labels = await db.query(`select * from labels where project_id = $1 order by position, name`, [p.id]);
     return {
-      project: { ...mapProject(p), myRole: m.role, myMembership: m },
+      project: { ...mapProject(p), mailInquiry: await effectiveMailInquiry(db, p.id), myRole: m.role, myMembership: m },
       labels: labels.rows.map(mapLabel),
       members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email, kind: r.kind === 'agent' ? 'agent' : 'person' })),
       groups: await projectGroups(p.id),
@@ -131,10 +137,17 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if ('mailInquiry' in b) {
+      // Mail-Rückfrage je Projekt; null übernimmt wieder die Vorgabe des Mandanten
+      let v: MailInquiry | null;
+      try { v = parseInquiry(b.mailInquiry ?? null); } catch (e: any) { throw badRequest(e.message); }
+      await db.query(`update projects set mail_inquiry = $2::jsonb where id = $1`, [req.params.id, JSON.stringify(v ?? {})]);
+      await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.mail_inquiry', objectType: 'project', objectId: req.params.id, details: (v ?? { inherit: true }) as Record<string, unknown> });
+    }
     if ('aiProfileId' in b) {
       if (b.aiProfileId && !(await profileAvailableInProject(db, req.params.id, b.aiProfileId))) throw badRequest('Dieses LLM ist im Projekt nicht verfügbar (Freigabe durch den Org-Admin oder eigenes LLM des Projekts)');
       // Ein eigenes LLM des Projekts neu als Projekt-KI wählen gilt wie Einbinden (Profilachse und Freigabe pl.own_llm)
@@ -193,6 +206,35 @@ export async function projectRoutes(app: FastifyInstance) {
 
   // Reporting manuell auslösen (PL): erzeugt den Bericht sofort nach den eingestellten Regeln
   // Externes Profil (Informationsgrenze): was Externe über das Projekt erfahren; Teil des Außenkontexts, Kontakte dürfen in Mails nach außen stehen
+  /**
+   * Projektagent (#52, dritte PL-Rolle): ein KI-Agent als stellvertretende Projektleitung. Mit agentMail bearbeitet er neue Mails der
+   * Projektkonten selbst (process) oder schlägt vor (triage); aus = nur Rolle. Setzt die Mitgliedschaft auf PL (Stellvertretung);
+   * der bisherige Projektagent wird wieder Mitglied. Nur die PL; der Agent muss zum Mandanten gehören (eigene Agenten nur zu diesem Projekt).
+   */
+  app.put<{ Params: { id: string }; Body: { agentUserId: string | null; agentMail?: AgentMailMode } }>('/projects/:id/agent', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    const b = req.body ?? ({} as any);
+    const mode: AgentMailMode = b.agentMail ?? 'off';
+    if (!['off', 'triage', 'process'].includes(mode)) throw badRequest('agentMail: off, triage oder process');
+    const cur = await db.one(`select agent_user_id from projects where id = $1`, [req.params.id]);
+    let agentId: string | null = null;
+    if (b.agentUserId) {
+      const a = await db.maybeOne(`select id, kind, active, agent_project_id from users where id = $1 and org_id = $2`, [b.agentUserId, user.orgId]);
+      if (!a || a.kind !== 'agent') throw badRequest('Projektagent muss ein KI-Agent des Mandanten sein');
+      if (!a.active) throw badRequest('Der Agent ist deaktiviert');
+      if (a.agent_project_id && a.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
+      agentId = a.id;
+      await db.query(
+        `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail, origin) values ($1,$2,'pl',true,true,false,false,true,true,'direct')
+         on conflict (project_id, user_id) do update set role = 'pl', is_deputy = true, can_edit_plan = true, can_use_ai = true, origin = 'direct'`, [req.params.id, agentId]);
+    }
+    if (cur.agent_user_id && cur.agent_user_id !== agentId) await db.query(`update project_members set role = 'member' where project_id = $1 and user_id = $2 and role = 'pl'`, [req.params.id, cur.agent_user_id]);
+    const p = await db.one(`update projects set agent_user_id = $2, agent_mail = $3 where id = $1 returning *`, [req.params.id, agentId, agentId ? mode : 'off']);
+    await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.agent', objectType: 'project', objectId: p.id, details: { agentUserId: agentId, agentMail: agentId ? mode : 'off' } });
+    return { project: { ...mapProject(p), mailInquiry: await effectiveMailInquiry(db, p.id) } };
+  });
+
   app.put<{ Params: { id: string }; Body: ExternalProfile }>('/projects/:id/external-profile', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
@@ -260,6 +302,11 @@ export async function projectRoutes(app: FastifyInstance) {
          returning *`,
         [req.params.id, req.params.userId, b.role, isAgent ? true : isDeputy, b.role === 'pl' || Boolean(b.canEditPlan), isAgent ? false : Boolean(b.canApprove), Boolean(b.canFinalize), canUseAi, isAgent ? b.agentCanMail !== false : true]
       );
+      // Projektagent folgt der Rolle: ein Agent als PL wird Projektagent (wenn keiner gesetzt ist), ein zurückgestufter verliert die Rolle
+      if (isAgent) {
+        if (b.role === 'pl') await db.query(`update projects set agent_user_id = $2 where id = $1 and agent_user_id is null`, [req.params.id, target.id]);
+        else await db.query(`update projects set agent_user_id = null, agent_mail = 'off' where id = $1 and agent_user_id = $2`, [req.params.id, target.id]);
+      }
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'member.set', objectType: 'membership', objectId: req.params.userId, details: { ...b, transferred } });
       return { membership: mapMembership(row), transferred };
     }
@@ -273,6 +320,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (m.role === 'pl' && !m.isDeputy) throw badRequest('Der verantwortliche PL kann nicht entfernt werden');
     if (m.origin === 'group') throw badRequest('Mitglied über eine Gruppe des Projekts: in der Gruppe oder unter „Gruppen im Projekt“ entfernen');
     await db.query(`delete from project_members where project_id = $1 and user_id = $2`, [req.params.id, req.params.userId]);
+    await db.query(`update projects set agent_user_id = null, agent_mail = 'off' where id = $1 and agent_user_id = $2`, [req.params.id, req.params.userId]);
     // Ohne Direkteintrag gelten wieder die Gruppen (auch „Gruppenrechte übernehmen“)
     await syncProjectGroups(db, { projectId: req.params.id, userId: req.params.userId });
     const viaGroup = await getMembership(db, req.params.id, req.params.userId);

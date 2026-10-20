@@ -14,6 +14,7 @@ import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
 import { checkHint } from '../outbound.js';
 import { USE_LATERAL } from '../mail/accounts.js';
+import { handleOpenPoints } from './mailInquiry.js';
 
 /**
  * Mail-KI an einer Ansicht.
@@ -22,6 +23,10 @@ import { USE_LATERAL } from '../mail/accounts.js';
  *   Ursprungsmail, Zuweisung (auch an Agenten), Termin, Antwortentwurf, Ablage der Mail.
  * triage: Ein Agent betreut die Ansicht und schlägt für neue Mails dieselben Aktionen vor; ausgeführt wird erst, wenn eine
  *   Person zustimmt, und dann mit deren Rechten.
+ * Projektagent (projects.agent_user_id, dritte PL-Rolle): Ist einer gesetzt und agent_mail nicht aus, bearbeitet er jede neue Mail
+ *   der Projektkonten selbst (process: direkt mit seinen Rechten als stellvertretende PL, Freigabe agent.mail; triage: Vorschläge).
+ *   Der Ordner „KI Bearbeiten“ und Agenten an einzelnen Ansichten bleiben für Konten ohne Projektagent bzw. persönliche Konten.
+ * Offene Punkte (openPoints) gehen an die Mail-Rückfrage (mailInquiry.ts): Frage an die PL, ins Projekt, beim Absender oder nur Log.
  * Jede Mail wird je Projekt und Art höchstens einmal bearbeitet (eindeutiger Index), Läufe zählen gegen das Tagesbudget.
  * Vor jedem Lauf gelten die KI-Freigaben (mail.process für den Auftraggeber, mail.triage für den Agenten): gesperrt heißt
  * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
@@ -31,9 +36,10 @@ export type StoredAction = MailAiAction & { status: 'done' | 'error' | 'pending'
 
 const TYPES = ['create_ap', 'create_aufgabe', 'link', 'create_event', 'reply_draft', 'move', 'none'];
 const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['summary', 'actions'],
+  type: 'object', additionalProperties: false, required: ['summary', 'openPoints', 'actions'],
   properties: {
     summary: { type: 'string', description: 'Ein Satz: was veranlasst bzw. vorgeschlagen wird' },
+    openPoints: { type: 'array', items: { type: 'string' }, description: 'Stichpunkte, was unklar ist oder fehlt, um die Mail zu bearbeiten; leer, wenn alles klar ist' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'title', 'text', 'ref', 'subproject', 'responsible', 'startDate', 'dueDate', 'items', 'startsAt', 'endsAt', 'location', 'folder', 'reason'],
       properties: {
@@ -61,14 +67,23 @@ const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).s
 /** Neue Mail in Ansichten mit Mail-KI: Läufe anlegen und starten (vom Sync aufgerufen; autoLinked = Antwort, die schon einem Arbeitspaket zugeordnet ist). */
 export async function enqueueForNewMail(db: Db, mailId: string, viewIds: string[], opts: { outgoing: boolean; autoLinked: boolean }): Promise<void> {
   if (opts.outgoing || !viewIds.length) return;
-  const views = await db.query(`select v.id, v.project_id, v.ai_process, v.ai_process_by, v.agent_user_id, p.org_id from mail_views v join projects p on p.id = v.project_id where v.id = any($1::uuid[]) and p.status = 'active' and (v.ai_process or v.agent_user_id is not null) order by v.ai_process desc`, [viewIds]);
+  const views = await db.query(
+    `select v.id, v.project_id, v.ai_process, v.ai_process_by, v.agent_user_id, p.org_id, u.use,
+       case when p.agent_user_id is not null and p.agent_mail in ('process','triage') and u.use = 'project' then p.agent_user_id end as project_agent_id, p.agent_mail
+     from mail_views v join projects p on p.id = v.project_id join mail_account_uses u on u.id = v.use_id
+     where v.id = any($1::uuid[]) and p.status = 'active'
+       and (v.ai_process or v.agent_user_id is not null or (p.agent_user_id is not null and p.agent_mail in ('process','triage') and u.use = 'project'))
+     order by (p.agent_user_id is not null and p.agent_mail in ('process','triage') and u.use = 'project') desc, v.ai_process desc`, [viewIds]);
   const done = new Set<string>();
   for (const v of views.rows) {
     if (done.has(v.project_id)) continue;
-    if (!v.ai_process && opts.autoLinked) continue;
-    const mode = v.ai_process ? 'process' : 'triage';
+    // Projektagent vor Ordner und Agent der Ansicht; er bearbeitet (process: Auftraggeber und Agent sind er selbst) oder schlägt vor
+    const mode: 'process' | 'triage' = v.project_agent_id ? v.agent_mail : v.ai_process ? 'process' : 'triage';
+    if (mode === 'triage' && opts.autoLinked) continue;
+    const actor = v.project_agent_id ? (mode === 'process' ? v.project_agent_id : null) : mode === 'process' ? v.ai_process_by : null;
+    const agent = v.project_agent_id ?? (mode === 'triage' ? v.agent_user_id : null);
     const r = await db.maybeOne(`insert into mail_ai_runs (org_id, project_id, view_id, mail_id, mode, actor_user_id, agent_user_id) values ($1,$2,$3,$4,$5,$6,$7) on conflict do nothing returning id`,
-      [v.org_id, v.project_id, v.id, mailId, mode, mode === 'process' ? v.ai_process_by : null, mode === 'triage' ? v.agent_user_id : null]);
+      [v.org_id, v.project_id, v.id, mailId, mode, actor, agent]);
     done.add(v.project_id);
     if (r) queueMailAi(r.id);
   }
@@ -90,9 +105,9 @@ async function userRow(db: Db, id: string | null): Promise<User | null> {
 export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fetch, runId: string): Promise<void> {
   const run = await db.maybeOne(`update mail_ai_runs set status = 'running', started_at = now() where id = $1 and status = 'queued' returning *`, [runId]);
   if (!run) return;
-  const finish = (status: string, patch: { summary?: string | null; actions?: StoredAction[]; error?: string | null; inputTokens?: number; outputTokens?: number } = {}) =>
-    db.query(`update mail_ai_runs set status = $2, summary = coalesce($3, summary), actions = coalesce($4::jsonb, actions), error = $5, input_tokens = input_tokens + $6, output_tokens = output_tokens + $7, finished_at = now() where id = $1`,
-      [run.id, status, patch.summary ?? null, patch.actions ? JSON.stringify(patch.actions) : null, patch.error ?? null, patch.inputTokens ?? 0, patch.outputTokens ?? 0]);
+  const finish = (status: string, patch: { summary?: string | null; actions?: StoredAction[]; error?: string | null; inputTokens?: number; outputTokens?: number; openPoints?: string[] } = {}) =>
+    db.query(`update mail_ai_runs set status = $2, summary = coalesce($3, summary), actions = coalesce($4::jsonb, actions), error = $5, input_tokens = input_tokens + $6, output_tokens = output_tokens + $7, open_points = coalesce($8::jsonb, open_points), finished_at = now() where id = $1`,
+      [run.id, status, patch.summary ?? null, patch.actions ? JSON.stringify(patch.actions) : null, patch.error ?? null, patch.inputTokens ?? 0, patch.outputTokens ?? 0, patch.openPoints ? JSON.stringify(patch.openPoints) : null]);
   const requeue = (error: string) => db.query(`update mail_ai_runs set status = 'queued', error = $2 where id = $1`, [run.id, error]);
   try {
     const project = await db.maybeOne(`select * from projects where id = $1 and status = 'active'`, [run.project_id]);
@@ -102,7 +117,15 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
 
     let header: string; let agent: any = null;
     let gate: Awaited<ReturnType<typeof aiConfigFor>>;
-    if (run.mode === 'process') {
+    // Projektagent bearbeitet selbst: Auftraggeber und Agent sind dieselbe Person (Rechte und Budget des Agenten, Freigabe agent.mail)
+    const asAgent = run.mode === 'process' && run.agent_user_id && run.agent_user_id === run.actor_user_id;
+    if (asAgent) {
+      agent = await db.maybeOne(`select u.id, u.name, u.org_id, u.persona from users u join project_members pm on pm.user_id = u.id and pm.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [run.agent_user_id, project.id]);
+      if (!agent || project.agent_user_id !== agent.id) return void (await finish('skipped', { error: 'Projektagent nicht mehr gesetzt, aktiv oder Mitglied' }));
+      gate = await aiConfigFor(db, { userId: agent.id, projectId: project.id, feature: 'agent.mail' });
+      if (!gate.cfg) return void (await (gate.decision.stage === 'budget' ? requeue(`wartet: ${gate.decision.reason}`) : finish('skipped', { error: gate.decision.publicReason })));
+      header = `# Du\nDu bist „${agent.name}“, KI-Agent und Projektagent (stellvertretende Projektleitung) von ${project.key} „${project.name}“. Neue Mail im Projektkonto; was du listest, wird sofort angelegt. Was unklar ist, nennst du in openPoints; das System fragt damit nach. ${styleText(agent.persona)}`;
+    } else if (run.mode === 'process') {
       const actor = await userRow(db, run.actor_user_id);
       if (!actor) return void (await finish('skipped', { error: 'Auftraggeber ist nicht mehr aktiv' }));
       gate = await aiConfigFor(db, { userId: actor.id, projectId: project.id, feature: 'mail.process', viewId: view.id });
@@ -120,6 +143,7 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
     const cfg = gate.cfg;
     const now = new Date();
     const actorForVis = run.mode === 'process' ? run.actor_user_id : agent.id;
+    const plIds = async () => (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent' and u.active`, [project.id])).rows.map((x: any) => x.user_id as string);
     const subprojects = await db.query(`select name, start_date, end_date from subprojects s where project_id = $1 and (not restricted or responsible_user_id = $2) order by position`, [project.id, actorForVis]);
     const tasks = await db.query(
       `select t.number, t.title, t.due_date, t.parent_id, pt.number as parent_number, c.name as column_name, eu.name as resp, s.name as sp from tasks t join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS} left join users eu on eu.id = (${EFFECTIVE_RESPONSIBLE_SQL})
@@ -141,26 +165,36 @@ Kalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_
 Mitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ` (KI-Agent${x.persona ? `: ${cut(x.persona, 80)}` : ''})` : ''}`).join(', ')}
 Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.specialUse || f.specialUse === 'inbox').map((f: any) => f.path)].filter((x, i, a) => a.indexOf(x) === i).join(', ')}`;
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 6000 : 2000, schema: SCHEMA });
-    const j = parseJson<{ summary?: string; actions?: MailAiAction[] }>(r.text);
+    const j = parseJson<{ summary?: string; openPoints?: string[]; actions?: MailAiAction[] }>(r.text);
     const proposed = (Array.isArray(j.actions) ? j.actions : []).filter((a) => a && TYPES.includes(a.type)).slice(0, 8);
     const summary = cut(String(j.summary ?? ''), 600);
+    const openPoints = (Array.isArray(j.openPoints) ? j.openPoints : []).map((x) => cut(String(x ?? ''), 200)).filter(Boolean).slice(0, 6);
+    const openText = openPoints.length ? ` · Offen: ${openPoints.join('; ')}` : '';
     let stored: StoredAction[];
+    let inquiry: Awaited<ReturnType<typeof handleOpenPoints>> = { action: 'none' };
     if (run.mode === 'process') {
       const actor = (await userRow(db, run.actor_user_id))!;
       stored = await applyActions(db, mailSvc, { run, project, mail: m, view, actor }, proposed);
-      await notify(db, { userId: actor.id, projectId: project.id, type: 'mail.ai', title: `KI hat Mail bearbeitet: ${cut(m.subject, 80)}`, body: summary, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
+      const taskId = stored.find((x) => x.status === 'done' && x.result?.taskId)?.result?.taskId ?? null;
+      // Offene Punkte: Projektagent fragt nach (Mail-Rückfrage), die Projekt-KI einer Person schreibt sie ins Log
+      inquiry = await handleOpenPoints(db, { project, mail: m, taskId, asker: asAgent ? agent : null, actorId: asAgent ? null : actor.id, openPoints });
+      const recipients = asAgent ? await plIds() : [actor.id];
+      for (const u of recipients) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${asAgent ? agent.name : 'KI'} hat Mail bearbeitet: ${cut(m.subject, 80)}`, body: `${summary}${inquiry.action === 'log' || inquiry.action === 'none' ? openText : ''}`, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null, ...(asAgent ? { actorId: agent.id } : {}) });
+      if (asAgent) await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens) values ($1,$2,$3,$4,'mail_process','ok',$5,$6,$7,$8)`,
+        [project.org_id, agent.id, project.id, taskId, `Mail bearbeitet: ${stored.filter((x) => x.status === 'done' && x.type !== 'none').length} Aktionen${openPoints.length ? `, ${openPoints.length} offene Punkte` : ''}`, JSON.stringify(stored.map((x) => ({ type: x.type, status: x.status }))), r.inputTokens, r.outputTokens]);
     } else {
       stored = proposed.map((a) => ({ ...clean(a), status: 'pending' as const }));
-      const owners = m.use === 'personal' && m.use_user_id ? [m.use_user_id] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent'`, [project.id])).rows.map((x: any) => x.user_id);
+      const owners = m.use === 'personal' && m.use_user_id ? [m.use_user_id] : await plIds();
       const n = stored.filter((x) => x.type !== 'none').length;
-      if (n) for (const u of owners) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${agent.name}: ${n} Vorschl${n === 1 ? 'ag' : 'äge'} zu „${cut(m.subject, 60)}“`, body: summary, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
+      // Vorschläge haben noch kein Arbeitspaket: offene Punkte stehen in der Meldung, die Frage folgt erst mit der Annahme
+      if (n || openPoints.length) for (const u of owners) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${agent.name}: ${n} Vorschl${n === 1 ? 'ag' : 'äge'} zu „${cut(m.subject, 60)}“`, body: `${summary}${openText}`, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
       // Für Budget und Übersicht der Agentenläufe: ohne Inhalt aus der Mail (die Läufe sehen alle Mitglieder, die Mail ggf. nicht)
       await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens) values ($1,$2,$3,null,'mail_triage','ok',$4,$5,$6,$7)`,
         [project.org_id, agent.id, project.id, `Mail-Vorschläge: ${n}`, JSON.stringify(stored.map((x) => ({ type: x.type }))), r.inputTokens, r.outputTokens]);
     }
     const failed = stored.filter((x) => x.status === 'error');
-    await finish(failed.length ? 'error' : 'ok', { summary, actions: stored, error: failed.length ? failed.map((x) => `${x.type}: ${x.result?.error}`).join(' | ') : null, inputTokens: r.inputTokens, outputTokens: r.outputTokens });
-    await audit(db, { orgId: project.org_id, projectId: project.id, userId: run.mode === 'process' ? run.actor_user_id : agent.id, action: run.mode === 'process' ? 'mail.ai_process' : 'mail.ai_triage', objectType: 'mail', objectId: m.id, details: { runId: run.id, actions: stored.map((x) => `${x.type}:${x.status}`), profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+    await finish(failed.length ? 'error' : 'ok', { summary, actions: stored, openPoints, error: failed.length ? failed.map((x) => `${x.type}: ${x.result?.error}`).join(' | ') : null, inputTokens: r.inputTokens, outputTokens: r.outputTokens });
+    await audit(db, { orgId: project.org_id, projectId: project.id, userId: run.mode === 'process' ? run.actor_user_id : agent.id, action: run.mode === 'process' ? 'mail.ai_process' : 'mail.ai_triage', objectType: 'mail', objectId: m.id, details: { runId: run.id, actions: stored.map((x) => `${x.type}:${x.status}`), openPoints: openPoints.length, inquiry: inquiry.action, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
   } catch (e: any) {
     await finish('error', { error: String(e?.message ?? e).slice(0, 300) });
   }
@@ -193,8 +227,9 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
   const membership = await getMembership(db, project.id, actor.id);
   if (!membership || membership.role === 'reader') fail('Keine Schreibrechte im Projekt');
   const rights = await getViewRights(db, view.id, actor, membership);
-  const pa: PlanActor = { id: actor.id, name: actor.name, orgId: project.org_id, role: membership!.role, label: ctx.run.mode === 'process' ? `Projekt-KI (für ${actor.name})` : actor.name, isAgent: false };
-  const by = ctx.run.mode === 'process' ? 'Projekt-KI' : `Vorschlag von ${ctx.run.agent_name ?? 'Agent'}, angenommen von ${actor.name}`;
+  const asAgent = actor.kind === 'agent';
+  const pa: PlanActor = { id: actor.id, name: actor.name, orgId: project.org_id, role: membership!.role, label: asAgent ? `${actor.name} (Projektagent)` : ctx.run.mode === 'process' ? `Projekt-KI (für ${actor.name})` : actor.name, isAgent: asAgent };
+  const by = asAgent ? `Projektagent ${actor.name}` : ctx.run.mode === 'process' ? 'Projekt-KI' : `Vorschlag von ${ctx.run.agent_name ?? 'Agent'}, angenommen von ${actor.name}`;
   // Inhalt ins Projekt: im Ordner-Modus hat der Auftraggeber zugestimmt (Kopie), sonst nur verknüpft
   const copied = ctx.run.mode === 'process';
   const linkMail = (taskId: string, origin: boolean) => linkMailToTask(db, { mailId: mail.id, taskId, copied, linkedBy: actor.id, origin, actorId: actor.id, logged: true });

@@ -65,7 +65,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   app.decorate('db', opts.db);
   app.decorate('mail', opts.mail);
   app.decorate('fetchFn', opts.fetchFn ?? fetch);
-  registerAgentRunner((taskId, trigger) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger));
+  registerAgentRunner((taskId, trigger, agentId) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger, agentId));
   registerAgentChatRunner((agentId, channelId, messageId) => runAgentChat(opts.db, opts.fetchFn ?? fetch, agentId, channelId, messageId));
   registerMailAiRunner((runId) => runMailAi(opts.db, opts.mail, opts.fetchFn ?? fetch, runId));
   registerAiUsage((profileId, i, o) => opts.db.query(`update ai_profiles set tokens_in = tokens_in + $2, tokens_out = tokens_out + $3, last_used_at = now() where id = $1`, [profileId, i, o]));

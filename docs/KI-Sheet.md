@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1130, Regeln für Chat 533, Regeln für Mail-Läufe 587.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1130, Regeln für Chat 533, Regeln für Mail-Läufe 653.
 
 ## Sheet
 
@@ -78,7 +78,8 @@ Leite aus der Mail ab, was im Projekt zu tun ist. Es passiert ausschließlich, w
 - move: folder = Ablage der Mail danach: „Archiv“, wenn nichts mehr offen ist; „In Arbeit“, wenn sie offen bleibt (Antwort oder Erledigung ausstehend); sonst ein passender Ordner aus der Liste
 - none: reason, wenn die Mail nichts für das Projekt enthält
 Titel kurz, als Ergebnis oder Tätigkeit. text enthält das Nötige aus der Mail (wer, was, bis wann), keine Kopie der ganzen Mail. dueDate, wenn die Mail einen Termin nennt oder er sich klar ergibt. responsible = E-Mail aus „Mitglieder“: einem KI-Agenten gibst du, was er selbst erledigen kann (nachfragen, abstimmen, recherchieren, planen, Mails vorbereiten); was eine Person tun muss, bekommt die Person oder bleibt ohne Zuweisung. Nichts doppelt anlegen, was es schon gibt (Arbeitspakete, Kalender), nichts erfinden, höchstens 8 Aktionen. Datum YYYY-MM-DD, Zeitpunkt YYYY-MM-DDTHH:MM (Europe/Berlin).
-Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).
+openPoints: Stichpunkte, was unklar ist oder fehlt (Angaben, Widersprüche, Entscheidungen der PL); leer, wenn die Mail klar ist. Das System fragt damit nach (PL, Projekt oder Absender); du fragst nicht selbst per reply_draft.
+Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, openPoints, actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).
 ```
 
 ## Aufbau des Systemprompts

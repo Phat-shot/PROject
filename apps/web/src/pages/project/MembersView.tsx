@@ -77,7 +77,9 @@ export function MembersView() {
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
-              <dt>Projekt-KI</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
+              <dt>Projekt-KI (LLM)</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
+              <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /></dd>
+              <dt>Mail-Rückfrage</dt><dd><MailInquirySelect readOnly={!isPl} /></dd>
             </dl>
             {isPl && detail.project.status === 'active' && <div className="row mt">
               <button className="btn sm" title="Spalten, Labels, Teilprojekte, Meilensteine, Ordner und Regeln als Vorlage für neue Projekte" onClick={() => setAsTemplate(true)}>Als Vorlage speichern</button>
@@ -178,7 +180,7 @@ export function MembersCard() {
           return (
             <tr key={m.userId}>
               <td>{m.name}<div className="muted small">{m.email}</div></td>
-              <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
+              <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.userId === detail.project.agentUserId ? ' (Projektagent)' : m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
               <td className="small muted">{m.role === 'pl' ? 'alle' : rightsText(m)}</td>
               <td className="small">{m.origin === 'group'
                 ? <span title="Mitglied über Gruppen des Projekts: höchste Rolle, Einzelrechte addiert">über {via.map((g) => g.name).join(', ') || 'Gruppe'}</span>
@@ -597,6 +599,48 @@ function BudgetInput() {
 type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null }[]; canAddOwn: boolean; addOwnReason?: string | null; ownLlmAllowed?: boolean };
 
 /** Projekt-KI: eines der im Projekt verfügbaren LLMs (vom Org-Admin freigegeben oder eigenes); ohne Auswahl sind die KI-Funktionen aus. */
+/**
+ * Projektagent (#52): ein KI-Agent als dritte PL-Rolle (stellvertretende Projektleitung). Mit Mail-Modus bearbeitet er neue Mails der
+ * Projektkonten selbst oder schlägt vor; der Ordner „KI Bearbeiten“ bleibt für Konten ohne Projektagent und für Agenten mit kleinerer Rolle.
+ */
+function ProjectAgentSelect({ readOnly = false }: { readOnly?: boolean }) {
+  const { detail, reload } = useProject();
+  const { busy, error, run } = useAsync();
+  const agents = detail.members.filter((m) => m.kind === 'agent');
+  const cur = agents.find((a) => a.userId === detail.project.agentUserId);
+  const mode = detail.project.agentMail ?? 'off';
+  const MODE: Record<string, string> = { off: 'nur Rolle (Mails über Ordner „KI Bearbeiten“ oder Agent je Ansicht)', triage: 'schlägt zu neuen Mails der Projektkonten vor', process: 'bearbeitet neue Mails der Projektkonten direkt' };
+  if (readOnly) return <>{cur ? `${cur.name} · ${MODE[mode]}` : <span className="muted">keiner</span>}</>;
+  const set = (agentUserId: string | null, agentMail: string) => void run(async () => { await api.put(`/projects/${detail.project.id}/agent`, { agentUserId, agentMail }); await reload(); });
+  return <span className="stack" style={{ gap: 4 }}>
+    <span className="row">
+      <select value={cur?.userId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => set(e.target.value || null, mode)}><option value="">keiner</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name}</option>)}</select>
+      {cur && <select value={mode} disabled={busy} style={{ width: 'auto' }} title="Mails der Projektkonten" onChange={(e) => set(cur.userId, e.target.value)}>{Object.entries(MODE).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}
+    </span>
+    <span className="muted small">{agents.length === 0 ? 'Zuerst einen KI-Agenten als Mitglied aufnehmen.' : 'Der Projektagent ist stellvertretende Projektleitung; die KI-Freigabe „Projektagent bearbeitet Mails der Projektkonten“ muss es erlauben. Was ihm unklar ist, fragt er nach (Mail-Rückfrage).'}</span>
+    {error && <span className="error small">{error}</span>}</span>;
+}
+
+/** Mail-Rückfrage (#51): wie der Projektagent mit offenen Punkten aus neuen Mails umgeht; Vorgabe vom Mandanten (Verwaltung). */
+function MailInquirySelect({ readOnly = false }: { readOnly?: boolean }) {
+  const { detail, reload } = useProject();
+  const { busy, error, run } = useAsync();
+  const v = detail.project.mailInquiry ?? { mode: 'ask_pl', waitHours: 48, inherited: true };
+  const LABEL: Record<string, string> = { ask_pl: 'PL fragen (Karte: klar / im Projekt fragen / beim Absender rückfragen)', ask_project: 'im Projekt fragen', ask_sender: 'beim Absender rückfragen', off: 'aus (offene Punkte nur im Log)' };
+  const [hours, setHours] = useState<string | null>(null);
+  if (readOnly) return <>{LABEL[v.mode]} · Frist {v.waitHours} h{v.inherited && <span className="muted small"> (Vorgabe des Mandanten)</span>}</>;
+  const save = (mode: string, waitHours: number) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { mailInquiry: { mode, waitHours } }); setHours(null); await reload(); });
+  return <span className="stack" style={{ gap: 4 }}>
+    <span className="row">
+      <select value={v.inherited ? '' : v.mode} disabled={busy} style={{ width: 'auto' }} onChange={(e) => { if (!e.target.value) void run(async () => { await api.patch(`/projects/${detail.project.id}`, { mailInquiry: null }); await reload(); }); else save(e.target.value, v.waitHours); }}>
+        <option value="">wie Mandant ({LABEL[v.mode]})</option>{Object.entries(LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+      </select>
+      {!v.inherited && v.mode !== 'off' && <label className="row small" style={{ gap: 4 }}>Frist <input type="number" min={1} max={720} value={hours ?? String(v.waitHours)} style={{ width: 70 }} onChange={(e) => setHours(e.target.value)} onBlur={() => { const h = Number(hours); if (hours !== null && Number.isInteger(h) && h >= 1 && h <= 720 && h !== v.waitHours) save(v.mode, h); else setHours(null); }} /> h</label>}
+    </span>
+    <span className="muted small">Nennt die Mail-KI zu einer neuen Mail offene Punkte, fragt der Projektagent nach, statt zu raten. Ohne Projektagent stehen sie im Log des Arbeitspakets.</span>
+    {error && <span className="error small">{error}</span>}</span>;
+}
+
 function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
   const { detail, reload } = useProject();
   const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);

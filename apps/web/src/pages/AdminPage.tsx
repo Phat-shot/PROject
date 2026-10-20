@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import type { AdminProject, AgentUser, AiDecision, AiPolicyRule, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User } from '@projekttool/shared';
+import type { AdminProject, AgentUser, AiDecision, AiPolicyRule, AiProfile, AuditEntry, DocTemplate, Group, Invitation, OrgSettings, ProjectTemplate, User, MailInquiry } from '@projekttool/shared';
 import { AI_CATEGORIES, AI_FEATURES, ORG_RIGHTS } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { RichEditor } from '../components/RichEditor';
@@ -244,6 +244,8 @@ function PdfStyleCard() {
         <label className="field full"><span>Fußzeile</span><input type="text" value={v.footerText ?? ''} placeholder="z. B. Vertraulich · nur für Projektbeteiligte" onChange={(e) => setF({ ...v, footerText: e.target.value })} /></label>
         <label className="check full"><input type="checkbox" checked={v.timeTracking !== false} onChange={(e) => setF({ ...v, timeTracking: e.target.checked })} /> Zeiterfassung mandantenweit aktiv (aus = Zeiten, Aufwand und Buchungen werden in allen Projekten ausgeblendet; Daten bleiben erhalten)</label>
         <label className="check full"><input type="checkbox" checked={Boolean(v.personalProjects)} onChange={(e) => setF({ ...v, personalProjects: e.target.checked })} /> Alle Benutzer dürfen ein persönliches Projekt (Assistent) anlegen: nur die Person und KI-Agenten, Org-Admin ohne Inhalte und ohne Kontenverwaltung. Projektersteller dürfen es immer.</label>
+        <label className="field"><span>Mail-Rückfrage (Vorgabe für Projekte): offene Punkte aus neuen Mails</span><select value={v.mailInquiry?.mode ?? 'ask_pl'} onChange={(e) => setF({ ...v, mailInquiry: { mode: e.target.value as MailInquiry['mode'], waitHours: v.mailInquiry?.waitHours ?? 48 } })}><option value="ask_pl">PL fragen (klar / im Projekt fragen / beim Absender rückfragen)</option><option value="ask_project">im Projekt fragen</option><option value="ask_sender">beim Absender rückfragen</option><option value="off">aus (nur Log)</option></select></label>
+        <label className="field"><span>Frist der Rückfrage (Stunden, danach Weitergabe über die Kette)</span><input type="number" min={1} max={720} value={v.mailInquiry?.waitHours ?? 48} onChange={(e) => setF({ ...v, mailInquiry: { mode: v.mailInquiry?.mode ?? 'ask_pl', waitHours: Number(e.target.value) } })} /></label>
         {error && <div className="error full">{error}</div>}
         <div className="full"><button className="btn primary sm" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/org/settings', f); setF(null); await reload(); window.location.reload(); })}>Speichern</button></div>
       </div>

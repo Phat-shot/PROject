@@ -5,7 +5,7 @@
  * eines Laufs eintrifft, setzt das Dirty-Flag und löst danach genau einen Folgelauf aus, der den Stand neu liest.
  * flushAgentRuns() wartet in Tests auf alle Läufe.
  */
-type Runner = (taskId: string, trigger: string) => Promise<unknown>;
+type Runner = (taskId: string, trigger: string, agentId: string | null) => Promise<unknown>;
 type ChatRunner = (agentId: string, channelId: string, messageId: string) => Promise<unknown>;
 type MailAiRunner = (runId: string) => Promise<unknown>;
 let runner: Runner | null = null;
@@ -50,10 +50,10 @@ export function queueMailAi(runId: string): void {
 }
 
 /** Lauf am Arbeitspaket; steht schon einer an, bleibt dessen Anlass (z. B. Zuweisung vor dem folgenden Kommentar). */
-export function queueAgentRun(taskId: string, trigger: string): void {
+export function queueAgentRun(taskId: string, trigger: string, agentId?: string | null): void {
   if (!runner) return;
   const run = runner;
-  schedule(taskId, 'agent', () => run(taskId, trigger), true);
+  schedule(taskId, 'agent', () => run(taskId, trigger, agentId ?? null), true);
 }
 
 /**

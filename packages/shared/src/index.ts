@@ -174,6 +174,7 @@ export const AI_FEATURES = [
   { key: 'assist.final_reply', category: 'assist', label: 'Abschluss-Antwort mit KI', who: 'person' },
   { key: 'mail.process', category: 'mail', label: 'Ordner „KI Bearbeiten“', who: 'person' },
   { key: 'mail.triage', category: 'mail', label: 'Agent betreut Mail-Ansicht', who: 'agent' },
+  { key: 'agent.mail', category: 'mail', label: 'Projektagent bearbeitet Mails der Projektkonten', who: 'agent' },
   { key: 'agent.run', category: 'agent', label: 'Agentenläufe', who: 'agent' },
   { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
   { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both', later: true },
@@ -469,6 +470,8 @@ export interface Question {
   remindAt: string | null; escalateAt: string | null; remindedAt: string | null;
   answeredBy: string | null; answeredByName: string | null; answeredAt: string | null; answerSource: 'chat' | 'task' | 'meeting' | 'mail' | 'system' | null; answerText: string | null; answerOption: string | null;
   cancelReason: string | null; createdAt: string; taskCode: string | null; taskTitle: string | null; projectKey: string | null;
+  /** Thema und Bezug (z. B. mail_inquiry mit mailId und openPoints) */
+  context?: Record<string, unknown> | null;
 }
 /** Mail-Rückfrage je Projekt: bei neuer Mail mit offenen Punkten die PL fragen, im Projekt fragen, beim Absender nachfragen oder nichts */
 export type MailInquiryMode = 'ask_pl' | 'ask_project' | 'ask_sender' | 'off';
@@ -745,6 +748,8 @@ export interface MailAiRun {
   createdAt: string;
   mail?: { id: string; subject: string; fromAddr: string; fromName: string | null; date: string };
   actions: { type: string; title?: string; text?: string; ref?: string; responsible?: string; dueDate?: string; startsAt?: string; location?: string; folder?: string; reason?: string; status: 'done' | 'error' | 'pending' | 'approved' | 'rejected'; result?: { ref?: string; taskId?: string; meetingId?: string; draftId?: string; folder?: string; error?: string; /** Fundstellen der Außenprüfung am Antwortentwurf (Hinweis) */ hints?: number } }[];
+  /** Offene Punkte aus der Mail (Mail-Rückfrage) */
+  openPoints?: string[];
 }
 
 export interface MailSummary {

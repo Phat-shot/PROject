@@ -5,7 +5,8 @@ import { badRequest, forbidden, HttpError, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
-import type { Group, Invitation, User } from '@projekttool/shared';
+import type { Group, Invitation, MailInquiry, User } from '@projekttool/shared';
+import { DEFAULT_INQUIRY, parseInquiry } from '../ai/mailInquiry.js';
 import { ORG_RIGHTS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
@@ -397,12 +398,15 @@ export async function userRoutes(app: FastifyInstance) {
     const o = await app.db.one(`select name, settings from orgs where id = $1`, [user.orgId]);
     return { name: o.name, settings: o.settings ?? {} };
   });
-  app.put<{ Body: { company?: string; accentColor?: string; footerText?: string; timeTracking?: boolean; personalProjects?: boolean } }>('/org/settings', async (req) => {
+  app.put<{ Body: { company?: string; accentColor?: string; footerText?: string; timeTracking?: boolean; personalProjects?: boolean; mailInquiry?: MailInquiry | null } }>('/org/settings', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
     if (b.accentColor && !/^#[0-9a-fA-F]{6}$/.test(b.accentColor)) throw badRequest('Akzentfarbe als #rrggbb');
-    const o = await app.db.one(`update orgs set settings = settings || $2::jsonb where id = $1 returning settings`, [user.orgId, JSON.stringify({ company: b.company ?? undefined, accentColor: b.accentColor ?? undefined, footerText: b.footerText ?? undefined, timeTracking: b.timeTracking ?? undefined, personalProjects: typeof b.personalProjects === 'boolean' ? b.personalProjects : undefined })]);
+    // Vorgabe der Mail-Rückfrage für Projekte ohne eigene Einstellung
+    let inquiry: MailInquiry | undefined;
+    if (b.mailInquiry !== undefined) { try { inquiry = parseInquiry(b.mailInquiry) ?? DEFAULT_INQUIRY; } catch (e: any) { throw badRequest(e.message); } }
+    const o = await app.db.one(`update orgs set settings = settings || $2::jsonb where id = $1 returning settings`, [user.orgId, JSON.stringify({ company: b.company ?? undefined, accentColor: b.accentColor ?? undefined, footerText: b.footerText ?? undefined, timeTracking: b.timeTracking ?? undefined, personalProjects: typeof b.personalProjects === 'boolean' ? b.personalProjects : undefined, mailInquiry: inquiry })]);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'org.settings', objectType: 'org', objectId: user.orgId, details: b });
     return { settings: o.settings };
   });

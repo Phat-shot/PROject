@@ -6,6 +6,7 @@ import { resolveRule } from './rules.js';
 import { canSeeSubproject } from './rights.js';
 import { contactChain } from './tasks/service.js';
 import { queueAgentRun } from './ai/agentEvents.js';
+import { onQuestionAnswered } from './ai/mailInquiry.js';
 import { projectPolicy } from './projectPolicy.js';
 
 /**
@@ -20,6 +21,8 @@ export interface QuestionRow {
   remind_at: Date | null; escalate_at: Date | null; reminded_at: Date | null;
   answered_by: string | null; answered_at: Date | null; answer_source: string | null; answer_text: string | null; answer_option: string | null;
   answer_message_id: string | null; answer_comment_id: string | null; cancel_reason: string | null; created_at: Date;
+  /** Thema und Bezug (z. B. mail_inquiry: mailId, openPoints, waitHours) */
+  context?: Record<string, unknown> | null;
 }
 export interface Asker { id: string; name: string; org_id: string; kind?: string }
 
@@ -69,6 +72,8 @@ export interface AskInput {
   meetingId?: string | null; options?: { key: string; label: string }[] | null; level?: number; parentId?: string | null; now?: Date;
   /** Meldungstyp und Titel abweichend vom Standard */
   type?: string; title?: string;
+  /** Thema und Bezug für Folgeschritte (z. B. Mail-Rückfrage) */
+  context?: Record<string, unknown> | null;
 }
 
 /**
@@ -94,9 +99,9 @@ export async function askQuestion(db: Db, a: AskInput): Promise<{ question: Ques
     [channelId, a.asker.id, text.slice(0, 8000), JSON.stringify({ question: true, kind: a.kind, options: a.options ?? null, taskId: task.id, link: `/projekte/${task.project_id}/board?task=${task.id}` })]);
   await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, a.asker.id]);
   const q = await db.one<QuestionRow>(
-    `insert into questions (org_id, project_id, task_id, meeting_id, kind, asked_by, addressee_id, addressee_role, level, parent_id, body, options, channel_id, message_id, remind_at, escalate_at)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning *`,
-    [task.org_id, task.project_id, task.id, a.meetingId ?? null, a.kind, a.asker.id, target.userId, target.role, a.level ?? 0, a.parentId ?? null, body, a.options ? JSON.stringify(a.options) : null, channelId, msg.id, t.remindAt, t.escalateAt]);
+    `insert into questions (org_id, project_id, task_id, meeting_id, kind, asked_by, addressee_id, addressee_role, level, parent_id, body, options, channel_id, message_id, remind_at, escalate_at, context)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) returning *`,
+    [task.org_id, task.project_id, task.id, a.meetingId ?? null, a.kind, a.asker.id, target.userId, target.role, a.level ?? 0, a.parentId ?? null, body, a.options ? JSON.stringify(a.options) : null, channelId, msg.id, t.remindAt, t.escalateAt, a.context ? JSON.stringify(a.context) : null]);
   await db.query(`update chat_messages set meta = meta || $2::jsonb where id = $1`, [msg.id, JSON.stringify({ questionId: q.id })]);
   // Meldungen: an den Adressaten, im Projektkanal an alle Mitglieder mit Sicht auf das AP (ohne Agenten, ohne Fragenden)
   const recipients: string[] = target.userId ? [target.userId] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active and u.kind <> 'agent' and m.role <> 'reader'`, [task.project_id])).rows.map((r: any) => r.user_id);
@@ -158,7 +163,9 @@ export async function answerQuestion(db: Db, q: QuestionRow, a: AnswerInput): Pr
   if (task) {
     const w = task.agent_wait ?? null;
     if (w && w.questionId === r.id) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
-    if (asker.kind === 'agent') queueAgentRun(task.id, 'answer');
+    // Folgeschritt zum Thema der Frage (Mail-Rückfrage: im Projekt fragen, beim Absender nachfragen) ersetzt den Lauf „answer“
+    const handled = await onQuestionAnswered(db, r, a);
+    if (asker.kind === 'agent' && !handled) queueAgentRun(task.id, 'answer');
   }
   await audit(db, { orgId: r.org_id, projectId: r.project_id, userId: a.userId, action: 'question.answer', objectType: 'question', objectId: r.id, details: { source: a.source, option: a.option ?? null } });
   return r;
@@ -259,7 +266,8 @@ export function mapQuestion(r: any) {
     body: r.body, options: r.options ?? null, channelId: r.channel_id ?? null, messageId: r.message_id ?? null,
     remindAt: r.remind_at ?? null, escalateAt: r.escalate_at ?? null, remindedAt: r.reminded_at ?? null,
     answeredBy: r.answered_by ?? null, answeredByName: r.answered_by_name ?? null, answeredAt: r.answered_at ?? null, answerSource: r.answer_source ?? null, answerText: r.answer_text ?? null, answerOption: r.answer_option ?? null,
-    cancelReason: r.cancel_reason ?? null, createdAt: r.created_at, taskCode: r.task_code ?? null, taskTitle: r.task_title ?? null, projectKey: r.project_key ?? null
+    cancelReason: r.cancel_reason ?? null, createdAt: r.created_at, taskCode: r.task_code ?? null, taskTitle: r.task_title ?? null, projectKey: r.project_key ?? null,
+    context: r.context ?? null
   };
 }
 export const QUESTION_SELECT = `select q.*, ab.name as asked_by_name, ad.name as addressee_name, an.name as answered_by_name, p.key as project_key, case when t.id is null then null else p.key || '-' || t.number end as task_code, t.title as task_title

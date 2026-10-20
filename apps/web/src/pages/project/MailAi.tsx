@@ -34,7 +34,7 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
   return (
     <div className="ai-proposal">
       <div className="row between">
-        <div><span className="badge">{run.mode === 'process' ? 'Projekt-KI' : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
+        <div><span className="badge">{run.mode === 'process' ? (run.agentName ? `Projektagent ${run.agentName}` : 'Projekt-KI') : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{run.openPoints && run.openPoints.length > 0 && <span className="badge warn" style={{ marginLeft: 4 }} title={run.openPoints.join(' · ')}>{run.openPoints.length} offen</span>}{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
         <span className="muted small">{STATUS[run.status]}{run.actorName && run.mode === 'process' ? ` · für ${run.actorName}` : ''} · {fmtDateTime(run.createdAt)}</span>
       </div>
       {run.summary && <div className="small mt">{run.summary}</div>}

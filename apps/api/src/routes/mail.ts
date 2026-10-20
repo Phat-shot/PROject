@@ -477,7 +477,7 @@ export async function mailRoutes(app: FastifyInstance) {
       if (!(await getMembership(db, r.project_id, user.id))) continue;
       if (!readable.has(r.mail_id)) readable.set(r.mail_id, (await mailReadable(user, r.mail_id)).ok);
       if (!readable.get(r.mail_id)) continue;
-      out.push({ id: r.id, mode: r.mode, status: r.status, summary: r.summary, error: r.error, agentName: r.agent_name ?? null, actorName: r.actor_name ?? null, createdAt: r.created_at, actions: r.actions ?? [],
+      out.push({ id: r.id, mode: r.mode, status: r.status, summary: r.summary, error: r.error, agentName: r.agent_name ?? null, actorName: r.actor_name ?? null, createdAt: r.created_at, actions: r.actions ?? [], openPoints: r.open_points ?? [],
         ...(r.subject !== undefined ? { mail: { id: r.mail_id, subject: r.subject, fromAddr: r.from_addr, fromName: r.from_name, date: r.date } } : {}) });
     }
     return out;

@@ -831,10 +831,13 @@ export async function logSkippedRun(db: Db, agent: { id: string; org_id: string 
 }
 
 /** Ereignislauf: der zuständige Agent läuft sofort (von Routen über queueAgentRun ausgelöst); Freigabe und Tagesbudget prüft der Lauf. */
-export async function runForTask(db: Db, mail: MailService, fetchFn: typeof fetch, taskId: string, trigger: string): Promise<AgentRunResult | null> {
+export async function runForTask(db: Db, mail: MailService, fetchFn: typeof fetch, taskId: string, trigger: string, agentId: string | null = null): Promise<AgentRunResult | null> {
   const t = await db.maybeOne(`select t.agent_paused, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
   if (!t || t.agent_paused || t.is_done) return null;
-  const agent = await agentForTask(db, taskId);
+  // Ausdrücklicher Agent (Projektagent bei der Mail-Rückfrage): aktives Mitglied des Projekts, sonst der zuständige Agent
+  const agent = agentId
+    ? await db.maybeOne(`select u.id, u.name, u.org_id, u.persona from users u join tasks t on t.id = $2 join project_members m on m.project_id = t.project_id and m.user_id = u.id where u.id = $1 and u.kind = 'agent' and u.active`, [agentId, taskId])
+    : await agentForTask(db, taskId);
   if (!agent) return null;
   return runAgentOnTask(db, mail, fetchFn, agent, taskId, trigger);
 }
