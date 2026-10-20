@@ -20,7 +20,20 @@ export function managerLabel(a: MailAccount, me: string | undefined, projects: P
   return p ? `Projekt ${p.key}` : 'ein Projekt';
 }
 export const useLabel = (u: { use: MailAccountUse; projectLabel?: string | null; isDefault?: boolean }) =>
-  u.use === 'org' ? 'Org-Postfach' : u.use === 'personal' ? 'persönlich' : `Projekt ${u.projectLabel ?? ''}${u.isDefault ? ' (Standard)' : ''}`;
+  u.use === 'org' ? 'Org-Postfach' : u.use === 'personal' ? 'Meine Konten' : `${u.projectLabel?.startsWith('persönlich') ? `persönliches Projekt ${u.projectLabel.slice('persönlich '.length)}` : u.projectLabel ?? ''}${u.isDefault ? ' (Standard)' : ''}`;
+/** Art des Postfachs: Org-Postfach (Systemmails), zentral (Organisation, mehrere Projekte), Projektpostfach (PL), persönlich. */
+export function kindLabel(a: MailAccount, me: string | undefined, projects: Project[]): string {
+  if (a.kind === 'org') return 'Org-Postfach';
+  if (a.kind === 'central') return 'Zentrales Postfach';
+  if (a.kind === 'project') { const pid = a.managedBy?.kind === 'project' ? a.managedBy.projectId : ''; const p = projects.find((x) => x.id === pid); return p ? `Projektpostfach ${p.key}` : 'Projektpostfach'; }
+  return a.managedBy?.kind === 'user' && a.managedBy.userId === me ? 'Persönlich (ich)' : 'Persönlich';
+}
+export const KIND_HINT: Record<string, string> = {
+  org: 'Systemmails der Organisation: Einladungen, Digest, Passwort. Keine Projekte, keine Ansichten.',
+  central: 'Konto der Organisation für mehrere Projekte; der Org-Admin pflegt es und bietet es Projekten an oder gibt es für alle frei.',
+  project: 'Gehört genau einem Projekt; die PL pflegt Zugangsdaten, Ordner und Ansichten.',
+  personal: 'Eigenes Konto der Person („Meine Konten“); sie kann es als PL in ihr Projekt holen.'
+};
 export const managedByParam = (a: MailAccount) => (a.managedBy?.kind === 'user' ? 'me' : a.managedBy?.kind === 'project' ? `project&projectId=${a.managedBy.projectId}` : 'org');
 
 export function MailAccountsPage() {
@@ -63,15 +76,17 @@ export function MailAccountsPage() {
       </TopBar>
       <div className="content">
         <div className="card">
-          <p className="muted small">Ein Konto hat einen Verwalter (du, ein Projekt über seine PL oder der Org-Admin) und Verwendungen: persönlich („Meine Konten“, Ansichten teilst nur du), Projektkonto (Antwortadresse, Absender für Agenten, Einladungen, Berichte; je Projekt eines als Standard) oder Org-Postfach (Systemmails, nur der Org-Admin). Ein Konto kann mehrere Verwendungen haben; Konten werden nie als Ganzes geteilt, nur gefilterte Ansichten mit eigenen Rechten. Gespeichert werden nur Treffer einer Ansicht.</p>
+          <p className="muted small">Vier Arten von Postfächern: das <strong>Org-Postfach</strong> (genau eines; Systemmails wie Einladungen, Digest, Passwort; nur der Org-Admin, keine Projekte), <strong>zentrale Postfächer</strong> der Organisation für mehrere Projekte (der Org-Admin pflegt sie und bietet sie Projekten an oder gibt sie für alle Projekte frei, dann holt die PL sie selbst ins Projekt), <strong>Projektpostfächer</strong>, die genau einem Projekt gehören und die seine PL pflegt, und <strong>persönliche Konten</strong>. Je Projekt ist ein Postfach Standard für ausgehende Mails (Antwortadresse, Agenten, Einladungen, Berichte). Konten werden nie als Ganzes geteilt, nur gefilterte Ansichten mit eigenen Rechten; gespeichert werden nur Treffer.</p>
           {error && <div className="error mb">{error}</div>}
           {msg && <div className={`${msg.kind === 'ok' ? 'success' : msg.kind === 'warn' ? 'notice' : 'error'} mb`}>{msg.text}</div>}
-          <table className="table"><thead><tr><th>Konto</th><th>Verwalter</th><th>Verwendungen</th><th>Anbindung</th><th>Ansichten</th><th>Letzter Sync</th><th /></tr></thead><tbody>
+          <table className="table"><thead><tr><th>Konto</th><th>Art</th><th>Projekte</th><th>Anbindung</th><th>Ansichten</th><th>Letzter Sync</th><th /></tr></thead><tbody>
             {accounts.data?.accounts.map((a) => (
               <tr key={a.id}>
                 <td>{a.name}<div className="muted small">{a.address}</div></td>
-                <td className="small">{managerLabel(a, user?.id, projects.data?.projects ?? [])}{user?.globalRole === 'org_admin' && <div><button className="btn sm link" onClick={() => setManagerFor(a)}>ändern</button></div>}</td>
-                <td className="small">{(a.uses ?? []).map((u) => <span key={u.id} className="badge" style={{ marginRight: 4, marginBottom: 2 }} title={u.use === 'project' ? 'Projektkonto: Antwortadresse, Absender für Agenten und Berichte' : u.use === 'org' ? 'Systemmails: Einladungen, Digest, Passwort' : 'Meine Konten: Ansichten teilst nur du'}>{useLabel(u)} <button className="btn sm link" title="Verwendung lösen (Ansichten darüber verschwinden)" disabled={busy} onClick={() => void dialog.confirm({ title: 'Verwendung lösen', text: `„${useLabel(u)}“ für ${a.address} lösen? Ansichten über diese Verwendung verschwinden, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Lösen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}/uses/${u.id}`); await accounts.reload(); }); })}>✕</button></span>)}<div><button className="btn sm link" onClick={() => setUseFor(a)}>+ Verwendung</button></div></td>
+                <td className="small"><span title={KIND_HINT[a.kind ?? 'personal']}>{kindLabel(a, user?.id, projects.data?.projects ?? [])}</span>
+                  {a.kind === 'central' && user?.globalRole === 'org_admin' && <div><label className="check small" title="Jede PL darf dieses Postfach in ihr Projekt holen (nicht in persönliche Projekte)"><input type="checkbox" checked={Boolean(a.offeredToAll)} disabled={busy} onChange={(e) => void run(async () => { await api.patch(`/mail/accounts/${a.id}`, { offeredToAll: e.target.checked }); await accounts.reload(); })} /> für alle Projekte wählbar</label></div>}
+                  {user?.globalRole === 'org_admin' && a.kind !== 'org' && <div><button className="btn sm link" onClick={() => setManagerFor(a)}>Art oder Verwalter ändern</button></div>}</td>
+                <td className="small">{a.kind === 'org' ? <span className="muted">keine (nur Systemmails)</span> : <>{(a.uses ?? []).filter((u) => u.use !== 'org').map((u) => <span key={u.id} className="badge" style={{ marginRight: 4, marginBottom: 2 }} title={u.use === 'project' ? 'Im Projekt nutzbar: Antwortadresse, Absender für Agenten und Berichte, Ansichten' : 'Meine Konten: Ansichten teilst nur du'}>{useLabel(u)} <button className="btn sm link" title="Bindung lösen (Ansichten darüber verschwinden)" disabled={busy} onClick={() => void dialog.confirm({ title: 'Bindung lösen', text: `${a.address}: „${useLabel(u)}“ lösen? Ansichten darüber verschwinden, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Lösen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}/uses/${u.id}`); await accounts.reload(); }); })}>×</button></span>)}{(a.kind !== 'project' || !(a.uses ?? []).some((u) => u.use === 'project')) && <div><button className="btn sm link" onClick={() => setUseFor(a)}>+ Projekt</button></div>}</>}</td>
                 <td className="small">{a.provider === 'dev' ? 'Dev-Postfach (im Speicher)' : a.provider === 'graph' ? <>Microsoft 365 (Graph, OAuth2)</> : a.oauthProvider ? <>{OAUTH_LABEL[a.oauthProvider]} (IMAP/SMTP, OAuth2)<br />{a.imapHost}</> : <>IMAP {a.imapHost}:{a.imapPort ?? 993}{a.imapSecure === false ? '' : ' SSL'}<br />SMTP {a.smtpHost}:{a.smtpPort ?? 587}{a.smtpSecure ? ' SSL' : ' STARTTLS'}</>}</td>
                 <td className="small">{a.viewCount ?? 0}{(a.viewCount ?? 0) === 0 && <div className="muted">noch keine</div>}</td>
                 <td className="small">{a.syncError ? <span className="badge warn" title={a.syncError}>Sync unterbrochen</span> : fmtDateTime(a.lastSyncAt) || '–'}{a.syncError && <div className="muted" style={{ maxWidth: 260 }}>{a.syncError}</div>}</td>
@@ -89,7 +104,7 @@ export function MailAccountsPage() {
         </div>
       </div>
       {oauthStart && <OAuthStartDialog provider={oauthStart} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setOauthStart(null)} />}
-      {create && <AccountForm projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setCreate(false)} onSaved={async () => { setCreate(false); await accounts.reload(); }} />}
+      {create && <AccountForm hasOrgMailbox={(accounts.data?.accounts ?? []).some((a) => a.kind === 'org')} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setCreate(false)} onSaved={async () => { setCreate(false); await accounts.reload(); }} />}
       {edit && <AccountForm existing={edit} projects={(projects.data?.projects ?? []).filter((p) => p.myRole === 'pl')} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await accounts.reload(); }} />}
       {useFor && <UseDialog account={useFor} projects={projects.data?.projects ?? []} onClose={() => setUseFor(null)} onSaved={async () => { setUseFor(null); await accounts.reload(); }} />}
       {managerFor && <ManagerDialog account={managerFor} projects={projects.data?.projects ?? []} onClose={() => setManagerFor(null)} onSaved={async () => { setManagerFor(null); await accounts.reload(); }} />}
@@ -107,20 +122,19 @@ export function UseDialog({ account, projects, onClose, onSaved }: { account: Ma
   const bound = new Set((account.uses ?? []).filter((u) => u.use === 'project').map((u) => u.projectId));
   const free = options.filter((p) => !bound.has(p.id));
   const hasPersonal = (account.uses ?? []).some((u) => u.use === 'personal' && u.userId === user?.id);
-  const [use, setUse] = useState<MailAccountUse>(hasPersonal ? 'project' : 'personal');
+  const [use, setUse] = useState<MailAccountUse>('project');
   const [projectId, setProjectId] = useState(free[0]?.id ?? '');
   const { busy, error, run } = useAsync();
   return (
-    <Modal title={`Verwendung hinzufügen: ${account.address}`} onClose={onClose}>
+    <Modal title={`Projekt hinzufügen: ${account.address}`} onClose={onClose}>
       <div className="form">
         <label className="field"><span>Verwendung</span><select value={use} onChange={(e) => setUse(e.target.value as MailAccountUse)}>
-          <option value="personal" disabled={hasPersonal}>Persönlich (unter „Meine Konten“, Ansichten teile nur ich)</option>
-          <option value="project">Projektkonto (Antwortadresse, Absender für Agenten und Berichte)</option>
-          {isAdmin && <option value="org">Org-Postfach (Systemmails: Einladungen, Digest, Passwort)</option>}
+          <option value="project">Im Projekt nutzen (Antwortadresse, Absender für Agenten und Berichte, Ansichten)</option>
+          <option value="personal" disabled={hasPersonal}>Unter „Meine Konten“ (Ansichten teile nur ich)</option>
         </select></label>
         {use === 'project' && <label className="field"><span>Projekt</span><select value={projectId || (free[0]?.id ?? '')} onChange={(e) => setProjectId(e.target.value)}>{free.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>}
-        {use === 'project' && free.length === 0 && <p className="notice small">Kein Projekt verfügbar: Projektkonten bindet die PL an ihr Projekt; Konten der Organisation bietet der Org-Admin an.</p>}
-        {use === 'project' && account.managedBy?.kind === 'org' && <p className="muted small">Angebotene Konten der Organisation werden im Projekt nie automatisch Standard; die PL wählt den Standard in den Projekteinstellungen.</p>}
+        {use === 'project' && free.length === 0 && <p className="notice small">Kein Projekt verfügbar: Projektpostfächer gehören genau einem Projekt, persönliche Konten holt die PL in ihre Projekte; zentrale Postfächer bietet der Org-Admin an oder gibt sie für alle Projekte frei.</p>}
+        {use === 'project' && account.kind === 'central' && <p className="muted small">Zentrale Postfächer werden im Projekt nie automatisch Standard; die PL wählt den Standard in den Projekteinstellungen.</p>}
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || (use === 'project' && !(projectId || free[0]?.id))} onClick={() => void run(async () => { await api.post(`/mail/accounts/${account.id}/uses`, { use, projectId: use === 'project' ? projectId || free[0]?.id : undefined }); await onSaved(); })}>Hinzufügen</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
@@ -140,7 +154,7 @@ export function ManagerDialog({ account, projects, onClose, onSaved }: { account
       <div className="form">
         <label className="field"><span>Verwalter</span><select value={kind} onChange={(e) => setKind(e.target.value as any)}><option value="org">Organisation (Org-Admin)</option><option value="project">Projekt (seine PL)</option><option value="me">ich</option></select></label>
         {kind === 'project' && <label className="field"><span>Projekt</span><select value={projectId || (options[0]?.id ?? '')} onChange={(e) => setProjectId(e.target.value)}>{options.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select></label>}
-        <p className="muted small">Der Verwalter pflegt Zugangsdaten und Ordner und löscht das Konto. Verwendungen bleiben beim Wechsel bestehen.</p>
+        <p className="muted small">Organisation = zentrales Postfach (mehrere Projekte), Projekt = Projektpostfach (gehört nur diesem Projekt, Bindungen an andere Projekte lösen sich), Person = persönliches Konto. Der Verwalter pflegt Zugangsdaten und Ordner und löscht das Konto.</p>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/mail/accounts/${account.id}/manager`, { managedBy: kind, projectId: kind === 'project' ? projectId || options[0]?.id : undefined }); await onSaved(); })}>Speichern</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
@@ -151,15 +165,15 @@ export function ManagerDialog({ account, projects, onClose, onSaved }: { account
 /** OAuth2-Start: Typ und Projekt wählen, dann Weiterleitung zu Microsoft/Google; das Konto entsteht beim Rückruf. */
 export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: { provider: OAuthProvider; projects: Project[]; onClose: () => void; fixedProject?: Project }) {
   const { user } = useAuth();
-  const [type, setType] = useState<'me' | 'project' | 'org'>(fixedProject ? 'project' : 'me');
+  const [type, setType] = useState<'me' | 'project' | 'central' | 'org'>(fixedProject ? 'project' : 'me');
   const [projectId, setProjectId] = useState(fixedProject?.id ?? projects[0]?.id ?? '');
   const [name, setName] = useState('');
-  const href = `/api/oauth/start?provider=${provider.key}&managedBy=${type}${type === 'project' ? `&projectId=${projectId}` : ''}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
+  const href = `/api/oauth/start?provider=${provider.key}&managedBy=${type === 'central' ? 'org' : type}&kind=${type === 'me' ? 'personal' : type}${type === 'project' ? `&projectId=${projectId}` : ''}${name ? `&name=${encodeURIComponent(name)}` : ''}`;
   return (
     <Modal title={`Mit ${provider.label} verbinden`} onClose={onClose}>
       <div className="form">
         {fixedProject ? <div className="field"><span>Projektkonto für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name}</span></div> : (
-          <label className="field"><span>Verwalter und erste Verwendung</span><select value={type} onChange={(e) => setType(e.target.value as any)}><option value="me">Ich: eigenes Konto (persönlich)</option><option value="project" disabled={!projects.length}>Projekt: Projektkonto (als PL)</option>{user?.globalRole === 'org_admin' && <option value="org">Organisation: Org-Postfach (Systemmails)</option>}</select></label>
+          <label className="field"><span>Art des Postfachs</span><select value={type} onChange={(e) => setType(e.target.value as any)}><option value="me">Persönlich: eigenes Konto (Meine Konten)</option><option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>{user?.globalRole === 'org_admin' && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{user?.globalRole === 'org_admin' && <option value="org">Org-Postfach: Systemmails (Einladungen, Digest, Passwort)</option>}</select></label>
         )}
         {!fixedProject && type === 'project' && <label className="field"><span>Projekt</span><select value={projectId} onChange={(e) => setProjectId(e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename (leer = Name aus dem Konto)</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
@@ -171,24 +185,25 @@ export function OAuthStartDialog({ provider, projects, onClose, fixedProject }: 
 }
 
 /** Konto anbinden/bearbeiten; mit fixedProject nur als Projektkonto dieses Projekts (aus den Projekteinstellungen). */
-export function AccountForm({ existing, projects, onClose, onSaved, fixedProject }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void>; fixedProject?: Project }) {
+export function AccountForm({ existing, projects, onClose, onSaved, fixedProject, hasOrgMailbox = false }: { existing?: MailAccount; projects: Project[]; onClose: () => void; onSaved: () => Promise<void>; fixedProject?: Project; hasOrgMailbox?: boolean }) {
   const { user } = useAuth();
   const isAdmin = user?.globalRole === 'org_admin';
   const [f, setF] = useState({
-    managedBy: (fixedProject ? 'project' : 'me') as 'me' | 'project' | 'org', projectId: fixedProject?.id ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
+    kind: (fixedProject ? 'project' : 'personal') as 'personal' | 'project' | 'central' | 'org', offeredToAll: true, projectId: fixedProject?.id ?? projects[0]?.id ?? '', name: existing?.name ?? '', address: existing?.address ?? '', provider: existing?.provider ?? 'imap',
     imapHost: existing?.imapHost ?? '', imapPort: existing?.imapPort ?? 993, imapUser: existing?.imapUser ?? '', imapPassword: '', imapSecure: existing?.imapSecure ?? true,
     smtpHost: existing?.smtpHost ?? '', smtpPort: existing?.smtpPort ?? 587, smtpUser: existing?.smtpUser ?? '', smtpPassword: '', smtpSecure: existing?.smtpSecure ?? false
   });
   const [test, setTest] = useState<TestResult | null>(null);
   const { busy, error, run } = useAsync();
   const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
-  const payload = () => ({ ...f, imapUser: f.imapUser || f.address, smtpUser: f.smtpUser || f.imapUser || f.address, imapPassword: f.imapPassword || undefined, smtpPassword: f.smtpPassword || f.imapPassword || undefined });
+  const payload = () => ({ ...f, managedBy: f.kind === 'personal' ? 'me' : f.kind === 'project' ? 'project' : 'org', imapUser: f.imapUser || f.address, smtpUser: f.smtpUser || f.imapUser || f.address, imapPassword: f.imapPassword || undefined, smtpPassword: f.smtpPassword || f.imapPassword || undefined });
   return (
     <Modal title={existing ? `Konto bearbeiten: ${existing.name}` : 'Mail-Konto anbinden'} onClose={onClose}>
       <div className="form cols-2">
-        {!existing && fixedProject && <div className="field full"><span>Projektkonto für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name} · das erste Projektkonto wird Standard, seine Adresse Projekt-Mailadresse</span></div>}
-        {!existing && !fixedProject && <label className="field"><span>Verwalter und erste Verwendung</span><select value={f.managedBy} onChange={(e) => set('managedBy', e.target.value)}><option value="me">Ich: eigenes Konto (persönlich)</option><option value="project" disabled={!projects.length}>Projekt: Projektkonto (als PL)</option>{isAdmin && <option value="org">Organisation: Org-Postfach (Systemmails: Einladungen)</option>}</select></label>}
-        {!existing && !fixedProject && f.managedBy === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
+        {!existing && fixedProject && <div className="field full"><span>Projektpostfach für</span><span><span className="badge">{fixedProject.key}</span> {fixedProject.name} · das erste Projektpostfach wird Standard, seine Adresse Projekt-Mailadresse</span></div>}
+        {!existing && !fixedProject && <label className="field"><span>Art des Postfachs</span><select value={f.kind} onChange={(e) => set('kind', e.target.value)}><option value="personal">Persönlich: eigenes Konto (Meine Konten)</option><option value="project" disabled={!projects.length}>Projektpostfach: gehört einem Projekt, die PL pflegt es</option>{isAdmin && <option value="central">Zentrales Postfach: Organisation, für mehrere Projekte</option>}{isAdmin && <option value="org" disabled={hasOrgMailbox}>Org-Postfach: Systemmails (Einladungen, Digest, Passwort){hasOrgMailbox ? ' · gibt es schon' : ''}</option>}</select></label>}
+        {!existing && !fixedProject && f.kind === 'central' && <label className="check full" title="Jede PL darf das Postfach in ihr Projekt holen (nicht in persönliche Projekte); sonst bietet der Org-Admin es einzelnen Projekten an"><input type="checkbox" checked={f.offeredToAll} onChange={(e) => set('offeredToAll', e.target.checked)} /> für alle Projekte wählbar</label>}
+        {!existing && !fixedProject && f.kind === 'project' && <label className="field"><span>Projekt</span><select value={f.projectId} onChange={(e) => set('projectId', e.target.value)}>{projects.map((p) => <option key={p.id} value={p.id}>{p.key} – {p.name}</option>)}</select></label>}
         <label className="field"><span>Anzeigename</span><input type="text" value={f.name} onChange={(e) => set('name', e.target.value)} /></label>
         <label className="field"><span>Adresse</span><input type="email" value={f.address} onChange={(e) => set('address', e.target.value)} /></label>
         {!existing && <label className="field full"><span>Anbindung</span><select value={f.provider} onChange={(e) => set('provider', e.target.value)}><option value="imap">IMAP/SMTP (Passwort oder App-Passwort)</option><option value="dev">Dev-Postfach (zum Testen, im Speicher)</option></select></label>}

@@ -97,10 +97,22 @@ export async function accountRights(db: Db, user: User, account: AccountRow, pro
  */
 export async function bindReason(db: Db, user: User, account: AccountRow, use: UseKind, target: { projectId?: string | null; userId?: string | null }): Promise<string | null> {
   const m = managerOf(account);
-  if (use === 'org') return user.globalRole === 'org_admin' && m.kind === 'org' ? null : 'Als Org-Postfach bindet nur der Org-Admin ein von ihm verwaltetes Konto';
+  const uses = await accountUses(db, account.id);
+  // Org-Postfach: nur Systemmails, keine Projekt- oder persönlichen Bindungen; umgekehrt wird kein gebundenes Konto zum Org-Postfach
+  if (use === 'org') {
+    if (!(user.globalRole === 'org_admin' && m.kind === 'org')) return 'Als Org-Postfach bindet nur der Org-Admin ein von ihm verwaltetes Konto';
+    return uses.some((u) => u.use !== 'org') ? 'Ein Konto mit Projekt- oder persönlichen Bindungen wird nicht zum Org-Postfach; dafür ein eigenes Konto anlegen' : null;
+  }
+  if (uses.some((u) => u.use === 'org')) return 'Das Org-Postfach dient nur Systemmails; für Projekte ein zentrales Postfach oder ein Projektpostfach anlegen';
   if (use === 'project') {
     if (!target.projectId) return 'projectId erforderlich';
-    if (m.kind === 'org') return user.globalRole === 'org_admin' ? null : 'Konten der Organisation bietet nur der Org-Admin einem Projekt an';
+    if (m.kind === 'org') {
+      if (user.globalRole === 'org_admin') return null;
+      // Zentrales Postfach: jede PL holt es in ihr normales Projekt, wenn der Org-Admin es für alle freigegeben hat
+      const p = await db.maybeOne(`select personal from projects where id = $1`, [target.projectId]);
+      if ((account as any).offered_to_all && p && !projectPolicy(p).mail.ownOnly && (await getMembership(db, target.projectId, user.id))?.role === 'pl') return null;
+      return 'Konten der Organisation bietet nur der Org-Admin einem Projekt an (zentrale Postfächer mit „für alle Projekte“ holt die PL selbst)';
+    }
     if ((await getMembership(db, target.projectId, user.id))?.role !== 'pl') return 'Projektkonten bindet die PL des Projekts';
     if (m.kind === 'project') return m.projectId === target.projectId ? null : 'Das Konto verwaltet ein anderes Projekt; nur der Org-Admin bietet fremde Konten an';
     return m.userId === user.id ? null : 'Das Konto verwaltet eine andere Person';
@@ -153,11 +165,19 @@ export async function unbind(db: Db, useId: string): Promise<UseRow | null> {
   return u;
 }
 
-/** Verwalter setzen (Spiegel in den alten Spalten mitziehen). */
+/** Verwalter setzen (Spiegel in den alten Spalten mitziehen). Wird ein Projekt Verwalter, lösen sich Bindungen an andere Projekte (Projektpostfächer gehören genau einem Projekt). */
 export async function setManager(db: Db, accountId: string, m: ManagedBy): Promise<void> {
   const mir = mirrorOf(m);
-  await db.query(`update mail_accounts set managed_user_id = $2, managed_project_id = $3, type = $4, owner_user_id = $5, project_id = $6 where id = $1`,
+  await db.query(`update mail_accounts set managed_user_id = $2, managed_project_id = $3, type = $4, owner_user_id = $5, project_id = $6, offered_to_all = case when $3::uuid is null and $2::uuid is null then offered_to_all else false end where id = $1`,
     [accountId, m.kind === 'user' ? m.userId : null, m.kind === 'project' ? m.projectId : null, mir.type, mir.owner_user_id, mir.project_id]);
+  if (m.kind === 'project') for (const u of (await accountUses(db, accountId)).filter((x) => x.use === 'project' && x.project_id !== m.projectId)) await unbind(db, u.id);
+}
+
+/** Art eines Kontos aus Verwalter und Bindungen (Oberfläche und Rechtehinweise). */
+export function accountKind(a: { managed_user_id?: string | null; managed_project_id?: string | null }, uses: { use: UseKind }[]): 'org' | 'central' | 'project' | 'personal' {
+  if (uses.some((u) => u.use === 'org')) return 'org';
+  const m = managerOf(a);
+  return m.kind === 'org' ? 'central' : m.kind === 'project' ? 'project' : 'personal';
 }
 
 /**

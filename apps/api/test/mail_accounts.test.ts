@@ -197,3 +197,48 @@ test('Verwalterwechsel und Deaktivierung: Konten ohne weitere Bindung werden gel
   assert.equal((await projectAccount(t.db, web()))!.id, t.ids.accounts.project, 'ältestes eigenes Konto rückt nach');
   assert.equal((await t.db.one(`select mail_address from projects where id = $1`, [web()])).mail_address, 'projekt-web@demo.local');
 });
+
+test('Postfach-Arten: Org-Postfach ohne Projekte, zentrales Postfach für alle Projekte holt die PL selbst (nicht in persönliche), Projektpostfach gehört einem Projekt', async () => {
+  const admin = await t.login('admin@demo.local');
+  const anna = await t.login('anna@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const list = (await t.api(admin).get('/mail/accounts')).json().accounts;
+  const org = list.find((a: any) => a.kind === 'org');
+  assert.ok(org, 'Org-Postfach hat die Art org');
+  assert.equal(list.find((a: any) => a.id === t.ids.accounts.project).kind, 'project');
+  // Org-Postfach: keine Projekt- und keine persönliche Bindung, auch nicht durch den Org-Admin
+  assert.equal((await t.api(admin).post(`/mail/accounts/${org.id}/uses`, { use: 'project', projectId: erp() })).statusCode, 403);
+  assert.equal((await t.api(admin).post(`/mail/accounts/${org.id}/uses`, { use: 'personal' })).statusCode, 403);
+  assert.equal((await t.api(admin).patch(`/mail/accounts/${org.id}`, { offeredToAll: true })).statusCode, 400);
+  assert.equal((await t.api(admin).post('/mail/accounts', { kind: 'org', name: 'Zweites', address: 'org2@demo.local', provider: 'dev' })).statusCode, 400, 'höchstens ein Org-Postfach');
+  // Zentrales Postfach: Art central, keine Bindung, „für alle Projekte“
+  const c = await t.api(admin).post('/mail/accounts', { kind: 'central', name: 'Vertrieb', address: 'vertrieb@demo.local', provider: 'dev' });
+  assert.equal(c.statusCode, 200, c.body);
+  const central = c.json().account;
+  assert.equal(central.kind, 'central'); assert.equal(central.offeredToAll, true); assert.deepEqual(central.uses, []);
+  // Die PL holt es sich in ERP (Anna ist dort PL); Petra ist in ERP nur Mitglied
+  const bindable = (await t.api(anna).get(`/projects/${erp()}/mail/accounts`)).json().bindable;
+  assert.ok(bindable.some((a: any) => a.id === central.id), 'zentrales Postfach ist für die PL wählbar');
+  assert.equal((await t.api(pl).post(`/mail/accounts/${central.id}/uses`, { use: 'project', projectId: erp() })).statusCode, 403);
+  const b = await t.api(anna).post(`/mail/accounts/${central.id}/uses`, { use: 'project', projectId: erp() });
+  assert.equal(b.statusCode, 200, b.body); assert.equal(b.json().use.isDefault, false, 'nie automatisch Standard');
+  assert.equal((await t.api(anna).put(`/projects/${erp()}/mail/default-account`, { accountId: central.id })).statusCode, 200);
+  // Ein gebundenes Konto wird nicht zum Org-Postfach; die Freigabe lässt sich zurücknehmen, dann bietet nur der Org-Admin an
+  assert.equal((await t.api(admin).patch(`/mail/accounts/${central.id}`, { offeredToAll: false })).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/mail/accounts/${central.id}/uses`, { use: 'project', projectId: web() })).statusCode, 403, 'ohne Freigabe nur per Angebot');
+  assert.equal((await t.api(admin).post(`/mail/accounts/${central.id}/uses`, { use: 'project', projectId: web() })).statusCode, 200, 'Angebot durch den Org-Admin');
+  await t.api(admin).patch(`/mail/accounts/${central.id}`, { offeredToAll: true });
+  // Persönliches Projekt: auch mit Freigabe holt es sich die PL nicht selbst
+  const max = await t.login('max@demo.local');
+  await t.api(admin).put('/org/settings', { personalProjects: true });
+  const pid = (await t.api(max).post('/projects', { key: 'MXB', name: 'Max Büro', personal: true })).json().project.id;
+  assert.equal((await t.api(max).post(`/mail/accounts/${central.id}/uses`, { use: 'project', projectId: pid })).statusCode, 403);
+  assert.ok(!(await t.api(max).get(`/projects/${pid}/mail/accounts`)).json().bindable.some((a: any) => a.id === central.id));
+  // Projektpostfach: Verwalter Projekt WEB; an ERP bindet es niemand; wird ein zentrales Konto an ein Projekt übergeben, lösen sich die anderen Bindungen
+  assert.equal((await t.api(anna).post(`/mail/accounts/${t.ids.accounts.project}/uses`, { use: 'project', projectId: erp() })).statusCode, 403);
+  assert.equal((await t.api(admin).put(`/mail/accounts/${central.id}/manager`, { managedBy: 'project', projectId: web() })).statusCode, 200);
+  const after = (await t.api(admin).get('/mail/accounts')).json().accounts.find((a: any) => a.id === central.id);
+  assert.equal(after.kind, 'project'); assert.equal(after.offeredToAll, false);
+  assert.deepEqual(after.uses.map((u: any) => u.projectId), [web()], 'nur noch das eigene Projekt');
+  assert.equal(await projectAccount(t.db, erp()), null, 'ERP hat keinen Standard mehr');
+});

@@ -10,7 +10,7 @@ import { aiAllowed, aiError } from '../ai/policy.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { PERSONAL_MAIL_ONLY, accountAllowedInProject, mailAccess, mailAllowedInProject } from '../mail/access.js';
-import { accountBoundToProject, accountRights, accountUseIn, accountUses, bind, bindReason, canManageAccount as canManage, ensureDefault, isOffered, managerOf, mirrorOf, orgAccount, personalUse, refreshMailAddress, setDefault, setManager, unbind, type ManagedBy, type UseKind } from '../mail/accounts.js';
+import { accountKind, accountBoundToProject, accountRights, accountUseIn, accountUses, bind, bindReason, canManageAccount as canManage, ensureDefault, isOffered, managerOf, mirrorOf, orgAccount, personalUse, refreshMailAddress, setDefault, setManager, unbind, type ManagedBy, type UseKind } from '../mail/accounts.js';
 import { projectLabelSql } from '../projectPolicy.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
@@ -29,6 +29,7 @@ function mapAccount(r: any): MailAccount {
   return {
     id: r.id, type: r.type, name: r.name, address: r.address, provider: r.provider, ownerUserId: r.owner_user_id, projectId: r.project_id,
     managedBy: managerOf(r), uses: (r.uses ?? []).map((u: any) => ({ id: u.id, use: u.use, projectId: u.projectId ?? null, projectLabel: u.projectLabel ?? null, userId: u.userId ?? null, isDefault: Boolean(u.isDefault) })),
+    kind: accountKind(r, r.uses ?? []), offeredToAll: Boolean(r.offered_to_all),
     imapHost: r.imap_host, imapPort: r.imap_port, imapUser: r.imap_user, imapSecure: r.imap_secure, smtpHost: r.smtp_host, smtpPort: r.smtp_port, smtpUser: r.smtp_user, smtpSecure: r.smtp_secure,
     hasImapPassword: Boolean(r.imap_password), hasSmtpPassword: Boolean(r.smtp_password), oauthProvider: r.oauth_provider ?? null, viewCount: r.view_count ?? 0,
     lastSyncAt: r.last_sync_at, syncError: r.sync_error
@@ -121,9 +122,9 @@ export async function mailRoutes(app: FastifyInstance) {
     return { accounts: rows.rows.map(mapAccount) };
   });
 
-  /** Verwalter aus der Anfrage: me (Anleger), project (PL), org (Org-Admin); „type“ bleibt als Alias einer Version. */
+  /** Verwalter aus der Anfrage: kind (org, central, project, personal) oder managedBy (me, project, org); „type“ bleibt als Alias einer Version. */
   async function managerFromBody(user: User, b: any): Promise<ManagedBy> {
-    const kind = b.managedBy ?? (b.type === 'project' ? 'project' : b.type === 'org' ? 'org' : 'me');
+    const kind = b.kind === 'org' || b.kind === 'central' ? 'org' : b.kind === 'project' ? 'project' : b.kind === 'personal' ? 'me' : b.managedBy ?? (b.type === 'project' ? 'project' : b.type === 'org' ? 'org' : 'me');
     if (kind === 'project') {
       if (!b.projectId) throw badRequest('projectId erforderlich');
       await requireProject(db, user, b.projectId, 'pl');
@@ -136,15 +137,15 @@ export async function mailRoutes(app: FastifyInstance) {
     if (kind !== 'me') throw badRequest('managedBy: me, project oder org');
     return { kind: 'user', userId: user.id };
   }
-  /** Erste Bindung eines neuen Kontos nach Verwalter: Person → persönlich, Projekt → Projektkonto, Org-Admin → Org-Postfach (höchstens eines). */
-  async function initialBind(user: User, account: AccountRow, m: ManagedBy) {
+  /** Erste Bindung eines neuen Kontos: persönlich → persönlich, Projektpostfach → Projektkonto, Org-Postfach → org (höchstens eines), zentral → keine (die Projekte holen es sich bzw. der Org-Admin bietet es an). */
+  async function initialBind(user: User, account: AccountRow, m: ManagedBy, kind: string | undefined) {
     if (m.kind === 'user') await bind(db, account, 'personal', { userId: m.userId }, user.id);
     else if (m.kind === 'project') await bind(db, account, 'project', { projectId: m.projectId }, user.id);
-    else if (!(await orgAccount(db, account.org_id))) await bind(db, account, 'org', {}, user.id); // weitere Konten der Organisation bleiben ohne Bindung, bis der Org-Admin sie anbietet
+    else if (kind === 'org' || (!kind && !(await orgAccount(db, account.org_id)))) { if (await orgAccount(db, account.org_id)) throw badRequest('Es gibt bereits ein Org-Postfach'); await bind(db, account, 'org', {}, user.id); }
   }
   const loadAccount = async (id: string, orgId: string) => db.maybeOne<AccountRow & { uses: any[] }>(`${ACCOUNT_SELECT} where a.id = $1 and a.org_id = $2`, [id, orgId]);
 
-  app.post<{ Body: Partial<AccountRow> & { type: 'personal' | 'project' | 'org'; projectId?: string; provider?: 'imap' | 'dev'; imapHost?: string; imapPort?: number; imapUser?: string; imapPassword?: string; imapSecure?: boolean; smtpHost?: string; smtpPort?: number; smtpUser?: string; smtpPassword?: string; smtpSecure?: boolean } }>(
+  app.post<{ Body: Partial<AccountRow> & { type: 'personal' | 'project' | 'org'; kind?: 'org' | 'central' | 'project' | 'personal'; offeredToAll?: boolean; projectId?: string; provider?: 'imap' | 'dev'; imapHost?: string; imapPort?: number; imapUser?: string; imapPassword?: string; imapSecure?: boolean; smtpHost?: string; smtpPort?: number; smtpUser?: string; smtpPassword?: string; smtpSecure?: boolean } }>(
     '/mail/accounts',
     async (req) => {
       const user = requireUser(req);
@@ -154,15 +155,16 @@ export async function mailRoutes(app: FastifyInstance) {
       if (provider === 'imap' && (!b.imapHost || !b.smtpHost)) throw badRequest('IMAP- und SMTP-Host erforderlich');
       if (provider === 'dev' && process.env.NODE_ENV === 'production') throw badRequest('Dev-Konten nur außerhalb der Produktion');
       const m = await managerFromBody(user, b);
+      if (b.kind === 'org' && (await orgAccount(db, user.orgId))) throw badRequest('Es gibt bereits ein Org-Postfach');
       const mir = mirrorOf(m);
       const r = await db.one<AccountRow>(
-        `insert into mail_accounts (org_id, type, owner_user_id, project_id, managed_user_id, managed_project_id, name, address, provider, imap_host, imap_port, imap_user, imap_password, imap_secure, smtp_host, smtp_port, smtp_user, smtp_password, smtp_secure)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) returning *`,
+        `insert into mail_accounts (org_id, type, owner_user_id, project_id, managed_user_id, managed_project_id, name, address, provider, imap_host, imap_port, imap_user, imap_password, imap_secure, smtp_host, smtp_port, smtp_user, smtp_password, smtp_secure, offered_to_all)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) returning *`,
         [user.orgId, mir.type, mir.owner_user_id, mir.project_id, m.kind === 'user' ? m.userId : null, m.kind === 'project' ? m.projectId : null, b.name, b.address.toLowerCase(), provider,
           b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, seal(b.imapPassword), b.imapSecure ?? true,
-          b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, seal(b.smtpPassword), b.smtpSecure ?? false]
+          b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, seal(b.smtpPassword), b.smtpSecure ?? false, m.kind === 'org' && b.kind === 'central' && b.offeredToAll !== false]
       );
-      await initialBind(user, r, m);
+      await initialBind(user, r, m, b.kind);
       await audit(db, { orgId: user.orgId, projectId: mir.project_id, userId: user.id, action: 'mail_account.create', objectType: 'mail_account', objectId: r.id, details: { managedBy: m.kind, address: b.address, provider } });
       return { account: mapAccount(await loadAccount(r.id, user.orgId)) };
     }
@@ -184,6 +186,8 @@ export async function mailRoutes(app: FastifyInstance) {
       [a.id, b.name ?? null, b.address ? String(b.address).toLowerCase() : null, b.imapHost ?? null, b.imapPort ?? null, b.imapUser ?? null, seal(b.imapPassword) ?? '', b.imapSecure ?? null,
         b.smtpHost ?? null, b.smtpPort ?? null, b.smtpUser ?? null, seal(b.smtpPassword) ?? '', b.smtpSecure ?? null]
     );
+    // Zentrales Postfach: „für alle Projekte“ setzt nur der Org-Admin an Konten der Organisation ohne org-Bindung
+    if (typeof b.offeredToAll === 'boolean') { if (user.globalRole !== 'org_admin' || managerOf(a).kind !== 'org') throw forbidden('„Für alle Projekte“ setzt der Org-Admin an zentralen Postfächern'); if (b.offeredToAll && (await accountUses(db, a.id)).some((u) => u.use === 'org')) throw badRequest('Das Org-Postfach wird keinem Projekt angeboten'); await db.query(`update mail_accounts set offered_to_all = $2 where id = $1`, [a.id, b.offeredToAll]); }
     if (r.address !== a.address) for (const u of (await accountUses(db, a.id)).filter((x) => x.use === 'project' && x.is_default)) await refreshMailAddress(db, u.project_id!);
     await audit(db, { orgId: user.orgId, projectId: a.managed_project_id ?? null, userId: user.id, action: 'mail_account.update', objectType: 'mail_account', objectId: a.id, details: Object.fromEntries(Object.entries(b).filter(([k]) => !/password/i.test(k))) });
     return { account: mapAccount(await loadAccount(a.id, user.orgId)) };
@@ -293,7 +297,9 @@ export async function mailRoutes(app: FastifyInstance) {
     const accounts = bound.rows.map((r: any) => ({ ...mapAccount(r), isDefault: Boolean(r.uses?.find((u: any) => u.use === 'project' && u.projectId === req.params.id)?.isDefault), offered: isOffered(r, req.params.id) }));
     let bindable: MailAccount[] = [];
     if (m.role === 'pl') {
-      const rows = await db.query(`${ACCOUNT_SELECT} where a.org_id = $1 and (a.managed_user_id = $2 or a.managed_project_id = $3) and not exists (select 1 from mail_account_uses u where u.account_id = a.id and u.use = 'project' and u.project_id = $3) order by a.name`, [user.orgId, user.id, req.params.id]);
+      // Eigene und vom Projekt verwaltete Konten sowie zentrale Postfächer der Organisation mit „für alle Projekte“ (nicht in persönlichen Projekten, nie das Org-Postfach)
+      const personalProject = projectPolicy(await db.one(`select personal from projects where id = $1`, [req.params.id])).mail.ownOnly;
+      const rows = await db.query(`${ACCOUNT_SELECT} where a.org_id = $1 and (a.managed_user_id = $2 or a.managed_project_id = $3 or (a.managed_user_id is null and a.managed_project_id is null and a.offered_to_all and not $4 and not exists (select 1 from mail_account_uses o where o.account_id = a.id and o.use = 'org'))) and not exists (select 1 from mail_account_uses u where u.account_id = a.id and u.use = 'project' and u.project_id = $3) order by a.name`, [user.orgId, user.id, req.params.id, personalProject]);
       bindable = rows.rows.map(mapAccount);
     }
     // Persönliche Konten des Benutzers (für Ansichten aus eigenen Postfächern)

@@ -10,7 +10,7 @@ import { seal } from '../secrets.js';
 import { bind, orgAccount } from '../mail/accounts.js';
 import type { AccountRow } from '../mail/types.js';
 
-interface MailPurpose { kind: 'mail'; provider: string; /** Verwalter des neuen Kontos (type bleibt eine Version als Alias) */ type: 'personal' | 'project' | 'org'; projectId: string | null; name: string | null }
+interface MailPurpose { kind: 'mail'; provider: string; /** Verwalter des neuen Kontos (type bleibt eine Version als Alias) */ type: 'personal' | 'project' | 'org'; /** zentrales Postfach (Organisation, mehrere Projekte): keine org-Bindung, für alle Projekte wählbar */ central?: boolean; projectId: string | null; name: string | null }
 interface OidcPurpose { kind: 'oidc'; next: string }
 
 /**
@@ -36,7 +36,7 @@ export async function oauthRoutes(app: FastifyInstance) {
   app.get('/oauth/providers', async () => ({ providers: oauthProviders().map((p) => ({ key: p.key, label: p.label, mailProvider: p.mailProvider })) }));
 
   // Start: prüft Rechte wie beim manuellen Anlegen, merkt den Zweck und leitet zum Anbieter
-  app.get<{ Querystring: { provider: string; type?: string; managedBy?: string; projectId?: string; name?: string } }>('/oauth/start', async (req, reply) => {
+  app.get<{ Querystring: { provider: string; type?: string; managedBy?: string; kind?: string; projectId?: string; name?: string } }>('/oauth/start', async (req, reply) => {
     const user = requireUser(req);
     const p = oauthProviders().find((x) => x.key === req.query.provider);
     if (!p) throw notFound('OAuth2-Anbieter nicht konfiguriert');
@@ -46,11 +46,13 @@ export async function oauthRoutes(app: FastifyInstance) {
       if (!req.query.projectId) throw badRequest('projectId erforderlich');
       await requireProject(db, user, req.query.projectId, 'pl');
       projectId = req.query.projectId;
-    } else if (type === 'org') {
-      if (user.globalRole !== 'org_admin') throw forbidden('Org-Postfach legt der Org-Admin an');
-      if (await orgAccount(db, user.orgId)) throw badRequest('Es gibt bereits ein Org-Postfach');
-    } else if (type !== 'personal') throw badRequest('managedBy: me, project oder org');
-    const state = await newState(user.id, { kind: 'mail', provider: p.key, type, projectId, name: req.query.name?.trim() || null });
+    }
+    const central = req.query.kind === 'central';
+    if (type === 'org') {
+      if (user.globalRole !== 'org_admin') throw forbidden('Konten der Organisation legt der Org-Admin an');
+      if (!central && (await orgAccount(db, user.orgId))) throw badRequest('Es gibt bereits ein Org-Postfach');
+    } else if (type !== 'personal' && type !== 'project') throw badRequest('managedBy: me, project oder org');
+    const state = await newState(user.id, { kind: 'mail', provider: p.key, type, central, projectId, name: req.query.name?.trim() || null });
     return reply.redirect(authorizeUrl(p, state));
   });
 
@@ -84,8 +86,9 @@ export async function oauthRoutes(app: FastifyInstance) {
             p.mailProvider === 'imap' ? p.imap!.smtpHost : null, p.mailProvider === 'imap' ? p.imap!.smtpPort : null, p.mailProvider === 'imap' ? info.email : null, false]
         );
         accountId = r.id;
-        // Erste Bindung nach Verwalter: persönlich, Projektkonto (Standard, wenn das erste) oder Org-Postfach
-        await bind(db, r as AccountRow, purpose.type === 'personal' ? 'personal' : purpose.type === 'project' ? 'project' : 'org', { userId: user.id, projectId: purpose.projectId }, user.id);
+        // Erste Bindung nach Art: persönlich, Projektpostfach (Standard, wenn das erste), Org-Postfach; zentrales Postfach bleibt ohne Bindung und ist für alle Projekte wählbar
+        if (purpose.central) await db.query(`update mail_accounts set offered_to_all = true where id = $1`, [r.id]);
+        else await bind(db, r as AccountRow, purpose.type === 'personal' ? 'personal' : purpose.type === 'project' ? 'project' : 'org', { userId: user.id, projectId: purpose.projectId }, user.id);
       }
       await audit(db, { orgId: user.org_id, projectId: purpose.projectId, userId: user.id, action: existing ? 'mail_account.reconnect' : 'mail_account.create', objectType: 'mail_account', objectId: accountId, details: { type: purpose.type, address: info.email, provider: p.mailProvider, oauth: p.key } });
       return reply.redirect(`${publicBase()}${back}?connected=${encodeURIComponent(info.email)}`);

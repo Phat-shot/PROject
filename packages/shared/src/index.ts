@@ -725,6 +725,8 @@ export type MailAccountUse = 'org' | 'project' | 'personal';
 export type MailAccountManager = { kind: 'org' } | { kind: 'user'; userId: string } | { kind: 'project'; projectId: string };
 /** Bindung eines Kontos: Org-Postfach, Projektkonto (Standard je Projekt) oder „Meine Konten“ einer Person */
 export interface MailAccountUseRow { id: string; use: MailAccountUse; projectId: string | null; projectLabel: string | null; userId: string | null; isDefault: boolean }
+/** Art eines Postfachs, abgeleitet aus Verwalter und Bindungen: Org-Postfach (Systemmails), zentral (Organisation, mehrere Projekte), Projektpostfach (PL), persönlich */
+export type MailAccountKind = 'org' | 'central' | 'project' | 'personal';
 export interface MailAccount {
   id: string;
   /** Spiegel des Verwalters (eine Version lang); maßgeblich sind managedBy und uses */
@@ -736,6 +738,9 @@ export interface MailAccount {
   projectId: string | null;
   managedBy?: MailAccountManager;
   uses?: MailAccountUseRow[];
+  kind?: MailAccountKind;
+  /** zentrales Postfach: jede PL darf es in ihr (normales) Projekt holen */
+  offeredToAll?: boolean;
   /** nur in GET /projects/:id/mail/accounts */
   isDefault?: boolean;
   /** vom Org-Admin angeboten (Verwalter ist nicht dieses Projekt) */

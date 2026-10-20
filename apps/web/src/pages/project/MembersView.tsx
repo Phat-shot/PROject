@@ -4,7 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
-import { AccountForm, OAuthStartDialog, managerLabel, useLabel } from '../MailAccountsPage';
+import { AccountForm, OAuthStartDialog, kindLabel, useLabel } from '../MailAccountsPage';
 import { useAiStatus } from '../../lib/useAi';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
@@ -458,23 +458,23 @@ function ProjectAccountsCard({ onCreate, onOauth, providers }: { onCreate: () =>
   const bindable = data.data?.bindable ?? [];
   return (
     <div className="mt" id="konten">
-      <h3>Projektkonten</h3>
-      <p className="muted small">Projektkonten sind Antwortadresse (Plus-Code), Absender für Agenten, Einladungen, Erinnerungen, Berichte und Workflows. Genau eines ist Standard für ausgehende Mails; die PL bindet eigene oder vom Projekt verwaltete Konten an, der Org-Admin kann Konten der Organisation anbieten.</p>
+      <h3>Postfächer des Projekts</h3>
+      <p className="muted small">Antwortadresse (Plus-Code), Absender für Agenten, Einladungen, Erinnerungen, Berichte und Workflows. Genau eines ist Standard für ausgehende Mails. Die PL legt ein <strong>Projektpostfach</strong> an oder holt ein <strong>zentrales Postfach</strong> der Organisation (vom Org-Admin angeboten oder für alle Projekte freigegeben) bzw. ein eigenes Konto ins Projekt; das Org-Postfach bleibt den Systemmails vorbehalten.</p>
       {error && <div className="error small">{error}</div>}
       {accounts.length === 0 && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.</p>}
-      {accounts.length > 0 && <table className="table"><thead><tr><th>Standard</th><th>Konto</th><th>Verwalter</th><th /></tr></thead><tbody>
+      {accounts.length > 0 && <table className="table"><thead><tr><th>Standard</th><th>Konto</th><th>Art</th><th /></tr></thead><tbody>
         {accounts.map((a) => <tr key={a.id}>
           <td><input type="radio" name="default-account" checked={Boolean(a.isDefault)} disabled={!isPl || busy} title={isPl ? 'Als Standard für ausgehende Mails setzen' : 'Standard-Ausgangskonto'} onChange={() => void run(async () => { await api.put(`/projects/${detail.project.id}/mail/default-account`, { accountId: a.id }); await refresh(); })} /></td>
           <td>{a.name}<div className="muted small">{a.address}{a.offered && <span className="badge" style={{ marginLeft: 6 }} title="Vom Org-Admin angeboten; wird nie automatisch Standard">angeboten</span>}</div></td>
-          <td className="small">{managerLabel(a, user?.id, [detail.project])}</td>
+          <td className="small">{kindLabel(a, user?.id, [detail.project])}</td>
           <td className="nowrap">{isPl && <button className="btn sm link" disabled={busy} onClick={() => { const u = a.uses?.find((x) => x.use === 'project' && x.projectId === detail.project.id); if (u) void dialog.confirm({ title: 'Projektbindung lösen', text: `${a.address} nicht mehr als Projektkonto nutzen? Ansichten darüber verschwinden, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Lösen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}/uses/${u.id}`); await refresh(); }); }); }}>Bindung lösen</button>}</td>
         </tr>)}
       </tbody></table>}
       {isPl && <div className="row mt">
-        <button className="btn sm primary" onClick={onCreate}>Neues Projektkonto anbinden</button>
+        <button className="btn sm primary" onClick={onCreate}>Neues Projektpostfach anbinden</button>
         {providers.map((p) => <button key={p.key} className="btn sm" onClick={() => onOauth(p)}>Mit {p.label} verbinden</button>)}
         {bindable.length > 0 && <>
-          <select value={bindId} onChange={(e) => setBindId(e.target.value)} style={{ width: 'auto' }}><option value="">– vorhandenes Konto binden –</option>{bindable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) · {(a.uses ?? []).map(useLabel).join(', ') || 'ohne Verwendung'}</option>)}</select>
+          <select value={bindId} onChange={(e) => setBindId(e.target.value)} style={{ width: 'auto' }}><option value="">– vorhandenes Postfach ins Projekt holen –</option>{bindable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) · {kindLabel(a, user?.id, [detail.project])}{(a.uses ?? []).filter((u) => u.use === 'project').length ? ` · in ${(a.uses ?? []).filter((u) => u.use === 'project').map(useLabel).join(', ')}` : ''}</option>)}</select>
           <button className="btn sm" disabled={!bindId || busy} onClick={() => void run(async () => { await api.post(`/mail/accounts/${bindId}/uses`, { use: 'project', projectId: detail.project.id }); setBindId(''); await refresh(); })}>Binden</button>
         </>}
       </div>}

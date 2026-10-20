@@ -1426,6 +1426,13 @@ Regeln:
 - **Deaktivierung einer Person** (users.ts:60): Konten mit Verwalter = Person und ohne `project`/`org`-Bindung werden gelöscht; sonst Verwalter auf die Org (oder das Projekt der einzigen `project`-Bindung) übertragen, `personal`-Bindung entfernen, Audit `mail_account.manager_transferred`. **Löschen eines Kontos mit Bindungen**: Bestätigungstext nennt die gebundenen Projekte; Standard rückt je Projekt nach.
 - **Persönliche Projekte:** `accountAllowedInProject` prüft Bindungen: erlaubt sind Konten mit `personal`-Bindung für den Eigentümer oder `project`-Bindung für dieses Projekt (dazu zählt das vom Org-Admin ausdrücklich angebotene Org-Postfach).
 
+### 17.2a Postfach-Arten (Ergänzung 20.10.2026, Migration 058)
+
+Aus Verwalter und Bindungen ergibt sich die **Art** (`accountKind`), die die Oberfläche zeigt: `org` (org-Bindung), `central` (Verwalter Org-Admin ohne org-Bindung), `project` (Verwalter Projekt), `personal` (Verwalter Person). Regeln:
+- Das **Org-Postfach** dient nur Systemmails: keine `project`- und keine `personal`-Bindung (auch nicht durch den Org-Admin); ein Konto mit solchen Bindungen wird nicht zum Org-Postfach. Bestand bereinigt Migration 058 (Bindungen gelöst, Standard rückt nach).
+- **Zentrale Postfächer** haben `mail_accounts.offered_to_all`: dann holt jede PL sie selbst in ihr normales Projekt (`bindReason`), sonst bietet sie nur der Org-Admin an; persönliche Projekte nur ausdrücklich durch den Org-Admin. `GET /projects/:id/mail/accounts` listet sie unter `bindable`. Anlegen mit `kind: 'central'` (POST, OAuth `kind=central`): keine erste Bindung.
+- **Projektpostfächer** gehören genau einem Projekt; `setManager` auf ein Projekt löst Bindungen an andere Projekte und setzt `offered_to_all` zurück.
+
 ### 17.3 Datenmodell (Migrationsnummer bei Umsetzung nach `ls apps/api/migrations`)
 
 ```sql
