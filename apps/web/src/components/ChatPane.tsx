@@ -75,14 +75,22 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     setMsgs((m) => [...p.messages, ...m]); setHasMore(p.hasMore);
     requestAnimationFrame(() => { if (el) el.scrollTop = el.scrollHeight - h0; });
   };
+  // Feld sofort leeren (wirkt flüssiger); schlägt das Senden fehl, kommt der Text zurück
+  const sending = useRef(false);
   const send = async (body: string, threadId: string | null) => {
-    if (!body.trim()) return;
+    if (!body.trim() || sending.current) return;
+    sending.current = true;
+    const clear = threadId ? setReply : setText;
+    clear('');
+    if (!threadId) stickBottom.current = true;
     try {
       await api.post(base, { body: body.trim(), threadId });
-      if (threadId) { setReply(''); await loadThread(threadId); } else { setText(''); stickBottom.current = true; }
+      setError(null);
+      if (threadId) await loadThread(threadId);
       await load();
       onSent?.();
-    } catch (e) { setError((e as Error).message); }
+    } catch (e) { clear(body); setError((e as Error).message); }
+    finally { sending.current = false; }
   };
   const remove = async (m: ChatMessage) => {
     if (!(await dialog.confirm({ title: 'Nachricht löschen', text: 'Diese Nachricht löschen?', confirmLabel: 'Löschen', danger: true }))) return;
@@ -103,7 +111,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         {!m.deleted && ((!system(m) && m.userId === user?.id) || canModerate) && <button className="btn sm link" title="Löschen" onClick={() => void remove(m)}>✕</button>}
       </div>
       {editing?.id === m.id
-        ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void saveEdit(); if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
+        ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
         : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
       {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
@@ -124,7 +132,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}<Msg m={m} inThread={false} /></div>; })}
         </div>
         {canWrite ? <div className="chat-compose">
-          <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (@Name erwähnt, Strg+Enter sendet)'} onSubmit={() => void send(text, null)} />
+          <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (Enter sendet, Umschalt+Enter neue Zeile, @Name erwähnt)'} onSubmit={() => void send(text, null)} enterSends />
           <button className="btn primary" disabled={!text.trim()} onClick={() => void send(text, null)}>Senden</button>
         </div> : <div className="muted small chat-compose">Im Projektkanal schreiben nur Mitglieder des Projekts; du liest mit.</div>}
       </div>
@@ -135,7 +143,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           {root ? <Msg m={root} inThread /> : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
           <div className="chat-replies">{replies.map((m) => <Msg key={m.id} m={m} inThread />)}</div>
           {canWrite && <div className="chat-compose" ref={replyBox}>
-            <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten …" onSubmit={() => void send(reply, thread)} />
+            <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten … (Enter sendet)" onSubmit={() => void send(reply, thread)} enterSends />
             <button className="btn primary" disabled={!reply.trim()} onClick={() => void send(reply, thread)}>Antworten</button>
           </div>}
         </div>

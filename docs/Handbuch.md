@@ -24,7 +24,7 @@ Vollständige Anleitung für alle Benutzer von PROject, einschließlich der Arbe
 - **Angeheftete Projekte:** bis zu fünf, mit ☆ anheften und ★ lösen (Benutzereinstellung). Ohne eigene Auswahl stehen dort die ersten fünf Projekte.
 - **Alle Projekte** klappt die übrigen Projekte aus; dort auch die Projektübersicht mit „Neues Projekt“ (Org-Admin, Projektersteller).
 - **Im Projekt:** Arbeitspakete (Board, Plan, Kalender, Besprechungen, Zeiten, Auswertung), Postfach, Doku, Risiken, KI, Einstellungen (nur PL).
-- **Global:** Postfach (alle Mail-Ansichten mit Leserecht), Kalender (alle Projekte), Workflows, Chat.
+- **Global:** Postfach (vereinigte Sicht aller Postfächer mit Leserecht, jede Mail einmal, Filter je Postfach; gelesen und Ordner gelten überall gleich), Kalender (alle Projekte), Workflows, Chat.
 - **Kopfzeile:** Suche über APs, Seiten und Mails (auch nach Kennung), Glocke mit Benachrichtigungen. Ein Klick auf eine Meldung öffnet das Ziel und markiert sie als gelesen. KI-Agenten und deaktivierte Benutzer bekommen keine Meldungen.
 - **Tutorial** und **Hilfe** unten links.
 

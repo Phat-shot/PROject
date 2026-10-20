@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
 
-export interface MailUnread { total: number; byProject: Record<string, number> }
-const EMPTY: MailUnread = { total: 0, byProject: {} };
+/** total zählt jede Mail einmal, auch wenn sie über mehrere Projekte sichtbar ist */
+export interface MailUnread { total: number; byProject: Record<string, number>; byAccount?: Record<string, number> }
+const EMPTY: MailUnread = { total: 0, byProject: {}, byAccount: {} };
 let cache: MailUnread = EMPTY;
 const listeners = new Set<(u: MailUnread) => void>();
 let timer: ReturnType<typeof setInterval> | null = null;
 const load = () => api.get<MailUnread>('/mail/unread').then((u) => { cache = u; listeners.forEach((l) => l(u)); }).catch(() => undefined);
 
-/** Ungelesene Mails (gesamt und je Projekt), alle 30 s und beim Fokus neu; refreshMailUnread() nach dem Öffnen einer Mail. */
+/** Ungelesene Mails (gesamt, je Projekt und je Postfach), alle 30 s und beim Fokus neu; refreshMailUnread() nach dem Öffnen einer Mail. */
 export function useMailUnread(): MailUnread {
   const [u, setU] = useState<MailUnread>(cache);
   useEffect(() => {

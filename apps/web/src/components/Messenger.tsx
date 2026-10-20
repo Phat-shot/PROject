@@ -111,7 +111,7 @@ function Conversation({ c, threadId, msgId, onBack, onThread, onSent }: { c: Con
       </div>
       <ChatPane key={c.channelId} channelId={c.channelId} members={members} canModerate={detail.data?.project.myMembership.role === 'pl'}
         threads initialThread={threadId} highlightId={msgId} onSent={onSent} onThreadChange={(t) => { if ((t ?? null) !== threadId) onThread(t); }}
-        placeholder={c.kind === 'project' ? `Nachricht an ${c.projectKey} … (@Name erwähnt, Strg+Enter sendet)` : `Nachricht an ${c.title} … (Strg+Enter sendet)`}
+        placeholder={c.kind === 'project' ? `Nachricht an ${c.projectKey} … (Enter sendet, @Name erwähnt)` : `Nachricht an ${c.title} … (Enter sendet)`}
         emptyText={c.kind === 'project' ? 'Noch keine Nachrichten im Projektkanal.' : `Noch keine Nachrichten.${agentHint}`} />
     </>
   );

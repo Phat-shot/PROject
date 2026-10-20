@@ -11,7 +11,7 @@ import { AllTasksView } from './AllTasksPage';
 import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
 import { useOpenChat } from '../components/Messenger';
-import { NotificationRow } from '../components/Notifications';
+import { NotificationRow, sortNotifications } from '../components/Notifications';
 
 /**
  * Dashboard (nur global, filterbar nach Projekt über ?projekt=): Reiter Meine Arbeit, Projekte (Ampel, Fortschritt,
@@ -146,7 +146,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
           </div>
           <div className="card">
             <h2>Meldungen {notes.data && notes.data.unread > 0 && <span className="badge warn">{notes.data.unread} neu</span>}</h2>
-            {(notes.data?.notifications ?? []).slice(0, 6).map((n) => <NotificationRow key={n.id} n={n} onOpened={() => void notes.reload()} />)}
+            {sortNotifications(notes.data?.notifications ?? []).slice(0, 6).map((n) => <NotificationRow key={n.id} n={n} onOpened={() => void notes.reload()} />)}
             {notes.data && notes.data.notifications.length === 0 && <div className="muted small">Keine Meldungen.</div>}
           </div>
         </div>

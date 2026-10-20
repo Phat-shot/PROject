@@ -639,49 +639,70 @@ export async function mailRoutes(app: FastifyInstance) {
     return { views };
   });
 
-  // Gemeinsames Postfach: alle Mails aus Ansichten mit Leserecht, über alle aktiven Projekte
-  app.get<{ Querystring: { folder?: string; projectId?: string; viewId?: string } }>('/mail/inbox', async (req) => {
-    const user = requireUser(req);
+  /** Ansichten mit Leserecht über alle aktiven Projekte (optional eines), mit Konto: Grundlage von Postfach und Zählern. */
+  async function readableViews(user: User, projectId?: string) {
     const views = await db.query(
-      `select v.id, v.name, v.project_id, p.key as project_key from mail_views v join projects p on p.id = v.project_id
-       where p.org_id = $1 and p.status = 'active' ${req.query.projectId ? 'and p.id = $2' : ''}`,
-      req.query.projectId ? [user.orgId, req.query.projectId] : [user.orgId]
+      `select v.id, v.name, v.project_id, v.account_id, a.name as account_name, p.key as project_key
+       from mail_views v join projects p on p.id = v.project_id join mail_accounts a on a.id = v.account_id
+       where p.org_id = $1 and p.status = 'active' ${projectId ? 'and p.id = $2' : ''} order by p.key, v.name`,
+      projectId ? [user.orgId, projectId] : [user.orgId]
     );
-    const readable: { id: string; name: string; projectId: string; projectKey: string }[] = [];
+    const out: { id: string; name: string; projectId: string; projectKey: string; accountId: string; accountName: string }[] = [];
     for (const v of views.rows) {
-      const m = await getMembership(db, v.project_id, user.id);
-      const r = await getViewRights(db, v.id, user, m);
-      if (r.canRead) readable.push({ id: v.id, name: v.name, projectId: v.project_id, projectKey: v.project_key });
+      const r = await getViewRights(db, v.id, user, await getMembership(db, v.project_id, user.id));
+      if (r.canRead) out.push({ id: v.id, name: v.name, projectId: v.project_id, projectKey: v.project_key, accountId: v.account_id, accountName: v.account_name });
     }
-    if (readable.length === 0) return { mails: [], views: [] };
-    const ids = readable.filter((v) => !req.query.viewId || v.id === req.query.viewId).map((v) => v.id);
+    return out;
+  }
+
+  /**
+   * Postfach: jede Mail einmal, aus allen Ansichten mit Leserecht (global über alle aktiven Projekte, im Projekt nur dessen).
+   * Global ist es die vereinigte Sicht der berechtigten Postfächer (Filter accountId); Gelesen und Ordner hängen an der Mail
+   * selbst und sind damit in allen Projekten gleich.
+   */
+  app.get<{ Querystring: { folder?: string; projectId?: string; viewId?: string; accountId?: string } }>('/mail/inbox', async (req) => {
+    const user = requireUser(req);
+    const readable = await readableViews(user, req.query.projectId);
+    const views = readable.map(({ id, name, projectId, projectKey }) => ({ id, name, projectId, projectKey }));
+    if (readable.length === 0) return { mails: [], views };
+    const ids = readable.filter((v) => (!req.query.viewId || v.id === req.query.viewId) && (!req.query.accountId || v.accountId === req.query.accountId)).map((v) => v.id);
+    if (ids.length === 0) return { mails: [], views };
     const rows = await db.query(
       `select distinct on (m.id) m.*, x.view_id, ${LINKED}, (not m.outgoing and not exists (select 1 from mail_reads rd where rd.mail_id = m.id and rd.user_id = $2)) as unread from mails m join mail_view_matches x on x.mail_id = m.id
        where x.view_id = any($1::uuid[]) ${req.query.folder ? 'and lower(m.folder) = lower($3)' : ''} order by m.id, x.view_id`,
       req.query.folder ? [ids, user.id, req.query.folder] : [ids, user.id]
     );
     const byView = new Map(readable.map((v) => [v.id, v]));
-    const mails = rows.rows
-      .map((r: any) => { const v = byView.get(r.view_id)!; return { ...mapSummary(r), projectId: v.projectId, projectKey: v.projectKey, viewId: v.id, viewName: v.name }; })
-      .sort((a: any, b: any) => String(b.date).localeCompare(String(a.date)))
-      .slice(0, 500);
-    return { mails, views: readable };
+    const list = rows.rows.sort((a: any, b: any) => new Date(b.date).getTime() - new Date(a.date).getTime()).slice(0, 500);
+    // Projekte je Mail (eine Mail kann über Ansichten mehrerer Projekte sichtbar sein): als Kennzeichen in der Liste
+    const keys = new Map<string, string[]>();
+    if (list.length) {
+      const hits = await db.query(`select mail_id, view_id from mail_view_matches where mail_id = any($1::uuid[]) and view_id = any($2::uuid[])`, [list.map((r: any) => r.id), ids]);
+      for (const h of hits.rows) { const k = byView.get(h.view_id)!.projectKey; const cur = keys.get(h.mail_id) ?? []; if (!cur.includes(k)) cur.push(k); keys.set(h.mail_id, cur); }
+    }
+    const mails = list.map((r: any) => { const v = byView.get(r.view_id)!; return { ...mapSummary(r), projectId: v.projectId, projectKey: v.projectKey, projectKeys: (keys.get(r.id) ?? [v.projectKey]).sort(), viewId: v.id, viewName: v.name, accountName: v.accountName }; });
+    return { mails, views };
   });
 
-  // Ungelesene Mails (nicht geöffnet, nicht gesendet, nicht Papierkorb/Spam) in lesbaren Ansichten: gesamt und je Projekt, für Navigation und Listen
+  // Ungelesene Mails (nicht geöffnet, nicht gesendet, nicht Papierkorb/Spam) in lesbaren Ansichten: gesamt (jede Mail einmal), je Projekt und je Postfach
   app.get('/mail/unread', async (req) => {
     const user = requireUser(req);
-    const views = await db.query(`select v.id, v.project_id from mail_views v join projects p on p.id = v.project_id where p.org_id = $1 and p.status = 'active'`, [user.orgId]);
-    const readable: { id: string; projectId: string }[] = [];
-    for (const v of views.rows) { const r = await getViewRights(db, v.id, user, await getMembership(db, v.project_id, user.id)); if (r.canRead) readable.push({ id: v.id, projectId: v.project_id }); }
-    if (!readable.length) return { total: 0, byProject: {} };
+    const readable = await readableViews(user);
+    if (!readable.length) return { total: 0, byProject: {}, byAccount: {} };
     const rows = await db.query(
-      `select v.project_id, count(distinct m.id)::int as n from mails m join mail_view_matches x on x.mail_id = m.id join mail_views v on v.id = x.view_id
+      `select m.id, m.account_id, v.project_id from mails m join mail_view_matches x on x.mail_id = m.id join mail_views v on v.id = x.view_id
        where x.view_id = any($1::uuid[]) and not m.outgoing and lower(m.folder) not similar to '%(trash|papierkorb|junk|spam|gelöscht|deleted)%'
-         and not exists (select 1 from mail_reads rd where rd.mail_id = m.id and rd.user_id = $2) group by v.project_id`, [readable.map((v) => v.id), user.id]);
-    const byProject: Record<string, number> = {};
-    for (const r of rows.rows) byProject[r.project_id] = r.n;
-    return { total: Object.values(byProject).reduce((a, b) => a + b, 0), byProject };
+         and not exists (select 1 from mail_reads rd where rd.mail_id = m.id and rd.user_id = $2)`, [readable.map((v) => v.id), user.id]);
+    const byProject: Record<string, Set<string>> = {};
+    const byAccount: Record<string, Set<string>> = {};
+    const all = new Set<string>();
+    for (const r of rows.rows) {
+      all.add(r.id);
+      (byProject[r.project_id] ??= new Set()).add(r.id);
+      (byAccount[r.account_id] ??= new Set()).add(r.id);
+    }
+    const count = (o: Record<string, Set<string>>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v.size]));
+    return { total: all.size, byProject: count(byProject), byAccount: count(byAccount) };
   });
   app.post<{ Params: { mid: string }; Body: { read: boolean } }>('/mail/mails/:mid/read', async (req) => {
     const user = requireUser(req);

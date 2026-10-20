@@ -848,8 +848,11 @@ export interface MailFolder {
 export interface InboxMail extends MailSummary {
   projectId: string;
   projectKey: string;
+  /** alle Projekte mit lesbarer Ansicht auf diese Mail */
+  projectKeys: string[];
   viewId: string;
   viewName: string;
+  accountName: string;
 }
 
 export interface MailDetail extends MailSummary {

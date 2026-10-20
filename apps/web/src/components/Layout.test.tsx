@@ -6,14 +6,14 @@ import { MemoryRouter } from 'react-router-dom';
 import type { Notification, User } from '@projekttool/shared';
 
 const get = vi.fn();
-vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), patch: vi.fn(), post: vi.fn() } }));
+vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), patch: vi.fn(), post: vi.fn() }, fmtDateTime: (d: string) => d }));
 vi.mock('../lib/useAi', () => ({ useAiStatus: () => null }));
 vi.mock('../lib/useChatUnread', () => ({ useChatUnread: () => ({ total: 0, reload: vi.fn() }) }));
 vi.mock('../lib/useMedia', () => ({ useIsMobile: () => false }));
 vi.mock('./Tour', () => ({ Tour: () => null, tourDone: () => true }));
 vi.mock('./Messenger', () => ({ Messenger: () => null, MessengerCtx: createContext(() => undefined), useOpenChat: () => vi.fn() }));
 const openNotification = vi.fn(async () => undefined);
-vi.mock('./Notifications', () => ({ useOpenNotification: () => openNotification, eventLabel: (n: { event?: string }) => (n.event && n.event !== 'info' ? `${n.event} · ` : '') }));
+vi.mock('./Notifications', async (importOriginal) => ({ ...(await importOriginal<typeof import('./Notifications')>()), useOpenNotification: () => openNotification }));
 let user: Partial<User> = {};
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user, orgName: 'Demo', logout: vi.fn(), setUser: vi.fn() }) }));
 import { Layout, TopBar } from './Layout';
@@ -53,7 +53,7 @@ describe('Glocke (Kopfzeile)', () => {
     await waitFor(() => expect(get).toHaveBeenCalledWith('/notifications'));
     fireEvent.click(screen.getByRole('button', { name: 'Benachrichtigungen' }));
     expect(await screen.findByText('Bald fällig: Angebot prüfen')).toBeInTheDocument();
-    expect(screen.getByText(/^due · /)).toBeInTheDocument();
+    expect(screen.getByText(/^Fälligkeit · /)).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText('Klasse'), { target: { value: 'due' } });
     await waitFor(() => expect(get).toHaveBeenCalledWith('/notifications?event=due'));
     fireEvent.click(screen.getByLabelText('nur ungelesene'));

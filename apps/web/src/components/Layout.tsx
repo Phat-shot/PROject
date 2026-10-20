@@ -10,7 +10,7 @@ import { useChatUnread } from '../lib/useChatUnread';
 import { useMailUnread } from '../lib/useMailUnread';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
-import { eventLabel, useOpenNotification } from './Notifications';
+import { NotifIcon, NotificationItem, sortNotifications, useOpenNotification } from './Notifications';
 import { useOpenChat } from './Messenger';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
@@ -86,7 +86,7 @@ export function Layout({ children }: { children: ReactNode }) {
         {sel && (
           <div className="sub2">
             <NavLink to={`${base}/board`} data-tour="p-aufgaben" className={() => (AREAS_AP.some((s) => isActive(`${base}/${s}`)) ? 'active' : '')}>Arbeitspakete</NavLink>
-            <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach</NavLink>
+            <NavLink to={`${base}/mail`} data-tour="p-postfach">Postfach{(mailUnread.byProject[p.id] ?? 0) > 0 && <span className="badge danger nav-count" title="ungelesene Mails">{mailUnread.byProject[p.id]}</span>}</NavLink>
             <NavLink to={`${base}/doku`} data-tour="p-doku">Doku</NavLink>
             <NavLink to={`${base}/raid`} data-tour="p-raid">Risiken</NavLink>
             {(ai?.enabled || ai?.killswitch) && <NavLink to={`${base}/ki`} data-tour="p-ki">KI</NavLink>}
@@ -194,7 +194,7 @@ function Bell() {
   };
   return (
     <div className="bell" style={{ position: 'relative' }}>
-      <button className="btn" title="Benachrichtigungen" aria-label="Benachrichtigungen" onClick={() => setOpen(!open)}>🔔{data.unread > 0 && <span className="dot">{data.unread}</span>}</button>
+      <button className="btn" title="Benachrichtigungen" aria-label="Benachrichtigungen" onClick={() => setOpen(!open)}><NotifIcon event="bell" size={18} />{data.unread > 0 && <span className="dot">{data.unread > 99 ? '99+' : data.unread}</span>}</button>
       {open && (
         <div className="notif-panel">
           <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span className="row" style={{ gap: 8 }}><button className={`btn sm ${tab === 'all' ? 'primary' : ''}`} onClick={() => setTab('all')}>Alle</button><button className={`btn sm ${tab === 'open' ? 'primary' : ''}`} title="Fragen, Entscheidungen und Bestätigungen, die auf dich warten" onClick={() => setTab('open')}>Offen für mich{questions.length > 0 && <span className="badge" style={{ marginLeft: 4 }}>{questions.length}</span>}</button></span>{tab === 'all' && data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
@@ -212,7 +212,10 @@ function Bell() {
             <label className="check small"><input type="checkbox" checked={filter.unread} onChange={(e) => setFilter({ ...filter, unread: e.target.checked })} /> nur ungelesene</label>
           </div>
           {data.notifications.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Benachrichtigungen.</div>}
-          {data.notifications.map((n) => <div key={n.id} className={`notif ${n.readAt ? '' : 'unread'}`} onClick={() => void go(n)}><div className="t">{n.title}</div>{n.body && <div className="b">{n.body}</div>}<div className="b">{eventLabel(n)}{new Date(n.createdAt).toLocaleString('de-DE')}{n.ref?.type === 'question' && !n.resolvedAt ? ' · offen' : ''}</div></div>)}</>}
+          {sortNotifications(data.notifications).map((n, i, all) => <div key={n.id}>
+            {(i === 0 || Boolean(all[i - 1].readAt) !== Boolean(n.readAt)) && data.notifications.some((x) => !x.readAt) && data.notifications.some((x) => x.readAt) && <div className="notif-sep">{n.readAt ? 'Gelesen' : 'Ungelesen'}</div>}
+            <NotificationItem n={n} onOpen={(x) => void go(x)} />
+          </div>)}</>}
         </div>
       )}
     </div>

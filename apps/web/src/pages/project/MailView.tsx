@@ -9,7 +9,7 @@ import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from 
 import { ProjectScope, useProject, useProjectOptional } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { aiBlocked } from '../../lib/useAi';
-import { refreshMailUnread } from '../../lib/useMailUnread';
+import { refreshMailUnread, useMailUnread } from '../../lib/useMailUnread';
 import { MailAiBox } from './MailAi';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
@@ -40,7 +40,10 @@ function useFolders(accountIds: string[]) {
   return folders;
 }
 
-/** Postfach: im Projekt mit Projektfilter, global (/postfach) über alle Projekte. Gleiche Ansicht, gleiche Aktionen. */
+/**
+ * Postfach: im Projekt dessen Ansichten, global (/postfach) die vereinigte Sicht aller Postfächer mit Leserecht (jede Mail
+ * einmal, Filter je Postfach statt je Projekt-Ansicht). Gleiche Mails, gleicher Gelesen- und Ordnerstand, gleiche Aktionen.
+ */
 export function MailView({ global = false }: { global?: boolean }) {
   const scope = useProjectOptional();
   const projectId = global ? null : scope!.detail.project.id;
@@ -51,29 +54,34 @@ export function MailView({ global = false }: { global?: boolean }) {
   const loc = useLocation();
   const [params, setParams] = useSearchParams();
   const folder = params.get('ordner') ?? 'INBOX';
-  const viewId = params.get('ansicht') ?? '';
+  const viewId = global ? '' : params.get('ansicht') ?? '';
+  const accountId = global ? params.get('postfach') ?? '' : '';
+  const unread = useMailUnread();
   const mobile = useIsMobile();
   const [navOpen, setNavOpen] = useState(false);
   const readable = (views.data?.views ?? []).filter((v) => v.myRights.canRead);
   const accountIds = Array.from(new Set(readable.map((v) => v.accountId)));
+  const accounts = accountIds.map((id) => readable.find((v) => v.accountId === id)!);
   const folders = useFolders(accountIds);
   const pending = (drafts.data?.drafts ?? []).filter((d) => d.status === 'pending_approval');
   const canWrite = global ? readable.some((v) => v.myRights.canDraft || v.myRights.canSend) : scope!.detail.project.myMembership.role !== 'reader';
   const isPl = !global && scope!.detail.project.myMembership.role === 'pl';
   const writeTarget = () => {
     if (!global) return `${base}/neu`;
-    const v = readable.find((x) => x.id === viewId && (x.myRights.canDraft || x.myRights.canSend)) ?? readable.find((x) => x.myRights.canDraft || x.myRights.canSend);
+    const v = readable.find((x) => x.accountId === accountId && (x.myRights.canDraft || x.myRights.canSend)) ?? readable.find((x) => x.myRights.canDraft || x.myRights.canSend);
     return v ? `/projekte/${v.projectId}/mail/neu?view=${v.id}` : base;
   };
   const inList = loc.pathname === base || loc.pathname.startsWith(`${base}/m/`);
   const go = (k: string, v: string) => { const n = new URLSearchParams(params); if (v) n.set(k, v); else n.delete(k); setNavOpen(false); nav(`${base}?${n.toString()}`); };
   const curFolder = folders.find((f) => f.path.toLowerCase() === folder.toLowerCase());
   const curView = readable.find((v) => v.id === viewId);
+  const curAccount = accounts.find((v) => v.accountId === accountId);
+  const kindLabel = (v: ViewRow) => (v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto');
   const label = (f: MailFolder) => (f.specialUse ? FOLDER_LABEL[f.specialUse] : f.name);
   return (
     <div className="mail-layout">
       {mobile && <div className="mail-mobile-bar">
-        <button className="btn sm" onClick={() => setNavOpen(!navOpen)}>{navOpen ? '▾' : '▸'} {curFolder ? label(curFolder) : 'Posteingang'} · {curView ? curView.name : 'Alle Ansichten'}</button>
+        <button className="btn sm" onClick={() => setNavOpen(!navOpen)}>{navOpen ? '▾' : '▸'} {curFolder ? label(curFolder) : 'Posteingang'} · {global ? curAccount?.accountName ?? 'Alle Postfächer' : curView ? curView.name : 'Alle Ansichten'}</button>
         {canWrite && <button className="btn sm primary right" onClick={() => nav(writeTarget())}>Neue Mail</button>}
       </div>}
       {(!mobile || navOpen) && <div className="mail-views">
@@ -85,14 +93,25 @@ export function MailView({ global = false }: { global?: boolean }) {
           </div>
         ))}
         {folders.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>{readable.length === 0 ? 'Keine Ansicht mit Leserecht.' : 'Lade Ordner …'}</div>}
-        <div className="section">Ansichten</div>
-        <div className={`view ${inList && !viewId ? 'active' : ''}`} onClick={() => go('ansicht', '')}><span>Alle Ansichten</span><span className="acc">{readable.length} mit Leserecht</span></div>
-        {readable.map((v) => (
-          <div key={v.id} className={`view ${inList && viewId === v.id ? 'active' : ''}`} onClick={() => go('ansicht', v.id)}>
-            <span>{global && v.projectKey && <span className="badge" style={{ marginRight: 6 }}>{v.projectKey}</span>}{v.name}</span>
-            <span className="acc">{v.accountAddress} · {v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</span>
-          </div>
-        ))}
+        {global ? <>
+          <div className="section">Postfächer</div>
+          <div className={`view ${inList && !accountId ? 'active' : ''}`} onClick={() => go('postfach', '')}><span>Alle Postfächer {unread.total > 0 && <span className="badge danger">{unread.total}</span>}</span><span className="acc">{accounts.length} mit Leserecht</span></div>
+          {accounts.map((v) => (
+            <div key={v.accountId} className={`view ${inList && accountId === v.accountId ? 'active' : ''}`} onClick={() => go('postfach', v.accountId)}>
+              <span>{v.accountName} {(unread.byAccount?.[v.accountId] ?? 0) > 0 && <span className="badge danger">{unread.byAccount![v.accountId]}</span>}</span>
+              <span className="acc">{v.accountAddress} · {kindLabel(v)}</span>
+            </div>
+          ))}
+        </> : <>
+          <div className="section">Ansichten</div>
+          <div className={`view ${inList && !viewId ? 'active' : ''}`} onClick={() => go('ansicht', '')}><span>Alle Ansichten</span><span className="acc">{readable.length} mit Leserecht</span></div>
+          {readable.map((v) => (
+            <div key={v.id} className={`view ${inList && viewId === v.id ? 'active' : ''}`} onClick={() => go('ansicht', v.id)}>
+              <span>{v.name}</span>
+              <span className="acc">{v.accountAddress} · {kindLabel(v)}</span>
+            </div>
+          ))}
+        </>}
         {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen/mail`}>Ansichten und Filter verwalten</Link>}
         {!global && <>
           <div className="section">Freigabe-Liste</div>
@@ -102,8 +121,8 @@ export function MailView({ global = false }: { global?: boolean }) {
         </>}
       </div>}
       <Routes>
-        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
-        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
+        <Route index element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
+        <Route path="m/:mailId" element={<InboxList base={base} projectId={projectId} folder={folder} viewId={viewId} accountId={accountId} views={views.data?.views ?? []} folders={folders} mobile={mobile} />} />
         {!global && <Route path="freigaben" element={<><div className="mail-list" /><DraftsPanel drafts={drafts.data?.drafts ?? []} reload={drafts.reload} /></>} />}
         {!global && <Route path="neu" element={<><div className="mail-list" /><Compose views={views.data?.views ?? []} onDone={() => { void drafts.reload(); nav(`${base}/freigaben`); }} /></>} />}
         <Route path="mail/:mailId" element={<LegacyMail base={base} />} />
@@ -122,13 +141,16 @@ function LegacyMail({ base }: { base: string }) {
   return <Navigate to={mailId ? `${base}/m/${mailId}${q}` : `${base}${q}`} replace />;
 }
 
-function InboxList({ base, projectId, folder, viewId, views, folders, mobile = false }: { base: string; projectId: string | null; folder: string; viewId: string; views: ViewRow[]; folders: MailFolder[]; mobile?: boolean }) {
+function InboxList({ base, projectId, folder, viewId, accountId, views, folders, mobile = false }: { base: string; projectId: string | null; folder: string; viewId: string; accountId: string; views: ViewRow[]; folders: MailFolder[]; mobile?: boolean }) {
   const { mailId } = useParams();
   const nav = useNavigate();
   const [params] = useSearchParams();
   const [q, setQ] = useState('');
-  const url = `/mail/inbox?${projectId ? `projectId=${projectId}&` : ''}${folder ? `folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}`;
-  const list = useData<{ mails: InboxMail[] }>(url, [folder, viewId]);
+  const url = `/mail/inbox?${projectId ? `projectId=${projectId}&` : ''}${folder ? `folder=${encodeURIComponent(folder)}` : ''}${viewId ? `&viewId=${viewId}` : ''}${accountId ? `&accountId=${accountId}` : ''}`;
+  // Gelesen-Stand gilt je Person für die Mail, egal über welches Projekt sie geöffnet wurde: ändert sich der Zähler (Öffnen anderswo, Abruf), Liste nachladen
+  const unreadTotal = useMailUnread().total;
+  const list = useData<{ mails: InboxMail[] }>(url, [unreadTotal]);
+  const accountCount = new Set(views.filter((v) => v.myRights.canRead).map((v) => v.accountId)).size;
   const needle = q.trim().toLowerCase();
   const mails = (list.data?.mails ?? []).filter((m) => !needle || m.subject.toLowerCase().includes(needle) || m.fromAddr.toLowerCase().includes(needle) || (m.fromName ?? '').toLowerCase().includes(needle));
   // Öffnen gilt als gelesen: Liste und Zähler sofort nachziehen (der Server trägt es beim Laden der Mail ein)
@@ -148,7 +170,7 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
           <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''} ${m.unread ? 'unread' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
             <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
-            <div className="snippet">{!projectId && <span className="badge" style={{ marginRight: 6 }}>{m.projectKey}</span>}{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>
+            <div className="snippet">{!projectId && (m.projectKeys ?? [m.projectKey]).map((k) => <span key={k} className="badge" style={{ marginRight: 6 }}>{k}</span>)}{m.snippet}{projectId ? !viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span> : !accountId && accountCount > 1 && <span className="muted"> · {m.accountName}</span>}</div>
           </div>
         ))}
         {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Die PL legt Ansichten unter Einstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}

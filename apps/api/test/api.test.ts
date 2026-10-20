@@ -294,6 +294,20 @@ test('Gesamtsicht: Aufgaben über alle Projekte, gemeinsames Postfach, Projekt-S
   assert.ok(inbox.mails.every((m: any) => m.projectKey && m.viewId && m.viewName));
   const ids = new Set(inbox.mails.map((m: any) => m.id));
   assert.equal(ids.size, inbox.mails.length, 'keine Doppelungen über mehrere Ansichten');
+  assert.ok(inbox.mails.every((m: any) => Array.isArray(m.projectKeys) && m.projectKeys.includes(m.projectKey) && m.accountName));
+  // Postfach-Filter: nur Mails dieses Kontos; Ungelesen-Zähler zählt jede Mail einmal und folgt dem Öffnen überall
+  const acc = inbox.mails[0].accountId;
+  assert.ok((await t.api(pl).get(`/mail/inbox?accountId=${acc}`)).json().mails.every((m: any) => m.accountId === acc));
+  const u0 = (await t.api(pl).get('/mail/unread')).json();
+  const unreadIds = new Set((await t.api(pl).get('/mail/inbox')).json().mails.filter((m: any) => m.unread && !/trash|junk|spam/i.test(m.folder)).map((m: any) => m.id));
+  assert.equal(u0.total, unreadIds.size, 'gesamt = Anzahl ungelesener Mails, nicht Summe je Projekt');
+  const first = inbox.mails.find((m: any) => m.unread);
+  if (first) {
+    await t.api(pl).get(`/mail/mails/${first.id}`);
+    assert.equal((await t.api(pl).get('/mail/unread')).json().total, u0.total - 1);
+    const inProject = (await t.api(pl).get(`/mail/inbox?projectId=${first.projectId}`)).json().mails.find((m: any) => m.id === first.id);
+    assert.equal(inProject.unread, false, 'im Projekt-Postfach ebenfalls gelesen');
+  }
   // Leser ohne Mail-Rechte sieht leeres Postfach, aber keinen Fehler
   const leser = await t.login('leser@demo.local');
   const li = await t.api(leser).get('/mail/inbox');

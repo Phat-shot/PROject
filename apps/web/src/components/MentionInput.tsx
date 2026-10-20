@@ -2,9 +2,18 @@ import { useEffect, useRef, useState } from 'react';
 
 interface Member { userId: string; name: string }
 
-/** Textfeld mit @-Vervollständigung über Projektmitglieder. */
-export function MentionInput({ value, onChange, members, placeholder, onSubmit }: { value: string; onChange: (v: string) => void; members: Member[]; placeholder?: string; onSubmit?: () => void }) {
+/**
+ * Textfeld mit @-Vervollständigung über Projektmitglieder. Strg/Cmd+Enter sendet; mit enterSends (Chat) sendet schon
+ * Enter, Umschalt+Enter bricht um, und das Feld wächst mit dem Text.
+ */
+export function MentionInput({ value, onChange, members, placeholder, onSubmit, enterSends = false, autoFocus }: { value: string; onChange: (v: string) => void; members: Member[]; placeholder?: string; onSubmit?: () => void; enterSends?: boolean; autoFocus?: boolean }) {
   const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    const el = ref.current;
+    if (!enterSends || !el) return;
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight + el.offsetHeight - el.clientHeight}px`;
+  }, [value, enterSends]);
   const [query, setQuery] = useState<string | null>(null);
   const [sel, setSel] = useState(0);
   const matches = query === null ? [] : members.filter((m) => m.name.toLowerCase().includes(query.toLowerCase())).slice(0, 6);
@@ -31,7 +40,7 @@ export function MentionInput({ value, onChange, members, placeholder, onSubmit }
           {matches.map((m, i) => <div key={m.userId} className={i === sel ? 'sel' : ''} onMouseDown={(e) => { e.preventDefault(); pick(m); }}>@{m.name}</div>)}
         </div>
       )}
-      <textarea ref={ref} value={value} placeholder={placeholder}
+      <textarea ref={ref} value={value} placeholder={placeholder} rows={enterSends ? 1 : undefined} autoFocus={autoFocus}
         onChange={(e) => update(e.target.value, e.target.selectionStart)}
         onKeyDown={(e) => {
           if (matches.length) {
@@ -40,7 +49,7 @@ export function MentionInput({ value, onChange, members, placeholder, onSubmit }
             if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); pick(matches[sel]); return; }
             if (e.key === 'Escape') { setQuery(null); return; }
           }
-          if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && onSubmit) { e.preventDefault(); onSubmit(); }
+          if (e.key === 'Enter' && onSubmit && !e.nativeEvent.isComposing && ((e.metaKey || e.ctrlKey) || (enterSends && !e.shiftKey && !e.altKey))) { e.preventDefault(); onSubmit(); }
         }} />
     </div>
   );
