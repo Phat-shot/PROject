@@ -1,11 +1,12 @@
 import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import type { ReminderPolicy } from '@projekttool/shared';
+import { DEFAULT_REMINDERS } from '@projekttool/shared';
 import { loadTasks, resolveProjectLead } from './service.js';
 import { publicBase } from '../docs/share.js';
 import { projectAccount } from '../mail/accounts.js';
 
-const DEFAULT: ReminderPolicy = { enabled: false, daysBefore: [3, 0], overdueEveryDays: 3, includeInternal: false };
+const DEFAULT: ReminderPolicy = DEFAULT_REMINDERS;
 
 export function remindersOf(raw: any): ReminderPolicy {
   const p = { ...DEFAULT, ...(raw ?? {}) };

@@ -40,7 +40,9 @@ test('Suche nach Kennung, Kalender, Doku-Seite und Projekteinstellungen sind err
   await page.locator('.doc-tree .page').first().click();
   await expect(page.locator('.doc-view .doc-actions')).toBeVisible();
   await page.getByRole('link', { name: 'Einstellungen' }).first().click();
-  await expect(page.locator('.section-nav')).toContainText('Papierkorb');
+  await expect(page.locator('.topbar .tabs')).toContainText('Daten');
+  await page.getByRole('link', { name: 'Daten', exact: true }).click();
+  await expect(page.locator('.content')).toContainText('Papierkorb');
 });
 
 test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Feldern', async ({ page }) => {

@@ -246,7 +246,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, req.params.id);
     const effective = await effectiveAgentPolicy(db, { agentId: req.query.agentId || null, projectId: req.params.id, taskId: req.query.taskId || null });
     const p = await db.one(`select p.agent_policy, o.settings->'ai'->'agentPolicy' as org_policy from projects p join orgs o on o.id = p.org_id where p.id = $1`, [req.params.id]);
-    const agents = (await db.query(`select m.user_id, u.name, m.agent_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id])).rows.map((r: any) => ({ userId: r.user_id, name: r.name, policy: r.agent_policy ?? null }));
+    const agents = await Promise.all((await db.query(`select m.user_id, u.name, m.agent_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id])).rows.map(async (r: any) => ({ userId: r.user_id, name: r.name, policy: r.agent_policy ?? null, effective: await effectiveAgentPolicy(db, { agentId: r.user_id, projectId: req.params.id }) })));
     return { effective, project: (p.agent_policy ?? {}) as AgentPolicy, org: (p.org_policy ?? {}) as AgentPolicy, agents, canEdit: m.role === 'pl' };
   });
   app.put<{ Params: { id: string }; Body: AgentPolicy }>('/projects/:id/agent-policy', async (req) => {

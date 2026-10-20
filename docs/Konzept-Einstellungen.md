@@ -247,3 +247,17 @@ Schritte 2 bis 4 sind unabhängig voneinander und können einzeln ausgeliefert w
 4. **Kontaktlisten zusammenführen** (Empfehlung: ja, Flag an `project_contacts`). Braucht eine Migration und Anpassung in `outbound.ts`/`agent.ts`, wo `externalProfile.contacts` gelesen wird.
 5. **Sprache entfernen** (Empfehlung: ja). Alternative: Feld behalten und als „folgt“ sperren.
 6. **Einstellungen für Mitglieder sichtbar** (Empfehlung: ja, nur lesen). Heute fehlt der Menüpunkt für Nicht-PL; die URL funktioniert trotzdem.
+
+## 9. Stand der Umsetzung (2026-10-20)
+
+Alle sechs Entscheidungen aus Abschnitt 8 sind umgesetzt. Abweichung vom Zielbild: das **LLM der Assistenz erbt nicht** von `defaultProfileId`; die Regel „Projekt-KI ist aus, bis die PL ein LLM wählt“ (ai.test) bleibt, weil sonst bestehende Projekte ohne Zutun KI-Kosten erzeugen würden. Die Bestätigungsklassen je Agent im Projekt sind weiterhin nur über die API setzbar (UI: Modus und Workflow-Schritte).
+
+| Schritt | Ergebnis |
+| --- | --- |
+| 0 | Bereinigung aus Abschnitt 6 (Drawer-Bug, Whitelist, Typen, Budget je Org-Agent, Recherche je Profil, expireH) |
+| 1 | `components/settings/Settings.tsx`: SettingsRoutes, SettingsCard, InheritSelect, InheritNumber, StandardBadge, ReadOnlyNote, useFlash |
+| 2 | Meine Einstellungen unter `/einstellungen/<tab>`; Konten in `components/mail/Accounts.tsx` mit Geltungsbereich |
+| 3 | Verwaltung unter `/verwaltung/<tab>`, `pages/admin/*`; Mail-Vorgaben unter Mail; Speichern ohne Reload |
+| 4 | Projekt unter `/projekte/:id/einstellungen/<tab>`, `pages/project/settings/*`; Kontakte zusammengeführt (Migration 061, Kennzeichen `external`) |
+| 5 | Wirksame Werte: Mail-Rückfrage, Policy je Agent (Modus, Workflow-Schritte) und am Arbeitspaket (Modus, Denktiefe), Org-Editor mit Standardwerten; „Standard“ mit Zurücksetzen für Eskalation, Reporting, Erinnerungen |
+| 6 | Redirects alter Routen, Handbuch Kapitel 13, KI-Handbuch, Kurzanleitung, Tour, e2e |

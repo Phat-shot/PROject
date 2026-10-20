@@ -134,6 +134,11 @@ export interface ReportingPolicy {
   lastPageId: string | null;
 }
 
+/** Code-Standards der Projekt-Policies ohne Org-Ebene; die Oberfläche zeigt „Standard“, solange ein Projekt nichts Eigenes gesetzt hat. */
+export const DEFAULT_ESCALATION: EscalationPolicy = { enabled: true, stageDays: [2, 5, 10], staleDays: 7, contactUserId: null, contactEmail: null, externalMode: 'proposal' };
+export const DEFAULT_REMINDERS: ReminderPolicy = { enabled: false, daysBefore: [3, 0], overdueEveryDays: 3, includeInternal: false };
+export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1, recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null };
+
 export interface EscalationRow {
   taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
   score: number; dueDate: string | null; responsible: string | null; chain: string[]; reason: string;

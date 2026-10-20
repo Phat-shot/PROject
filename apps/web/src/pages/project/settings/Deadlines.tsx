@@ -1,3 +1,4 @@
+import { DEFAULT_ESCALATION, DEFAULT_REPORTING } from '@projekttool/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmtDate } from '../../../lib/api';
@@ -6,6 +7,7 @@ import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared'
 import { useProject } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
 import { SettingsCard, ReadOnlyNote } from '../../../components/settings/Settings';
+import { StandardBadge } from '../../../components/settings/Settings';
 
 function EscalationForm() {
   const { detail, users, reload } = useProject();
@@ -82,12 +84,18 @@ function ReportingForm() {
 
 /** Projekt › Einstellungen › Fristen und Berichte: Eskalationsregeln und Reporting. */
 export function DeadlinesTab() {
-  const { detail } = useProject();
+  const { detail, reload } = useProject();
   const isPl = detail.project.myMembership.role === 'pl';
+  const { busy, run } = useAsync();
+  const esc = detail.project.escalation;
+  const rep = detail.project.reporting;
+  const escDefault = JSON.stringify(esc) === JSON.stringify(DEFAULT_ESCALATION);
+  const repDefault = rep ? JSON.stringify({ ...rep, lastRunOn: null, lastPageId: null }) === JSON.stringify(DEFAULT_REPORTING) : true;
+  const reset = (body: Record<string, unknown>) => run(async () => { await api.patch(`/projects/${detail.project.id}`, body); await reload(); });
   return (
     <>
-      <SettingsCard title="Eskalationsregeln" hint={isPl ? undefined : undefined}>{!isPl && <ReadOnlyNote who="PL" />}<EscalationForm /></SettingsCard>
-      <SettingsCard title="Reporting">{!isPl && <ReadOnlyNote who="PL" />}<ReportingForm /></SettingsCard>
+      <SettingsCard title="Eskalationsregeln" action={<StandardBadge isDefault={escDefault} disabled={busy} onReset={isPl ? () => void reset({ escalation: DEFAULT_ESCALATION }) : undefined} />}>{!isPl && <ReadOnlyNote who="PL" />}<EscalationForm key={JSON.stringify(esc)} /></SettingsCard>
+      <SettingsCard title="Reporting" action={<StandardBadge isDefault={repDefault} disabled={busy} onReset={isPl ? () => void reset({ reporting: { ...DEFAULT_REPORTING, lastRunOn: undefined, lastPageId: undefined } }) : undefined} />}>{!isPl && <ReadOnlyNote who="PL" />}<ReportingForm key={JSON.stringify(rep)} /></SettingsCard>
     </>
   );
 }

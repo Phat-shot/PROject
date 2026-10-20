@@ -1,3 +1,5 @@
+import { DEFAULT_REMINDERS } from '@projekttool/shared';
+import { StandardBadge } from '../../../components/settings/Settings';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
@@ -181,15 +183,16 @@ export function ExternalCard() {
 
 /** Projekt › Einstellungen › Mail: Postfächer, Ansichten und Filter, Mail-Rückfrage, Außenkommunikation, Erinnerungen an Externe. */
 export function MailTab() {
-  const { detail } = useProject();
+  const { detail, reload } = useProject();
   const isPl = detail.project.myMembership.role === 'pl';
+  const { busy, run } = useAsync();
   return (
     <>
       <ProjectAccountsCard />
       <SettingsCard title="Ansichten und Filter"><MailViewsCard /></SettingsCard>
       <MailInquiryCard />
       <ExternalCard />
-      <SettingsCard title="Erinnerungen an Externe">{!isPl && <ReadOnlyNote who="PL" />}<ReminderForm /></SettingsCard>
+      <SettingsCard title="Erinnerungen an Externe" action={<StandardBadge isDefault={JSON.stringify(detail.project.reminders) === JSON.stringify(DEFAULT_REMINDERS)} disabled={busy} onReset={isPl ? () => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reminders: DEFAULT_REMINDERS }); await reload(); }) : undefined} />}>{!isPl && <ReadOnlyNote who="PL" />}<ReminderForm key={JSON.stringify(detail.project.reminders)} /></SettingsCard>
     </>
   );
 }

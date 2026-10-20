@@ -15,7 +15,7 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 
 - **PROject** (oben links) öffnet das **Dashboard**: Meine Arbeit, Projekte, Alle Arbeitspakete. Oben nach einem Projekt filtern, dann zeigt es das Dashboard dieses Projekts.
 - Darunter bis zu **fünf angeheftete Projekte** (☆ anheften, ★ lösen); **Alle Projekte** klappt die übrigen aus.
-- Ein Klick auf ein Projekt öffnet die **Arbeitspakete**; darunter Postfach, Doku, Risiken, KI und für die PL die Einstellungen.
+- Ein Klick auf ein Projekt öffnet die **Arbeitspakete**; darunter Postfach, Doku, Risiken, KI und die Einstellungen (alle lesen, die PL ändert).
 - Global: **Postfach**, **Kalender** (mit Modus **Belegung** für Ressourcen und Personen), **Workflows**, **Chat**.
 - Oben in jeder Seite: Suche (auch nach Kennung wie `WEB-12`) und die Glocke mit Benachrichtigungen.
 

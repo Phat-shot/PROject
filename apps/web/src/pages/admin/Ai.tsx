@@ -5,7 +5,7 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { invalidateAi, useAiStatus } from '../../lib/useAi';
-import { AgentPolicyEditor } from '../../components/AgentPolicy';
+import { AgentPolicyEditor, orgEffectivePolicy } from '../../components/AgentPolicy';
 
 /** KI-Profile je Mandant: Anbieter (lokales LLM oder Anthropic), Adresse, Modell, Schlüssel; Agenten und Projekte bekommen je eines zugewiesen. */
 /** Verwaltung › KI: vier Karten nach Konzept LLM/Agenten 3.1 – LLMs, Agenten, Freigaben, Grenzen und Vorgaben. */
@@ -124,7 +124,7 @@ function LimitsCard() {
       <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
       <h3 className="mt">Agenten-Policy des Mandanten</h3>
       <p className="muted small">Vorgabe für alle Projekte: Selbstständigkeit (ohne Angabe „Rückfrage bei wichtigen Schritten“; Bestandsprojekte stehen auf „Selbstständig“) und Grenzen, die kein Projekt unterschreiten kann. Die PL stellt je Projekt, Agent und Arbeitspaket weiter ein; gesperrte Klassen regeln die KI-Freigaben.</p>
-      <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
+      <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" effective={orgEffectivePolicy(st.agentPolicy)} onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
       <WebSearchForm st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
     </div>
   );

@@ -32,12 +32,12 @@ Projekte, Mitglieder, Rechte oder Einstellungen ändern; Zusagen mit Geld- oder 
 ### Agent aufnehmen
 
 1. **Verwaltung › KI › KI-Agenten › Agent anlegen** (Org-Admin oder Recht „KI verwalten“): LLM, **Einsatz** (alle oder ausgewählte Projekte), **Persona** (eine Zeile Schreibstil, z. B. „freundlich, knapp, duzt das Team, siezt Externe“), Denkmodus, Unterschrift. Oder die Projektleitung legt unter **Einstellungen › KI › Eigene KI-Agenten** einen eigenen Agenten nur für ihr Projekt an, wenn die Freigabe „Eigene Agenten der PL“ es erlaubt. Ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist (Verwalter und Einsatz wie bei Mail-Konten; Konzept-LLM-Agenten-Einsatz.md).
-2. **Einstellungen › KI › Agenten im Projekt › aufnehmen** (oder Mitglieder › hinzufügen): Rolle Mitglied (schlägt vor) oder stellvertretende PL (legt direkt an), „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe). Nicht einsetzbare Agenten nennt der Dialog mit Grund.
+2. **Einstellungen › Personen › Mitglieder › Hinzufügen** (KI-Agenten stehen in der Auswahl): Rolle Mitglied (schlägt vor) oder stellvertretende PL (legt direkt an), „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe). Nicht einsetzbare Agenten nennt der Dialog mit Grund.
 3. **Zuweisen**: Arbeitspaket, Aufgabe oder Teilprojekt. Der erste Lauf startet sofort.
 
 ### Projektagent
 
-Die Projektleitung kann einen Agenten als **Projektagent** setzen (Einstellungen › Mitglieder). Er ist stellvertretende Projektleitung und bearbeitet mit Mail-Modus „bearbeiten“ neue Mails der Projektkonten direkt; mit „vorschlagen“ schlägt er nur vor. Mails bearbeitet immer ein Agent, nie eine „Projekt-KI“: Welcher Agent, ergibt sich aus Projektagent oder Agent an der Mail-Ansicht; ob er direkt anlegt oder vorschlägt, aus seiner Rolle (stellvertretende PL oder Mitglied). Offene Punkte aus einer Mail klärt er je **Mail-Rückfrage**: Er fragt die Projektleitung (klar oder Infos kommen, im Projekt fragen mit Frist, beim Absender rückfragen). Mit Reichweite „ganzes Projekt“ läuft werktags der **Projektdurchlauf** (Kapitel 4).
+Die Projektleitung kann einen Agenten als **Projektagent** setzen (Einstellungen › KI). Er ist stellvertretende Projektleitung und bearbeitet mit Mail-Modus „bearbeiten“ neue Mails der Projektkonten direkt; mit „vorschlagen“ schlägt er nur vor. Mails bearbeitet immer ein Agent, nie eine „Projekt-KI“: Welcher Agent, ergibt sich aus Projektagent oder Agent an der Mail-Ansicht; ob er direkt anlegt oder vorschlägt, aus seiner Rolle (stellvertretende PL oder Mitglied). Offene Punkte aus einer Mail klärt er je **Mail-Rückfrage**: Er fragt die Projektleitung (klar oder Infos kommen, im Projekt fragen mit Frist, beim Absender rückfragen). Mit Reichweite „ganzes Projekt“ läuft werktags der **Projektdurchlauf** (Kapitel 4).
 
 ### Auftrag im Chat
 
@@ -66,8 +66,8 @@ Drei Dinge wirken zusammen, jedes an seinem Ort:
 | Was | Wo | Wer | Beispiele |
 |---|---|---|---|
 | **Rechte** | Mitgliedschaft im Projekt | Projektleitung | Rolle, „darf Mails senden“, „Final setzen“, „Projektplan ändern“; Zugriff je Doku-Ordner (voll, lesen, kein) |
-| **Freigaben** | Verwaltung › KI-Freigaben | Org-Admin, „KI verwalten“ | je Funktion erlauben oder sperren für Mandant, Projekt, Gruppe, Person, Agent; Notaus; Online-Recherche ist standardmäßig gesperrt |
-| **Policy** (Verhalten) | Verwaltung › KI, Einstellungen › Mitglieder, Arbeitspaket | Org-Admin, Projektleitung | Selbstständigkeit, Bestätigungen, Reichweite, Überschneidungen, Aufträge im Chat, Workflow-Schritte, Uhrzeit des Projektdurchlaufs |
+| **Freigaben** | Verwaltung › KI › KI-Freigaben | Org-Admin, „KI verwalten“ | je Funktion erlauben oder sperren für Mandant, Projekt, Gruppe, Person, Agent; Notaus; Online-Recherche ist standardmäßig gesperrt |
+| **Policy** (Verhalten) | Verwaltung › KI, Projekt › Einstellungen › KI, Arbeitspaket | Org-Admin, Projektleitung | Selbstständigkeit, Bestätigungen, Reichweite, Überschneidungen, Aufträge im Chat, Workflow-Schritte, Uhrzeit des Projektdurchlaufs |
 
 Sperre gewinnt immer. Die Projektleitung kann nur einschränken, nie über eine Freigabe hinaus erlauben.
 
@@ -113,7 +113,7 @@ Der Agent erkennt Anweisungen in natürlicher Sprache und führt sie als Befehle
 - **Passende Seiten und ähnliche Arbeitspakete** findet das System per Suche; mit `search` und `read_task` holt der Agent in höchstens zwei Leserunden nach, was fehlt.
 - **Überschneidungen:** Das System findet ohne KI Kandidaten (gleicher Externer, gemeinsame Stichwörter, Zeitraum und Ort, dieselbe Seite, Abhängigkeit mit Terminkonflikt, Fragen an dieselbe Person). Meldet der Agent einen Zusammenhang, fragt das System die Zuständigen bzw. die Projektleitung: synchron bearbeiten, Abhängigkeit, zusammenführen, unabhängig. Entschieden wird mit den Rechten der Person; die Beziehung steht im Arbeitspaket unter „Verwandte Arbeitspakete“.
 - **Projektdurchlauf:** Mit Reichweite „ganzes Projekt“ prüft der Projektagent werktags das Projekt: Doppelarbeit und Synergien, Hinweise ins Log, Fragen an die Projektleitung, Steckbrief. Unverändertes Projekt: kein KI-Aufruf. „Projektdurchlauf jetzt“ stößt ihn von Hand an.
-- **Kontextgröße:** Die Eingabe belegt höchstens 45 % des Kontextfensters des KI-Profils (Verwaltung › KI › Profil, Standard 32.000 Token). Überschüssiges wird in fester Reihenfolge gekürzt, das eigene Arbeitspaket bleibt vollständig. Projekt › KI zeigt je Lauf „Kontext n/Grenze“ und ✂, wenn gekürzt wurde.
+- **Kontextgröße:** Die Eingabe belegt höchstens 45 % des Kontextfensters des KI-Profils (Verwaltung › KI › LLMs, Standard 32.000 Token). Überschüssiges wird in fester Reihenfolge gekürzt, das eigene Arbeitspaket bleibt vollständig. Projekt › KI zeigt je Lauf „Kontext n/Grenze“ und ✂, wenn gekürzt wurde.
 
 ## 5. Online-Recherche
 

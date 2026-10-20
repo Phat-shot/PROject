@@ -6,7 +6,7 @@ import { AgentPolicyEditor, EffectivePolicyText, modeLabel } from '../../../comp
 import { AGENT_MODES, AI_FEATURES, type AgentPolicy, type EffectiveAgentPolicy, type AgentUser, type AiFeatureDef } from '@projekttool/shared';
 import { useProject } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
-import { SettingsCard, ReadOnlyNote } from '../../../components/settings/Settings';
+import { InheritSelect, ReadOnlyNote, SettingsCard } from '../../../components/settings/Settings';
 import { rightsText } from './People';
 
 type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; webSearch?: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null }[]; canAddOwn: boolean; addOwnReason?: string | null; ownLlmAllowed?: boolean };
@@ -40,15 +40,20 @@ function ProjectAgentSelect({ readOnly = false }: { readOnly?: boolean }) {
  */
 function ProjectAgentPolicy({ readOnly = false }: { readOnly?: boolean }) {
   const { detail, reload } = useProject();
-  const d = useData<{ effective: EffectiveAgentPolicy; project: AgentPolicy; org: AgentPolicy; agents: { userId: string; name: string; policy: AgentPolicy | null }[]; canEdit: boolean }>(`/projects/${detail.project.id}/agent-policy`);
+  const d = useData<{ effective: EffectiveAgentPolicy; project: AgentPolicy; org: AgentPolicy; agents: { userId: string; name: string; policy: AgentPolicy | null; effective: EffectiveAgentPolicy }[]; canEdit: boolean }>(`/projects/${detail.project.id}/agent-policy`);
   const [open, setOpen] = useState(false);
   const { error, run } = useAsync();
   if (!d.data) return null;
   const agents = d.data.agents;
+  const setAgent = (a: { userId: string }, next: AgentPolicy) => run(async () => { const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)); await api.put(`/projects/${detail.project.id}/members/${a.userId}/agent-policy`, Object.keys(clean).length ? clean : null); await d.reload(); });
   return <span className="stack" style={{ gap: 4 }}>
     <span className="row"><EffectivePolicyText e={d.data.effective} />{!readOnly && <button className="btn sm link" onClick={() => setOpen((o) => !o)}>{open ? 'schließen' : 'ändern'}</button>}</span>
     {open && <AgentPolicyEditor value={d.data.project} limits workflows inheritFrom="Mandant" effective={d.data.effective} onSave={async (v) => { await api.put(`/projects/${detail.project.id}/agent-policy`, v); setOpen(false); await d.reload(); await reload(); }} />}
-    {agents.length > 0 && <span className="small stack" style={{ gap: 2 }}>{agents.map((a) => <span key={a.userId} className="row" style={{ gap: 6 }}><span className="muted">{a.name}:</span>{readOnly ? <span>{a.policy?.mode ? modeLabel(a.policy.mode) : 'erbt'}</span> : <select value={a.policy?.mode ?? ''} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put(`/projects/${detail.project.id}/members/${a.userId}/agent-policy`, e.target.value ? { mode: e.target.value } : null); await d.reload(); })}><option value="">erbt vom Projekt</option>{AGENT_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select>}</span>)}</span>}
+    {agents.length > 0 && <span className="small stack" style={{ gap: 4 }}>{agents.map((a) => <span key={a.userId} className="row" style={{ gap: 6, flexWrap: 'wrap' }}><span className="muted">{a.name}:</span>
+      <InheritSelect ariaLabel={`${a.name} Selbstständigkeit`} value={a.policy?.mode ?? undefined} effective={{ value: a.effective.mode, origin: a.effective.origin.mode }} options={AGENT_MODES} disabled={readOnly} text={(v) => modeLabel(v)} onChange={(mode) => void setAgent(a, { ...(a.policy ?? {}), mode })} />
+      <span className="muted">Workflow-Schritte:</span>
+      <InheritSelect ariaLabel={`${a.name} Workflow-Schritte`} value={a.policy?.workflows === undefined ? undefined : a.policy.workflows ? 'yes' : 'no'} effective={{ value: a.effective.workflows ? 'yes' : 'no', origin: a.effective.origin.workflows }} options={[{ key: 'yes', label: 'erlaubt' }, { key: 'no', label: 'aus' }] as const} disabled={readOnly} onChange={(w) => void setAgent(a, { ...(a.policy ?? {}), workflows: w === undefined ? undefined : w === 'yes' })} />
+    </span>)}</span>}
     <span className="muted small">Grundmenge (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei; Angehaltenes legt der Agent der PL als Karte vor. Je Arbeitspaket lässt sich die Selbstständigkeit im Arbeitspaket setzen, der Zugriff auf Doku-Ordner am Ordner.</span>
     {detail.project.agentUserId && <ProjectReview readOnly={readOnly} scope={d.data.effective.scope} />}
     {error && <span className="error small">{error}</span>}</span>;

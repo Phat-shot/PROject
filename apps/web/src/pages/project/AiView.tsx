@@ -48,7 +48,7 @@ export function AiView() {
   return (
     <div className="content">
       {error && <div className="error mb">{error}</div>}
-      {caps?.killswitch && <div className="notice danger mb"><strong>KI im Mandanten abgeschaltet (Notaus).</strong> Keine KI-Funktion und keine Agentenläufe, bis der Org-Admin sie unter Verwaltung › KI-Freigaben wieder einschaltet.</div>}
+      {caps?.killswitch && <div className="notice danger mb"><strong>KI im Mandanten abgeschaltet (Notaus).</strong> Keine KI-Funktion und keine Agentenläufe, bis der Org-Admin sie unter Verwaltung › KI › KI-Freigaben wieder einschaltet.</div>}
       {projectAiOff && !caps?.killswitch && <div className="notice mb">Projekt-KI ist aus{ai && !ai.enabled ? ': kein LLM im Mandanten (Verwaltung › KI)' : isPl ? ': unter Einstellungen › KI ein LLM der Assistenz wählen' : ': die PL wählt unter Einstellungen › KI ein LLM der Assistenz'}. Agenten laufen unabhängig davon mit ihrem eigenen Profil.</div>}
       {profileName && <p className="muted small">Projekt-KI: {profileName}</p>}
       {(mailAi.data?.runs.length ?? 0) > 0 && <div className="card mb">

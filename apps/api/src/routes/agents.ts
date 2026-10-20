@@ -206,6 +206,14 @@ export async function agentRoutes(app: FastifyInstance) {
    * Selbstständigkeit für ein Arbeitspaket (gilt auch für seine Aufgaben): die PL frei; mit „Projektplan ändern“ nur verschärfen
    * (strenger als die ohne AP wirksame Policy); null = erben.
    */
+  /** Policy am Arbeitspaket (eigener Wert) und wirksame Policy mit Herkunft für den zuständigen Agenten. */
+  app.get<{ Params: { id: string } }>('/tasks/:id/agent-policy', async (req) => {
+    const user = requireUser(req);
+    const t = await db.maybeOne(`select id, project_id, agent_policy from tasks where id = $1 and deleted_at is null`, [req.params.id]);
+    if (!t) throw notFound('Arbeitspaket nicht gefunden');
+    await requireProject(db, user, t.project_id);
+    return { policy: (t.agent_policy ?? null) as AgentPolicy | null, effective: await effectiveAgentPolicy(db, { agentId: (await agentForTask(db, t.id))?.id ?? null, projectId: t.project_id, taskId: t.id }) };
+  });
   app.put<{ Params: { id: string }; Body: { mode?: AgentMode | null; confirm?: AgentActionClass[] | null; depth?: string | null } | null }>('/tasks/:id/agent-policy', async (req) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);

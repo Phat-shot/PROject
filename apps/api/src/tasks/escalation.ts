@@ -1,3 +1,4 @@
+import { DEFAULT_ESCALATION } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { dispatch, notify } from '../notify.js';
@@ -22,7 +23,7 @@ export interface EscalationPolicy {
   externalMode: 'proposal' | 'direct';
 }
 
-export const DEFAULT_POLICY: EscalationPolicy = { enabled: true, stageDays: [2, 5, 10], staleDays: 7, contactUserId: null, contactEmail: null, externalMode: 'proposal' };
+export const DEFAULT_POLICY: EscalationPolicy = DEFAULT_ESCALATION;
 
 export function policyOf(raw: any): EscalationPolicy {
   const p = { ...DEFAULT_POLICY, ...(raw ?? {}) };

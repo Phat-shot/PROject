@@ -159,7 +159,7 @@ function RecipientsDialog({ label, value, targets, inherit, onClose, onSave }: {
   );
 }
 
-/** Verwaltung › Kommunikation: Regeln der Org mit Schlössern und die Stunde des Tages-Digests (Europe/Berlin). */
+/** Verwaltung › Benachrichtigungen: Tages-Digest und Regeln der Org mit Schlössern und die Stunde des Tages-Digests (Europe/Berlin). */
 export function OrgNotifyCard() {
   const d = useData<RulesListing & { digestHour: number }>('/org/notification-rules');
   const groups = useData<{ groups: Group[] }>('/groups');
@@ -186,7 +186,7 @@ export function OrgNotifyCard() {
   );
 }
 
-/** Projekteinstellungen › Kommunikation: Regeln des Projekts (erbt von der Org, Sperren sichtbar), Doku-Seite und Vorschau „Wer bekommt was?“. */
+/** Projekt › Einstellungen › Benachrichtigungen: Regeln des Projekts (erbt von der Org, Sperren sichtbar), Doku-Seite und Vorschau „Wer bekommt was?“. */
 export function ProjectNotifyCard({ projectId, members }: { projectId: string; members: { userId: string; name: string; kind?: string }[] }) {
   const d = useData<RulesListing & { canEdit: boolean }>(`/projects/${projectId}/notification-rules`, [projectId]);
   const groups = useData<{ groups: Group[] }>(d.data?.canEdit ? '/groups' : null, [d.data?.canEdit]);
@@ -237,7 +237,7 @@ export function NotifyPreview({ projectId, taskId, targets }: { projectId: strin
   );
 }
 
-/** Benutzereinstellungen › Benachrichtigungen: eigene Regeln für alle Projekte oder ein Projekt (nur Chat und Mail), Projekt stummschalten. */
+/** Meine Einstellungen › Benachrichtigungen: eigene Regeln für alle Projekte oder ein Projekt (nur Chat und Mail), Projekt stummschalten. */
 export function MyNotifyCard() {
   const projects = useData<{ projects: Project[] }>('/projects');
   const [projectId, setProjectId] = useState('');

@@ -2,6 +2,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { ReportingPolicy } from '@projekttool/shared';
+import { DEFAULT_REPORTING as SHARED_DEFAULT_REPORTING } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import { audit } from '../audit.js';
@@ -18,10 +19,7 @@ import { projectAccount } from '../mail/accounts.js';
  * ergänzt sie um Kennzahlen aus dem Projekt und versendet sie als PDF über das Projektkonto an den
  * Empfängerkreis. Modus „proposal“: Seite bleibt Entwurf, PL wird benachrichtigt und versendet nach Prüfung.
  */
-export const DEFAULT_REPORTING: ReportingPolicy = {
-  enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1,
-  recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null
-};
+export const DEFAULT_REPORTING: ReportingPolicy = SHARED_DEFAULT_REPORTING;
 
 export function reportingOf(raw: any): ReportingPolicy {
   const p = { ...DEFAULT_REPORTING, ...(raw ?? {}) };

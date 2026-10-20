@@ -29,7 +29,7 @@ export function projectPolicy(p: { personal?: boolean | null }): ProjectPolicyUi
     scaffold: {
       template: !personal,
       title: personal ? 'Persönliches Projekt' : 'Neues Projekt',
-      hint: personal ? 'Startet leer. Weitere Personen und Einladungen sind gesperrt, sichtbar nur für dich; der Org-Admin sieht im Audit keine Inhalte und verwaltet die Konten nicht. Agenten nimmst du unter Einstellungen › Mitglieder auf oder legst eigene an (wenn freigegeben). Mit einem Ordner „KI Bearbeiten“ im Postfach legt die Projekt-KI aus Mails direkt Aufgaben und Termine an.' : null,
+      hint: personal ? 'Startet leer. Weitere Personen und Einladungen sind gesperrt, sichtbar nur für dich; der Org-Admin sieht im Audit keine Inhalte und verwaltet die Konten nicht. Agenten nimmst du unter Einstellungen › Personen auf oder legst eigene an (wenn freigegeben). Mit einem Ordner „KI Bearbeiten“ im Postfach legt die Projekt-KI aus Mails direkt Aufgaben und Termine an.' : null,
     },
   };
 }

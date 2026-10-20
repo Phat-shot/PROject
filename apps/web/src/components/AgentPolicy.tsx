@@ -1,7 +1,9 @@
 import { useState } from 'react';
 import { AGENT_ACTION_CLASSES, AGENT_DEPTHS, AGENT_MODES, type AgentActionClass, type AgentDepth, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type Question, type SynergyMode } from '@projekttool/shared';
 import { api } from '../lib/api';
+import { useData } from '../lib/useData';
 import { PromptModal, useAsync } from './ui';
+import { InheritSelect } from './settings/Settings';
 
 /** Beschriftungen der Agenten-Policy (Konzept 6). */
 export const modeLabel = (m: AgentMode | undefined | null) => AGENT_MODES.find((x) => x.key === m)?.label ?? 'erben';
@@ -56,6 +58,40 @@ export function AgentPolicyEditor({ value, onSave, limits = false, workflows = t
       <div className="row"><button className="btn primary sm" disabled={busy} onClick={() => void run(() => onSave(f))}>Speichern</button><button className="btn sm" disabled={busy} onClick={() => setF({})}>Alles erben</button></div>
     </div>
   );
+}
+
+/**
+ * Policy am Arbeitspaket (Selbstständigkeit, Denktiefe) als Inline-Felder mit wirksamem Wert und Herkunft; PL und „Projektplan ändern“
+ * (nur verschärfen, prüft die API). Leer = erbt von Agent, Projekt oder Mandant.
+ */
+export function TaskPolicyInline({ task, onChanged }: { task: { id: string; agentPolicy?: AgentPolicy | null }; onChanged: () => unknown }) {
+  const d = useData<{ policy: AgentPolicy | null; effective: EffectiveAgentPolicy }>(`/tasks/${task.id}/agent-policy`, [task.id, JSON.stringify(task.agentPolicy ?? null)]);
+  const { busy, error, run } = useAsync();
+  const own = d.data?.policy ?? task.agentPolicy ?? {};
+  const save = (next: AgentPolicy) => run(async () => { await api.put(`/tasks/${task.id}/agent-policy`, Object.keys(next).length ? next : null); await d.reload(); await onChanged(); });
+  const e = d.data?.effective;
+  return <>
+    <span className="muted" title="Agenten-Policy für dieses Arbeitspaket und seine Aufgaben; mit „Projektplan ändern“ nur verschärfen">Selbstständigkeit hier:</span>
+    <InheritSelect ariaLabel="Selbstständigkeit" value={own.mode ?? undefined} effective={e ? { value: e.mode, origin: e.origin.mode } : null} options={AGENT_MODES} disabled={busy} text={(v) => modeLabel(v)} onChange={(mode) => void save({ ...own, mode: mode ?? undefined })} />
+    <span className="muted" title="Denktiefe für dieses Arbeitspaket: schnell (eine Leserunde), Standard, gründlich (vier Leserunden, kostet zwei Läufe); Grenze des Mandanten oder Projekts gilt">Denktiefe:</span>
+    <InheritSelect ariaLabel="Denktiefe" value={own.depth ?? undefined} effective={e ? { value: e.depth, origin: e.origin.depth } : null} options={AGENT_DEPTHS} disabled={busy} text={(v) => depthLabel(v)} onChange={(depth) => void save({ ...own, depth: depth ?? undefined })} />
+    {error && <span className="error small">{error}</span>}
+  </>;
+}
+
+const DEFAULT_CONFIRM = AGENT_ACTION_CLASSES.filter((c) => c.critical).map((c) => c.key);
+/** Wirksame Policy auf Mandantenebene (nur Code-Standard darunter), damit der Editor der Verwaltung geerbte Werte benennt. */
+export function orgEffectivePolicy(org: AgentPolicy | null | undefined): EffectiveAgentPolicy {
+  const o = org ?? {};
+  const mode = o.mode ?? 'confirm_critical';
+  const pick = <K extends keyof AgentPolicy>(k: K) => (o[k] !== undefined ? 'Mandant' : 'Standard');
+  const confirm = mode === 'confirm_all' ? AGENT_ACTION_CLASSES.map((c) => c.key) : mode === 'confirm_critical' ? [...(o.confirm ?? DEFAULT_CONFIRM)] : [];
+  for (const k of o.lockedConfirm ?? []) if (!confirm.includes(k)) confirm.push(k);
+  return {
+    mode, confirm, workflows: o.workflows ?? true, chatOrders: o.chatOrders ?? 'pl', scope: o.scope ?? 'task', synergies: o.synergies ?? 'ask', reviewAt: o.reviewAt ?? '06:45', depth: o.depth ?? 'standard',
+    origin: { mode: pick('mode'), confirm: Object.fromEntries(confirm.map((k) => [k, (o.lockedConfirm ?? []).includes(k) ? 'Mandant erzwungen' : pick('confirm')])), workflows: pick('workflows'), chatOrders: pick('chatOrders'), scope: pick('scope'), synergies: pick('synergies'), depth: pick('depth') },
+    denied: {}
+  };
 }
 
 /** Wirksame Policy als Text mit Herkunft. */
