@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type EffectiveAgentPolicy, type Question } from '@projekttool/shared';
+import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type ChatOrdersLevel, type EffectiveAgentPolicy, type Question } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { PromptModal, useAsync } from './ui';
 
@@ -34,6 +34,8 @@ export function AgentPolicyEditor({ value, onSave, limits = false, workflows = t
         <label className="field"><span>Grenze für tiefere Ebenen: mindestens</span>
           <select value={f.maxMode ?? ''} onChange={(e) => setF({ ...f, maxMode: (e.target.value || undefined) as AgentMode | undefined })}><option value="">keine Grenze</option>{AGENT_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select></label>
         {list('lockedConfirm', 'Immer bestätigen lassen', '(gilt auf allen tieferen Ebenen, auch bei „Selbstständig“)')}
+        <label className="field"><span>Aufträge an Agenten im Chat</span>
+          <select value={f.chatOrders ?? ''} onChange={(e) => setF({ ...f, chatOrders: (e.target.value || undefined) as ChatOrdersLevel | undefined })}><option value="">erben{effective ? ` (${effective.chatOrders})` : ' (Standard: PL und Stellvertretung)'}</option><option value="pl">PL und Stellvertretung</option><option value="tp">dazu Teilprojekt-Verantwortung im eigenen Teilprojekt</option><option value="responsible">dazu Zuständige für Aufgaben unter dem eigenen AP</option><option value="members">alle Mitglieder</option></select></label>
       </>}
       {workflows && <label className="field"><span>Workflow-Schritte an Agenten</span>
         <select value={f.workflows === undefined ? '' : f.workflows ? 'yes' : 'no'} onChange={(e) => setF({ ...f, workflows: e.target.value === '' ? undefined : e.target.value === 'yes' })}><option value="">erben{effective ? ` (${effective.workflows ? 'erlaubt' : 'aus'})` : ''}</option><option value="yes">erlaubt</option><option value="no">aus (Schritt geht an die PL)</option></select></label>}
@@ -50,6 +52,7 @@ export function EffectivePolicyText({ e }: { e: EffectiveAgentPolicy }) {
     {e.confirm.length > 0 && <> · Bestätigung vor: {e.confirm.map((c) => <span key={c} title={e.origin.confirm[c]}>{classLabel(c)}{e.origin.confirm[c]?.includes('erzwungen') ? ' 🔒' : ''}; </span>)}</>}
     {Object.keys(e.denied).length > 0 && <> · <span style={{ color: 'var(--danger)' }}>gesperrt: {(Object.keys(e.denied) as AgentActionClass[]).map(classLabel).join(', ')}</span></>}
     {!e.workflows && <> · keine Workflow-Schritte</>}
+    {e.chatOrders !== 'pl' && <> · Aufträge im Chat: {e.chatOrders}</>}
   </span>;
 }
 

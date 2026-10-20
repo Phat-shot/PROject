@@ -931,6 +931,7 @@ function triggerText(trigger: string, task: any): string {
     case 'overdue': return 'Das Arbeitspaket ist überfällig.';
     case 'changed': return 'Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert (Log, Mail, Status, Termin oder Tasks). Lies die Änderung und handle entsprechend.';
     case 'periodic': return 'Regelmäßige Durchsicht: seit drei Tagen kein Lauf. Prüfe den Stand; ist nichts zu tun und nichts zu erwarten, tu nichts.';
+    case 'order': return 'Neuer Auftrag per Chat (Beschreibung und Log „Auftrag von …“). Verschaffe dir den Stand und beginne; Rückfragen, Zwischenstände und Entscheidungen gehen an den Auftraggeber (Stufe 0 der Kette).';
     case 'approved': return 'Eine Person hat deine angehaltenen Aktionen bestätigt; sie wurden ausgeführt (siehe Log). Mach weiter.';
     case 'rejected': return 'Eine Person hat einen Vorschlag von dir abgelehnt (z. B. einen Mail-Entwurf; Details im Log). Wiederhole ihn nicht unverändert; kläre bei Bedarf per Chat, was anders sein soll.';
     case 'manual': return 'Die Projektleitung hat den Lauf manuell gestartet.';
@@ -996,7 +997,7 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
     const tasks = await db.query(
       `select t.id, t.project_id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
        where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active'
-         and exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $1) order by t.due_date nulls last`, [agent.id]);
+         and exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $1) order by case t.priority when 'critical' then 0 when 'high' then 1 when 'normal' then 2 else 3 end, t.due_date nulls last`, [agent.id]);
     for (const t of tasks.rows as any[]) {
       if (budget <= 0) break;
       // Übersprungene Läufe zählen nicht als letzter Lauf (Fingerabdruck und Rhythmus bleiben beim letzten echten Lauf)

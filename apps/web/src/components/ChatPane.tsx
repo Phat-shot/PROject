@@ -7,7 +7,7 @@ import { MentionInput, MentionText } from './MentionInput';
 import { useDialog } from './ui';
 import { ApprovalCard } from './AgentPolicy';
 
-export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string } | null }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe */ card?: 'results'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
 interface Member { userId: string; name: string }
 
@@ -106,6 +106,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void saveEdit(); if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
         : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
       {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
+      {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
         <button className="btn sm link chat-thread-btn" onClick={() => setThread(m.id)}>{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}
@@ -147,6 +148,21 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
  * Thread-Kopf einer Frage: Bezug, Status (offen, beantwortet von … in der Aufgabe, weitergegeben, erledigt), Auswahl als Knöpfe,
  * „Im AP öffnen“ und „Erledigt“ (fragende Person, Adressat oder PL). Antworten im Thread bleiben möglich.
  */
+/** Karte der Chat-Steuerung (Konzept 7): Rückgängig für einen eben angelegten Auftrag (10 Minuten) und die Freigabekarte zu offenen Bestätigungen. */
+function ResultsCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }) {
+  const [q, setQ] = useState<Question | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [gone, setGone] = useState(false);
+  const qid = m.meta?.approvalQuestionId ?? null;
+  useEffect(() => { if (qid) api.get<{ question: Question }>(`/questions/${qid}`).then((r) => setQ(r.question)).catch(() => undefined); }, [qid]);
+  const undoable = Boolean(m.meta?.taskId && m.meta?.undoUntil && new Date(m.meta.undoUntil).getTime() > Date.now()) && !gone;
+  return <div className="small mt">
+    {undoable && <button className="btn sm" title="Den eben angelegten Auftrag zurücknehmen (archivieren); nur Auftraggeber oder PL, 10 Minuten" onClick={() => void api.post(`/tasks/${m.meta!.taskId}/undo-order`).then(() => { setGone(true); onChanged(); }).catch((e) => setError((e as Error).message))}>Rückgängig</button>}
+    {q && <ApprovalCard q={q} onChanged={() => { void api.get<{ question: Question }>(`/questions/${q.id}`).then((r) => setQ(r.question)); onChanged(); }} />}
+    {error && <div className="error small">{error}</div>}
+  </div>;
+}
+
 function QuestionHead({ q, onChanged }: { q: Question; onChanged: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const act = async (fn: () => Promise<unknown>) => { try { await fn(); setError(null); onChanged(); } catch (e) { setError((e as Error).message); } };

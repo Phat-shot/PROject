@@ -277,7 +277,8 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   await say(pl, plDm, 'Status GEH?');
   p = prompts.at(-1)!;
   assert.ok(p.includes('Kennzahlen zu GEH: offen 5 · in Arbeit 2 · fällig diese Woche 1 · überfällig 1 · blockiert 1 · wartet 1'), p);
-  assert.ok(p.includes(`- GEH-${a.number} „Angebot anfordern“`) && !p.includes('Streng vertraulich'), 'eigene Arbeitspakete des Themas, fremde nicht');
+  assert.ok(p.includes(`- GEH-${a.number} „Angebot anfordern“`), 'eigene Arbeitspakete des Themas');
+  assert.ok(p.includes('Weitere offene Arbeitspakete im Thema') && p.includes('Streng vertraulich'), 'fremde Arbeitspakete nur kompakt in der Liste für Aufträge (Konzept 7.2)');
 
   // claimCheck: Behauptung ohne Notiz wird ersetzt und im Lauf vermerkt; mit Notiz bleibt „vermerkt“ stehen
   nextReply = 'Ich habe die Mail an Müller gesendet. Das Angebot liegt vor.';

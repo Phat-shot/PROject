@@ -10,6 +10,9 @@ import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 import { isInternal } from '../outbound.js';
 import { answerQuestion, type QuestionRow } from '../questions.js';
+import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
+import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
+import { projectAccount } from '../mail/accounts.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -28,9 +31,27 @@ import { answerQuestion, type QuestionRow } from '../questions.js';
  * persönlicher Regeln, die volle Begründung bekommt der Absender als Meldung.
  */
 const SCHEMA = {
-  type: 'object', additionalProperties: false, required: ['reply', 'notes', 'answers'],
+  type: 'object', additionalProperties: false, required: ['reply', 'notes', 'answers', 'commands'],
   properties: {
     reply: { type: 'string', description: 'Antwort im Chat: kurz, im vorgegebenen Schreibstil, ohne Unterschrift' },
+    commands: {
+      type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
+      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'reason', 'mail'], properties: {
+        type: { type: 'string', enum: ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
+        ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); sonst leer' },
+        text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
+        title: { type: 'string', description: 'order: kurzer Titel des Arbeitspakets bzw. der Aufgabe; sonst leer' },
+        parent: { type: 'string', description: 'order: Kennung des Über-AP, wenn eine Aufgabe darunter entstehen soll; sonst leer' },
+        subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer' },
+        dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD oder leer' },
+        deliverables: { type: 'array', items: { type: 'string' }, description: 'order: Lieferergebnisse als Tasks; sonst leer' },
+        every: { type: 'string', description: 'order/report: Zwischenstände each, milestones, daily oder done; sonst leer' },
+        level: { type: 'string', description: 'priority: niedrig, normal, hoch oder kritisch; sonst leer' },
+        mode: { type: 'string', description: 'policy: auto, confirm_critical oder confirm_all; sonst leer' },
+        reason: { type: 'string', description: 'stop/reject: Grund; sonst leer' },
+        mail: { type: 'boolean', description: 'order/report: Zwischenstände und Lieferung auch per Mail an den Auftraggeber' }
+      } }
+    },
     notes: {
       type: 'array', description: 'Log-Einträge an deinen Arbeitspaketen (taskId aus der Liste), wenn die Nachricht eine Information dazu enthält; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['taskId', 'text'], properties: { taskId: { type: 'string' }, text: { type: 'string' } } }
@@ -212,8 +233,9 @@ const CLAIM_ACT = 'angelegt|erstellt|gesendet|geschickt|verschickt|versendet|ver
  * System durch „Das konnte ich nicht ausführen: …“. Deterministisch, ohne Kommas/Nebensätze dazwischen (kein „ich habe gesehen,
  * dass …“) und ohne Verneinung („ich habe nichts gesendet“). Mit ausgeführter Notiz bleiben Sätze über Vermerken bzw. Eintragen stehen.
  */
-export function claimCheck(reply: string, noted: boolean): { text: string; replaced: string[] } {
-  const verbs = noted ? CLAIM_ACT : `${CLAIM_ACT}|${CLAIM_LOG}`;
+export function claimCheck(reply: string, noted: boolean, acted = false): { text: string; replaced: string[] } {
+  const verbs = [acted ? '' : CLAIM_ACT, noted ? '' : CLAIM_LOG].filter(Boolean).join('|');
+  if (!verbs) return { text: reply, replaced: [] };
   const inner = '[^.!?\\n,;:]*?';
   const patterns = [
     new RegExp(`\\b(ich|wir)\\b${inner}\\b(habe|hab|haben)\\b${inner}\\b(${verbs})\\b`, 'i'),
@@ -231,7 +253,7 @@ export function claimCheck(reply: string, noted: boolean): { text: string; repla
   return { text, replaced };
 }
 
-export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string }
+export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string; results?: { type: string; status: string; text: string }[] }
 
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
   const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
@@ -347,18 +369,45 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const openQs = await db.query(
     `select q.id, q.body, q.created_at, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id
      where q.asked_by = $1 and q.status = 'open' and (q.channel_id = $2) and (q.addressee_id = $3 or q.addressee_id is null) order by q.created_at desc limit 8`, [agent.id, channel.id, msg.user_id]);
+  // Steuerung (Konzept 7): Projekt für Befehle, Rolle und Rechte des Absenders, Policy, offene Bestätigungen, weitere APs, Fähigkeiten
+  const cmdProject = project ?? (scope.projects.length === 1 ? scope.projects[0] : null);
+  const scopeTask = scope.taskIds.length === 1 ? await db.maybeOne(`select * from tasks where id = $1`, [scope.taskIds[0]]) : null;
+  const role = cmdProject ? await senderRole(db, msg.user_id, cmdProject.id, scopeTask) : 'none';
+  const policy = cmdProject ? await effectiveAgentPolicy(db, { agentId: agent.id, projectId: cmdProject.id, taskId: scopeTask?.id ?? null }) : null;
+  const allowed = allowedCommands(role, policy);
+  const approvals = scope.projectIds.length ? await db.query(`select q.id, p.key, t.number, t.title, q.body from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id where q.asked_by = $1 and q.kind = 'approval' and q.status = 'open' and q.project_id = any($2::uuid[]) order by q.created_at desc limit 8`, [agent.id, scope.projectIds]) : { rows: [] as any[] };
+  const otherAps = scope.projectIds.length ? await db.query(
+    `select t.number, t.title, p.key, s.name as sp, coalesce(u.name, t.responsible_email) as resp from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id left join subprojects s on s.id = t.subproject_id left join users u on u.id = t.responsible_user_id
+     where t.project_id = any($1::uuid[]) and t.parent_id is null and t.deleted_at is null and t.archived_at is null and not c.is_done and not (t.id = any($2::uuid[]))
+       and ${project ? `(t.subproject_id is null or not exists (select 1 from subprojects x where x.id = t.subproject_id and x.restricted))` : `${visibleSubprojectSql(3)} and ${visibleSubprojectSql(4)}`} order by p.key, t.position limit 40`,
+    project ? [scope.projectIds, [...known.keys()]] : [scope.projectIds, [...known.keys()], msg.user_id, agent.id]) : { rows: [] as any[] };
+  const agentMember = cmdProject ? await db.maybeOne(`select agent_can_mail from project_members where project_id = $1 and user_id = $2`, [cmdProject.id, agent.id]) : null;
+  const canMail = Boolean(agentMember?.agent_can_mail) && Boolean(cmdProject && (await projectAccount(db, cmdProject.id)));
+  const web = cmdProject ? await aiAllowed(db, { userId: agent.id, projectId: cmdProject.id, feature: 'agent.web', budget: false }) : null;
+  const ctxCmd: CommandCtx = { db, agent, sender: { id: msg.user_id, name: msg.user_name, orgId: agent.org_id }, project: cmdProject, projects: scope.projects, channelId: channel.id, threadId, messageId: msg.id, now, policy };
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Thema: ${theme}
+Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: bei order das Über-AP (parent) nennen oder nachfragen' : ''}
+${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
+${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
+` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.allowed ? 'freigegeben' : `nicht freigegeben${web ? ` (${web.publicReason})` : ''}`}.
 ${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
-${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
+${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
+${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
+` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
 ${scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine Antwort mit „Zu ${scope.refs[0] ?? scope.projects[0]?.key}:“.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
-    const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[] }>(r.text);
+    const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(r.text);
+    // Befehle: prüfen und ausführen, bevor gepostet wird; die Karte zeigt das tatsächliche Ergebnis
+    const cmds = (Array.isArray(j.commands) ? j.commands : []).filter((c) => c && COMMAND_TYPES.includes(c.type)).slice(0, 5);
+    const results = cmds.length ? await runCommands(ctxCmd, cmds) : [];
+    const acted = results.some((x) => x.status === 'ok' && x.type !== 'note');
+    const notedCmd = results.some((x) => x.status === 'ok' && x.type === 'note');
     const notes = (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);
     // Antworten auf offene Fragen (nur eigene, hier gestellte): Frage schließen, Log, Lauf am Arbeitspaket (Anlass answer)
     const answers = (Array.isArray(j.answers) ? j.answers : []).filter((a) => openQs.rows.some((q: any) => q.id === a.questionId)).slice(0, 3);
@@ -367,7 +416,7 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
       if (q) await answerQuestion(db, q, { source: 'chat', userId: msg.user_id, text: String(a.text ?? '').trim() || msg.body, messageId: msg.id, now });
     }
     // claimCheck: Behauptungen ohne ausgeführte Aktion ersetzt das System; Kennungen ohne Freigabe bekommen die feste Absage voran
-    const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0);
+    const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0 || notedCmd, acted);
     const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${checked.text}`;
     await post(reply);
     for (const n of notes) {
@@ -376,10 +425,12 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
     }
     const actions: Record<string, unknown>[] = [{ type: 'chat_reply', text: cut(reply, 300) }, ...notes.map((n) => ({ type: 'chat_note', taskId: n.taskId, text: cut(n.text, 300) })), ...answers.map((a) => ({ type: 'chat_answer', questionId: a.questionId, text: cut(a.text, 300) }))];
     if (checked.replaced.length) actions.push({ type: 'claim_check', replaced: checked.replaced.length, text: cut(checked.replaced.join(' | '), 300) });
+    for (const x of results) actions.push({ type: `cmd_${x.type}`, status: x.status, text: cut(x.text, 300), taskId: x.taskId ?? null });
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens, channel_id) values ($1,$2,$3,null,'chat','ok',$4,$5,$6,$7,$8) returning id`,
       [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);
-    await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, scope: scope.how, notes: notes.length, claimsReplaced: checked.replaced.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
-    return { status: 'ok', reply, notes, scope };
+    if (results.length) await postResults(ctxCmd, results, run.id);
+    await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, scope: scope.how, notes: notes.length, commands: results.map((x) => `${x.type}:${x.status}`), claimsReplaced: checked.replaced.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+    return { status: 'ok', reply, notes, scope, results };
   } catch (e: any) {
     const err = String(e?.message ?? e).slice(0, 300);
     await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','error',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, err, channel.id]);

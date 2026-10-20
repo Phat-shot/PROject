@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { undoOrder } from '../ai/chatCommands.js';
 import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
@@ -136,6 +137,12 @@ export async function chatRoutes(app: FastifyInstance) {
   });
 
   // Nachricht senden (optional als Antwort in einem Thread)
+  // Auftrag aus dem Chat zurücknehmen (10 Minuten, Auftraggeber oder PL)
+  app.post<{ Params: { id: string } }>('/tasks/:id/undo-order', async (req) => {
+    const user = requireUser(req);
+    try { return await undoOrder(db, user, req.params.id); } catch (e: any) { throw badRequest(String(e?.message ?? e)); }
+  });
+
   app.post<{ Params: { cid: string }; Body: { body: string; threadId?: string | null } }>('/chat/channels/:cid/messages', async (req) => {
     const user = requireUser(req);
     if (user.kind === 'agent') throw forbidden('KI-Agenten schreiben nicht im Chat');

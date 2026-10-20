@@ -48,7 +48,12 @@ export async function pickAddressee(db: Db, task: any, asker: Asker, opts: { to?
     if (!(await channelOk())) return { error: 'Projektkanal nicht bei eingeschränkten Teilprojekten oder persönlichen Projekten' };
     return { userId: null, role: 'project', name: 'Projektkanal' };
   }
-  if (to === 'pl') { const c = chain.find((x) => x.role === 'pl' || x.role === 'deputy_pl'); if (c) return { userId: c.id, role: c.role, name: c.name }; }
+  if (to === 'pl') {
+    // PL oder Stellvertretung; steht die PL schon früher in der Kette (z. B. als Auftraggeber), zählt sie trotzdem als PL
+    const plIds = (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent' and u.active order by m.is_deputy, m.created_at`, [task.project_id])).rows.map((r: any) => r.user_id as string);
+    const c = plIds.map((id) => chain.find((x) => x.id === id)).find(Boolean) ?? chain.find((x) => x.role === 'pl' || x.role === 'deputy_pl');
+    if (c) return { userId: c.id, role: c.role === 'pl' || c.role === 'deputy_pl' ? c.role : 'pl', name: c.name };
+  }
   if (to === 'tp') { const c = chain.find((x) => x.role === 'subproject_lead'); if (c) return { userId: c.id, role: c.role, name: c.name }; }
   if (to.includes('@')) { const c = chain.find((x) => x.email.toLowerCase() === to); if (c) return { userId: c.id, role: c.role, name: c.name }; return { error: `${to} steht nicht in der Kette (Auftraggeber, Über-AP, Teilprojekt, PL, Eskalationskontakt)` }; }
   if (opts.kind === 'decision') { const c = chain.find((x) => ['pl', 'deputy_pl', 'escalation_contact'].includes(x.role)) ?? chain[0]; if (c) return { userId: c.id, role: c.role, name: c.name }; }
@@ -106,7 +111,7 @@ export async function askQuestion(db: Db, a: AskInput): Promise<{ question: Ques
   // Meldungen: an den Adressaten, im Projektkanal an alle Mitglieder mit Sicht auf das AP (ohne Agenten, ohne Fragenden)
   const recipients: string[] = target.userId ? [target.userId] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active and u.kind <> 'agent' and m.role <> 'reader'`, [task.project_id])).rows.map((r: any) => r.user_id);
   const link = `/chat/${channelId}?thread=${msg.id}&msg=${msg.id}`;
-  const label = a.kind === 'confirm' ? 'Bestätigung' : a.kind === 'decision' ? 'Entscheidung' : a.kind === 'external_referral' ? 'Rückfrage von extern' : a.kind === 'approval' ? 'Freigabe' : 'Frage';
+  const label = a.kind === 'confirm' ? 'Bestätigung' : a.kind === 'decision' ? 'Entscheidung' : a.kind === 'external_referral' ? 'Rückfrage von extern' : a.kind === 'approval' ? 'Freigabe' : a.kind === 'order_request' ? 'Auftragsvorschlag' : 'Frage';
   const type = a.type ?? `question.${a.kind}`; const title = a.title ?? `${label} von ${a.asker.name} zu ${code(task)}`;
   for (const u of recipients) {
     if (u === a.asker.id || (!target.userId && !(await canSeeSubproject(db, u, task.subproject_id)))) continue;

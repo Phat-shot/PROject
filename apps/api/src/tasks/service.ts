@@ -70,7 +70,7 @@ export async function insertTask(db: Db, p: { projectId: string; subprojectId?: 
 }
 
 const TASK_SELECT = `
-  select t.*, c.is_done,
+  select t.*, c.is_done, (select name from users where id = t.requested_by) as requested_by_name,
     ru.name as responsible_name, ru.email as responsible_user_email, pc.name as responsible_contact_name,
     s.responsible_user_id as sp_responsible_user_id, su.name as sp_responsible_name, su.email as sp_responsible_email,
     s.end_date as sp_end_date,
@@ -164,6 +164,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     agentWait: r.agent_wait ?? null,
     agentNextCheckAt: r.agent_next_check_at ? new Date(r.agent_next_check_at).toISOString() : null,
     agentPolicy: r.agent_policy ?? null,
+    requestedBy: r.requested_by ? { userId: r.requested_by, name: r.requested_by_name ?? null } : null,
     recurrence: r.recurrence ?? null,
     estimateMinutes: r.estimate_minutes ?? null,
     loggedMinutes: r.logged_minutes ?? 0,
@@ -256,7 +257,7 @@ export interface ChainPerson { id: string; name: string; email: string; why: str
  * Der Auftraggeber (tasks.requested_by) kommt mit den Aufträgen aus dem Chat hinzu.
  */
 export async function contactChain(db: Db, task: { id: string; project_id: string; parent_id: string | null; subproject_id: string | null }, opts: { exclude?: string[] } = {}): Promise<ChainPerson[]> {
-  const t = await db.one(`select p.key, pt.number as parent_number, s.name as sp_name from tasks t join projects p on p.id = t.project_id left join tasks pt on pt.id = t.parent_id left join subprojects s on s.id = t.subproject_id where t.id = $1`, [task.id]);
+  const t = await db.one(`select p.key, pt.number as parent_number, s.name as sp_name, t.requested_by from tasks t join projects p on p.id = t.project_id left join tasks pt on pt.id = t.parent_id left join subprojects s on s.id = t.subproject_id where t.id = $1`, [task.id]);
   // Zuständigkeit des Über-AP wie EFFECTIVE_RESPONSIBLE_SQL für ein Arbeitspaket: direkt, extern (keine Person) oder vom Teilprojekt geerbt
   const parentResp = task.parent_id ? (await db.maybeOne(`select case when pt.responsible_user_id is not null then pt.responsible_user_id when pt.responsible_email is not null then null else s.responsible_user_id end as uid from tasks pt left join subprojects s on s.id = pt.subproject_id where pt.id = $1`, [task.parent_id]))?.uid : null;
   const spResp = task.subproject_id ? (await db.maybeOne(`select responsible_user_id as uid from subprojects where id = $1`, [task.subproject_id]))?.uid : null;
@@ -265,7 +266,7 @@ export async function contactChain(db: Db, task: { id: string; project_id: strin
   const deputies = (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and m.is_deputy and u.kind <> 'agent' order by m.created_at`, [task.project_id])).rows.map((r: any) => r.user_id as string);
   const contactId = (await db.maybeOne(`select escalation->>'contactUserId' as uid from projects where id = $1`, [task.project_id]))?.uid ?? null;
   const out: ChainPerson[] = [];
-  const steps: [string | null, string, ChainRole][] = [[parentResp, `zuständig für ${t.key}-${t.parent_number}`, 'parent_responsible'], [spResp, `verantwortlich für Teilprojekt „${t.sp_name}“`, 'subproject_lead'], [plId, 'Projektleitung', 'pl'], ...deputies.map((d): [string | null, string, ChainRole] => [d, 'stellvertretende Projektleitung', 'deputy_pl']), [contactId, 'Eskalationskontakt', 'escalation_contact']];
+  const steps: [string | null, string, ChainRole][] = [[t.requested_by ?? null, 'Auftraggeber', 'requester'], [parentResp, `zuständig für ${t.key}-${t.parent_number}`, 'parent_responsible'], [spResp, `verantwortlich für Teilprojekt „${t.sp_name}“`, 'subproject_lead'], [plId, 'Projektleitung', 'pl'], ...deputies.map((d): [string | null, string, ChainRole] => [d, 'stellvertretende Projektleitung', 'deputy_pl']), [contactId, 'Eskalationskontakt', 'escalation_contact']];
   for (const [uid, why, role] of steps) {
     if (!uid || opts.exclude?.includes(uid) || out.some((x) => x.id === uid)) continue;
     const u = await db.maybeOne(`select id, name, email from users where id = $1 and kind <> 'agent' and active`, [uid]);

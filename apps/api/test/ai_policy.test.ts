@@ -239,7 +239,7 @@ test('Vorschau „Wirkung für Person X in Projekt Y“ mit Spur; Fähigkeiten m
   assert.ok(!eff.features.some((x: any) => x.feature === 'agent.run'), 'Agentenfunktionen nur für Agenten');
   assert.ok(!eff.features.some((x: any) => x.feature === 'agent.web'), 'noch nicht geprüfte Funktionen fehlen');
   const effAgent = (await t.api(admin).get(`/ai/policies/effective?userId=${morton.id}&projectId=${web()}`)).json();
-  assert.deepEqual(effAgent.features.map((x: any) => x.feature).sort(), ['agent.assign', 'agent.chat', 'agent.close', 'agent.distribute', 'agent.finalize', 'agent.foreign', 'agent.mail', 'agent.plan', 'agent.restructure', 'agent.run', 'agent.schedule', 'agent.send_external', 'agent.workflow', 'mail.triage']);
+  assert.deepEqual(effAgent.features.map((x: any) => x.feature).sort(), ['agent.assign', 'agent.chat', 'agent.close', 'agent.distribute', 'agent.finalize', 'agent.foreign', 'agent.mail', 'agent.order', 'agent.plan', 'agent.restructure', 'agent.run', 'agent.schedule', 'agent.send_external', 'agent.workflow', 'mail.triage']);
   assert.equal((await t.api(max).get(`/ai/policies/effective?userId=${t.ids.users.max}`)).statusCode, 403);
   // Ziele für die Matrix: persönliche Projekte nur als „persönlich (Eigentümer)“
   const targets = (await t.api(admin).get('/ai/policy-targets')).json();

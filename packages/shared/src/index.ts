@@ -181,7 +181,7 @@ export const AI_FEATURES = [
   { key: 'agent.mail', category: 'mail', label: 'Projektagent bearbeitet Mails der Projektkonten', who: 'agent' },
   { key: 'agent.run', category: 'agent', label: 'Agentenläufe', who: 'agent' },
   { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
-  { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both', later: true },
+  { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both' },
   { key: 'agent.web', category: 'agent', label: 'Online-Recherche', who: 'agent', defaultDeny: true, later: true },
   { key: 'agent.finalize', category: 'agent', label: 'Final setzen', who: 'agent' },
   { key: 'agent.distribute', category: 'agent', label: 'PDF an Verteiler', who: 'agent' },
@@ -415,6 +415,8 @@ export interface Task {
   agentNextCheckAt?: string | null;
   /** Selbstständigkeit für dieses AP und seine Aufgaben (null = erben) */
   agentPolicy?: AgentPolicy | null;
+  /** Auftraggeber (Auftrag per Chat): steht an erster Stelle der Kette */
+  requestedBy?: { userId: string; name: string | null } | null;
   recurrence: Recurrence | null;
   estimateMinutes: number | null;
   loggedMinutes: number;
@@ -508,11 +510,13 @@ export const AGENT_ACTION_CLASSES: { key: AgentActionClass; label: string; criti
   { key: 'foreign', label: 'Fremde Arbeitspakete ändern', critical: false }
 ];
 /** Je Ebene gesetzte Felder; Grenzen (maxMode, lockedConfirm) gelten für tiefere Ebenen; workflows = Workflow-Schritte übernehmen */
-export interface AgentPolicy { mode?: AgentMode; confirm?: AgentActionClass[]; maxMode?: AgentMode; lockedConfirm?: AgentActionClass[]; workflows?: boolean }
+/** Wer Agenten im Chat Aufträge geben darf (Konzept 7.1): PL und Stellvertretung immer; tp = dazu Teilprojekt-Verantwortung im eigenen TP; responsible = dazu Zuständige für Aufgaben unter dem eigenen AP; members = alle Mitglieder */
+export type ChatOrdersLevel = 'pl' | 'tp' | 'responsible' | 'members';
+export interface AgentPolicy { mode?: AgentMode; confirm?: AgentActionClass[]; maxMode?: AgentMode; lockedConfirm?: AgentActionClass[]; workflows?: boolean; chatOrders?: ChatOrdersLevel }
 /** Wirksame Policy mit Herkunft je Feld */
 export interface EffectiveAgentPolicy {
-  mode: AgentMode; confirm: AgentActionClass[]; workflows: boolean;
-  origin: { mode: string; confirm: Partial<Record<AgentActionClass, string>>; workflows: string };
+  mode: AgentMode; confirm: AgentActionClass[]; workflows: boolean; chatOrders: ChatOrdersLevel;
+  origin: { mode: string; confirm: Partial<Record<AgentActionClass, string>>; workflows: string; chatOrders: string };
   /** über KI-Freigaben gesperrte Klassen mit Begründung */
   denied: Partial<Record<AgentActionClass, string>>;
 }

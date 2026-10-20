@@ -1,4 +1,4 @@
-import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type EffectiveAgentPolicy } from '@projekttool/shared';
+import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type ChatOrdersLevel, type EffectiveAgentPolicy } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { resolveRules } from './policy.js';
 
@@ -15,6 +15,7 @@ export const MODE_ORDER: AgentMode[] = ['auto', 'confirm_critical', 'confirm_all
 export const CLASS_KEYS: AgentActionClass[] = AGENT_ACTION_CLASSES.map((c) => c.key);
 export const DEFAULT_CONFIRM: AgentActionClass[] = AGENT_ACTION_CLASSES.filter((c) => c.critical).map((c) => c.key);
 export const DEFAULT_MODE: AgentMode = 'confirm_critical';
+export const CHAT_ORDERS: ChatOrdersLevel[] = ['pl', 'tp', 'responsible', 'members'];
 export const classLabel = (c: AgentActionClass) => AGENT_ACTION_CLASSES.find((x) => x.key === c)?.label ?? c;
 export const modeLabel = (m: AgentMode) => AGENT_MODES.find((x) => x.key === m)?.label ?? m;
 const stricter = (a: AgentMode, b: AgentMode) => (MODE_ORDER.indexOf(a) >= MODE_ORDER.indexOf(b) ? a : b);
@@ -34,6 +35,7 @@ export function parseAgentPolicy(raw: unknown, opts: { limits: boolean; workflow
     const lc = classes(x.lockedConfirm, 'lockedConfirm'); if (lc) out.lockedConfirm = lc;
   }
   if (opts.workflows && typeof x.workflows === 'boolean') out.workflows = x.workflows;
+  if (opts.limits && x.chatOrders !== undefined && x.chatOrders !== null && x.chatOrders !== '') { if (!CHAT_ORDERS.includes(x.chatOrders)) throw new Error('Agenten-Policy: chatOrders muss pl, tp, responsible oder members sein'); out.chatOrders = x.chatOrders; }
   return out;
 }
 
@@ -68,6 +70,7 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
   else if (mode === 'confirm_critical') for (const k of chosen) confirm.set(k, c ? c.origin : 'Standard');
   for (const [name, v] of [['Mandant', org], [`Projekt ${p.key}`, project]] as [string, AgentPolicy][]) for (const k of v.lockedConfirm ?? []) confirm.set(k, `${name} erzwungen`);
   const w = pick('workflows');
+  const co = pick('chatOrders');
   const denied: Partial<Record<AgentActionClass, string>> = {};
   if (q.agentId) {
     for (const k of CLASS_KEYS) {
@@ -75,7 +78,7 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
       if (r.effect === 'deny') denied[k] = r.publicText;
     }
   }
-  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, origin: { mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard' }, denied };
+  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', origin: { mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard' }, denied };
 }
 
 /** Text für den variablen Teil des Prompts (nicht ins Sheet, damit der Prefix-Cache bleibt). */
