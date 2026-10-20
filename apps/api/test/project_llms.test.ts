@@ -148,18 +148,24 @@ test('Persönliche Projekte: Org-Profile nur mit „auch in persönlichen Projek
   assert.ok(!(await names()).includes('Qwen'));
   await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'selected', projectIds: [pers, t.ids.projects.web] });
   assert.ok((await names()).includes('Qwen'), 'per Auswahl');
-  // Org-Agent: in normalen Projekten läuft er mit seinem Profil (auch scope none), im persönlichen nur mit Freigabe
+  // Org-Agent (Konzept LLM/Agenten 2.2): nur dort einsetzbar, wo sein LLM freigegeben ist; Profil „Nur Agenten“ (Einsatz keins) sperrt jedes Projekt
   const agentsOnly = (await t.db.one(`select id from ai_profiles where name = 'Nur Agenten'`)).id;
   const orgi = (await t.api(admin).post('/agents', { name: 'Orgi', aiProfileId: agentsOnly })).json().agent;
+  const noWeb = await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${orgi.id}`, { role: 'member' });
+  assert.equal(noWeb.statusCode, 400); assert.match(noWeb.json().error, /LLM „Nur Agenten“ von Orgi ist für dieses Projekt nicht freigegeben/);
+  await t.api(admin).patch(`/ai/profiles/${agentsOnly}`, { projectScope: 'selected', projectIds: [t.ids.projects.web] });
   assert.equal((await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${orgi.id}`, { role: 'member' })).statusCode, 200);
-  assert.equal((await t.api(pl).put(`/projects/${pers}/members/${orgi.id}`, { role: 'member' })).statusCode, 200);
-  assert.equal((await aiAllowed(t.db, { userId: orgi.id, projectId: t.ids.projects.web, feature: 'agent.run', budget: false })).allowed, true, 'normales Projekt: Profil none sperrt nicht');
-  const denied = await aiAllowed(t.db, { userId: orgi.id, projectId: pers, feature: 'agent.run', budget: false });
-  assert.equal(denied.allowed, false);
-  assert.match(denied.reason, /im persönlichen Projekt nicht freigegeben/);
-  assert.equal(await aiConfigForAgent(t.db, orgi.id, pers), null);
+  assert.equal((await t.api(pl).put(`/projects/${pers}/members/${orgi.id}`, { role: 'member' })).statusCode, 400, 'persönliches Projekt nicht in der Auswahl');
+  assert.equal((await aiAllowed(t.db, { userId: orgi.id, projectId: t.ids.projects.web, feature: 'agent.run', budget: false })).allowed, true);
+  // Einsatz des LLM enger: der Agent bleibt Mitglied, läuft aber nicht mehr; die Verwaltung bekommt die Warnung
+  const narrowed = await t.api(admin).patch(`/ai/profiles/${agentsOnly}`, { projectScope: 'selected', projectIds: [pers] });
+  assert.ok(narrowed.json().warnings.some((w: string) => /^Orgi läuft in WEB Website-Relaunch/.test(w)), JSON.stringify(narrowed.json().warnings));
+  const denied = await aiAllowed(t.db, { userId: orgi.id, projectId: t.ids.projects.web, feature: 'agent.run', budget: false });
+  assert.equal(denied.allowed, false); assert.equal(denied.stage, 'profile');
+  assert.match(denied.reason, /für dieses Projekt nicht freigegeben/);
+  assert.equal(await aiConfigForAgent(t.db, orgi.id, t.ids.projects.web), null);
   assert.ok(await aiConfigForAgent(t.db, orgi.id, null));
-  await t.api(admin).patch(`/ai/profiles/${agentsOnly}`, { projectScope: 'selected', projectIds: [pers] });
+  assert.equal((await t.api(pl).put(`/projects/${pers}/members/${orgi.id}`, { role: 'member' })).statusCode, 200);
   assert.equal((await aiAllowed(t.db, { userId: orgi.id, projectId: pers, feature: 'agent.run', budget: false })).allowed, true, 'per Auswahl');
   // Migration: ein persönliches Projekt, das ein „alle“-Profil als Projekt-KI nutzt, behält es als Auswahl
   await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'all', projectIds: [], personalScope: false });

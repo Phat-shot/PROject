@@ -40,7 +40,7 @@ export function MembersView() {
   return (
     <div className="content settings">
       <nav className="section-nav">
-        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['eskalation', 'Eskalation'], ['kommunikation', 'Kommunikation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['aussen', 'Außenkommunikation'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
+        {[['allgemein', 'Allgemein'], ['mitglieder', 'Mitglieder'], ['kontakte', 'Kontakte'], ['planung', 'Planung'], ['board', 'Board'], ['projekt', 'Projekt'], ['ki', 'KI'], ['eskalation', 'Eskalation'], ['kommunikation', 'Kommunikation'], ['reporting', 'Reporting'], ['mail', 'Mail-Ansichten'], ['aussen', 'Außenkommunikation'], ['papierkorb', 'Papierkorb']].map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}
         <Link to={`/projekte/${detail.project.id}/audit`}>Audit-Log</Link>
       </nav>
       <div className="card mb" id="allgemein">
@@ -50,8 +50,7 @@ export function MembersView() {
       <div className="grid cols-2">
         <div className="stack">
           <MembersCard />
-          <OwnLlmCard />
-          <ProjectAgentsCard />
+          <ProjectAiCard />
           <div className="card" id="kontakte">
             <h2>Kontakte und Stakeholder</h2>
             <ContactsCard />
@@ -86,10 +85,7 @@ export function MembersView() {
               {timeTracking && <><dt>Zeiterfassung</dt><dd>{isPl ? <label className="check"><input type="checkbox" checked={detail.project.timeTrackingEnabled} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { timeTrackingEnabled: e.target.checked }); await reload(); })} /> aktiv (optionales Modul)</label> : detail.project.timeTrackingEnabled ? 'aktiv' : 'aus'}</dd>
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
-              <dt>Projekt-KI (LLM)</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
-              <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /> <Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch">Hilfe</Link></dd>
-              <dt>Mail-Rückfrage</dt><dd><MailInquirySelect readOnly={!isPl} /></dd>
-              <dt>Agenten-Policy</dt><dd><ProjectAgentPolicy readOnly={!isPl} /></dd>
+              <dt>KI</dt><dd><a href="#ki">LLM, Agenten, Projektagent, Policy</a></dd>
             </dl>
             {isPl && detail.project.status === 'active' && <div className="row mt">
               <button className="btn sm" title="Spalten, Labels, Teilprojekte, Meilensteine, Ordner und Regeln als Vorlage für neue Projekte" onClick={() => setAsTemplate(true)}>Als Vorlage speichern</button>
@@ -285,7 +281,10 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
   const isPrimary = me.role === 'pl' && !me.isDeputy;
   const dialog = useDialog();
   // Agenten anderer Projekte (von deren PL angelegt) sind nicht wählbar; nach Projektregel ggf. nur Agenten
-  const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!useProjectPolicy(detail.project).members.onlyOwnerAndAgents || u.kind === 'agent'));
+  // Agenten nur, wenn sie hier einsetzbar sind (Einsatz, LLM im Projekt freigegeben; Konzept LLM/Agenten 2.2); die anderen mit Grund darunter
+  const agentInfo = useData<{ orgAgents: { id: string; name: string; usable: boolean; reason: string | null; member: boolean }[] }>(member ? null : `/projects/${detail.project.id}/agents`);
+  const unusable = (agentInfo.data?.orgAgents ?? []).filter((a) => !a.member && !a.usable);
+  const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!useProjectPolicy(detail.project).members.onlyOwnerAndAgents || u.kind === 'agent') && !(u.kind === 'agent' && unusable.some((a) => a.id === u.id)));
   const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
   const { busy, error, run } = useAsync();
   const picked = users.find((u) => u.id === f.userId);
@@ -296,6 +295,7 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
       <div className="form">
         {member?.origin === 'group' && <div className="notice small">Mitglied über {(detail.groups ?? []).filter((g) => g.memberIds.includes(member.userId)).map((g) => g.name).join(', ') || 'eine Gruppe'}. Speichern legt einen Direkteintrag an; er überschreibt die Rechte aus den Gruppen, bis du „Gruppenrechte übernehmen“ wählst.</div>}
         {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
+        {!member && unusable.length > 0 && <div className="muted small">Nicht einsetzbar: {unusable.map((a) => `${a.name} (${a.reason})`).join('; ')}</div>}
         {isAgent && <div className="notice small">KI-Agent: handelt bei Arbeitspaketen und Aufgaben, für die er zuständig ist (direkt oder geerbt, z. B. als Teilprojekt-Verantwortung), und schreibt Log-Einträge unter seinem Namen. Als stellvertretende PL plant er im ganzen Projekt (Teilprojekte, Arbeitspakete, Aufgaben, Zuweisungen, Termine), verwaltet aber keine Mitglieder, Rechte oder Einstellungen und legt keine Projekte an.<label className="field" style={{ marginTop: 6 }}><span>Rolle</span><select value={f.role === 'pl' ? 'pl' : 'member'} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL</option></select></label><label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
         {/* „KI nutzen“ je Rolle vorbelegt: Mitglied an, Leser aus */}
         {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any, canUseAi: e.target.value !== 'reader' })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
@@ -692,6 +692,58 @@ function ProjectReview({ readOnly, scope }: { readOnly: boolean; scope: 'task' |
   </span>;
 }
 
+/** Projekteinstellungen › KI (Konzept LLM/Agenten 3.2): LLM der Assistenz, eigene LLMs, Agenten im Projekt, eigene Agenten, Projektagent, Mail-Rückfrage, Policy. */
+function ProjectAiCard() {
+  const { detail } = useProject();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const llms = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
+  return (
+    <div className="card" id="ki">
+      <div className="row between mb"><h2 style={{ margin: 0 }}>KI</h2><Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch">Hilfe</Link></div>
+      <p className="muted small">LLMs und Agenten stellt die Organisation bereit (Einsatz je LLM und Agent); die PL wählt und nimmt auf. Ein Agent läuft hier nur, wenn sein LLM für dieses Projekt freigegeben ist.</p>
+      <dl className="kv">
+        <dt title="Für Zusammenfassen, Essenz, Frage ans Projekt, Statusbericht">LLM der Assistenz</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
+        <dt>Verfügbare LLMs</dt><dd className="small">{!llms.data ? '…' : llms.data.available.length === 0 ? <span className="muted">keins für dieses Projekt freigegeben{llms.data.canAddOwn ? ' – unten ein eigenes einbinden' : ' (Org-Admin: Verwaltung › KI › LLMs: Einsatz)'}</span> : llms.data.available.map((l) => <span key={l.id} className="badge" style={{ marginRight: 4 }} title={`${l.provider === 'local' ? 'Lokal' : 'Anthropic'} · ${l.model}`}>{l.name} · {l.own ? 'eigenes LLM' : 'Organisation'}</span>)}</dd>
+        <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /></dd>
+        <dt>Mail-Rückfrage</dt><dd><MailInquirySelect readOnly={!isPl} /></dd>
+        <dt>Agenten-Policy</dt><dd><ProjectAgentPolicy readOnly={!isPl} /></dd>
+      </dl>
+      <ProjectAgentsInProject />
+      <OwnLlmCard embedded />
+      <ProjectAgentsCard embedded />
+    </div>
+  );
+}
+
+/** Agenten, die Mitglied sind: Rolle, LLM, läuft hier oder Grund; Aufnahme von Org-Agenten mit Einsetzbarkeit. */
+function ProjectAgentsInProject() {
+  const { detail, reload } = useProject();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const d = useData<{ inProject: { id: string; name: string; role: string; profileName: string | null; own: boolean; usable: boolean; reason: string | null }[]; orgAgents: { id: string; name: string; persona: string | null; profileName: string | null; member: boolean; usable: boolean; reason: string | null }[] }>(`/projects/${detail.project.id}/agents`);
+  const [pick, setPick] = useState('');
+  const [role, setRole] = useState<'member' | 'pl'>('member');
+  const { busy, error, run } = useAsync();
+  if (!d.data) return null;
+  const free = d.data.orgAgents.filter((a) => !a.member);
+  const usable = free.filter((a) => a.usable);
+  return (
+    <div className="mt">
+      <h3>Agenten im Projekt</h3>
+      {d.data.inProject.length === 0 ? <div className="empty">Noch kein Agent im Projekt.</div> : <table className="table"><thead><tr><th>Agent</th><th>Rolle</th><th>LLM</th><th>Status</th></tr></thead><tbody>
+        {d.data.inProject.map((a) => <tr key={a.id}><td>{a.name}{a.own && <span className="muted small"> · eigener Agent</span>}{detail.project.agentUserId === a.id && <span className="badge" style={{ marginLeft: 6 }}>Projektagent</span>}</td><td className="small">{a.role === 'pl' ? 'stellv. PL' : 'Mitglied'}</td><td className="small">{a.profileName ?? <span className="muted">kein LLM</span>}</td><td className="small">{a.usable ? <span className="badge ok">läuft</span> : <span className="badge warn" title={a.reason ?? ''}>läuft nicht</span>}{!a.usable && <div className="muted">{a.reason}</div>}</td></tr>)}
+      </tbody></table>}
+      {isPl && free.length > 0 && <div className="row mt small">
+        <span className="muted">Agent der Organisation aufnehmen:</span>
+        <select value={pick} disabled={busy || usable.length === 0} style={{ width: 'auto' }} onChange={(e) => setPick(e.target.value)}><option value="">{usable.length ? '– wählen –' : '– keiner einsetzbar –'}</option>{usable.map((a) => <option key={a.id} value={a.id}>{a.name}{a.profileName ? ` · ${a.profileName}` : ''}</option>)}</select>
+        <select value={role} disabled={busy} style={{ width: 'auto' }} onChange={(e) => setRole(e.target.value as 'member' | 'pl')}><option value="member">Mitglied (schlägt vor)</option><option value="pl">stellv. PL (legt direkt an)</option></select>
+        <button className="btn sm" disabled={busy || !pick} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/members/${pick}`, { role, agentCanMail: true }); setPick(''); await d.reload(); await reload(); })}>Aufnehmen</button>
+      </div>}
+      {isPl && free.some((a) => !a.usable) && <div className="muted small mt">Nicht einsetzbar: {free.filter((a) => !a.usable).map((a) => `${a.name} (${a.reason})`).join('; ')}</div>}
+      {error && <div className="error small">{error}</div>}
+    </div>
+  );
+}
+
 function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
   const { detail, reload } = useProject();
   const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
@@ -707,7 +759,7 @@ function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {
 }
 
 /** Eigene LLMs des Projekts (PL): nur hier nutzbar, Schlüssel verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann sperren. */
-function OwnLlmCard() {
+function OwnLlmCard({ embedded = false }: { embedded?: boolean }) {
   const { detail, reload } = useProject();
   const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
   const [edit, setEdit] = useState<ProjectLlms['own'][number] | 'new' | null>(null);
@@ -717,8 +769,8 @@ function OwnLlmCard() {
   if (!d.data || (!d.data.canAddOwn && !d.data.ownLlmAllowed && d.data.own.length === 0)) return null;
   const base = `/projects/${detail.project.id}/llms`;
   return (
-    <div className="card" id="llm">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigenes LLM</h2>{(d.data.canAddOwn || d.data.ownLlmAllowed) && <button className="btn primary sm" disabled={!d.data.canAddOwn} title={d.data.addOwnReason ?? undefined} onClick={() => setEdit('new')}>Einbinden</button>}</div>
+    <div className={embedded ? 'mt' : 'card'} id="llm">
+      <div className="row between mb">{embedded ? <h3 style={{ margin: 0 }}>Eigenes LLM</h3> : <h2 style={{ margin: 0 }}>Eigenes LLM</h2>}{(d.data.canAddOwn || d.data.ownLlmAllowed) && <button className="btn primary sm" disabled={!d.data.canAddOwn} title={d.data.addOwnReason ?? undefined} onClick={() => setEdit('new')}>Einbinden</button>}</div>
       {!d.data.canAddOwn && d.data.ownLlmAllowed && d.data.addOwnReason && <div className="notice small mb">{d.data.addOwnReason}</div>}
       <p className="muted small">Ein eigenes LLM (lokal, OpenAI-kompatibel, oder Anthropic) nur für dieses Projekt: für die Projekt-KI und eigene Agenten. Der Schlüssel liegt verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann es sperren.</p>
       {error && <div className="error small">{error}</div>}
@@ -753,7 +805,7 @@ function OwnLlmCard() {
 }
 
 /** Eigene KI-Agenten des Projekts: legt die PL an (wenn der Mandant es erlaubt), nur hier einsetzbar, nur freigegebene KI-Profile. */
-function ProjectAgentsCard() {
+function ProjectAgentsCard({ embedded = false }: { embedded?: boolean }) {
   const { detail, reload } = useProject();
   const d = useData<{ agents: AgentUser[]; policy: { enabled: boolean; maxBudget: number; profiles: { id: string; name: string }[] }; canManage: boolean; manageReason?: string | null }>(`/projects/${detail.project.id}/agents`);
   const [edit, setEdit] = useState<AgentUser | 'new' | null>(null);
@@ -762,8 +814,8 @@ function ProjectAgentsCard() {
   if (!d.data || (!isPl && d.data.agents.length === 0)) return null;
   const { agents, policy, canManage } = d.data;
   return (
-    <div className="card" id="agenten">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>{isPl && <button className="btn primary sm" disabled={!canManage} title={d.data.manageReason ?? undefined} onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
+    <div className={embedded ? 'mt' : 'card'} id="agenten">
+      <div className="row between mb">{embedded ? <h3 style={{ margin: 0 }}>Eigene KI-Agenten</h3> : <h2 style={{ margin: 0 }}>Eigene KI-Agenten</h2>}{isPl && <button className="btn primary sm" disabled={!canManage} title={d.data.manageReason ?? undefined} onClick={() => setEdit('new')}>Agent anlegen</button>}</div>
       {isPl && !canManage && d.data.manageReason && <div className="notice small mb">{d.data.manageReason}</div>}
       <p className="muted small">Agenten nur für dieses Projekt. Sie arbeiten wie andere Agenten (Zuständigkeit, Planung, Mail-Vorschläge), auf einem im Projekt verfügbaren LLM und mit höchstens {policy.maxBudget} Läufen am Tag. Der Org-Admin sieht sie und kann sie deaktivieren, aber keine Inhalte.</p>
       {agents.length === 0 ? <div className="empty">Noch keiner.</div> : <table className="table"><tbody>

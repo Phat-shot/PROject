@@ -15,8 +15,9 @@ test('Arbeitspaket aus Mail: Zuständige nur Mitglieder, Agenten nur durch die P
   const admin = await t.login('admin@demo.local');
   const web = t.ids.projects.web;
   const mail = (await mailsOf(max, t.ids.views.project)).find((m) => m.fromAddr === 'gf@demo.local');
-  const agent = (await t.api(admin).post('/agents', { name: 'Postbote' })).json().agent;
-  await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' });
+  const llm = (await t.api(admin).post('/ai/profiles', { name: 'Agenten-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x', personalScope: true })).json().profile;
+  const agent = (await t.api(admin).post('/agents', { name: 'Postbote', aiProfileId: llm.id })).json().agent;
+  assert.equal((await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' })).statusCode, 200);
 
   const byMember = await t.api(max).post(`/mail/mails/${mail.id}/create-task`, { projectId: web, responsibleUserId: agent.id });
   assert.equal(byMember.statusCode, 403, 'Mitglied darf keinen Agenten zuweisen');

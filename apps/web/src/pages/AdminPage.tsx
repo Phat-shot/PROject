@@ -16,9 +16,9 @@ import { AgentPolicyEditor } from '../components/AgentPolicy';
 const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
 /**
- * Verwaltung: der Org-Admin sieht alle Karten; die KI-Verwaltung (Org-Recht ai_admin) nur die KI-Karten
- * (Freigaben und Notaus, Profile, eigene LLMs der Projekte, Agenten), die Gruppenverwaltung (groups_admin)
- * und Verwalter einer Gruppe nur die Gruppen.
+ * Verwaltung mit Abschnittsnavigation (Benutzer, Gruppen, Projekte, Kommunikation, Ressourcen, KI, Vorlagen, Mandant, Audit):
+ * der Org-Admin sieht alles; die KI-Verwaltung (Org-Recht ai_admin) nur den Abschnitt KI (LLMs, Agenten, Freigaben, Grenzen),
+ * die Gruppenverwaltung (groups_admin) und Verwalter einer Gruppe nur die Gruppen, die Ressourcenverwaltung den Pool.
  */
 export function AdminPage() {
   const { user } = useAuth();
@@ -30,34 +30,36 @@ export function AdminPage() {
   const [create, setCreate] = useState(false);
   const [audit, setAudit] = useState<AuditEntry[] | null>(null);
   const { error, run, busy } = useAsync();
+  // Abschnitte in der Reihenfolge der Navigation; die KI-Verwaltung (ai_admin) sieht nur „KI“, Gruppen- und Ressourcenverwalter ihre Karten
+  const sections: [string, string][] = isAdmin
+    ? [['benutzer', 'Benutzer'], ['gruppen', 'Gruppen'], ['projekte', 'Projekte'], ['kommunikation', 'Kommunikation'], ['ressourcen', 'Ressourcen'], ['ki', 'KI'], ['vorlagen', 'Vorlagen'], ['mandant', 'Mandant'], ['audit', 'Audit']]
+    : [...(groupsAdmin || user?.managesGroups ? [['gruppen', 'Gruppen'] as [string, string]] : []), ...(resourcesAdmin ? [['ressourcen', 'Ressourcen'] as [string, string]] : []), ...(aiAdmin ? [['ki', 'KI'] as [string, string]] : [])];
+  const Nav = () => <nav className="section-nav">{sections.map(([id, l]) => <a key={id} href={`#${id}`}>{l}</a>)}</nav>;
   if (!isAdmin) return (
     <>
       <TopBar title={aiAdmin && !groupsAdmin && !user?.managesGroups && !resourcesAdmin ? 'Verwaltung › KI' : 'Verwaltung'} />
-      <div className="content">
-        {(groupsAdmin || user?.managesGroups) && <GroupsCard users={users.data?.users ?? []} canAdmin={groupsAdmin} />}
-        {resourcesAdmin && <PoolResourcesCard />}
-        {aiAdmin && <><AiPolicyCard /><AiCard /><ProjectLlmsCard /><AgentsCard /></>}
+      <div className="content settings">
+        <Nav />
+        {(groupsAdmin || user?.managesGroups) && <div id="gruppen"><GroupsCard users={users.data?.users ?? []} canAdmin={groupsAdmin} /></div>}
+        {resourcesAdmin && <div id="ressourcen"><PoolResourcesCard /></div>}
+        {aiAdmin && <AiSection />}
       </div>
     </>
   );
   return (
     <>
       <TopBar title="Verwaltung"><button className="btn" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></TopBar>
-      <div className="content">
-        <InvitationsCard onAccepted={() => void users.reload()} />
-        <UsersCard users={users.data?.users ?? []} reload={users.reload} />
-        <GroupsCard users={users.data?.users ?? []} canAdmin />
-        <ProjectLeadsCard users={users.data?.users ?? []} />
-        <PdfStyleCard />
-        <OrgNotifyCard />
-        <PoolResourcesCard />
-        <AiPolicyCard />
-        <AiCard />
-        <ProjectLlmsCard />
-        <AgentsCard />
-        <ProjectTemplatesCard />
-        <TemplatesCard />
-        <div className="card">
+      <div className="content settings">
+        <Nav />
+        <div id="benutzer"><UsersCard users={users.data?.users ?? []} reload={users.reload} /><InvitationsCard onAccepted={() => void users.reload()} /></div>
+        <div id="gruppen"><GroupsCard users={users.data?.users ?? []} canAdmin /></div>
+        <div id="projekte"><ProjectLeadsCard users={users.data?.users ?? []} /></div>
+        <div id="kommunikation"><OrgNotifyCard /></div>
+        <div id="ressourcen"><PoolResourcesCard /></div>
+        <AiSection />
+        <div id="vorlagen"><ProjectTemplatesCard /><TemplatesCard /></div>
+        <div id="mandant"><PdfStyleCard /></div>
+        <div className="card" id="audit">
           <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><span className="row">
             <button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Anzeigen (nur Metadaten, wird protokolliert)</button>
             <button className="btn primary" disabled={busy} onClick={() => void run(async () => { const e = (await api.get<{ entries: AuditEntry[] }>('/audit')).entries; downloadCsv(`audit-${new Date().toISOString().slice(0, 10)}.csv`, ['Zeit', 'Wer', 'Aktion', 'Objekttyp', 'Objekt', 'Projekt', 'Details'], e.map((x) => [x.createdAt, x.userName ?? 'Worker', x.action, x.objectType, x.objectId, x.projectId, JSON.stringify(x.details)])); })}>CSV herunterladen</button>
@@ -342,45 +344,70 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 }
 
 /** KI-Profile je Mandant: Anbieter (lokales LLM oder Anthropic), Adresse, Modell, Schlüssel; Agenten und Projekte bekommen je eines zugewiesen. */
-function AiCard() {
+/** Verwaltung › KI: vier Karten nach Konzept LLM/Agenten 3.1 – LLMs, Agenten, Freigaben, Grenzen und Vorgaben. */
+function AiSection() {
+  return (
+    <div id="ki">
+      <div className="card"><h2 style={{ margin: 0 }}>KI</h2>
+        <p className="muted small" style={{ marginBottom: 0 }}>LLMs und Agenten haben je einen <strong>Verwalter</strong> (Organisation oder ein Projekt) und einen <strong>Einsatz</strong> (alle Projekte, ausgewählte, nur das eigene). Ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist. Die Freigaben sperren, die Grenzen begrenzen. Konzept: docs/Konzept-LLM-Agenten-Einsatz.md.</p>
+      </div>
+      <LlmsCard />
+      <AgentsCard />
+      <AiPolicyCard />
+      <LimitsCard />
+    </div>
+  );
+}
+
+type ProjectLlmRow = { id: string; name: string; provider: string; model: string; baseUrl: string | null; active: boolean; adminBlocked: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null; project: string; createdBy: string | null };
+const fmtTokens = (n: number) => `${n.toLocaleString('de-DE')} Token`;
+
+/** LLMs: Org-LLMs (anlegen, Einsatz, Standard) und Projekt-LLMs (sperren) in einer Tabelle mit Verwalter und Einsatz. */
+function LlmsCard() {
   const st = useAiStatus();
+  const own = useData<{ llms: ProjectLlmRow[] }>('/ai/project-llms');
+  const projects = useData<{ projects: { id: string; label: string }[] }>('/ai/release-projects');
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
-  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '' });
-  const [budget, setBudget] = useState<number | null>(null);
-  const [assist, setAssist] = useState<number | null>(null);
+  const empty = { name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '' };
+  const [f, setF] = useState(empty);
   const [msg, setMsg] = useState<string | null>(null);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all', projectIds: [], personalScope: false, webSearch: false, contextTokens: '' } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: (p as any).projectScope ?? 'all', projectIds: (p as any).projectIds ?? [], personalScope: Boolean((p as any).personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '' }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? empty : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: p.projectScope ?? 'all', projectIds: p.projectIds ?? [], personalScope: Boolean(p.personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '' }); };
+  const label = (id: string) => projects.data?.projects.find((x) => x.id === id)?.label ?? '?';
+  const scopeText = (p: AiProfile) => p.projectScope === 'selected' ? <span title={(p.projectIds ?? []).map(label).join(', ')}>{(p.projectIds ?? []).length} ausgewählte Projekte</span> : p.projectScope === 'none' ? <span className="muted">kein Projekt (nur Verbindungstest)</span> : <>alle Projekte{p.personalScope ? ' und persönliche' : ''}</>;
+  const after = async (w?: string[]) => { await invalidateAi(); await own.reload(); setWarnings(w ?? []); };
   return (
     <div className="card">
-      <div className="row between"><h2 style={{ margin: 0 }}>KI-Profile</h2><button className="btn primary sm" onClick={() => open('new')}>Profil anlegen</button></div>
-      <p className="muted small">Jedes Profil ist eine KI: lokales LLM mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio) oder Anthropic. Agenten bekommen je ein Profil (unten), Je Profil legst du fest, für welche Projekte es bereitsteht (alle, ausgewählte, keine); die PL wählt daraus die Projekt-KI, ohne Auswahl ist die KI dort aus. Eigene LLMs der Projekte erlaubst du unten. Regel vor KI: Vorschläge mit Freigabe, Agenten nur bei zugewiesenen Arbeitspaketen. Jede Anfrage steht im Audit mit Profil, Modell und Token.</p>
+      <div className="row between"><h2 style={{ margin: 0 }}>LLMs</h2><button className="btn primary sm" onClick={() => open('new')}>LLM anlegen</button></div>
+      <p className="muted small">Ein LLM ist ein Modell mit Zugang: lokal mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio) oder Anthropic. <strong>Verwalter</strong> Organisation: du legst es an und bestimmst den Einsatz. Verwalter Projekt: die PL hat es eingebunden (nur dort nutzbar), du siehst Metadaten und Verbrauch und kannst es sperren. Das <strong>Standard-LLM</strong> gilt für Agenten ohne eigenes LLM.</p>
       {error && <div className="error mb">{error}</div>}
       {msg && <div className="success mb small">{msg}</div>}
-      {st.profiles.length === 0 && <div className="empty mb">Noch kein Profil. Ohne Profil ist KI für den Mandanten aus.</div>}
-      {st.profiles.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Anbieter</th><th>Modell</th><th>Status</th><th /></tr></thead><tbody>
-        {st.profiles.map((p) => <tr key={p.id} style={p.active ? undefined : { opacity: 0.6 }}><td>{p.name}{st.defaultProfileId === p.id && <span className="badge ok" style={{ marginLeft: 6 }} title="Vorbelegung für neue Agenten">Standard</span>}</td><td className="small">{p.provider === 'local' ? <>Lokales LLM<div className="muted">{p.baseUrl}</div></> : 'Anthropic'}</td><td className="small">{p.model}{p.provider === 'local' && p.thinkingOff && <div><span className="badge" title="Denkmodus aus: enable_thinking = false">Denkmodus aus</span></div>}<div className="muted">{{ all: `alle Projekte${(p as any).personalScope ? ' (auch persönliche)' : ''}`, selected: `${(p as any).projectIds?.length ?? 0} ausgewählte Projekte`, none: 'nur Agenten des Org-Admins' }[((p as any).projectScope ?? 'all') as 'all' | 'selected' | 'none']}</div></td><td className="small">{!p.active ? <span className="badge">inaktiv</span> : p.provider === 'anthropic' && !p.hasKey ? <span className="badge warn">Schlüssel fehlt</span> : <span className="badge ok">bereit</span>}</td>
+      {warnings.length > 0 && <div className="notice mb small"><strong>Folgen:</strong><ul style={{ margin: '4px 0 0 16px' }}>{warnings.map((w) => <li key={w}>{w}</li>)}</ul></div>}
+      {st.profiles.length === 0 && (own.data?.llms.length ?? 0) === 0 && <div className="empty mb">Noch kein LLM. Ohne LLM ist KI für den Mandanten aus.</div>}
+      {(st.profiles.length > 0 || (own.data?.llms.length ?? 0) > 0) && <table className="table mb"><thead><tr><th>Name</th><th>Verwalter</th><th>Einsatz</th><th>Anbieter · Modell</th><th>Status · Verbrauch</th><th /></tr></thead><tbody>
+        {st.profiles.map((p) => <tr key={p.id} style={p.active ? undefined : { opacity: 0.6 }}>
+          <td>{p.name}{st.defaultProfileId === p.id && <span className="badge ok" style={{ marginLeft: 6 }} title="Gilt für Agenten ohne eigenes LLM">Standard</span>}</td>
+          <td className="small">Organisation</td>
+          <td className="small">{scopeText(p)}</td>
+          <td className="small">{p.provider === 'local' ? 'Lokal' : 'Anthropic'}<div className="muted">{p.model}{p.baseUrl ? ` · ${p.baseUrl}` : ''}</div></td>
+          <td className="small">{p.active ? <span className="badge ok">aktiv</span> : <span className="badge">inaktiv</span>}{!p.hasKey && p.provider === 'anthropic' && <span className="badge warn" style={{ marginLeft: 4 }}>kein Schlüssel</span>}<div className="muted">{fmtTokens((p.tokensIn ?? 0) + (p.tokensOut ?? 0))}{p.lastUsedAt ? ` · ${fmtDateTime(p.lastUsedAt)}` : ''}</div></td>
           <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>(`/ai/profiles/${p.id}/test`); setMsg(`${p.name}: ${r.model} antwortet „${r.reply}“.`); })}>Testen</button>{' '}
             <button className="btn sm" onClick={() => open(p)}>Bearbeiten</button>{' '}
-            {st.defaultProfileId !== p.id && <><button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { defaultProfileId: p.id }); await invalidateAi(); })}>Als Standard</button>{' '}</>}
-            <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Profil löschen', text: `„${p.name}“ löschen? Agenten und Projekte, die es nutzen, verlieren ihre KI, bis ein anderes Profil zugewiesen ist.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/ai/profiles/${p.id}`); await invalidateAi(); }); })}>Löschen</button></td></tr>)}
+            {st.defaultProfileId !== p.id && <><button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.put('/ai/settings', { defaultProfileId: p.id }); await after(); })}>Als Standard</button>{' '}</>}
+            <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'LLM löschen', text: `„${p.name}“ löschen? Agenten und Projekte, die es nutzen, verlieren ihre KI, bis ein anderes LLM zugewiesen ist.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/ai/profiles/${p.id}`); await after(); }); })}>Löschen</button></td></tr>)}
+        {(own.data?.llms ?? []).map((l) => <tr key={l.id} style={l.adminBlocked || !l.active ? { opacity: 0.6 } : undefined}>
+          <td>{l.name}</td>
+          <td className="small">Projekt {l.project}<div className="muted">von {l.createdBy ?? '–'}</div></td>
+          <td className="small">nur dieses Projekt</td>
+          <td className="small">{l.provider === 'local' ? 'Lokal' : 'Anthropic'}<div className="muted">{l.model}{l.baseUrl ? ` · ${l.baseUrl}` : ''}</div></td>
+          <td className="small">{l.adminBlocked ? <span className="badge danger">gesperrt</span> : l.active ? <span className="badge ok">aktiv</span> : <span className="badge">inaktiv</span>}<div className="muted">{fmtTokens(l.tokensIn + l.tokensOut)}{l.lastUsedAt ? ` · ${fmtDateTime(l.lastUsedAt)}` : ' · nie genutzt'}</div></td>
+          <td className="nowrap"><button className={`btn sm ${l.adminBlocked ? '' : 'danger'}`} disabled={busy} onClick={() => void run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/ai/profiles/${l.id}`, { adminBlocked: !l.adminBlocked }); await after(r.warnings); })}>{l.adminBlocked ? 'Entsperren' : 'Sperren'}</button></td></tr>)}
       </tbody></table>}
-      <div className="row small"><span className="muted" title="0 = Agenten laufen nicht; gezählt werden ausgeführte Läufe (auch mit Fehler)">Tagesbudget je Agent (Läufe, 0 = keine):</span><input type="number" min={0} max={1000} value={budget ?? st.agentDailyBudget} onChange={(e) => setBudget(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || budget == null} onClick={() => void run(async () => { await api.put('/ai/settings', { agentDailyBudget: budget }); setBudget(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
-      <div className="row small mt"><span className="muted" title="Zusammenfassen, Essenz, Statusbericht, Frage ans Projekt, Abschluss-Antwort; 0 = keine">Tagesbudget KI-Assistenz je Projekt (Anfragen, 0 = keine):</span><input type="number" min={0} max={10000} value={assist ?? st.assistDailyBudget ?? 200} onChange={(e) => setAssist(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || assist == null} onClick={() => void run(async () => { await api.put('/ai/settings', { assistDailyBudget: assist }); setAssist(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
-      <div className="row small mt"><span className="muted" title="Gilt für Mails, Antworten auf Ursprungsmails und PDF-Versand der KI-Agenten an Nicht-Interne; Entwürfe der Mail-KI und die Abschluss-Antwort mit KI werden nur geprüft (Hinweise)">Außenprüfung für Agenten-Mails an Nicht-Interne:</span>
-        <select value={st.externalGuard ?? 'strict'} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put('/ai/settings', { externalGuard: e.target.value }); await invalidateAi(); setMsg('Außenprüfung gespeichert.'); })}>
-          <option value="strict">streng: mit Außenkontext neu formulieren, dann prüfen (ein Zusatzaufruf je Mail)</option>
-          <option value="check">nur prüfen</option>
-        </select></div>
-      <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
-      <h3 className="mt">Agenten-Policy des Mandanten</h3>
-      <p className="muted small">Vorgabe für alle Projekte: Selbstständigkeit (ohne Angabe „Rückfrage bei wichtigen Schritten“; Bestandsprojekte stehen auf „Selbstständig“) und Grenzen, die kein Projekt unterschreiten kann. Die PL stellt je Projekt, Agent und Arbeitspaket weiter ein; gesperrte Klassen regeln die KI-Freigaben (agent.finalize, agent.send_external, agent.close …).</p>
-      <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
-      <WebSearchForm st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
       {edit && (
-        <Modal title={edit === 'new' ? 'KI-Profil anlegen' : `Profil: ${edit.name}`} onClose={() => setEdit(null)}>
+        <Modal title={edit === 'new' ? 'LLM anlegen (Verwalter: Organisation)' : `LLM: ${edit.name}`} onClose={() => setEdit(null)}>
           <div className="form cols-2">
             <label className="field full"><span>Name</span><input type="text" value={f.name} autoFocus placeholder="z. B. Qwen3 auf der KI-VM" onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
             <label className="field"><span>Anbieter</span><select value={f.provider} onChange={(e) => setF({ ...f, provider: e.target.value as any, model: '' })}><option value="local">Lokales LLM (OpenAI-kompatibel: vLLM, Ollama, LM Studio)</option><option value="anthropic">Anthropic (Claude)</option></select></label>
@@ -392,23 +419,53 @@ function AiCard() {
               : <select value={f.model || st.models[0]} onChange={(e) => setF({ ...f, model: e.target.value })}>{st.models.map((m) => <option key={m} value={m}>{m}</option>)}</select>}</label>
             {f.provider === 'local' && <label className="field"><span>Schlüssel (optional, Bearer)</span><input type="password" value={f.apiKey} autoComplete="new-password" placeholder="leer, wenn der Server keinen verlangt" onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>}
             {f.provider === 'local' && <div className="full stack" style={{ gap: 4 }}>
-              <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus</label>
-              <label className="field" title="Kontextfenster des Modells; die Eingabe eines Agentenlaufs belegt höchstens 45 % davon, Überschüssiges wird gekürzt (AP-Liste, Seitentitel, ähnliche APs, Mailtexte, Log, Steckbrief)"><span>Kontextgröße in Token (leer = 32.000)</span><input type="number" min={4000} step={1000} value={f.contextTokens} onChange={(e) => setF({ ...f, contextTokens: e.target.value })} placeholder="32000" /></label>
-              <label className="check" title="Dazu muss die KI-Freigabe „Online-Recherche“ (agent.web) erlauben; lokale Profile brauchen einen Suchdienst (unten)"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem Profil erlaubt</label>
-              <span className="muted small">Für Modelle mit Thinking (z. B. Qwen): schneller, weniger Token, keine abgeschnittenen Antworten. Sendet <code>chat_template_kwargs.enable_thinking = false</code> (vLLM, llama.cpp).</span>
+              <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus <span className="muted small">(Modelle mit Thinking wie Qwen: schneller, weniger Token; sendet chat_template_kwargs.enable_thinking = false)</span></label>
+              <label className="field" title="Kontextfenster des Modells; die Eingabe eines Agentenlaufs belegt höchstens 45 % davon, Überschüssiges wird gekürzt"><span>Kontextgröße in Token (leer = 32.000)</span><input type="number" min={4000} step={1000} value={f.contextTokens} placeholder="32000" onChange={(e) => setF({ ...f, contextTokens: e.target.value })} /></label>
+              <label className="check" title="Dazu muss die KI-Freigabe „Online-Recherche“ (agent.web) erlauben; lokale LLMs brauchen einen Suchdienst (Grenzen und Vorgaben)"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem LLM erlaubt</label>
             </div>}
             <ScopeEditor scope={f.projectScope} projectIds={f.projectIds} onChange={(projectScope, projectIds) => setF({ ...f, projectScope, projectIds, personalScope: projectScope === 'all' && f.personalScope })} />
             {f.projectScope === 'all' && <label className="check full"><input type="checkbox" checked={f.personalScope} onChange={(e) => setF({ ...f, personalScope: e.target.checked })} /> auch in persönlichen Projekten <span className="muted small">(sonst sehen persönliche Projekte nur ihr eigenes LLM)</span></label>}
-            {f.projectScope === 'selected' && <span className="muted small full">Persönliche Projekte stehen als „persönlich (Name)“ in der Liste und werden einzeln ausgewählt.</span>}
+            {f.projectScope === 'selected' && <span className="muted small full">Persönliche Projekte stehen als „persönlich (Name)“ in der Liste und werden einzeln ausgewählt. Agenten mit diesem LLM laufen nur in den gewählten Projekten.</span>}
             {error && <div className="error full">{error}</div>}
             <div className="full row">
-              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.provider === 'local' && f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.projectScope === 'all' && f.personalScope, contextTokens: f.contextTokens ? Number(f.contextTokens) : null }; if (edit === 'new') await api.post('/ai/profiles', body); else await api.patch(`/ai/profiles/${edit.id}`, body); setEdit(null); await invalidateAi(); })}>{edit === 'new' ? 'Anlegen' : 'Speichern'}</button>
-              {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { await api.patch(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await invalidateAi(); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
+              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.personalScope, webSearch: f.webSearch, contextTokens: f.contextTokens ? Number(f.contextTokens) : null }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/ai/profiles', body) : await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, body); setEdit(null); await after(r.warnings); })}>Speichern</button>
+              {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await after(r.warnings); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
               <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
             </div>
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+/** Grenzen und Vorgaben: Budgets, Außenprüfung, Rechte der PL (eigene LLMs und Agenten), Agenten-Policy, Online-Recherche, Arbeitszeitfenster. */
+function LimitsCard() {
+  const st = useAiStatus();
+  const [budget, setBudget] = useState<number | null>(null);
+  const [assist, setAssist] = useState<number | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const { busy, error, run } = useAsync();
+  if (!st) return null;
+  return (
+    <div className="card">
+      <h2>Grenzen und Vorgaben</h2>
+      {error && <div className="error mb">{error}</div>}
+      {msg && <div className="success mb small">{msg}</div>}
+      <h3>Budgets und Außenprüfung</h3>
+      <div className="row small"><span className="muted" title="0 = Agenten laufen nicht; gezählt werden ausgeführte Läufe (auch mit Fehler)">Tagesbudget je Agent (Läufe, 0 = keine):</span><input type="number" min={0} max={1000} value={budget ?? st.agentDailyBudget} onChange={(e) => setBudget(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || budget == null} onClick={() => void run(async () => { await api.put('/ai/settings', { agentDailyBudget: budget }); setBudget(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
+      <div className="row small mt"><span className="muted" title="Zusammenfassen, Essenz, Statusbericht, Frage ans Projekt, Abschluss-Antwort; 0 = keine">Tagesbudget KI-Assistenz je Projekt (Anfragen, 0 = keine):</span><input type="number" min={0} max={10000} value={assist ?? st.assistDailyBudget ?? 200} onChange={(e) => setAssist(Number(e.target.value))} style={{ width: 90 }} /><button className="btn sm" disabled={busy || assist == null} onClick={() => void run(async () => { await api.put('/ai/settings', { assistDailyBudget: assist }); setAssist(null); await invalidateAi(); setMsg('Budget gespeichert.'); })}>Speichern</button></div>
+      <div className="row small mt"><span className="muted" title="Gilt für Mails, Antworten auf Ursprungsmails und PDF-Versand der KI-Agenten an Nicht-Interne; Entwürfe und die Abschluss-Antwort mit KI werden nur geprüft (Hinweise)">Außenprüfung für Agenten-Mails an Nicht-Interne:</span>
+        <select value={st.externalGuard ?? 'strict'} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put('/ai/settings', { externalGuard: e.target.value }); await invalidateAi(); setMsg('Außenprüfung gespeichert.'); })}>
+          <option value="strict">streng: mit Außenkontext neu formulieren, dann prüfen (ein Zusatzaufruf je Mail)</option>
+          <option value="check">nur prüfen</option>
+        </select></div>
+      <h3 className="mt">Was die Projektleitung selbst darf</h3>
+      <PlAgentPolicy st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
+      <h3 className="mt">Agenten-Policy des Mandanten</h3>
+      <p className="muted small">Vorgabe für alle Projekte: Selbstständigkeit (ohne Angabe „Rückfrage bei wichtigen Schritten“; Bestandsprojekte stehen auf „Selbstständig“) und Grenzen, die kein Projekt unterschreiten kann. Die PL stellt je Projekt, Agent und Arbeitspaket weiter ein; gesperrte Klassen regeln die KI-Freigaben.</p>
+      <AgentPolicyEditor value={st.agentPolicy ?? {}} limits workflows inheritFrom="Standard" onSave={async (v) => { await api.put('/ai/settings', { agentPolicy: v }); await invalidateAi(); setMsg('Agenten-Policy gespeichert.'); }} />
+      <WebSearchForm st={st} onSaved={async () => { await invalidateAi(); setMsg('Einstellungen gespeichert.'); }} />
     </div>
   );
 }
@@ -465,33 +522,13 @@ function PlAgentPolicy({ st, onSaved }: { st: NonNullable<ReturnType<typeof useA
   );
 }
 
-/** Eigene LLMs der Projekte: Metadaten und Verbrauch, sperren/entsperren; Schlüssel und Inhalte sieht der Org-Admin nicht. */
-function ProjectLlmsCard() {
-  const d = useData<{ llms: { id: string; name: string; provider: string; model: string; baseUrl: string | null; active: boolean; adminBlocked: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null; project: string; createdBy: string | null }[] }>('/ai/project-llms');
-  const { busy, error, run } = useAsync();
-  if (!d.data || d.data.llms.length === 0) return null;
-  return (
-    <div className="card">
-      <h2>Eigene LLMs der Projekte</h2>
-      <p className="muted small">Von PL eingebundene LLMs, nur im jeweiligen Projekt nutzbar. Sichtbar sind Metadaten und Verbrauch, nicht Schlüssel oder Inhalte. Gesperrte LLMs nutzen weder Projekt-KI noch Agenten.</p>
-      {error && <div className="error small">{error}</div>}
-      <table className="table"><thead><tr><th>Name</th><th>Anbieter / Adresse</th><th>Projekt</th><th>Verbrauch</th><th /></tr></thead><tbody>
-        {d.data.llms.map((l) => <tr key={l.id} style={l.adminBlocked || !l.active ? { opacity: 0.6 } : undefined}><td>{l.name}{l.adminBlocked && <span className="badge danger" style={{ marginLeft: 6 }}>gesperrt</span>}{!l.active && <span className="badge" style={{ marginLeft: 6 }}>inaktiv</span>}<div className="muted small">von {l.createdBy ?? '–'}</div></td>
-          <td className="small">{l.provider === 'local' ? l.baseUrl : 'Anthropic'}<div className="muted">{l.model}</div></td><td className="small">{l.project}</td>
-          <td className="small">{(l.tokensIn + l.tokensOut).toLocaleString('de-DE')} Token<div className="muted">{l.lastUsedAt ? fmtDateTime(l.lastUsedAt) : 'nie genutzt'}</div></td>
-          <td><button className={`btn sm ${l.adminBlocked ? '' : 'danger'}`} disabled={busy} onClick={() => void run(async () => { await api.patch(`/ai/profiles/${l.id}`, { adminBlocked: !l.adminBlocked }); await d.reload(); })}>{l.adminBlocked ? 'Entsperren' : 'Sperren'}</button></td></tr>)}
-      </tbody></table>
-    </div>
-  );
-}
-
-/** Freigabe eines Profils für Projekte: alle, ausgewählte oder keine (dann nur für Agenten des Org-Admins). */
-function ScopeEditor({ scope, projectIds, onChange }: { scope: 'all' | 'selected' | 'none'; projectIds: string[]; onChange: (scope: 'all' | 'selected' | 'none', projectIds: string[]) => void }) {
+/** Einsatz eines LLM (alle, ausgewählte, keins) bzw. eines Agenten (alle, ausgewählte) in Projekten. */
+function ScopeEditor({ scope, projectIds, onChange, agent = false }: { scope: 'all' | 'selected' | 'none'; projectIds: string[]; onChange: (scope: 'all' | 'selected' | 'none', projectIds: string[]) => void; agent?: boolean }) {
   const projects = useData<{ projects: { id: string; label: string }[] }>(scope === 'selected' ? '/ai/release-projects' : null, [scope]);
   return (
     <div className="full stack" style={{ gap: 4 }}>
-      <label className="field"><span>Für Projekte (Projekt-KI und eigene Agenten der PL)</span><select value={scope} onChange={(e) => onChange(e.target.value as any, projectIds)}><option value="all">alle Projekte</option><option value="selected">ausgewählte Projekte</option><option value="none">keine (nur Agenten des Org-Admins)</option></select></label>
-      {scope === 'selected' && <div className="row small" style={{ flexWrap: 'wrap' }}>{(projects.data?.projects ?? []).map((p) => <label key={p.id} className="check"><input type="checkbox" checked={projectIds.includes(p.id)} onChange={(e) => onChange(scope, e.target.checked ? [...projectIds, p.id] : projectIds.filter((x) => x !== p.id))} /> {p.label}</label>)}</div>}
+      <label className="field"><span>Einsatz</span><select value={scope} onChange={(e) => onChange(e.target.value as any, projectIds)}><option value="all">alle Projekte</option><option value="selected">ausgewählte Projekte</option>{!agent && <option value="none">kein Projekt (nur Verbindungstest; Agenten damit laufen nirgends)</option>}</select></label>
+      {scope === 'selected' && <div className="row small" style={{ flexWrap: 'wrap' }}>{(projects.data?.projects ?? []).map((p) => <label key={p.id} className="check"><input type="checkbox" checked={projectIds.includes(p.id)} onChange={(e) => onChange(scope, e.target.checked ? [...projectIds, p.id] : projectIds.filter((x) => x !== p.id))} /> {p.label}</label>)}{projects.data && projects.data.projects.length === 0 && <span className="muted">keine aktiven Projekte</span>}</div>}
     </div>
   );
 }
@@ -525,34 +562,61 @@ function SignatureField({ value, disabled, onSave }: { value: string; disabled: 
     <textarea rows={3} maxLength={500} value={v} disabled={disabled} style={{ width: '100%', minHeight: 64 }} placeholder={'leer = „Name (KI-Agent, Projekt KEY)“\nz. B. Viele Grüße\nMorton, Assistenz von Philipp Schwarz'} onChange={(e) => setV(e.target.value)} onBlur={() => { if (v.trim() !== value) onSave(v.trim()); }} /></details>;
 }
 
-/** KI-Agenten: Benutzer ohne Login, vom Org-Admin benannt; in Projekten Mitglied oder stellvertretende PL, nie verantwortliche PL. */
+/** KI-Agenten: Verwalter (Organisation oder Projekt), LLM, Einsatz und Projekte mit Einsetzbarkeit; Org-Agenten legt die KI-Verwaltung an. */
 function AgentsCard() {
   const d = useData<{ agents: AgentUser[] }>('/agents');
   const st = useAiStatus();
-  const [name, setName] = useState('');
-  const [persona, setPersona] = useState('');
+  const projects = useData<{ projects: { id: string; label: string }[] }>('/ai/release-projects');
+  const empty = { name: '', persona: '', aiProfileId: '', scope: 'all' as 'all' | 'selected', projectIds: [] as string[] };
+  const [edit, setEdit] = useState<AgentUser | 'new' | null>(null);
+  const [f, setF] = useState(empty);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
+  const label = (id: string) => projects.data?.projects.find((x) => x.id === id)?.label ?? '?';
+  const open = (a: AgentUser | 'new') => { setEdit(a); setF(a === 'new' ? empty : { name: a.name, persona: a.persona ?? '', aiProfileId: a.aiProfileId ?? '', scope: a.scope === 'selected' ? 'selected' : 'all', projectIds: a.projectIds ?? [] }); };
+  const save = (id: string, body: Record<string, unknown>) => run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/agents/${id}`, body); setWarnings(r.warnings ?? []); await d.reload(); });
+  const scopeText = (a: AgentUser) => a.scope === 'project' ? `nur ${a.projectBound?.label ?? 'eigenes Projekt'}` : a.scope === 'selected' ? <span title={(a.projectIds ?? []).map(label).join(', ')}>{(a.projectIds ?? []).length} ausgewählte Projekte</span> : 'alle Projekte';
   return (
     <div className="card">
-      <h2>KI-Agenten</h2>
-      <p className="muted small">Ein Agent ist ein spezieller Benutzer: kein Login, nie verantwortliche PL oder Org-Admin. Die PL nimmt ihn als Mitglied oder stellvertretende PL ins Projekt (dort auch „darf Mails senden“) und macht ihn zuständig: für Arbeitspakete, Aufgaben oder ein Teilprojekt. Er handelt dann im Rahmen dieser Rechte: Log, Status, Tasks, Planung (Aufgaben, Termine, Zuweisungen), Nachfragen per Mail, Antwort auf die Ursprungsmail, Blockade melden, Eskalation an die PL; im Chat ist er direkt erreichbar. Projekte legt er nie an. Die Persona beschreibt in einer Zeile seinen Schreibstil (Log, Mails, Doku, Chat); Fakten- und Rechteregeln gehen ihr vor. Die Unterschrift ist frei; leer gilt „Name (KI-Agent, Projekt KEY)“. Jeder Lauf steht unter Projekt › KI und im Audit.</p>
+      <div className="row between"><h2 style={{ margin: 0 }}>KI-Agenten</h2><button className="btn primary sm" onClick={() => open('new')}>Agent anlegen</button></div>
+      <p className="muted small">Ein Agent ist ein Benutzer ohne Login: nie verantwortliche PL oder Org-Admin. Die PL nimmt ihn als Mitglied oder stellvertretende PL ins Projekt und macht ihn zuständig; er handelt im Rahmen der KI-Freigaben und der Agenten-Policy. <strong>Verwalter</strong> Organisation: du gestaltest ihn (Name, Persona, LLM, Einsatz). Verwalter Projekt: die PL hat ihn angelegt, du kannst ihn nur deaktivieren. Er läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist; wo nicht, steht der Grund bei den Projekten.</p>
       {error && <div className="error mb">{error}</div>}
-      {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Persona (Schreibstil)</th><th>KI-Profil</th><th>Projekte</th><th>Läufe</th><th>Letzter Lauf</th><th /></tr></thead><tbody>
-        {d.data.agents.map((a) => a.projectBound ? <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.email}</div></td><td colSpan={2} className="small muted">Agent der PL: {a.projectBound.label}{a.dailyBudget != null ? ` · Budget ${a.dailyBudget}/Tag` : ''}</td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
-          <td className="nowrap">{a.active ? <button className="btn sm danger" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: false }); await d.reload(); })}>Deaktivieren</button> : <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: true }); await d.reload(); })}>Aktivieren</button>}</td></tr> : <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}><td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.email}</div></td>
-          <td style={{ minWidth: 240 }}><PersonaField value={a.persona ?? ''} disabled={busy} onSave={(persona) => void run(async () => { await api.patch(`/agents/${a.id}`, { persona: persona || null }); await d.reload(); })} />
-            <SignatureField value={a.signature ?? ''} disabled={busy} onSave={(signature) => void run(async () => { await api.patch(`/agents/${a.id}`, { signature: signature || null }); await d.reload(); })} /></td>
-          <td><select value={a.aiProfileId ?? ''} disabled={busy} onChange={(e) => void run(async () => { await api.patch(`/agents/${a.id}`, { aiProfileId: e.target.value || null }); await d.reload(); })}><option value="">– Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ': keines'} –</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}{p.active ? '' : ' (inaktiv)'}</option>)}</select>
-            <ThinkingSelect agent={a} profile={st?.profiles.find((p) => p.id === (a.aiProfileId ?? st?.defaultProfileId)) ?? null} disabled={busy} onChange={(thinkingMode) => void run(async () => { await api.patch(`/agents/${a.id}`, { thinkingMode }); await d.reload(); })} /></td><td className="small">{a.projects.map((p) => <span key={p.id} className="badge" style={{ marginRight: 4 }}>{p.key}</span>)}{a.projects.length === 0 && <span className="muted">–</span>}</td><td>{a.runs}</td><td className="small">{a.lastRunAt ? fmtDateTime(a.lastRunAt) : '–'}</td>
-          <td className="nowrap"><button className="btn sm" disabled={busy} onClick={() => { const n = window.prompt('Neuer Name', a.name); if (n?.trim()) void run(async () => { await api.patch(`/agents/${a.id}`, { name: n.trim() }); await d.reload(); }); }}>Umbenennen</button>{' '}
-            {a.active ? <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Agent deaktivieren', text: `${a.name} deaktivieren? Zuweisungen werden entfernt, Mitgliedschaften und Historie bleiben.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.patch(`/agents/${a.id}`, { active: false }); await d.reload(); }); })}>Deaktivieren</button> : <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: true }); await d.reload(); })}>Aktivieren</button>}</td></tr>)}
+      {warnings.length > 0 && <div className="notice mb small"><strong>Folgen:</strong><ul style={{ margin: '4px 0 0 16px' }}>{warnings.map((w) => <li key={w}>{w}</li>)}</ul></div>}
+      {d.data && d.data.agents.length === 0 && <div className="empty mb">Noch kein Agent.</div>}
+      {d.data && d.data.agents.length > 0 && <table className="table mb"><thead><tr><th>Name</th><th>Verwalter</th><th>LLM</th><th>Einsatz</th><th>Projekte</th><th>Läufe</th><th /></tr></thead><tbody>
+        {d.data.agents.map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}>
+          <td>{a.name}{!a.active && <span className="badge" style={{ marginLeft: 6 }}>deaktiviert</span>}<div className="muted small">{a.persona ?? 'Standardstil'}</div>
+            {!a.projectBound && <>
+              <PersonaField value={a.persona ?? ''} disabled={busy} onSave={(persona) => void save(a.id, { persona: persona || null })} />
+              <SignatureField value={a.signature ?? ''} disabled={busy} onSave={(signature) => void save(a.id, { signature: signature || null })} />
+            </>}</td>
+          <td className="small">{a.projectBound ? <>Projekt {a.projectBound.label}</> : 'Organisation'}</td>
+          <td className="small">{a.projectBound ? (a.profileName ?? '–') : <>
+            <select value={a.aiProfileId ?? ''} disabled={busy} onChange={(e) => void save(a.id, { aiProfileId: e.target.value || null })}><option value="">Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ' (keins)'}</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select>
+            <ThinkingSelect agent={a} profile={st?.profiles.find((p) => p.id === (a.aiProfileId ?? st?.defaultProfileId)) ?? null} disabled={busy} onChange={(thinkingMode) => void save(a.id, { thinkingMode })} /></>}</td>
+          <td className="small">{scopeText(a)}</td>
+          <td className="small">{a.projects.length === 0 ? <span className="muted">–</span> : a.projects.map((p) => <span key={p.id} className={`badge ${p.usable === false ? 'warn' : ''}`} style={{ marginRight: 4 }} title={p.usable === false ? p.reason ?? '' : `${p.name}: läuft`}>{p.key}{p.usable === false ? ' ⚠' : ''}</span>)}</td>
+          <td className="small">{a.runs}{a.lastRunAt && <div className="muted">{fmtDateTime(a.lastRunAt)}</div>}</td>
+          <td className="nowrap">{!a.projectBound && <><button className="btn sm" disabled={busy} onClick={() => open(a)}>Bearbeiten</button>{' '}</>}
+            {a.active ? <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Agent deaktivieren', text: `${a.name} deaktivieren? Zuweisungen werden entfernt, Mitgliedschaften und Historie bleiben.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void save(a.id, { active: false }); })}>Deaktivieren</button>
+              : <button className="btn sm" disabled={busy} onClick={() => void save(a.id, { active: true })}>Aktivieren</button>}</td></tr>)}
       </tbody></table>}
-      <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post('/agents', { name, persona: persona.trim() || null }); setName(''); setPersona(''); await d.reload(); }); }}>
-        <input type="text" placeholder="Name des Agenten, z. B. Nachfasser" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 280 }} />
-        <input type="text" placeholder="Persona (optional): Schreibstil, z. B. freundlich, knapp, duzt das Team" maxLength={300} value={persona} onChange={(e) => setPersona(e.target.value)} style={{ flex: 1, minWidth: 220 }} />
-        <button className="btn primary sm" disabled={busy || !name.trim()}>Agent anlegen</button>
-      </form>
+      {edit && (
+        <Modal title={edit === 'new' ? 'Agent anlegen (Verwalter: Organisation)' : `Agent: ${edit.name}`} onClose={() => setEdit(null)}>
+          <div className="form">
+            <label className="field"><span>Name</span><input type="text" value={f.name} autoFocus maxLength={80} placeholder="z. B. Nachfasser" onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <label className="field"><span>Persona (Schreibstil, eine Zeile)</span><input type="text" value={f.persona} maxLength={300} placeholder="z. B. freundlich, knapp, duzt das Team" onChange={(e) => setF({ ...f, persona: e.target.value })} /></label>
+            <label className="field"><span>LLM</span><select value={f.aiProfileId} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}><option value="">Standard{st?.defaultProfileId ? ` (${st.profiles.find((p) => p.id === st.defaultProfileId)?.name ?? ''})` : ' (keins)'}</option>{(st?.profiles ?? []).map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select><span className="muted small">Der Agent läuft nur in Projekten, in denen sein LLM freigegeben ist (Einsatz des LLM).</span></label>
+            <ScopeEditor agent scope={f.scope} projectIds={f.projectIds} onChange={(scope, projectIds) => setF({ ...f, scope: scope === 'selected' ? 'selected' : 'all', projectIds })} />
+            {error && <div className="error">{error}</div>}
+            <div className="row">
+              <button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { const body = { name: f.name, persona: f.persona.trim() || null, aiProfileId: f.aiProfileId || null, scope: f.scope, projectIds: f.scope === 'selected' ? f.projectIds : [] }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/agents', body) : await api.patch<{ warnings?: string[] }>(`/agents/${edit.id}`, body); setWarnings(r.warnings ?? []); setEdit(null); await d.reload(); })}>Speichern</button>
+              <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }

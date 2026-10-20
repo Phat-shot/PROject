@@ -31,8 +31,8 @@ Projekte, Mitglieder, Rechte oder Einstellungen ändern; Zusagen mit Geld- oder 
 
 ### Agent aufnehmen
 
-1. **Verwaltung › KI-Agenten › Agent anlegen** (Org-Admin oder Recht „KI verwalten“): KI-Profil, **Persona** (eine Zeile Schreibstil, z. B. „freundlich, knapp, duzt das Team, siezt Externe“), Denkmodus, Unterschrift, Tagesbudget. Oder die Projektleitung legt unter **Einstellungen › Eigene KI-Agenten** einen eigenen Agenten nur für ihr Projekt an, wenn die Freigabe „Eigene Agenten der PL“ es erlaubt.
-2. **Einstellungen › Mitglieder › Agent aufnehmen**: Rolle Mitglied oder stellvertretende PL, „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe), optional „Final setzen“.
+1. **Verwaltung › KI › KI-Agenten › Agent anlegen** (Org-Admin oder Recht „KI verwalten“): LLM, **Einsatz** (alle oder ausgewählte Projekte), **Persona** (eine Zeile Schreibstil, z. B. „freundlich, knapp, duzt das Team, siezt Externe“), Denkmodus, Unterschrift. Oder die Projektleitung legt unter **Einstellungen › KI › Eigene KI-Agenten** einen eigenen Agenten nur für ihr Projekt an, wenn die Freigabe „Eigene Agenten der PL“ es erlaubt. Ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist (Verwalter und Einsatz wie bei Mail-Konten; Konzept-LLM-Agenten-Einsatz.md).
+2. **Einstellungen › KI › Agenten im Projekt › aufnehmen** (oder Mitglieder › hinzufügen): Rolle Mitglied (schlägt vor) oder stellvertretende PL (legt direkt an), „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe). Nicht einsetzbare Agenten nennt der Dialog mit Grund.
 3. **Zuweisen**: Arbeitspaket, Aufgabe oder Teilprojekt. Der erste Lauf startet sofort.
 
 ### Projektagent

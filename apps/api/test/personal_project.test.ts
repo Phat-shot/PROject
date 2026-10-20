@@ -26,7 +26,12 @@ test('Persönliches Projekt: anlegen nur mit Freigabe, leer, nur Ersteller und A
   assert.equal((await t.api(max).put(`/projects/${pid}/members/${t.ids.users.anna}`, { role: 'member' })).statusCode, 403);
   assert.equal((await t.api(max).post('/invitations', { email: 'neu@extern.de', name: 'Neu', projectId: pid })).statusCode, 403);
   assert.equal((await t.api(max).patch(`/projects/${pid}`, { visibility: 'org' })).statusCode, 400);
-  const agent = (await t.api(admin).post('/agents', { name: 'Hilfe' })).json().agent;
+  // Org-Agent nur mit einem LLM, das auch in persönlichen Projekten freigegeben ist
+  const noLlm = (await t.api(admin).post('/agents', { name: 'Ohne' })).json().agent;
+  const blocked = await t.api(max).put(`/projects/${pid}/members/${noLlm.id}`, { role: 'pl' });
+  assert.equal(blocked.statusCode, 400); assert.match(blocked.json().error, /kein LLM|nicht freigegeben/);
+  const llm = (await t.api(admin).post('/ai/profiles', { name: 'Agenten-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x', personalScope: true })).json().profile;
+  const agent = (await t.api(admin).post('/agents', { name: 'Hilfe', aiProfileId: llm.id })).json().agent;
   assert.equal((await t.api(max).put(`/projects/${pid}/members/${agent.id}`, { role: 'pl' })).statusCode, 200, 'Agenten ja, auch als stellv. PL');
   assert.equal((await t.api(admin).get(`/projects/${pid}`)).statusCode, 403, 'Org-Admin sieht keine Inhalte');
   // Org-Admin: Agentenliste ohne Projektnamen

@@ -4,7 +4,7 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { HttpError } from '../errors.js';
 import { getViewRights, mapMembership } from '../rights.js';
-import { aiConfigForAgent, aiConfigForProfile, aiConfigForProject, orgAiSettings, profileConfig, type AiConfig, type AiProfileRow } from './client.js';
+import { aiConfigForAgent, aiConfigForProfile, aiConfigForProject, orgAiSettings, profileConfig, type AiConfig, type AiProfileRow, agentUsableIn } from './client.js';
 import { PROJECT_LABEL_SQL, projectPolicy } from '../projectPolicy.js';
 
 /**
@@ -189,8 +189,9 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
   if (isAgent) {
     cfg = await aiConfigForAgent(db, subj.id, project?.id ?? null);
     if (!cfg) {
-      const base = project && projectPolicy(project).ai.orgProfilesNeedRelease ? await aiConfigForAgent(db, subj.id, null) : null;
-      return deny('profile', base ? `Profil ${base.name} im persönlichen Projekt nicht freigegeben (Verwaltung › KI-Profile: „auch in persönlichen Projekten“ oder Auswahl)` : `Kein freigegebenes KI-Profil für ${subj.name} (Verwaltung › KI-Agenten)`, true);
+      // Grund wie beim Aufnehmen (Konzept LLM/Agenten 2.2): Einsatz des Agenten, LLM im Projekt verfügbar
+      const u = project ? await agentUsableIn(db, subj.id, project.id) : null;
+      return deny('profile', u && !u.ok ? u.reason : `Kein freigegebenes KI-Profil für ${subj.name} (Verwaltung › KI › Agenten)`, true);
     }
     pass('profile', `Profil ${cfg.name}`);
   } else if (f === 'pl.own_llm' && q.profileId) {

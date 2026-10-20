@@ -630,8 +630,10 @@ test('Meldungen nur an aktive Personen: KI-Agenten und deaktivierte Benutzer bek
   const anna = await t.login('anna@demo.local');
   const admin = await t.login('admin@demo.local');
   const web = t.ids.projects.web;
-  const agent = (await t.api(admin).post('/agents', { name: 'Leiser' })).json().agent;
-  await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' });
+  // Ein Agent braucht ein im Projekt freigegebenes LLM (Konzept LLM/Agenten 2.2)
+  const llm = (await t.api(admin).post('/ai/profiles', { name: 'Agenten-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x', personalScope: true })).json().profile;
+  const agent = (await t.api(admin).post('/agents', { name: 'Leiser', aiProfileId: llm.id })).json().agent;
+  assert.equal((await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' })).statusCode, 200);
   const count = async (uid: string) => (await t.db.one(`select count(*)::int as n from notifications where user_id = $1`, [uid])).n;
   // Zuweisung an den Agenten und Kommentare an seinem AP (er hat dort selbst geschrieben): keine Meldung an ihn
   const task = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Meldungstest', responsibleUserId: agent.id })).json().task;

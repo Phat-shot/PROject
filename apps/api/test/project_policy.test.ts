@@ -75,7 +75,8 @@ test('Persönliches Projekt im Betrieb: Vorlage 400, keine Gruppen, keine Einlad
   assert.equal((await t.api(admin).get(`/projects/${pid}`)).statusCode, 403, 'kein Inhaltszugriff');
   // Meldung mit chat=project: in normalen Projekten Systembeitrag im Projektkanal, hier nicht (der Kanal existiert)
   assert.equal((await t.api(pl).put(`/projects/${pid}/notification-rules`, { rules: [{ event: 'assigned', recipients: ['responsible', 'pl'], channels: { chat: 'project', log: true } }] })).statusCode, 200);
-  const agent = (await t.api(admin).post('/agents', { name: 'PP-Agent' })).json().agent;
+  const llm = (await t.api(admin).post('/ai/profiles', { name: 'Agenten-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x', personalScope: true })).json().profile;
+  const agent = (await t.api(admin).post('/agents', { name: 'PP-Agent', aiProfileId: llm.id })).json().agent;
   assert.equal((await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member' })).statusCode, 200, 'Agenten ja');
   const col = (await t.api(pl).get(`/projects/${pid}`)).json().columns[0].id;
   const task = (await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Kanaltest privat', columnId: col, responsibleUserId: agent.id })).json().task;

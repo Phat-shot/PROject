@@ -11,7 +11,7 @@ import { canSeeSubproject, hasOrgRight, requireProject, requireTask, visibleSubp
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
 import { linkMailToTask } from '../mail/link.js';
-import { aiConfigFor, aiStatus, complete, MODELS, projectProfiles } from '../ai/client.js';
+import { aiConfigFor, aiStatus, complete, MODELS, profileWarnings, projectProfiles } from '../ai/client.js';
 import { aiError, ownLlmAllowed, ownLlmReason, setAiPolicy } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
@@ -223,7 +223,7 @@ export async function aiRoutes(app: FastifyInstance) {
       if (Object.keys(b).some((k) => k !== 'adminBlocked') || typeof b.adminBlocked !== 'boolean') throw forbidden('Eigene LLMs der Projekte kann der Org-Admin nur sperren oder entsperren');
       await db.query(`update ai_profiles set admin_blocked = $2 where id = $1`, [cur.id, b.adminBlocked]);
       await audit(db, { orgId: user.orgId, userId: user.id, action: b.adminBlocked ? 'ai.project_llm.block' : 'ai.project_llm.unblock', objectType: 'ai_profile', objectId: cur.id });
-      return { ok: true, adminBlocked: b.adminBlocked };
+      return { ok: true, adminBlocked: b.adminBlocked, warnings: await profileWarnings(db, user.orgId, cur.id) };
     }
     const v = validProfile(b, cur);
     const scopeNow = b.projectScope !== undefined ? validScope(b.projectScope) : cur.project_scope;
@@ -237,7 +237,8 @@ export async function aiRoutes(app: FastifyInstance) {
     const contextTokens = b.contextTokens === undefined ? cur.context_tokens ?? null : validContext(b.contextTokens);
     await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9, context_tokens = $10 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff, typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search), contextTokens]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, thinkingOff, keyChanged: b.apiKey !== undefined } });
-    return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id) };
+    // Warnungen: Agenten mit diesem LLM, die in Projekten nicht mehr laufen (Einsatz enger, deaktiviert)
+    return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id), warnings: await profileWarnings(db, user.orgId, cur.id) };
   });
   app.delete<{ Params: { id: string } }>('/ai/profiles/:id', async (req) => {
     const user = requireUser(req);

@@ -9,7 +9,7 @@ import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '.
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
-import { profileAvailableInProject } from '../ai/client.js';
+import { profileAvailableInProject, agentUsableIn } from '../ai/client.js';
 import { ownLlmReason } from '../ai/policy.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
@@ -227,6 +227,8 @@ export async function projectRoutes(app: FastifyInstance) {
       if (!a || a.kind !== 'agent') throw badRequest('Projektagent muss ein KI-Agent des Mandanten sein');
       if (!a.active) throw badRequest('Der Agent ist deaktiviert');
       if (a.agent_project_id && a.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
+      const usable = await agentUsableIn(db, a.id, req.params.id);
+      if (!usable.ok) throw badRequest(usable.reason);
       agentId = a.id;
       await db.query(
         `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail, origin) values ($1,$2,'pl',true,true,false,false,true,true,'direct')
@@ -312,6 +314,11 @@ export async function projectRoutes(app: FastifyInstance) {
       if (target.agent_project_id && target.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
       // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar, keine KI-Freigabe
       const isAgent = target.kind === 'agent';
+      // Aufnehmen nur, wenn der Agent hier einsetzbar ist (Einsatz, LLM im Projekt verfügbar; Konzept LLM/Agenten 2.2); Rollenwechsel eines Mitglieds bleibt möglich
+      if (isAgent && !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [req.params.id, target.id]))) {
+        const u = await agentUsableIn(db, target.id, req.params.id);
+        if (!u.ok) throw badRequest(u.reason);
+      }
       if (isAgent) { if (b.role !== 'pl') b.role = 'member'; b.isDeputy = true; b.canUseAi = true; }
       // Stellvertreter = zweiter PL, vom PL bestimmt.
       const isDeputy = b.role === 'pl' ? Boolean(b.isDeputy ?? true) : false;

@@ -5,7 +5,7 @@ import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { unseal } from '../secrets.js';
 import { checkAi, orgRuleAllows, type AiQuery } from './policy.js';
-import { SQL } from '../projectPolicy.js';
+import { projectLabelSql, SQL } from '../projectPolicy.js';
 
 /**
  * Modellanbindung je Mandant (Verwaltung › KI): Anthropic über das offizielle SDK oder ein lokales LLM mit
@@ -81,7 +81,7 @@ export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const rows = await db.query(`select a.*, coalesce((select json_agg(x.project_id) from ai_profile_projects x where x.profile_id = a.id), '[]'::json) as project_ids from ai_profiles a where a.org_id = $1 and a.project_id is null order by a.created_at`, [orgId]);
   const own = await db.maybeOne(`select 1 from ai_profiles where org_id = $1 and project_id is not null and active and not admin_blocked limit 1`, [orgId]);
   const s = await orgAiSettings(db, orgId);
-  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
+  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
   const plAgents = { enabled: await orgRuleAllows(db, orgId, 'pl.agents'), maxBudget: s.plAgents.maxBudget };
   return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, assistDailyBudget: s.assistDailyBudget, plAgents, ownLlm: s.ownLlm, externalGuard: s.externalGuard, agentPolicy: (await db.one(`select settings->'ai'->'agentPolicy' as p from orgs where id = $1`, [orgId])).p ?? {}, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
 }
@@ -107,13 +107,54 @@ export async function aiConfigForProject(db: Db, projectId: string): Promise<AiC
  * freigegeben ist („auch in persönlichen Projekten“ oder Auswahl).
  */
 export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: string | null): Promise<AiConfig | null> {
-  const r = await db.maybeOne<AiProfileRow & { agent_thinking: 'off' | 'on' | null; agent_project_id: string | null }>(`select a.*, u.thinking_mode as agent_thinking, u.agent_project_id from users u join ai_profiles a on a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) where u.id = $1`, [agentUserId]);
-  if (r?.agent_project_id ? !(await profileAvailableInProject(db, r.agent_project_id, r.id)) : r?.project_id) return null;
-  if (r && !r.agent_project_id && projectId && !(await db.maybeOne(`select 1 from projects p where p.id = $1 and (${SQL.notPersonal('p')} or $2 or exists (select 1 from ai_profile_projects x where x.profile_id = $3 and x.project_id = p.id))`, [projectId, Boolean(r.personal_scope), r.id]))) return null;
+  const r = await db.maybeOne<AiProfileRow & { agent_thinking: 'off' | 'on' | null; agent_project_id: string | null; agent_scope: string }>(`select a.*, u.thinking_mode as agent_thinking, u.agent_project_id, u.agent_scope from users u join ai_profiles a on a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) where u.id = $1`, [agentUserId]);
+  if (!r) return null;
+  // Konzept LLM/Agenten 2.2: im Projekt nur, wenn der Einsatz des Agenten es umfasst und sein LLM dort verfügbar ist
+  const pid = projectId ?? r.agent_project_id ?? null;
+  if (pid) {
+    if (r.agent_project_id && r.agent_project_id !== pid) return null;
+    if (!r.agent_project_id && r.agent_scope === 'selected' && !(await db.maybeOne(`select 1 from agent_projects where agent_user_id = $1 and project_id = $2`, [agentUserId, pid]))) return null;
+    if (!(await profileAvailableInProject(db, pid, r.id))) return null;
+  } else if (r.project_id) return null;
   const cfg = profileConfig(r);
   if (cfg && cfg.provider === 'local' && r?.agent_thinking) cfg.enableThinking = r.agent_thinking === 'on';
   return cfg;
 }
+/**
+ * Einsetzbarkeit eines Agenten in einem Projekt (Konzept LLM/Agenten 2.2): aktiv, Einsatz umfasst das Projekt, sein LLM ist
+ * dort verfügbar. Dieselbe Prüfung beim Aufnehmen, beim Setzen als Projektagent und bei jedem Lauf; der Grund ist für die PL lesbar.
+ */
+export async function agentUsableIn(db: Db, agentUserId: string, projectId: string): Promise<{ ok: true; profile: string } | { ok: false; reason: string }> {
+  const u = await db.maybeOne(`select u.id, u.name, u.active, u.agent_project_id, u.agent_scope, coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) as profile_id from users u where u.id = $1 and u.kind = 'agent'`, [agentUserId]);
+  if (!u) return { ok: false, reason: 'Kein KI-Agent' };
+  if (!u.active) return { ok: false, reason: `${u.name} ist deaktiviert` };
+  if (u.agent_project_id && u.agent_project_id !== projectId) return { ok: false, reason: `${u.name} gehört zu einem anderen Projekt` };
+  if (!u.agent_project_id && u.agent_scope === 'selected' && !(await db.maybeOne(`select 1 from agent_projects where agent_user_id = $1 and project_id = $2`, [u.id, projectId]))) return { ok: false, reason: `${u.name} ist nicht für dieses Projekt vorgesehen (Verwaltung › KI › Agenten: Einsatz)` };
+  if (!u.profile_id) return { ok: false, reason: `${u.name} hat kein LLM (Verwaltung › KI: Standard-LLM oder LLM am Agenten)` };
+  const a = await db.maybeOne(`select a.name from projects p join orgs o on o.id = p.org_id join ai_profiles a on ${PROJECT_PROFILE_SQL} where p.id = $1 and a.id = $2`, [projectId, u.profile_id]);
+  if (!a) {
+    const name = (await db.maybeOne(`select name from ai_profiles where id = $1`, [u.profile_id]))?.name ?? 'LLM';
+    return { ok: false, reason: `LLM „${name}“ von ${u.name} ist für dieses Projekt nicht freigegeben (Verwaltung › KI › LLMs: Einsatz)` };
+  }
+  return { ok: true, profile: a.name };
+}
+
+/**
+ * Warnungen nach einer Änderung an einem LLM (Einsatz, Status, Standard): Agenten, die es nutzen und in Projekten Mitglied sind,
+ * in denen es nicht mehr verfügbar ist; die Mitgliedschaften bleiben, die Agenten laufen dort nicht mehr.
+ */
+export async function profileWarnings(db: Db, orgId: string, profileId: string): Promise<string[]> {
+  const rows = await db.query(
+    `select u.id, u.name, p.id as project_id, ${projectLabelSql('p', 'o')} as label from users u join project_members m on m.user_id = u.id join projects p on p.id = m.project_id and p.status = 'active' left join users o on o.id = p.created_by
+     where u.org_id = $1 and u.kind = 'agent' and u.active and coalesce(u.ai_profile_id, (select (x.settings->'ai'->>'defaultProfileId')::uuid from orgs x where x.id = u.org_id)) = $2 order by u.name, p.key`, [orgId, profileId]);
+  const out: string[] = [];
+  for (const r of rows.rows) {
+    const u = await agentUsableIn(db, r.id, r.project_id);
+    if (!u.ok) out.push(`${r.name} läuft in ${r.label} nicht mehr: ${u.reason}`);
+  }
+  return out;
+}
+
 /** Intern (Verbindungstest über aiConfigFor): Profil des Mandanten. */
 export async function aiConfigForProfile(db: Db, orgId: string, profileId: string): Promise<AiConfig | null> {
   return profileConfig(await db.maybeOne<AiProfileRow>(`select * from ai_profiles where id = $1 and org_id = $2`, [profileId, orgId]));

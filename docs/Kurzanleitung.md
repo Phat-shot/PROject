@@ -35,7 +35,7 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 
 ## Mit KI-Agenten arbeiten
 
-- Ein **Agent** ist ein Benutzer ohne Login. Der Org-Admin legt ihn an (mit KI-Profil, Persona, Unterschrift) oder die PL legt einen eigenen für ihr Projekt an (wenn freigegeben). Die PL nimmt ihn als Mitglied oder **stellvertretende PL** auf und macht ihn **zuständig**: für Arbeitspakete, Aufgaben oder ein ganzes Teilprojekt (geerbt).
+- Ein **Agent** ist ein Benutzer ohne Login. Der Org-Admin legt ihn an (Verwaltung › KI: LLM, Einsatz, Persona, Unterschrift) oder die PL legt einen eigenen für ihr Projekt an (wenn freigegeben). Er läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist. Die PL nimmt ihn als Mitglied oder **stellvertretende PL** auf und macht ihn **zuständig**: für Arbeitspakete, Aufgaben oder ein ganzes Teilprojekt (geerbt).
 - Der Agent arbeitet sofort los: Log schreiben, nachfragen, Tasks abhaken, Status setzen, **planen** (Aufgaben und APs mit Terminen anlegen, zuweisen, Termine in den Kalender), warten und nachfassen, an die PL eskalieren. Projekte legt er nie an.
 - **Gute Zuweisung:** klares Ziel in der Beschreibung, Termin, Tasks als Checkliste, externe Ansprechpartner als Kontakt.
 - **Informieren:** Kommentar ins Log oder Chat an den Agenten. Im Projektkanal mit `@Name`.
