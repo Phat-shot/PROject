@@ -22,6 +22,7 @@ import type { AiConfig } from './client.js';
 import { actionFingerprint, actionLabel, classLabel, classifyAction, effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
 import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
 import type { ExternalWindow } from '@projekttool/shared';
+import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -62,7 +63,14 @@ export type AgentAction =
   | { type: 'create_milestone'; title: string; dueDate: string; subproject?: string | null }
   | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null }
   | { type: 'research'; text: string }
+  | { type: 'search'; text: string }
+  | { type: 'read_task'; ref: string }
+  | { type: 'relate'; ref: string; kind?: RelationKind | null; text?: string | null }
+  | { type: 'withdraw'; ref: string }
   | { type: 'none'; reason?: string };
+const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task']);
+/** Leserunden: höchstens zwei Runden mit zusammen sechs Zugriffen (read_page, search, read_task); research zählt gegen das Recherche-Budget */
+const MAX_ACCESSES = 6;
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
 const H = 3600_000;
@@ -94,14 +102,14 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
         status: { type: 'string', description: 'doc_status: draft, review oder final; sonst leer' },
         title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; sonst leer' },
-        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; sonst leer' },
+        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; sonst leer' },
         responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
         startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; sonst leer' },
         dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; sonst leer' },
@@ -114,7 +122,7 @@ const SCHEMA = {
         to: { type: 'array', items: { type: 'string' }, description: 'mail: Empfängeradressen (nur Nicht-Interne); refer: Adresse des Externen, leer = Absender der letzten Mail; ask: leer = Ansprechpartner (Stufe 0 der Kette), „pl“, „tp“, „projekt“ oder eine E-Mail aus der Kette; chat: E-Mail von Projektmitgliedern, leer = PL, „projekt“ = Projektkanal; doc_send_pdf (nur finale Seiten): Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite, leer = Verteiler des Ordners; sonst leer' },
         subject: { type: 'string', description: 'mail: Betreff; refer: Thema der Frage in Worten des Externen; sonst leer' },
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
-        kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; ask: question (Information, Termin, Zusage) oder decision (Entscheidung außerhalb deiner Zuständigkeit); sonst leer' },
+        kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; ask: question (Information, Termin, Zusage) oder decision (Entscheidung außerhalb deiner Zuständigkeit); relate: related, sync, duplicate oder dependency; sonst leer' },
         checkAfterHours: { type: 'number', description: 'wait: Stunden bis zur nächsten Prüfung; sonst leer' },
         until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); sonst leer' },
         remindAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zum Nachfassen; ask: gewünschte Frist in Stunden (verkürzt nur den Standard); sonst leer' },
@@ -369,6 +377,32 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         }
       } else if (a.type === 'read_page') errors.push('read_page ohne weitere Aktionen verworfen');
       else if (a.type === 'research') errors.push('research ohne weitere Aktionen verworfen');
+      else if (a.type === 'search') errors.push('search ohne weitere Aktionen verworfen');
+      else if (a.type === 'read_task') errors.push('read_task ohne weitere Aktionen verworfen');
+      else if (a.type === 'relate') {
+        // Synergie (Konzept 6.7): Beziehung zwischen den Arbeitspaketen; nach Policy synergies fragen (ask) oder Querverweis (use, nur related/sync)
+        const other = await findTaskByRef(db, task.project_id, a.ref);
+        const own = task.parent_id ?? task.id;
+        const otherAp = other ? (other.parent_id ?? other.id) : null;
+        const kind: RelationKind = (['related', 'sync', 'duplicate', 'dependency'] as const).includes(a.kind as any) ? (a.kind as RelationKind) : 'related';
+        if (!other || otherAp === own) errors.push(`relate verworfen: ${other ? 'eigenes Arbeitspaket' : `Kennung ${a.ref ?? '?'} unbekannt`}`);
+        else if (!(await canSeeSubproject(db, agent.id, other.subproject_id))) errors.push(`relate verworfen: ${a.ref} ist für dich nicht sichtbar`);
+        else if (ctx.policy.synergies === 'off') errors.push('relate verworfen: Überschneidungen sind in der Agenten-Policy aus');
+        else {
+          const why = cut(a.text, 300) || 'vom Agenten erkannt';
+          const r = await createRelation(db, { projectId: task.project_id, a: own, b: otherAp!, kind, signals: [{ type: 'agent', detail: why }], note: cut(a.text, 500) || null, foundBy: agent.id });
+          if ('error' in r) errors.push(`relate ${a.ref}: ${r.error}`);
+          else {
+            if (ctx.policy.synergies === 'use' && (kind === 'related' || kind === 'sync')) await acceptRelation(db, { relationId: r.id, userId: agent.id, text: `${kind === 'sync' ? 'synchron bearbeiten' : 'Querverweis'} (${agent.name}): ${why}` });
+            else { const q = await askSynergy(db, { relationId: r.id, agent: { id: agent.id, name: agent.name, org_id: agent.org_id, kind: 'agent' }, now }); if ('error' in q) errors.push(`relate ${a.ref}: ${q.error}`); }
+            applied.push({ ...a, kind });
+          }
+        }
+      } else if (a.type === 'withdraw') {
+        const other = await findTaskByRef(db, task.project_id, a.ref);
+        const r = other ? await withdrawRelation(db, { a: task.parent_id ?? task.id, b: other.parent_id ?? other.id, userId: agent.id }) : { error: `Kennung ${a.ref ?? '?'} unbekannt` };
+        if ('error' in r) errors.push(`withdraw ${a.ref}: ${r.error}`); else applied.push(a);
+      }
       else if (a.type === 'doc_update') {
         const page = await db.maybeOne(`select * from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [a.pageId, task.project_id]);
         if (!page || !a.text?.trim()) errors.push(`Seitenänderung verworfen: ${!page ? 'pageId unbekannt' : 'kein Text'}`);
@@ -700,55 +734,99 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
        join chat_channel_members me on me.channel_id = c.id and me.user_id = $1 left join users u on u.id = m.user_id
      where m.deleted_at is null and m.created_at > now() - interval '7 days'
        and exists (select 1 from chat_channel_members o join project_members pm on pm.user_id = o.user_id and pm.project_id = $2 where o.channel_id = c.id and o.user_id <> $1)
-     order by m.created_at desc limit 10`, [agent.id, task.project_id]);
+       and exists (select 1 from chat_messages z where z.channel_id = c.id and z.deleted_at is null and z.created_at > now() - interval '7 days' and z.body ilike '%' || $3 || '%')
+     order by m.created_at desc limit 10`, [agent.id, task.project_id, code]);
+  // Projektwissen (Konzept 6.8): passende Seiten und ähnliche Arbeitspakete per Suche, Kandidaten für Überschneidungen ohne Token, bestehende Beziehungen, Projektüberblick je Sichtbarkeit
+  const found = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: `${task.title} ${cut(task.description, 400)}`, maxTitles: 10, maxExcerpts: 3 });
+  const foundPages = found.pages.length ? found.pages : pages.rows.slice(0, 10).map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null }));
+  const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
+  const candidates = policy.synergies === 'off' ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: 3 });
+  const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
+  const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };
+  const digest = await projectDigest(db, { projectId: task.project_id, agentId: agent.id });
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
-  // Fester Teil zuerst (KI-Sheet und Regeln, für alle Läufe gleich: Prefix-Cache), danach Name, Projekt und Schreibstil
-  const system = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
-  const prompt = `Heute: ${today}
+  // Systemblöcke (Konzept 6.8): fest (KI-Sheet und Regeln, für alle Läufe gleich), je Agent und Projekt (Name, Rolle, Stil), je Projekt und Sichtbarkeit (Überblick); Anthropic cacht die Blöcke
+  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}`;
+  const sysAgent = `# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
+  let systemBlocks = [sysFixed, sysAgent, digestText(digest)];
+  let system = systemBlocks.join('\n\n');
+  // Kontextbudget: die Eingabe belegt höchstens 45 % des Kontextfensters; gekürzt wird in fester Reihenfolge, das eigene AP bleibt vollständig
+  const limit = Math.max(3000, Math.floor((c.contextTokens ?? 32000) * 0.45) - estTokens(system));
+  const sections = [
+    { key: 'task', keep: true, text: `Heute: ${today}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
 ${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
 ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
-${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}
-Log (neueste zuerst):
-${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}
-${dms.rows.length ? `Chat (deine Direktnachrichten mit Projektmitgliedern, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}\n` : ''}Mails zum Arbeitspaket:
-${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}
-Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
-Doku-Seiten (neueste zuerst):
-${pages.rows.map((p: any) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status}, ${new Date(p.updated_at).toLocaleDateString('de-DE')})`).join('\n') || '–'}
-Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
+${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
+    { key: 'log', text: `Log (neueste zuerst):
+${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}` },
+    { key: 'chat', keep: true, text: dms.rows.length ? `Chat (deine Direktnachrichten zu ${code}, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}` : '' },
+    { key: 'mails', text: `Mails zum Arbeitspaket:
+${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
+    { key: 'pages', text: `Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
+Doku-Seiten (${found.pages.length ? 'passend zum Arbeitspaket; weitere per search' : 'neueste; passende per search'}):
+${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}` },
+    { key: 'similar', text: `${similar.length ? `Ähnliche Arbeitspakete (per read_task lesbar): ${similar.map((x) => `${x.ref} „${cut(x.title, 60)}“ · ${x.status}`).join('; ')}\n` : ''}${candidates.length ? `Mögliche Überschneidungen (prüfen, ggf. read_task; bei echtem Zusammenhang relate, sonst nichts):\n${candidatesText(candidates)}\n` : ''}${relations.rows.length ? `Beziehungen dieses Arbeitspakets (nicht erneut melden): ${relations.rows.map(relText).join('; ')}\n` : ''}`.replace(/\n$/, '') },
+    { key: 'members', keep: true, text: `Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
 Deine Zuständigkeit: ${basis}.
-Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}
-Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
-${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}
-${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
+Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}` },
+    { key: 'aps', text: `Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
+${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}` },
+    { key: 'rest', keep: true, text: `${milestones.rows.length ? `Meilensteine: ${milestones.rows.map((x: any) => `${x.name} ${d10(x.date)}${x.sp ? ` (${x.sp})` : ''}`).join(', ')}\n` : ''}Termine im Projektkalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}${x.location ? ` (${x.location})` : ''}${x.tentative ? ' [vorläufig, unbestätigt]' : ''}`).join(', ') || '–'}
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (weitere Termine von ${contact.name}, ohne Details): ${busy.rows.map((x: any) => `${fmtWhen(new Date(x.starts_at))}–${new Date(x.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}`).join(', ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 Agenten-Policy: ${policyText(policy)}
 ${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
 
-Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.`;
+Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.` }
+  ].filter((s) => s.text);
+  let fitted = fitBudget(sections, limit);
+  // Reicht das Kürzen der Abschnitte nicht, fällt zuletzt der Steckbrief aus dem Überblick
+  if (fitted.stats.after > limit && digest.brief) { systemBlocks = [sysFixed, sysAgent, digestText({ structure: digest.structure, brief: null })]; system = systemBlocks.join('\n\n'); fitted = fitBudget(sections, limit + estTokens(digestText(digest)) - estTokens(systemBlocks[2])); fitted.stats.trimmed.brief = { from: estTokens(digest.brief), to: 0 }; }
+  const prompt = fitted.text;
+  const contextStats = { ...fitted.stats, system: estTokens(system), contextTokens: c.contextTokens ?? 32000, candidates: candidates.length, foundPages: found.pages.length, similar: similar.length, dms: dms.rows.length };
   try {
     const errors: string[] = [];
     let extra = '';
     let inputTokens = 0; let outputTokens = 0; let model = '';
     let j: any = {};
     let actions: AgentAction[] = [];
-    // Leserunden: read_page liefert Seiteninhalte, danach entscheidet das Modell erneut (max. zwei Leserunden)
+    // Leserunden: read_page, search und read_task liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
+    let accesses = 0;
     for (let round = 0; round < 3; round++) {
       // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum
-      const r = await complete(c, fetchFn, { system, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
+      const r = await complete(c, fetchFn, { system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: c.enableThinking === true ? 6500 : 2500, schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
       j = parseJson(r.text);
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
       const searches = actions.filter((a) => a.type === 'research');
-      if (!reads.length && !searches.length) break;
-      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => a.type !== 'read_page' && a.type !== 'research'); break; }
+      const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task');
+      if (!reads.length && !searches.length && !lookups.length) break;
+      if (round === 2) { errors.push('Lesen abgebrochen: mehr als zwei Leserunden'); actions = actions.filter((a) => !READ_TYPES.has(a.type)); break; }
       const texts: string[] = [];
+      // Projektwissen (Konzept 6.8): Suche und fremde Arbeitspakete nur innerhalb der Sichtbarkeit des Agenten
+      for (const a of lookups) {
+        if (accesses >= MAX_ACCESSES) { texts.push(`- ${a.type}: Zugriffslimit erreicht (${MAX_ACCESSES} je Lauf)`); continue; }
+        accesses++;
+        if (a.type === 'search') {
+          const q = cut((a as any).text, 200);
+          const r2 = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: q, maxTitles: 10, maxExcerpts: 3 });
+          texts.push(`### Suche „${q}“\n${searchText(r2)}`);
+        } else {
+          const ref = String((a as any).ref ?? '').trim();
+          const other = await findTaskByRef(db, task.project_id, ref);
+          if (!other || !(await canSeeSubproject(db, agent.id, other.subproject_id))) { texts.push(`- read_task ${ref || '?'}: ${other ? 'nicht sichtbar' : 'Kennung unbekannt'}`); continue; }
+          const oItems = await db.query(`select title, done from checklist_items where task_id = $1 order by position`, [other.id]);
+          const oLog = await db.query(`select c.body, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit 8`, [other.id]);
+          const oResp = other.responsible_user_id ? (await db.maybeOne(`select name from users where id = $1`, [other.responsible_user_id]))?.name : other.responsible_email;
+          const col = await db.maybeOne(`select name from board_columns where id = $1`, [other.column_id]);
+          texts.push(`### ${task.project_key}-${other.number} „${other.title}“ · ${col?.name ?? '?'}${other.is_done ? ' (erledigt)' : ''} · ${oResp ?? 'PL (geerbt)'}${span(other.start_date, other.due_date)}\nBeschreibung: ${cut(other.description, 1500) || '–'}\nTasks: ${oItems.rows.map((i: any) => `[${i.done ? 'x' : ' '}] ${i.title}`).join('; ') || '–'}\nLog: ${oLog.rows.map((x: any) => `${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}: ${cut(x.body, 200)}`).join(' | ') || '–'}`);
+        }
+      }
       // Online-Recherche (Konzept 8): Freigabe, Profil, Suchdienst und Budget prüft webAvailable; Quellen landen in agent_web_sources
       for (const a of searches.slice(0, 3)) {
         const q = String((a as any).text ?? '').trim();
@@ -765,14 +843,16 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       }
       for (const a of reads.slice(0, 4)) {
         const pid = (a as any).pageId;
+        if (accesses >= MAX_ACCESSES) { texts.push(`- pageId ${pid ?? '?'}: Zugriffslimit erreicht (${MAX_ACCESSES} je Lauf)`); continue; }
+        accesses++;
         const page = await db.maybeOne(`select id, title, status, version, content_md, content_html, folder_id from doc_pages where id = $1 and project_id = $2 and deleted_at is null`, [pid, task.project_id]);
         if (!page) { texts.push(`- pageId ${pid ?? '?'}: nicht gefunden`); continue; }
         if (page.folder_id && ctx.folderAccess.get(page.folder_id) === 'none') { texts.push(`- pageId ${pid}: kein Zugriff für Agenten (Ordner gesperrt)`); continue; }
         const md = page.content_html ? htmlToMd(page.content_html) : page.content_md ?? '';
         texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
       }
-      const others = actions.filter((a) => a.type !== 'read_page' && a.type !== 'research');
-      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page für bereits gelesene Seiten, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
+      const others = actions.filter((a) => !READ_TYPES.has(a.type));
+      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page, search oder read_task für bereits Gelesenes, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
       actions = [];
     }
     const res = await applyAgentActions(ctx, actions, { hold: true });
@@ -785,11 +865,12 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions)]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
+    await db.query(`update agent_runs set context_stats = $2 where id = $1`, [run.id, JSON.stringify(contextStats)]);
     if (ctx.webSourceIds.length) await db.query(`update agent_web_sources set run_id = $1 where id = any($2::uuid[])`, [run.id, ctx.webSourceIds]);
     // Angehaltene Aktionen: Vorschläge an einer Frage approval (Karte im Chat, Meldung, Log, Warten des Agenten)
     if (res.held.length) await holdProposals(ctx, res.held, run.id);
     // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen
-    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'chat'].includes(x.type));
+    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'search', 'read_task', 'chat'].includes(x.type));
     if (content.length) {
       const doneCols = new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => x.name));
       const done = content.some((x: any) => x.type === 'set_status' && doneCols.has(x.column));
@@ -810,7 +891,7 @@ const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
   blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
-  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen'
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
 function progressText(actions: AgentAction[], note: unknown): string {

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Task, TaskComment } from '@projekttool/shared';
+import type { Task, TaskComment, TaskRelation } from '@projekttool/shared';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { QuickMail } from '../../components/QuickMail';
@@ -201,6 +201,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
       <WebSourcesBlock taskId={t.id} />
+      <RelationsBlock taskId={t.id} canDecide={canEdit} />
 
       <ReportWish taskId={t.id} />
 
@@ -451,6 +452,31 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
  * als erledigt schließen (PL). Beantwortete und erledigte der letzten Zeit stehen eingeklappt darunter.
  */
 /** Quellen der Online-Recherche des Agenten (Konzept 8). */
+/** Verwandte Arbeitspakete (Konzept 6.7): vom Agenten oder Projektagenten gemeldete Zusammenhänge; entscheiden dürfen PL und Zuständige. */
+function RelationsBlock({ taskId, canDecide }: { taskId: string; canDecide: boolean }) {
+  const d = useData<{ relations: TaskRelation[] }>(`/tasks/${taskId}/relations`, [taskId]);
+  const { error, run } = useAsync();
+  const list = d.data?.relations ?? [];
+  if (!list.length) return null;
+  const kind: Record<string, string> = { related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' };
+  const status: Record<string, string> = { suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt', rejected: 'unabhängig' };
+  const decide = (id: string, option: string) => run(async () => { await api.post(`/relations/${id}/decide`, { option }); await d.reload(); });
+  return <>
+    <h3 className="mt">Verwandte Arbeitspakete <span className="badge">{list.length}</span></h3>
+    <ul className="small">{list.map((r) => <li key={r.id}>
+      <strong>{r.other.ref}</strong> {r.other.title}{r.other.done ? ' (erledigt)' : ''} <span className="muted">· {kind[r.kind] ?? r.kind} · {status[r.status] ?? r.status}{r.foundByName ? ` · gemeldet von ${r.foundByName}` : ''}{r.decidedByName ? ` · entschieden von ${r.decidedByName}` : ''}</span>
+      {(r.note || r.signals.length > 0) && <div className="muted">{r.note ?? r.signals.map((s) => s.detail).join('; ')}</div>}
+      {canDecide && (r.status === 'suggested' || r.status === 'asked') && <div className="row" style={{ gap: 4, marginTop: 2 }}>
+        <button className="btn sm" onClick={() => void decide(r.id, 'sync')}>synchron bearbeiten</button>
+        <button className="btn sm" onClick={() => void decide(r.id, 'dependency')} title="Abhängigkeit: das andere Arbeitspaket zuerst (PL oder „Projektplan ändern“)">Abhängigkeit</button>
+        <button className="btn sm" onClick={() => void decide(r.id, 'duplicate')}>zusammenführen</button>
+        <button className="btn sm" onClick={() => void decide(r.id, 'independent')}>unabhängig</button>
+      </div>}
+    </li>)}</ul>
+    {error && <div className="error small">{error}</div>}
+  </>;
+}
+
 function WebSourcesBlock({ taskId }: { taskId: string }) {
   const d = useData<{ sources: WebSource[] }>(`/tasks/${taskId}/web-sources`, [taskId]);
   const list = d.data?.sources ?? [];

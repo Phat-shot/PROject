@@ -134,7 +134,9 @@ export async function aiRoutes(app: FastifyInstance) {
 
   // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden (PL), wenn der Mandant es für diese Projektart erlaubt und pl.own_llm freigegeben ist
   const ownAllowed = (orgId: string, projectId: string) => ownLlmAllowed(db, orgId, projectId);
-  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
+  /** Kontextfenster des Modells in Token (leer = Standard 32k); die Eingabe belegt höchstens 45 % (Konzept 6.8) */
+  const validContext = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); if (!Number.isInteger(n) || n < 4000 || n > 2_000_000) throw badRequest('Kontextgröße: ganze Zahl ab 4000 Token'); return n; };
+  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
   const ownReason = (user: User, projectId: string) => ownLlmReason(db, user, projectId);
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
@@ -199,7 +201,8 @@ export async function aiRoutes(app: FastifyInstance) {
     const v = validProfile(b);
     const scope = validScope(b.projectScope ?? 'all');
     if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scope !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true]);
+    const contextTokens = validContext(b.contextTokens);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search, context_tokens) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true, contextTokens]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
     if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
@@ -228,7 +231,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, cur.id, b.projectIds);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
-    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff, typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search)]);
+    const contextTokens = b.contextTokens === undefined ? cur.context_tokens ?? null : validContext(b.contextTokens);
+    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9, context_tokens = $10 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff, typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search), contextTokens]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, thinkingOff, keyChanged: b.apiKey !== undefined } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id) };
   });

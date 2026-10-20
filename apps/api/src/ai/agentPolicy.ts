@@ -1,4 +1,4 @@
-import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type ChatOrdersLevel, type EffectiveAgentPolicy } from '@projekttool/shared';
+import { AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type SynergyMode } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { resolveRules } from './policy.js';
 
@@ -35,6 +35,9 @@ export function parseAgentPolicy(raw: unknown, opts: { limits: boolean; workflow
     const lc = classes(x.lockedConfirm, 'lockedConfirm'); if (lc) out.lockedConfirm = lc;
   }
   if (opts.workflows && typeof x.workflows === 'boolean') out.workflows = x.workflows;
+  if (x.scope !== undefined && x.scope !== null && x.scope !== '') { if (!['task', 'project'].includes(x.scope)) throw new Error('Agenten-Policy: scope task oder project'); out.scope = x.scope; }
+  if (x.synergies !== undefined && x.synergies !== null && x.synergies !== '') { if (!['off', 'ask', 'use'].includes(x.synergies)) throw new Error('Agenten-Policy: synergies off, ask oder use'); out.synergies = x.synergies; }
+  if (opts.limits && x.reviewAt !== undefined && x.reviewAt !== null && x.reviewAt !== '') { if (!/^\d{2}:\d{2}$/.test(String(x.reviewAt))) throw new Error('Agenten-Policy: reviewAt als HH:MM'); out.reviewAt = String(x.reviewAt); }
   if (opts.limits && x.chatOrders !== undefined && x.chatOrders !== null && x.chatOrders !== '') { if (!CHAT_ORDERS.includes(x.chatOrders)) throw new Error('Agenten-Policy: chatOrders muss pl, tp, responsible oder members sein'); out.chatOrders = x.chatOrders; }
   return out;
 }
@@ -71,6 +74,9 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
   for (const [name, v] of [['Mandant', org], [`Projekt ${p.key}`, project]] as [string, AgentPolicy][]) for (const k of v.lockedConfirm ?? []) confirm.set(k, `${name} erzwungen`);
   const w = pick('workflows');
   const co = pick('chatOrders');
+  const sc = pick('scope'); const sy = pick('synergies'); const ra = pick('reviewAt');
+  // Synergien: in den Rückfrage-Stufen immer nachfragen
+  const synergies: SynergyMode = (sy?.value as SynergyMode | undefined) ?? 'ask';
   const denied: Partial<Record<AgentActionClass, string>> = {};
   if (q.agentId) {
     for (const k of CLASS_KEYS) {
@@ -78,7 +84,7 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
       if (r.effect === 'deny') denied[k] = r.publicText;
     }
   }
-  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', origin: { mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard' }, denied };
+  return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', scope: (sc?.value as AgentScope | undefined) ?? 'task', synergies: synergies === 'use' && mode !== 'auto' ? 'ask' : synergies, reviewAt: (ra?.value as string | undefined) ?? '06:45', origin: { mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard', scope: sc ? sc.origin : 'Standard', synergies: sy ? (synergies === 'use' && mode !== 'auto' ? `${sy.origin} (nutzen nur bei Selbstständig)` : sy.origin) : 'Standard' }, denied };
 }
 
 /** Text für den variablen Teil des Prompts (nicht ins Sheet, damit der Prefix-Cache bleibt). */

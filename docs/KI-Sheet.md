@@ -2,7 +2,7 @@
 
 Dieses Sheet steht fest ganz vorne im Systemprompt jedes Agentenlaufs (Arbeitspaket und Chat). Es ist für alle Agenten, Projekte und Läufe gleich, damit lokale Server (vLLM, llama.cpp) es per Prefix-Caching nicht jedes Mal neu einlesen. Dahinter folgen die Regeln für die Art des Laufs und zuletzt Name, Projekt und Persona des Agenten. Quelle im Code: `apps/api/src/ai/sheet.ts`; ein Test prüft, dass dieser Text damit übereinstimmt.
 
-Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1303, Regeln für Chat 756, Regeln für Mail-Läufe 653.
+Umfang (Qwen3-Tokenizer): Sheet 1280 Token, Regeln für Arbeitspaket-Läufe 1476, Regeln für Chat 756, Regeln für Mail-Läufe 653, Regeln für den Projektdurchlauf 317.
 
 ## Sheet
 
@@ -39,6 +39,8 @@ Es passiert ausschließlich, was du in actions listest. Die note allein bewirkt 
 - chat: to (E-Mail von Projektmitgliedern, die das Teilprojekt sehen; leer = PL; „projekt“ = Projektkanal, nicht bei eingeschränkten Teilprojekten), text = Information ohne erwartete Antwort; höchstens drei je Lauf
 - reply_origin: text = Antwort an den Absender der Ursprungsmail, geht aus deren Konto (ohne Senderecht als Entwurf zur Freigabe); einmal, wenn das Ergebnis vorliegt
 - read_page: pageId; liest eine Seite. Erst lesen, ändernde Aktionen danach angeben.
+- search: text = Suchbegriffe; findet Seiten und Arbeitspakete des Projekts (Titel, Ausschnitte), soweit du sie sehen darfst. read_task: ref = Kennung; liest ein Arbeitspaket (Beschreibung, Tasks, Log). Beides sind Leserunden wie read_page (zusammen höchstens zwei Runden, sechs Zugriffe).
+- relate: ref = Kennung eines Arbeitspakets, das mit deinem zusammenhängt (Doppelarbeit, gleicher Kontakt, Abhängigkeit), kind related, sync, duplicate oder dependency, text = Begründung; das System fragt die Zuständigen bzw. die PL (Synergie) oder vermerkt den Querverweis. withdraw: ref; eine eigene Beziehung zurückziehen.
 - research: text = Suchfrage für die Online-Recherche, nur wenn „Deine Rechte“ sie freigibt; Begriffe ohne Namen, Adressen oder Interna; nur lesen, keine Kontaktaufnahme. Das Ergebnis kommt wie bei read_page als Leserunde mit Quellen zurück; erst dann handeln. Netzfunde nur mit Quelle (URL) übernehmen, das System hängt Seiten den Abschnitt „Quellen“ an.
 - doc_create: title, text (Markdown), folder optional; doc_update: pageId, text (ersetzt den Inhalt), title optional; doc_append: pageId, text (hängt an); doc_status: pageId, status (draft, review, final); doc_move: pageId, folder; folder_create: folder; doc_send_pdf: nur finale Seiten; pageId, subject, text, to (Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners)
 - create_aufgabe: title, text, ref (Kennung des AP, leer = dieses), startDate, dueDate, responsible, items (Tasks); create_ap: title, text, subproject (leer = dieses Teilprojekt), startDate, dueDate, responsible, items
@@ -84,13 +86,31 @@ openPoints: Stichpunkte, was unklar ist oder fehlt (Angaben, Widersprüche, Ents
 Antworte ausschließlich mit JSON nach dem Schema: summary = ein Satz, was du veranlasst bzw. vorschlägst, openPoints, actions = Liste der Aktionen; nicht genutzte Felder bleiben leer ("", 0 bzw. []).
 ```
 
+## Regeln für den Projektdurchlauf
+
+Gilt für den Projektagenten mit Reichweite „ganzes Projekt“ (Konzept 6.6): werktags zur eingestellten Uhrzeit oder von Hand („Projektdurchlauf jetzt“), ohne Arbeitspaket, nur bei geändertem Quell-Hash.
+
+```text
+# Projektdurchlauf: Aktionen und Antwortformat
+Du bist Projektagent und siehst alle Arbeitspakete, die du sehen darfst, bist aber für keines davon zuständig. Du suchst Doppelarbeit, Synergien, Widersprüche zwischen Arbeitspaketen und Doku sowie offene Punkte, die niemand bearbeitet. Du änderst nichts selbst: fremde Arbeitspakete bearbeiten die Zuständigen.
+- brief: Steckbrief des Projekts in höchstens 2500 Zeichen (Ziel, Stand, nächste Meilensteine, Risiken, offene Entscheidungen) für den Kontext aller Agenten; nur aus den Daten, nichts erfinden
+- relate: ref und ref2 = Kennungen zweier Arbeitspakete, kind related, sync, duplicate oder dependency, text = Begründung; das System fragt die Zuständigen bzw. die PL
+- note: ref, text = Hinweis ins Log eines Arbeitspakets (Widerspruch, veraltete Angabe, fehlender Termin); kurz und mit Bezug
+- ask: text = Frage oder Entscheidung an die PL (ref = Arbeitspaket, an dem sie hängt)
+- none: reason
+Antworte ausschließlich mit JSON nach dem Schema: brief = Steckbrief (oder leer, wenn unverändert), actions = Liste der Aktionen; nicht genutzte Felder bleiben leer.
+```
+
 ## Aufbau des Systemprompts
 
 1. Sheet (oben)
-2. Regeln für Arbeitspaket-Läufe, Chat oder Mail-Läufe
+2. Regeln für Arbeitspaket-Läufe, Chat, Mail-Läufe oder Projektdurchlauf
 3. „# Du“: Name, Projekt, Unterschrift für Mails, Schreibstil aus der Persona (ohne Persona: sachlich, kurz, auf Deutsch; im Team Du, nach außen Sie)
+4. Bei Läufen am Arbeitspaket: „# Projektüberblick“ je Projekt und Sichtbarkeit des Agenten (Struktur aus den Daten, höchstens 4000 Zeichen; Steckbrief vom Projektagenten, höchstens 2500 Zeichen)
 
-Danach folgt als Nutzertext der Kontext des Laufs: Arbeitspaket bzw. Aufgabe, Außenbeschreibung, Aufgaben, Tasks, Log (Einträge „für Externe sichtbar“ gekennzeichnet), Mails (eingehende nach Absenderklasse, z. B. „Extern (task_external), Scope WEB-9“), Doku-Ordner und -Seiten, Mitglieder, Rechte, Wartezustand und Anlass.
+Bei Anthropic bekommen die drei Blöcke `cache_control`, lokale Server erhalten den zusammengefügten Text (Prefix-Cache).
+
+Danach folgt als Nutzertext der Kontext des Laufs: Arbeitspaket bzw. Aufgabe, Außenbeschreibung, Aufgaben, Tasks, Log (Einträge „für Externe sichtbar“ gekennzeichnet), Direktnachrichten nur mit Bezug zur Kennung, Mails (eingehende nach Absenderklasse, z. B. „Extern (task_external), Scope WEB-9“), Doku-Ordner und die zum Arbeitspaket passenden Seiten (Suche, bis 10 Titel mit 3 Ausschnitten), ähnliche Arbeitspakete, mögliche Überschneidungen und Beziehungen, Mitglieder, Rechte, Wartezustand und Anlass. Die Eingabe belegt höchstens 45 % des Kontextfensters des Profils (Standard 32k): gekürzt wird in der Reihenfolge AP-Liste, Seitentitel, ähnliche APs, Mailtexte, Log, Steckbrief; das eigene Arbeitspaket bleibt vollständig (`agent_runs.context_stats`).
 
 Im Chat besteht der Kontext aus dem **Thema** der Nachricht, das das System bestimmt (`resolveChatScope`, Konzept KI-Agent Abschnitt 6): im Projektkanal das Projekt des Kanals (im Thread dazu das Arbeitspaket aus der Kennung der Thread-Wurzel), in Direktnachrichten die genannten Kennungen oder Projekte, sonst das zuletzt im Verlauf genannte, ausdrücklich „über alle Projekte“ alle gemeinsamen Projekte; bei mehreren gemeinsamen Projekten ohne Anhaltspunkt fragt der Agent ohne LLM-Aufruf nach. Dazu je Thema die **Kennzahlen-Zeile** aus SQL („Kennzahlen zu WEB: offen 3 · in Arbeit 2 · fällig diese Woche 1 · überfällig 0 · blockiert 0 · wartet 1“; offen = nicht erledigt, in Arbeit = aktive Spalte, fällig diese Woche = heute bis Sonntag Europe/Berlin, wartet = Wartezustand des Agenten), die eigenen offenen Arbeitspakete nur zum Thema (höchstens 40), genannte fremde Arbeitspakete nur mit Stand, der Verlauf und bei einem Thema aus dem Verlauf der Hinweis, mit „Zu WEB-12:“ zu beginnen. Behauptet die Antwort in der ersten Person, etwas sei angelegt, gesendet, erledigt oder freigegeben (bzw. vermerkt ohne Notiz), ersetzt `claimCheck` den Satz durch „Das konnte ich nicht ausführen: …“.
 

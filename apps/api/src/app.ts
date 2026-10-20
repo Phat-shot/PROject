@@ -39,6 +39,7 @@ import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
 import { questionRoutes } from './routes/questions.js';
+import { knowledgeRoutes } from './routes/knowledge.js';
 
 export interface AppOptions {
   db: Db;
@@ -134,6 +135,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(workflowRoutes);
       await api.register(notifyRuleRoutes);
       await api.register(questionRoutes);
+      await api.register(knowledgeRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },

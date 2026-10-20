@@ -2,6 +2,7 @@ import type { MailInquiry, MailInquiryMode } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { askQuestion, type Asker, type QuestionRow, type AnswerInput } from '../questions.js';
 import { queueAgentRun } from './agentEvents.js';
+import { onSynergyAnswered } from './knowledge.js';
 
 /**
  * Mail-Rückfrage (Konzept 5, #51): Nennt die Mail-KI zu einer neuen Mail offene Punkte, fragt der Agent nach, statt zu raten.
@@ -99,6 +100,8 @@ async function askSender(db: Db, taskId: string, agent: Asker, mail: OpenPointsI
  */
 export async function onQuestionAnswered(db: Db, q: QuestionRow, a: AnswerInput): Promise<boolean> {
   const ctx = (q as any).context as { topic?: string; mailId?: string; openPoints?: string[]; waitHours?: number } | null;
+  // Frage synergy (Konzept 6.7): Entscheidung über eine Beziehung zwischen Arbeitspaketen
+  if (ctx?.topic === 'synergy') return onSynergyAnswered(db, q, a);
   if (ctx?.topic !== 'mail_inquiry' || q.kind !== 'decision' || !q.task_id) return false;
   const option = a.option ?? (/absender/i.test(a.text) ? 'ask_sender' : /projekt/i.test(a.text) ? 'ask_project' : null);
   if (option !== 'ask_project' && option !== 'ask_sender') return false;

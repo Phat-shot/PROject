@@ -21,7 +21,7 @@ export interface AiProfileRow { id: string; org_id: string; name: string; provid
  * enableThinking (nur lokal): false = Denkmodus aus, true = ausdrücklich an, undefined = Standard von Modell/Server;
  * gesendet als chat_template_kwargs.enable_thinking (ausgewertet von vLLM und llama.cpp).
  */
-export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean }
+export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number }
 export type OwnLlmMode = 'off' | 'personal' | 'all';
 export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget: number; plAgents: { enabled: boolean; maxBudget: number }; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Rohwert) */ agentPolicy: AgentPolicy; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
 
@@ -30,7 +30,7 @@ export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | nu
   if (!r || !r.active || r.admin_blocked) return null;
   const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' && !r.project_id ? process.env.ANTHROPIC_API_KEY ?? null : null);
   if (r.provider === 'local' ? !(r.base_url && r.model) : !apiKey) return null;
-  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined };
+  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined, contextTokens: Number((r as any).context_tokens) >= 4000 ? Number((r as any).context_tokens) : undefined };
 }
 
 /**
@@ -81,7 +81,7 @@ export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const rows = await db.query(`select a.*, coalesce((select json_agg(x.project_id) from ai_profile_projects x where x.profile_id = a.id), '[]'::json) as project_ids from ai_profiles a where a.org_id = $1 and a.project_id is null order by a.created_at`, [orgId]);
   const own = await db.maybeOne(`select 1 from ai_profiles where org_id = $1 and project_id is not null and active and not admin_blocked limit 1`, [orgId]);
   const s = await orgAiSettings(db, orgId);
-  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off), webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
+  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
   const plAgents = { enabled: await orgRuleAllows(db, orgId, 'pl.agents'), maxBudget: s.plAgents.maxBudget };
   return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, assistDailyBudget: s.assistDailyBudget, plAgents, ownLlm: s.ownLlm, externalGuard: s.externalGuard, agentPolicy: (await db.one(`select settings->'ai'->'agentPolicy' as p from orgs where id = $1`, [orgId])).p ?? {}, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
 }
@@ -120,7 +120,7 @@ export async function aiConfigForProfile(db: Db, orgId: string, profileId: strin
 }
 
 export interface Completion { text: string; inputTokens: number; outputTokens: number; model: string }
-export interface CompleteOpts { system: string; prompt: string; maxTokens?: number; /** JSON-Schema für strukturierte Antwort */ schema?: Record<string, unknown> }
+export interface CompleteOpts { system: string; prompt: string; maxTokens?: number; /** JSON-Schema für strukturierte Antwort */ schema?: Record<string, unknown>; /** Systemanweisung in Blöcken (stabil zuerst); Anthropic setzt cache_control auf die ersten cacheBlocks Blöcke, lokale Server bekommen den zusammengefügten Text */ systemBlocks?: string[]; cacheBlocks?: number }
 
 /** Eine Anfrage: Systemanweisung und Nutzertext; mit schema kommt JSON zurück (Anthropic: Structured Outputs, lokal: json_object). */
 export async function complete(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion> {
@@ -133,7 +133,7 @@ async function completeAnthropic(cfg: AiConfig, fetchFn: typeof fetch, opts: Com
   const client = new Anthropic({ apiKey: cfg.apiKey!, fetch: fetchFn as any, maxRetries: 1, timeout: 120_000 });
   try {
     const r = await client.beta.messages.create({
-      model: cfg.model, max_tokens: opts.maxTokens ?? 4000, system: opts.system, messages: [{ role: 'user', content: opts.prompt }],
+      model: cfg.model, max_tokens: opts.maxTokens ?? 4000, system: opts.systemBlocks?.length ? (opts.systemBlocks.map((text, i) => ({ type: 'text', text, ...(i < (opts.cacheBlocks ?? 0) ? { cache_control: { type: 'ephemeral' } } : {}) })) as any) : opts.system, messages: [{ role: 'user', content: opts.prompt }],
       output_config: { effort: 'low', ...(opts.schema ? { format: { type: 'json_schema', schema: opts.schema as any } } : {}) },
       betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default'
     });
@@ -156,7 +156,7 @@ async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: Complet
   try {
     r = await fetchFn(url, {
       method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
-      body: JSON.stringify({ model: cfg.model, max_tokens: opts.maxTokens ?? 4000, temperature: 0.2, messages: [{ role: 'system', content: opts.system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(cfg.enableThinking !== undefined ? { chat_template_kwargs: { enable_thinking: cfg.enableThinking } } : {}) })
+      body: JSON.stringify({ model: cfg.model, max_tokens: opts.maxTokens ?? 4000, temperature: 0.2, messages: [{ role: 'system', content: opts.systemBlocks?.length ? opts.systemBlocks.join('\n\n') : opts.system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(cfg.enableThinking !== undefined ? { chat_template_kwargs: { enable_thinking: cfg.enableThinking } } : {}) })
     });
   } catch (e: any) {
     throw new HttpError(400, `Lokales LLM nicht erreichbar (${cfg.baseUrl}): ${String(e?.message ?? e).slice(0, 150)}`);

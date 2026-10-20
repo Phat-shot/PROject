@@ -14,6 +14,7 @@ import { runWorkflows } from './workflows/engine.js';
 import { runQuestions } from './questions.js';
 import { expireProposals } from './ai/agentApproval.js';
 import { runScheduledMails } from './ai/scheduledMail.js';
+import { runProjectReviews } from './ai/knowledge.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig; Empfänger nach Regel N, Standard die zuständige Person) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -74,7 +75,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
-      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireProposals(db); await runScheduledMails(db, mail); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
+      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await runCleanup(db);

@@ -661,7 +661,27 @@ function ProjectAgentPolicy({ readOnly = false }: { readOnly?: boolean }) {
     {open && <AgentPolicyEditor value={d.data.project} limits workflows inheritFrom="Mandant" effective={d.data.effective} onSave={async (v) => { await api.put(`/projects/${detail.project.id}/agent-policy`, v); setOpen(false); await d.reload(); await reload(); }} />}
     {agents.length > 0 && <span className="small stack" style={{ gap: 2 }}>{agents.map((a) => <span key={a.userId} className="row" style={{ gap: 6 }}><span className="muted">{a.name}:</span>{readOnly ? <span>{a.policy?.mode ? modeLabel(a.policy.mode) : 'erbt'}</span> : <select value={a.policy?.mode ?? ''} style={{ width: 'auto' }} onChange={(e) => void run(async () => { await api.put(`/projects/${detail.project.id}/members/${a.userId}/agent-policy`, e.target.value ? { mode: e.target.value } : null); await d.reload(); })}><option value="">erbt vom Projekt</option>{AGENT_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select>}</span>)}</span>}
     <span className="muted small">Grundmenge (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei; Angehaltenes legt der Agent der PL als Karte vor. Je Arbeitspaket lässt sich die Selbstständigkeit im Arbeitspaket setzen, der Zugriff auf Doku-Ordner am Ordner.</span>
+    {detail.project.agentUserId && <ProjectReview readOnly={readOnly} scope={d.data.effective.scope} />}
     {error && <span className="error small">{error}</span>}</span>;
+}
+
+/** Projektdurchlauf (Konzept 6.6): Stand des Überblicks, Steckbrief des Projektagenten und der Knopf „Projektdurchlauf jetzt“ (nur mit Reichweite „ganzes Projekt“). */
+function ProjectReview({ readOnly, scope }: { readOnly: boolean; scope: 'task' | 'project' }) {
+  const { detail } = useProject();
+  const d = useData<{ digest: { structure: string; brief: string | null; builtAt: string | null; lastReview: { at: string; status: string; error: string | null } | null; reviewAt: string } | null }>(`/projects/${detail.project.id}/digest`);
+  const [msg, setMsg] = useState('');
+  const { busy, error, run } = useAsync();
+  const dg = d.data?.digest;
+  if (!dg) return null;
+  return <span className="stack small" style={{ gap: 2 }}>
+    <span className="row" style={{ gap: 6 }}><span className="muted">Projektdurchlauf:</span>
+      {scope === 'project' ? <>werktags {dg.reviewAt}{dg.lastReview && <span className="muted">· zuletzt {fmtDate(dg.lastReview.at)}{dg.lastReview.status === 'skipped' ? ' (unverändert, kein LLM-Aufruf)' : dg.lastReview.status === 'error' ? ` (Fehler: ${dg.lastReview.error ?? ''})` : ''}</span>}
+        {!readOnly && <button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ run: { status: string; error?: string; actions: { type: string }[] } }>(`/projects/${detail.project.id}/agent-review`); setMsg(`${r.run.status === 'skipped' ? 'übersprungen' : `${r.run.actions.length} Aktion${r.run.actions.length === 1 ? '' : 'en'}`}${r.run.error ? ` · ${r.run.error}` : ''}`); await d.reload(); })}>Projektdurchlauf jetzt</button>}</> : <span className="muted">aus (Reichweite „zugewiesene Arbeitspakete“)</span>}
+    </span>
+    {msg && <span>{msg}</span>}
+    {dg.brief && <details><summary className="muted">Steckbrief des Projektagenten</summary><div style={{ whiteSpace: 'pre-wrap' }}>{dg.brief}</div></details>}
+    {error && <span className="error">{error}</span>}
+  </span>;
 }
 
 function ProjectAiSelect({ readOnly = false }: { readOnly?: boolean }) {

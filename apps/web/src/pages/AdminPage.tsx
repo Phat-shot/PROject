@@ -329,14 +329,14 @@ function CreateUser({ onClose, onCreated }: { onClose: () => void; onCreated: ()
 function AiCard() {
   const st = useAiStatus();
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
-  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false });
+  const [f, setF] = useState({ name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '' });
   const [budget, setBudget] = useState<number | null>(null);
   const [assist, setAssist] = useState<number | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all', projectIds: [], personalScope: false, webSearch: false } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: (p as any).projectScope ?? 'all', projectIds: (p as any).projectIds ?? [], personalScope: Boolean((p as any).personalScope), webSearch: Boolean(p.webSearch) }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? { name: '', provider: 'local', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all', projectIds: [], personalScope: false, webSearch: false, contextTokens: '' } : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: (p as any).projectScope ?? 'all', projectIds: (p as any).projectIds ?? [], personalScope: Boolean((p as any).personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '' }); };
   return (
     <div className="card">
       <div className="row between"><h2 style={{ margin: 0 }}>KI-Profile</h2><button className="btn primary sm" onClick={() => open('new')}>Profil anlegen</button></div>
@@ -377,6 +377,7 @@ function AiCard() {
             {f.provider === 'local' && <label className="field"><span>Schlüssel (optional, Bearer)</span><input type="password" value={f.apiKey} autoComplete="new-password" placeholder="leer, wenn der Server keinen verlangt" onChange={(e) => setF({ ...f, apiKey: e.target.value })} /></label>}
             {f.provider === 'local' && <div className="full stack" style={{ gap: 4 }}>
               <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus</label>
+              <label className="field" title="Kontextfenster des Modells; die Eingabe eines Agentenlaufs belegt höchstens 45 % davon, Überschüssiges wird gekürzt (AP-Liste, Seitentitel, ähnliche APs, Mailtexte, Log, Steckbrief)"><span>Kontextgröße in Token (leer = 32.000)</span><input type="number" min={4000} step={1000} value={f.contextTokens} onChange={(e) => setF({ ...f, contextTokens: e.target.value })} placeholder="32000" /></label>
               <label className="check" title="Dazu muss die KI-Freigabe „Online-Recherche“ (agent.web) erlauben; lokale Profile brauchen einen Suchdienst (unten)"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem Profil erlaubt</label>
               <span className="muted small">Für Modelle mit Thinking (z. B. Qwen): schneller, weniger Token, keine abgeschnittenen Antworten. Sendet <code>chat_template_kwargs.enable_thinking = false</code> (vLLM, llama.cpp).</span>
             </div>}
@@ -385,7 +386,7 @@ function AiCard() {
             {f.projectScope === 'selected' && <span className="muted small full">Persönliche Projekte stehen als „persönlich (Name)“ in der Liste und werden einzeln ausgewählt.</span>}
             {error && <div className="error full">{error}</div>}
             <div className="full row">
-              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.provider === 'local' && f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.projectScope === 'all' && f.personalScope }; if (edit === 'new') await api.post('/ai/profiles', body); else await api.patch(`/ai/profiles/${edit.id}`, body); setEdit(null); await invalidateAi(); })}>{edit === 'new' ? 'Anlegen' : 'Speichern'}</button>
+              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.provider === 'local' && f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.projectScope === 'all' && f.personalScope, contextTokens: f.contextTokens ? Number(f.contextTokens) : null }; if (edit === 'new') await api.post('/ai/profiles', body); else await api.patch(`/ai/profiles/${edit.id}`, body); setEdit(null); await invalidateAi(); })}>{edit === 'new' ? 'Anlegen' : 'Speichern'}</button>
               {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { await api.patch(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await invalidateAi(); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
               <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
             </div>
