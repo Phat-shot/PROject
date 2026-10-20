@@ -33,12 +33,12 @@ function SetupChecklist({ taskCount }: { taskCount: number }) {
   const base = `/projekte/${p.id}`;
   if (p.myMembership.role !== 'pl' || taskCount >= 10) return null;
   const items: { done: boolean; label: string; to: string }[] = [
-    { done: detail.members.length > 1, label: 'Mitglieder hinzufügen oder einladen', to: `${base}/einstellungen#mitglieder` },
-    { done: detail.subprojects.length > 0, label: 'Teilprojekte anlegen', to: `${base}/einstellungen#planung` },
-    { done: detail.milestones.length > 0, label: 'Meilensteine setzen', to: `${base}/einstellungen#planung` },
+    { done: detail.members.length > 1, label: 'Mitglieder hinzufügen oder einladen', to: `${base}/einstellungen/personen` },
+    { done: detail.subprojects.length > 0, label: 'Teilprojekte anlegen', to: `${base}/einstellungen/planung` },
+    { done: detail.milestones.length > 0, label: 'Meilensteine setzen', to: `${base}/einstellungen/planung` },
     { done: taskCount > 0, label: 'Erste Arbeitspakete aufs Board', to: `${base}/board` },
-    { done: Boolean(p.mailAddress), label: 'Projektkonto anbinden (Mail, Nachfragen, PDF-Versand)', to: `${base}/einstellungen#mail` },
-    { done: Boolean(p.escalation?.enabled && (p.escalation.contactUserId || p.escalation.contactEmail)), label: 'Eskalationskontakt festlegen', to: `${base}/einstellungen#eskalation` }
+    { done: Boolean(p.mailAddress), label: 'Projektkonto anbinden (Mail, Nachfragen, PDF-Versand)', to: `${base}/einstellungen/mail` },
+    { done: Boolean(p.escalation?.enabled && (p.escalation.contactUserId || p.escalation.contactEmail)), label: 'Eskalationskontakt festlegen', to: `${base}/einstellungen/fristen` }
   ];
   const open = items.filter((i) => !i.done);
   if (open.length === 0) return null;

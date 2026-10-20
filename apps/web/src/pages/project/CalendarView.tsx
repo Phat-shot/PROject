@@ -39,7 +39,7 @@ export function CalendarView() {
   ];
   const occupancy = <>
     <Occupancy bookings={bookings.data?.bookings ?? []} rows={rows} start={params.get('datum')} onPick={(b) => { if (b.taskId) openTask(b.taskId); }} onBook={canBook ? (r) => setBook(r.key.startsWith('r:') ? { resourceId: r.key.slice(2), name: r.label } : { userId: r.key.slice(2), name: r.label }) : undefined} />
-    <div className="row mt small">{canBook && <button className="btn sm" onClick={() => setBook('any')}>Buchen …</button>}<Link className="btn sm" to={`/projekte/${detail.project.id}/einstellungen#ressourcen`}>Ressourcen des Projekts</Link><span className="muted">{(resources.data?.resources ?? []).length} Ressourcen ({(resources.data?.resources ?? []).map((r) => kindLabel(r.kind)).filter((v, i, a) => a.indexOf(v) === i).join(', ') || '–'})</span></div>
+    <div className="row mt small">{canBook && <button className="btn sm" onClick={() => setBook('any')}>Buchen …</button>}<Link className="btn sm" to={`/projekte/${detail.project.id}/einstellungen/planung`}>Ressourcen des Projekts</Link><span className="muted">{(resources.data?.resources ?? []).length} Ressourcen ({(resources.data?.resources ?? []).map((r) => kindLabel(r.kind)).filter((v, i, a) => a.indexOf(v) === i).join(', ') || '–'})</span></div>
   </>;
   return (
     <div className="content">

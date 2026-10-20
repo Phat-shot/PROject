@@ -19,10 +19,10 @@ export function ContactsCard() {
   const save = (c: ProjectContact, body: Partial<ProjectContact>) => run(async () => { await api.patch(`/projects/${pid}/contacts/${c.id}`, body); await d.reload(); });
   return (
     <div>
-      <p className="muted small">Kontakte sind externe Personen ohne Login (Kunde, Lieferant, Dienstleister). Mit Name und Mail angelegt, lassen sie sich wie Mitglieder als zuständig für Arbeitspakete und Tasks wählen; Nachfragen und Berichte gehen per Mail an sie. Adressen, die direkt an Arbeitspaketen eingetragen werden, landen hier automatisch.</p>
+      <p className="muted small">Kontakte sind externe Personen ohne Login (Kunde, Lieferant, Dienstleister). Mit Name und Mail angelegt, lassen sie sich wie Mitglieder als zuständig für Arbeitspakete und Tasks wählen; Nachfragen und Berichte gehen per Mail an sie. Adressen, die direkt an Arbeitspaketen eingetragen werden, landen hier automatisch. <strong>Nach außen</strong>: Ansprechpartner, die KI-Agenten in Mails an Externe nennen dürfen und an die sie Fragen außerhalb der Aufgabe verweisen (Außenkommunikation unter Mail).</p>
       {error && <div className="error mb">{error}</div>}
       {msg && <div className="muted small mb">{msg}</div>}
-      <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Organisation</th><th>Telefon</th><th /></tr></thead><tbody>
+      <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Organisation</th><th>Telefon</th><th title="Ansprechpartner für Externe">nach außen</th><th /></tr></thead><tbody>
         {d.data?.contacts.map((c) => (
           <tr key={c.id} className="inline-row">
             <td><InlineText value={c.name ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { name: v })} /></td>
@@ -30,10 +30,11 @@ export function ContactsCard() {
             <td><InlineText value={c.role ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { role: v })} /></td>
             <td><InlineText value={c.organization ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { organization: v })} /></td>
             <td><InlineText value={c.phone ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { phone: v })} /></td>
-            <td className="nowrap">{canEdit && <button className="btn sm link" title="Als buchbare Person (Ressource vom Typ Person) im Projekt führen, z. B. für Einsatztage" onClick={() => void run(async () => { await api.post('/resources', { kind: 'person', name: c.name ?? c.email, email: c.email, organization: c.organization ?? null, trade: c.role ?? null, projectId: pid }); setMsg(`${c.name ?? c.email} ist jetzt buchbar (Einstellungen › Ressourcen).`); })}>buchbar</button>}{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })}>✕</button>}</td>
+            <td><input type="checkbox" aria-label={`${c.name ?? c.email} nach außen`} checked={Boolean(c.external)} disabled={!canEdit || busy} onChange={(e) => void save(c, { external: e.target.checked })} /></td>
+            <td className="nowrap">{canEdit && <button className="btn sm link" title="Als buchbare Person (Ressource vom Typ Person) im Projekt führen, z. B. für Einsatztage" onClick={() => void run(async () => { await api.post('/resources', { kind: 'person', name: c.name ?? c.email, email: c.email, organization: c.organization ?? null, trade: c.role ?? null, projectId: pid }); setMsg(`${c.name ?? c.email} ist jetzt buchbar (Einstellungen › Planung und Board).`); })}>buchbar</button>}{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })}>✕</button>}</td>
           </tr>
         ))}
-        {d.data && d.data.contacts.length === 0 && <tr><td colSpan={6} className="muted small">Noch keine Kontakte.</td></tr>}
+        {d.data && d.data.contacts.length === 0 && <tr><td colSpan={7} className="muted small">Noch keine Kontakte.</td></tr>}
       </tbody></table>
       {canEdit && <form className="row mt" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api.post(`/projects/${pid}/contacts`, f); setF({ email: '', name: '', role: '', organization: '' }); await d.reload(); }); }}>
         <input type="email" placeholder="E-Mail" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={{ width: 200 }} required />

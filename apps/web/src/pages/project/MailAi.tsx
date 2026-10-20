@@ -76,7 +76,7 @@ export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask, d
   const reload = async () => { await d.reload(); await reloadTasks(); };
   if (!d.data) return null;
   const canProcess = Boolean(agent?.canProcess) && !processed && !outgoing && canCreateTask;
-  const why = !agent ? 'Kein Agent im Projekt (Projektagent unter Einstellungen › Projekt oder Agent an der Mail-Ansicht)' : !agent.canProcess ? `${agent.name} ist Mitglied, nicht (stellvertretende) Projektleitung: nur Vorschläge` : processed ? 'Diese Mail wurde schon bearbeitet' : outgoing ? 'Gesendete Mails bearbeitet die KI nicht' : !canCreateTask ? 'Erfordert das Recht „Arbeitspaket erzeugen“' : `${agent.name} legt sofort an: Arbeitspaket oder Aufgabe mit Ursprungsmail, Termin, Antwortentwurf, Ablage${kiView ? ` (die Mail wandert in den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“)` : ''}`;
+  const why = !agent ? 'Kein Agent im Projekt (Projektagent unter Einstellungen › KI oder Agent an der Mail-Ansicht)' : !agent.canProcess ? `${agent.name} ist Mitglied, nicht (stellvertretende) Projektleitung: nur Vorschläge` : processed ? 'Diese Mail wurde schon bearbeitet' : outgoing ? 'Gesendete Mails bearbeitet die KI nicht' : !canCreateTask ? 'Erfordert das Recht „Arbeitspaket erzeugen“' : `${agent.name} legt sofort an: Arbeitspaket oder Aufgabe mit Ursprungsmail, Termin, Antwortentwurf, Ablage${kiView ? ` (die Mail wandert in den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“)` : ''}`;
   return (
     <div className="mb">
       <div className="row mb small">
@@ -106,9 +106,9 @@ export function AiFolderDialog({ onClose, onDone }: { onClose: () => void; onDon
     <Modal title="Ordner „KI Bearbeiten“ einrichten" onClose={onClose}>
       <p className="small">Im Konto entsteht der Ordner „KI Bearbeiten“ und im Projekt eine Ansicht darauf. Jede Mail, die du dort ablegst (im Mailprogramm oder hier mit „Verschieben“), bearbeitet der gewählte Agent sofort: als stellvertretende Projektleitung legt er Arbeitspaket oder Aufgabe mit Ursprungsmail, Termin und Antwortentwurf direkt an und legt die Mail ab („Archiv“ oder „In Arbeit“); als Mitglied schlägt er dasselbe vor.</p>
       <p className="notice small">Der Inhalt dieser Mails wird für die Mitglieder des Projekts sichtbar (als Kopie am Arbeitspaket).</p>
-      {usable.length === 0 ? <div className="empty">Kein passendes Konto: ein eigenes Konto (Einstellungen › Mail-Konten) oder als PL ein Projektkonto (Einstellungen › Mail).</div> :
+      {usable.length === 0 ? <div className="empty">Kein passendes Konto: ein eigenes Konto (Meine Einstellungen › Mail) oder als PL ein Projektkonto (Projekt › Einstellungen › Mail).</div> :
         <label className="field"><span>Konto</span><select value={accountId} onChange={(e) => setAccountId(e.target.value)}>{usable.map((a) => <option key={a.id} value={a.id}>{a.address} · {a.via}</option>)}</select></label>}
-      {agents.length === 0 ? <div className="empty">Kein KI-Agent im Projekt: zuerst einen Agenten als Mitglied aufnehmen (Einstellungen › Mitglieder).</div> :
+      {agents.length === 0 ? <div className="empty">Kein KI-Agent im Projekt: zuerst einen Agenten als Mitglied aufnehmen (Einstellungen › Personen).</div> :
         <label className="field"><span>Agent</span><select value={agentId} onChange={(e) => setAgentId(e.target.value)}>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name} · {a.role === 'pl' ? 'stellv. PL: legt direkt an' : 'Mitglied: schlägt vor'}</option>)}</select></label>}
       {error && <div className="error">{error}</div>}
       <div className="row mt"><button className="btn primary" disabled={busy || !accountId || !agentId} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/mail/ai-folder`, { accountId, agentUserId: agentId }); onDone(); })}>Einrichten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>

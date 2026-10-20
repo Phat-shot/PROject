@@ -30,7 +30,7 @@ export function QuickMail({ projectId, taskId, checklistItemId, to, subject, bod
   });
   return (
     <Modal title={title ?? 'Mail senden'} onClose={onClose}>
-      {views && views.length === 0 && <div className="empty">Keine Ansicht mit Entwurfs- oder Senderecht in diesem Projekt. Der PL legt Ansichten in den Projekteinstellungen an.</div>}
+      {views && views.length === 0 && <div className="empty">Keine Ansicht mit Entwurfs- oder Senderecht in diesem Projekt. Die PL legt Ansichten unter Einstellungen › Mail an.</div>}
       {views && views.length > 0 && (
         <div className="form">
           <label className="field"><span>Senden über</span>

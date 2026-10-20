@@ -29,9 +29,11 @@ vi.mock('../../lib/auth', () => ({ useAuth: () => ({ timeTracking: false, user: 
 vi.mock('../../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('./MailAi', () => ({ MailAiBox: () => null, AiFolderDialog: () => null }));
 vi.mock('./InviteCard', () => ({ InviteCard: () => null }));
-import { MembersCard } from './MembersView';
+import { MembersCard } from './settings/People';
+import { MyRights } from './settings/Ai';
 
 const renderCard = () => render(<MemoryRouter><MembersCard /></MemoryRouter>);
+const renderRights = () => render(<MemoryRouter><MyRights /></MemoryRouter>);
 
 describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', () => {
   beforeEach(() => {
@@ -98,8 +100,7 @@ describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', 
       'assist.summarize': { allowed: false, reason: 'Im Projekt gesperrt (Regel des Org-Admins)', stage: 'org' },
       'pl.agents': { allowed: false, reason: 'Nur PL', stage: 'project' }
     } };
-    renderCard();
-    expect(screen.getByText('Deine Rechte')).toBeInTheDocument();
+    renderRights();
     expect(screen.getByText('Mitglied · Einzelrechte: Projektplan ändern, KI nutzen')).toBeInTheDocument();
     expect(within(screen.getByText('Frage ans Projekt').closest('tr')!).getByText('erlaubt')).toBeInTheDocument();
     expect(within(screen.getByText('Mail zusammenfassen').closest('tr')!).getByText('gesperrt: Im Projekt gesperrt (Regel des Org-Admins)')).toBeInTheDocument();
@@ -109,7 +110,7 @@ describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', 
   it('Deine Rechte als Leser: nur die Auskunftsfunktionen', () => {
     myMembership = { role: 'reader', isDeputy: false, canEditPlan: false, canApprove: false, canFinalize: false, canUseAi: true };
     ai = { killswitch: false, agents: [], features: { 'assist.ask': { allowed: true, reason: 'Leser mit „KI nutzen“', stage: 'project' }, 'assist.summarize': { allowed: false, reason: 'Leser stellen nur Fragen ans Projekt', stage: 'project' } } };
-    renderCard();
+    renderRights();
     expect(screen.getByText('Frage ans Projekt')).toBeInTheDocument();
     expect(screen.getByText('Chat mit Agenten')).toBeInTheDocument();
     expect(screen.queryByText('Mail zusammenfassen')).not.toBeInTheDocument();

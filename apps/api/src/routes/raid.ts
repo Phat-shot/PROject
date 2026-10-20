@@ -17,7 +17,7 @@ export function mapRaid(r: any): RaidItem {
     decidedOn: dateStr(r.decided_on), taskId: r.task_id ?? null, pageId: r.page_id ?? null, createdAt: r.created_at, updatedAt: r.updated_at
   };
 }
-const mapContact = (r: any): ProjectContact => ({ id: r.id, projectId: r.project_id, email: r.email, name: r.name ?? null, role: r.role ?? null, organization: r.organization ?? null, phone: r.phone ?? null, notes: r.notes ?? null });
+const mapContact = (r: any): ProjectContact => ({ id: r.id, projectId: r.project_id, email: r.email, name: r.name ?? null, role: r.role ?? null, organization: r.organization ?? null, phone: r.phone ?? null, notes: r.notes ?? null, external: Boolean(r.external) });
 
 /** RAID-Register und Kontakte je Projekt. Lesen: jedes Mitglied; schreiben: Mitglied; löschen: PL. */
 export async function raidRoutes(app: FastifyInstance) {
@@ -95,9 +95,9 @@ export async function raidRoutes(app: FastifyInstance) {
     const email = String(b.email ?? '').trim().toLowerCase();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Gültige E-Mail erforderlich');
     const r = await db.one(
-      `insert into project_contacts (project_id, email, name, role, organization, phone, notes) values ($1,$2,$3,$4,$5,$6,$7)
-       on conflict (project_id, email) do update set name = coalesce(excluded.name, project_contacts.name), role = coalesce(excluded.role, project_contacts.role), organization = coalesce(excluded.organization, project_contacts.organization), phone = coalesce(excluded.phone, project_contacts.phone), notes = coalesce(excluded.notes, project_contacts.notes) returning *`,
-      [req.params.id, email, b.name?.trim() || null, b.role?.trim() || null, b.organization?.trim() || null, b.phone?.trim() || null, b.notes?.trim() || null]
+      `insert into project_contacts (project_id, email, name, role, organization, phone, notes, external) values ($1,$2,$3,$4,$5,$6,$7,$8)
+       on conflict (project_id, email) do update set external = project_contacts.external or excluded.external, name = coalesce(excluded.name, project_contacts.name), role = coalesce(excluded.role, project_contacts.role), organization = coalesce(excluded.organization, project_contacts.organization), phone = coalesce(excluded.phone, project_contacts.phone), notes = coalesce(excluded.notes, project_contacts.notes) returning *`,
+      [req.params.id, email, b.name?.trim() || null, b.role?.trim() || null, b.organization?.trim() || null, b.phone?.trim() || null, b.notes?.trim() || null, b.external === true]
     );
     return { contact: mapContact(r) };
   });
@@ -106,8 +106,8 @@ export async function raidRoutes(app: FastifyInstance) {
     await requireProject(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     const r = await db.maybeOne(
-      `update project_contacts set name = coalesce($3, name), role = coalesce($4, role), organization = coalesce($5, organization), phone = coalesce($6, phone), notes = coalesce($7, notes) where id = $1 and project_id = $2 returning *`,
-      [req.params.cid, req.params.id, b.name ?? null, b.role ?? null, b.organization ?? null, b.phone ?? null, b.notes ?? null]
+      `update project_contacts set name = coalesce($3, name), role = coalesce($4, role), organization = coalesce($5, organization), phone = coalesce($6, phone), notes = coalesce($7, notes), external = coalesce($8, external) where id = $1 and project_id = $2 returning *`,
+      [req.params.cid, req.params.id, b.name ?? null, b.role ?? null, b.organization ?? null, b.phone ?? null, b.notes ?? null, typeof b.external === 'boolean' ? b.external : null]
     );
     if (!r) throw notFound('Kontakt nicht gefunden');
     return { contact: mapContact(r) };

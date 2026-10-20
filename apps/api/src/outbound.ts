@@ -75,6 +75,12 @@ export function audienceText(a: AudienceClass, code: string): string {
 }
 
 /** Externes Profil des Projekts (pflegt die PL): Name nach außen, Adresse, Zufahrt, Ansprechpartner für Externe. */
+/** Ansprechpartner für Externe: Projektkontakte mit Kennzeichen external (eine Kontaktliste je Projekt). */
+export async function externalContacts(db: Db, projectId: string): Promise<NonNullable<ExternalProfile['contacts']>> {
+  const r = await db.query(`select name, email, role from project_contacts where project_id = $1 and external order by coalesce(name, email)`, [projectId]);
+  return (r.rows as any[]).map((c) => ({ name: c.name ?? c.email, email: c.email, ...(c.role ? { role: c.role } : {}) }));
+}
+
 export function profileOf(v: any): ExternalProfile {
   const s = (x: unknown, n: number) => String(x ?? '').trim().slice(0, n);
   const contacts = (Array.isArray(v?.contacts) ? v.contacts : []).map((c: any) => ({ name: s(c?.name, 120), email: normAddr(c?.email).slice(0, 200), role: s(c?.role, 120) })).filter((c: any) => c.name || c.email).slice(0, 10);
@@ -119,7 +125,7 @@ async function scopeOf(db: Db, projectId: string, taskId: string | null, aud: Au
   const task = taskId ? await db.maybeOne(`select t.*, c.name as column_name, c.is_done, c.kind as column_kind, pt.number as parent_number, pt.title as parent_title from tasks t join board_columns c on c.id = t.column_id left join tasks pt on pt.id = t.parent_id where t.id = $1`, [taskId]) : null;
   const family = taskId ? (await db.query(`${FAMILY} select t.id, t.number, t.title, t.parent_id, c.name as column_name, c.is_done, c.kind from tasks t join board_columns c on c.id = t.column_id where t.id in (select id from fam) order by t.parent_id nulls first, t.number`, [taskId])).rows : [];
   const externals = aud.recipients.filter((r) => r.audience !== 'internal').map((r) => r.email);
-  return { project: { ...p, profile: profileOf(p.external_profile) }, task, family, externals, released: await releasedPages(db, projectId, externals) };
+  return { project: { ...p, profile: { ...profileOf(p.external_profile), contacts: await externalContacts(db, projectId) } }, task, family, externals, released: await releasedPages(db, projectId, externals) };
 }
 
 const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
@@ -346,8 +352,8 @@ export async function referToChain(db: Db, q: { task: any; agent: { id: string; 
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [t.id, q.agent.id, `${REFER_MARK}${q.from ? ` (${q.from})` : ''} außerhalb der Aufgabe an ${contact.name} weitergegeben (${contact.why}): ${cut(q.question, 1500)}`]);
   await notify(db, { userId: contact.id, projectId: t.project_id, taskId: t.id, type: 'external.referral', title: `${REFER_MARK}: ${t.title}`, body: cut(q.question, 300), link: `/projekte/${t.project_id}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, actorId: q.agent.id, chatted: true, dedupeKey: null });
   await agentChatMessage(db, q.agent, { userId: contact.id }, `${code} „${t.title}“: ${REFER_MARK}${q.from ? ` (${q.from})` : ''}, gehört nicht zu dieser Aufgabe: ${cut(q.question, 1500)}\nAntworte hier; endet deine Antwort mit dem Satz „Darf weitergegeben werden.“, wird sie für Externe sichtbar und ich gebe sie weiter.`, t.project_id);
-  const p = await db.one(`select external_profile, mail_address from projects where id = $1`, [t.project_id]);
-  const c = profileOf(p.external_profile).contacts?.[0];
+  const p = await db.one(`select mail_address from projects where id = $1`, [t.project_id]);
+  const c = (await externalContacts(db, t.project_id))[0];
   const referral = c ? `${c.name}${c.role ? ` (${c.role})` : ''}${c.email ? `, ${c.email}` : ''}` : `die Projektleitung${p.mail_address ? ` (erreichbar über ${p.mail_address})` : ''}`;
   return { contact, referral };
 }

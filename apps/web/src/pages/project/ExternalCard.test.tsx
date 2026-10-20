@@ -13,26 +13,21 @@ vi.mock('../../lib/useAi', () => ({ useAiStatus: () => ({ externalGuard: 'strict
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ timeTracking: false, user: { id: 'u1' } }) }));
 vi.mock('../../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('./MailAi', () => ({ MailAiBox: () => null, AiFolderDialog: () => null }));
-import { ExternalCard } from './MembersView';
+import { ExternalCard } from './settings/Mail';
 
 const renderCard = () => render(<MemoryRouter><ExternalCard /></MemoryRouter>);
 
 describe('Projekteinstellungen: Außenkommunikation', () => {
   beforeEach(() => { put.mockReset(); put.mockResolvedValue({}); reload.mockClear(); role = 'pl'; });
 
-  it('PL pflegt das externe Profil mit Ansprechpartnern', async () => {
+  it('PL pflegt das externe Profil; Ansprechpartner kommen aus den Kontakten', async () => {
     renderCard();
     expect(screen.getByText('neu formulieren und prüfen')).toBeInTheDocument();
+    expect(screen.getByText(/Bauleitung Nord \(Bauleitung\) <bauleitung@firma.example>/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /Kontakte mit „nach außen“ pflegen/ })).toHaveAttribute('href', '/projekte/p1/einstellungen/personen');
     fireEvent.change(screen.getByLabelText(/Name nach außen/), { target: { value: 'Neubau Nord' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Ansprechpartner hinzufügen' }));
-    const names = screen.getAllByPlaceholderText('Name');
-    fireEvent.change(names[1], { target: { value: 'Empfang' } });
-    fireEvent.change(screen.getAllByPlaceholderText('Mail')[1], { target: { value: 'empfang@firma.example' } });
     fireEvent.click(screen.getByRole('button', { name: 'Speichern' }));
-    await waitFor(() => expect(put).toHaveBeenCalledWith('/projects/p1/external-profile', {
-      name: 'Neubau Nord', address: 'Hafenstraße 1', access: 'Tor 3',
-      contacts: [{ name: 'Bauleitung Nord', email: 'bauleitung@firma.example', role: 'Bauleitung' }, { name: 'Empfang', email: 'empfang@firma.example', role: '' }]
-    }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith('/projects/p1/external-profile', { name: 'Neubau Nord', address: 'Hafenstraße 1', access: 'Tor 3' }));
     await waitFor(() => expect(reload).toHaveBeenCalled());
   });
 

@@ -905,6 +905,7 @@ export interface OutboundCheck {
   createdAt: string;
 }
 /** Externes Profil eines Projekts: Name nach außen, Adresse, Zufahrt, Ansprechpartner für Externe. */
+/** Externes Profil (Informationsgrenze); contacts kommt aus den Projektkontakten mit Kennzeichen „nach außen“ (nur lesend geliefert) */
 export interface ExternalProfile { name?: string; address?: string; access?: string; contacts?: { name: string; email: string; role?: string }[] }
 
 export interface DocFolder {
@@ -1043,6 +1044,8 @@ export interface ProjectContact {
   organization: string | null;
   phone: string | null;
   notes: string | null;
+  /** Ansprechpartner für Externe: darf in Mails nach außen genannt werden, an ihn verweist der Agent Fragen außerhalb der Aufgabe */
+  external: boolean;
 }
 
 export interface AuditEntry {

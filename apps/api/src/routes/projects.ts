@@ -15,7 +15,7 @@ import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
 import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
-import { profileOf } from '../outbound.js';
+import { externalContacts, profileOf } from '../outbound.js';
 import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
 import { effectiveAgentPolicy, parseAgentPolicy } from '../ai/agentPolicy.js';
@@ -130,7 +130,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const lead = await resolveProjectLead(db, p.id);
     const labels = await db.query(`select * from labels where project_id = $1 order by position, name`, [p.id]);
     return {
-      project: { ...mapProject(p), mailInquiry: await effectiveMailInquiry(db, p.id), myRole: m.role, myMembership: m },
+      project: { ...mapProject(p), externalProfile: { ...profileOf(p.external_profile), contacts: await externalContacts(db, p.id) }, mailInquiry: await effectiveMailInquiry(db, p.id), myRole: m.role, myMembership: m },
       labels: labels.rows.map(mapLabel),
       members: members.rows.map((r: any) => ({ ...mapMembership(r), name: r.name, email: r.email, kind: r.kind === 'agent' ? 'agent' : 'person' })),
       groups: await projectGroups(p.id),
@@ -274,11 +274,16 @@ export async function projectRoutes(app: FastifyInstance) {
   app.put<{ Params: { id: string }; Body: ExternalProfile }>('/projects/:id/external-profile', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    const profile = profileOf(req.body ?? {});
-    if (profile.contacts?.some((c) => c.email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email))) throw badRequest('Ansprechpartner: gültige Mail-Adresse oder leer');
+    const { contacts, ...profile } = profileOf(req.body ?? {});
+    // Ansprechpartner (Übergang): werden als Projektkontakte mit Kennzeichen external geführt; eine Liste ersetzt die bisherige Auswahl
+    if (req.body && 'contacts' in req.body) {
+      if (contacts?.some((c) => !c.email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(c.email))) throw badRequest('Ansprechpartner: gültige Mail-Adresse erforderlich');
+      await db.query(`update project_contacts set external = false where project_id = $1`, [req.params.id]);
+      for (const c of contacts ?? []) await db.query(`insert into project_contacts (project_id, email, name, role, external) values ($1,$2,$3,$4,true) on conflict (project_id, email) do update set external = true, name = coalesce(excluded.name, project_contacts.name), role = coalesce(excluded.role, project_contacts.role)`, [req.params.id, c.email, c.name || null, c.role || null]);
+    }
     await db.query(`update projects set external_profile = $2 where id = $1`, [req.params.id, JSON.stringify(profile)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.external_profile', objectType: 'project', objectId: req.params.id, details: { ...profile } });
-    return { externalProfile: profile };
+    return { externalProfile: { ...profile, contacts: await externalContacts(db, req.params.id) } };
   });
 
   app.post<{ Params: { id: string } }>('/projects/:id/reporting/run', async (req) => {

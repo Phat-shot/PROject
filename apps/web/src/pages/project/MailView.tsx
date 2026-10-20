@@ -92,7 +92,7 @@ export function MailView({ global = false }: { global?: boolean }) {
             <span className="acc">{v.accountAddress} · {v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</span>
           </div>
         ))}
-        {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen#mail`}>Ansichten und Filter verwalten</Link>}
+        {isPl && <Link className="btn sm link" to={`/projekte/${projectId}/einstellungen/mail`}>Ansichten und Filter verwalten</Link>}
         {!global && <>
           <div className="section">Freigabe-Liste</div>
           <div className={`view ${loc.pathname.endsWith('/freigaben') ? 'active' : ''}`} onClick={() => { setNavOpen(false); nav(`${base}/freigaben`); }}>
@@ -149,7 +149,7 @@ function InboxList({ base, projectId, folder, viewId, views, folders, mobile = f
             <div className="snippet">{!projectId && <span className="badge" style={{ marginRight: 6 }}>{m.projectKey}</span>}{m.snippet}{!viewId && views.length > 1 && <span className="muted"> · {m.viewName}</span>}</div>
           </div>
         ))}
-        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Der PL legt Ansichten in den Projekteinstellungen an.' : 'Keine Mails in diesem Ordner.'}</div>}
+        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch keine Mail-Ansicht. Die PL legt Ansichten unter Einstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}
       </div>}
       {mobile && !mailId ? null : mailId && current && !projectId
         ? <ProjectScope projectId={current.projectId}><MailDetailPanel mailId={mailId} views={views} folders={folders} base={`/projekte/${current.projectId}/mail`} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(`${base}?${params.toString()}`); }} viewHint={current.viewId} /></ProjectScope>
@@ -662,7 +662,7 @@ export function NewView({ onClose, onCreated }: { onClose: () => void; onCreated
       <div className="form cols-2">
         <label className="field full"><span>Konto</span>
           <select value={f.accountId} onChange={(e) => setF({ ...f, accountId: e.target.value })}><option value="">– wählen –</option>{usable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) – {a.via}</option>)}</select></label>
-        {usable.length === 0 && <p className="notice small full">Kein Konto verfügbar. Lege unter „Mail-Konten“ ein eigenes Konto an oder binde als PL ein Projektkonto an (Einstellungen › Mail).</p>}
+        {usable.length === 0 && <p className="notice small full">Kein Konto verfügbar. Lege unter Meine Einstellungen › Mail ein eigenes Konto an oder binde als PL ein Projektkonto an (Projekt › Einstellungen › Mail).</p>}
         <label className="field full"><span>Name der Ansicht</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. Kunde Müller" /></label>
         <label className="field"><span>Absender (Adresse oder @domain, Komma)</span><input type="text" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} placeholder="@mueller-design.de" /></label>
         <label className="field"><span>Empfänger enthält</span><input type="text" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></label>

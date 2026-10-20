@@ -8,8 +8,7 @@ import { BoardView } from './project/BoardView';
 import { PlanView } from './project/PlanView';
 import { MailView } from './project/MailView';
 import { DocsView } from './project/DocsView';
-import { MembersView } from './project/MembersView';
-import { AuditView } from './project/AuditView';
+import { PROJECT_SETTINGS_TABS, ProjectSettingsPage } from './project/settings/ProjectSettings';
 import { CalendarView } from './project/CalendarView';
 import { TimeView } from './project/TimeView';
 import { TaskDrawer } from './project/TaskDrawer';
@@ -90,6 +89,7 @@ function ProjectBody() {
   // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt nur die Unterreiter des aktuellen Bereichs
   const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
   const isPl = p.myMembership.role === 'pl';
+  // Bereiche kommen aus der Seitenleiste; die Kopfzeile zeigt die Unterreiter des Bereichs, bei Einstellungen die Reiter der Einstellungsseite
   const tabs = ['board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub)
     ? [
         { to: `${base}/board`, label: 'Board' },
@@ -99,8 +99,8 @@ function ProjectBody() {
         ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
         { to: `${base}/auswertung`, label: 'Auswertung' }
       ]
-    : ['einstellungen', 'audit'].includes(sub)
-      ? [{ to: `${base}/einstellungen`, label: 'Einstellungen', end: true }, { to: `${base}/audit`, label: 'Audit' }]
+    : sub === 'einstellungen'
+      ? PROJECT_SETTINGS_TABS.map((t) => ({ to: `${base}/einstellungen/${t.key}`, label: t.label }))
       : undefined;
   const area = ['', 'board', 'plan', 'kalender', 'besprechungen', 'zeiten', 'auswertung'].includes(sub) ? 'Arbeitspakete' : sub === 'mail' ? 'Postfach' : sub === 'doku' ? 'Doku' : sub === 'raid' ? 'Risiken & Entscheidungen' : sub === 'ki' ? 'KI' : 'Einstellungen';
   const taskId = params.get('task');
@@ -117,9 +117,9 @@ function ProjectBody() {
         <Route path="besprechungen" element={<MeetingsView />} />
         <Route path="mail/*" element={<MailView />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
-        <Route path="einstellungen" element={<MembersView />} />
-        <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen`} replace />} />
-        <Route path="audit" element={<AuditView />} />
+        <Route path="einstellungen/*" element={<ProjectSettingsPage />} />
+        <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen/personen`} replace />} />
+        <Route path="audit" element={<Navigate to={`${base}/einstellungen/daten`} replace />} />
         <Route path="raid" element={<RaidView />} />
         <Route path="ki" element={<AiView />} />
         <Route path="chat" element={<ProjectChatRedirect />} />
