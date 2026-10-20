@@ -521,3 +521,20 @@ test('Ereignisse am Arbeitspaket gehen nicht verloren: vor dem Start bleibt der 
   assert.ok(!calls[n0].body.messages[1].content.includes('Zweiter Hinweis'));
   assert.match(calls[calls.length - 1].body.messages[1].content, /Dritter Hinweis/, 'Folgelauf liest den Stand neu');
 });
+
+test('Seitenstatus durch eine Person: Arbeitspakete, deren Log die Seite nennt, bekommen den Eintrag und der Agent läuft', async () => {
+  const pl = await t.login('pl@demo.local');
+  const pid = t.ids.projects.web;
+  const agent = (await t.api(pl).get('/agents')).json().agents.find((a: any) => a.name === 'Schreiber');
+  const task = (await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Freigabe abwarten', responsibleUserId: agent.id })).json().task;
+  const page = (await t.api(pl).post(`/projects/${pid}/docs/pages`, { title: 'Abnahmekonzept Annahmen', contentMd: 'Entwurf' })).json().page;
+  await flushAgentRuns();
+  await t.db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, 'Seite „Abnahmekonzept Annahmen“ (Entwurf, Ordner Konzepte) angelegt. Warte auf Freigabe der PL.']);
+  await t.db.query(`delete from agent_runs where task_id = $1`, [task.id]);
+  nextActions = [{ type: 'none', reason: 'x' }];
+  assert.equal((await t.api(pl).post(`/docs/pages/${page.id}/status`, { status: 'review' })).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/docs/pages/${page.id}/status`, { status: 'final' })).statusCode, 200);
+  await flushAgentRuns();
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and source = 'system' and body = 'Doku-Seite „Abnahmekonzept Annahmen“ → Final (durch Petra Lenz)'`, [task.id]));
+  assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'task_changed'`, [task.id]), 'Agent läuft nach dem Statuswechsel');
+});

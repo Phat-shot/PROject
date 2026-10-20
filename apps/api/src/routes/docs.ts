@@ -12,6 +12,7 @@ import { BUILTIN_TEMPLATES, mapFolder, mapPage, mapTemplate, mapVersion } from '
 import { mapAttachment } from './tasks.js';
 import { mapShare, newShareToken, publicBase, resolveShare, sharedPageIds } from '../docs/share.js';
 import { dispatch, notifyMany, usersWithRight } from '../notify.js';
+import { queueAgentRun } from '../ai/agentEvents.js';
 import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
 import { htmlToMd, mdToHtml, sanitizeHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
@@ -243,6 +244,18 @@ export async function docRoutes(app: FastifyInstance) {
     );
     await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
     await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: `page.${to}`, objectType: 'doc_page', objectId: r.id, details: { from: r.status, version: u.version } });
+    // Arbeitspakete, deren Log diese Seite nennt (z. B. ein Agent wartet auf die Freigabe): Statuswechsel ins Log, Agent läuft
+    const linked = await db.query(
+      `select distinct t.id from task_comments c join tasks t on t.id = c.task_id
+       where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and c.created_at > now() - interval '90 days' and c.body like $2
+       order by t.id limit 10`,
+      [r.project_id, `%„${u.title}“%`]
+    );
+    const label = { draft: 'Entwurf', review: 'In Prüfung', final: 'Final' }[to];
+    for (const l of linked.rows) {
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [l.id, user.id, `Doku-Seite „${u.title}“ → ${label} (durch ${user.name})`]);
+      queueAgentRun(l.id, 'task_changed');
+    }
     if (to === 'review') {
       await dispatch(db, { event: 'review', projectId: r.project_id, users: await usersWithRight(db, r.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
     }

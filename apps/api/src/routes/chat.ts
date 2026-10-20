@@ -30,14 +30,14 @@ export async function chatRoutes(app: FastifyInstance) {
     from chat_messages m left join users u on u.id = m.user_id`;
 
   /**
-   * Arbeitspaket, zu dem der Agent gefragt hat: Thread-Start des Agenten bzw. seine letzte Direktnachricht („KEY-12 „Titel“: …“,
+   * Arbeitspaket, zu dem der Agent gefragt hat: Thread-Start des Agenten bzw. seine letzte Frage in der Direktnachricht (Chat-Antworten dazwischen zählen nicht) („KEY-12 „Titel“: …“,
    * höchstens 14 Tage alt), sofern die antwortende Person das Arbeitspaket sehen darf. In Direktnachrichten zählt die erste Antwort
    * und was binnen zwei Stunden danach folgt; spätere Nachrichten sind wieder normaler Chat.
    */
   async function answeredTask(agentId: string, channelId: string, threadId: string | null, user: any, messageId: string) {
     const last = threadId
       ? await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.user_id = $2 and m.kind = 'user' and m.deleted_at is null and m.created_at > now() - interval '14 days'`, [threadId, agentId])
-      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.kind = 'user' and m.thread_id is null and m.deleted_at is null and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
+      : await db.maybeOne(`select m.body, m.created_at, u.name from chat_messages m join users u on u.id = m.user_id where m.channel_id = $1 and m.user_id = $2 and m.kind = 'user' and m.thread_id is null and m.deleted_at is null and m.body ~ '^[A-Z0-9-]{2,12}-[0-9]+ „' and m.created_at > now() - interval '14 days' order by m.created_at desc limit 1`, [channelId, agentId]);
     const ref = last ? String(last.body).match(/^([A-Z0-9-]{2,12})-(\d+) „/) : null;
     if (!ref) return null;
     if (!threadId) {
@@ -181,7 +181,9 @@ export async function chatRoutes(app: FastifyInstance) {
         const released = t.refer ? releasedText(body) : null;
         await db.query(`insert into task_comments (task_id, user_id, body, source, visibility) values ($1,$2,$3,'chat',$4)`, [t.id, user.id, `Rückmeldung per Chat an ${t.agent_name}: ${released ?? body}`, released ? 'external' : 'internal']);
         queueAgentRun(t.id, 'comment');
-      } else queueAgentChat(a, channel.id, r.id, channel.kind === 'project' ? threadId ?? r.id : '');
+      }
+      // Im Chat antwortet der Agent immer (auch wenn die Nachricht schon als Rückmeldung im Log steht; er sieht das im Kontext)
+      queueAgentChat(a, channel.id, r.id, channel.kind === 'project' ? threadId ?? r.id : '');
     }
     return { message: mapMessage({ ...r, user_name: user.name, reply_count: 0 }) };
   });

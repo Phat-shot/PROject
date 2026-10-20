@@ -168,6 +168,10 @@ test('Fragen per Chat: Eskalation und chat-Aktion kommen als Direktnachricht an,
   await flushAgentRuns();
   // Rückmeldung auf die Frage zum Arbeitspaket steht im Log (Quelle Chat)
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and source = 'chat' and user_id = $2 and body = 'Rückmeldung per Chat an Morton: Budget sind 4.000 €.'`, [ap.id, t.ids.users.pl]));
+  // … und der Agent antwortet trotzdem im Chat (die Nachricht wird nicht verschluckt); der Chat-Lauf weiß, dass sie schon im Log steht
+  assert.ok(await t.db.maybeOne(`select 1 from chat_messages where channel_id = $1 and user_id = $2 and created_at >= (select max(created_at) from chat_messages where channel_id = $1 and user_id = $3)`, [dm, morton.id, t.ids.users.pl]), 'Chat-Antwort');
+  const chatPrompt = calls.filter((c) => c.response_format && String(c.messages[0].content).includes('Man erreicht dich im Chat')).pop();
+  assert.match(chatPrompt.messages[1].content, new RegExp(`steht bereits als Rückmeldung im Log von WEB-${ap.number}`));
   const before = calls.length;
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   const prompt = calls.slice(before).find((c) => c.response_format && !String(c.messages[0].content).includes('Man erreicht dich im Chat'));

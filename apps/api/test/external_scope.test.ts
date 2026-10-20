@@ -405,7 +405,7 @@ test('Prompt kennzeichnet Absenderklassen; refer: Log, Meldung und Chat an die e
   const rel = (await logOf(ap.id)).filter((c) => c.source === 'chat').at(-1);
   assert.equal(rel.visibility, 'external');
   assert.equal(rel.body, 'Rückmeldung per Chat an Außendienst: Das Budget ist vertraulich. Das Lieferfenster ist KW 47');
-  const next2 = String(calls.filter((c) => c.response_format && String(c.messages[1].content).includes('Fliesenarbeiten Bad koordinieren')).at(-1).messages[1].content);
+  const next2 = String(calls.filter((c) => c.response_format && !String(c.messages[0].content).includes('Man erreicht dich im Chat') && String(c.messages[1].content).includes('Fliesenarbeiten Bad koordinieren')).at(-1).messages[1].content);
   assert.match(next2, /Petra Lenz \[für Externe sichtbar\]: Rückmeldung per Chat an Außendienst/, 'der Agent läuft und sieht die Freigabe');
   const ctx = await externalContext(t.db, ap.id, await aud(ap.id, ['fliesen@extern.example']));
   assert.match(ctx.text, /Lieferfenster ist KW 47/);
