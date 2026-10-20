@@ -18,6 +18,8 @@ import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
 import { notify } from '../notify.js';
+import { suggestAgent } from '../ai/mailAi.js';
+import { agentChatMessage } from '../ai/plan.js';
 import { seal } from '../secrets.js';
 import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
 
@@ -269,7 +271,10 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!pid) throw badRequest('Mail gehört zu keiner Projektansicht');
     // Gleiche Regel wie bei den Vorschlägen: KI-Recht an der Ansicht und Freigabe im Projekt („KI nutzen“)
     const cfg = await gate(user, pid, 'assist.summarize');
-    return { summary: await summarizeMail(db, cfg, app.fetchFn, user, mail, pid) };
+    const summary = await summarizeMail(db, cfg, app.fetchFn, user, mail, pid);
+    const agent = await suggestAgent(db, pid, mail.account_id);
+    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Zusammenfassung von „${String(mail.subject ?? '').slice(0, 80)}“:\n${summary}`, pid);
+    return { summary, viaChat: agent ? agent.name : null };
   });
 
   // Essenz → Arbeitspaket (Vorschlag)
@@ -288,7 +293,9 @@ export async function aiRoutes(app: FastifyInstance) {
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'task_update', taskId: task.id, mailId: mail.id } });
     await notifyApprovers(task.project_id, user.id, `KI-Vorschlag: ${task.title}`, e.summary, `/projekte/${task.project_id}/ki`, task.subproject_id);
-    return { proposal: mapProposal(r) };
+    const agent = await suggestAgent(db, task.project_id, mail.account_id);
+    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag zu „${task.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${e.summary}\nFreigabe: /projekte/${task.project_id}/ki`, task.project_id);
+    return { proposal: mapProposal(r), viaChat: agent ? agent.name : null };
   });
 
   // Essenz → Seite (Vorschlag)
@@ -306,7 +313,9 @@ export async function aiRoutes(app: FastifyInstance) {
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'page_append', pageId: page.id, mailId: mail.id } });
     await notifyApprovers(page.project_id, user.id, `KI-Vorschlag für Seite: ${page.title}`, `Aus Mail „${mail.subject}“`, `/projekte/${page.project_id}/ki`);
-    return { proposal: mapProposal(r) };
+    const agent = await suggestAgent(db, page.project_id, mail.account_id);
+    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag für die Seite „${page.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${section.slice(0, 200).replace(/\s+/g, ' ')} …\nFreigabe: /projekte/${page.project_id}/ki`, page.project_id);
+    return { proposal: mapProposal(r), viaChat: agent ? agent.name : null };
   });
 
   // Vorschläge zu Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf

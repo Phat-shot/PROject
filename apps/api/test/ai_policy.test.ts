@@ -434,7 +434,7 @@ test('Eigene Agenten der PL: Regel pl.agents (Standard gesperrt), Prüfung auch 
   await clearRules();
 });
 
-test('Mail-KI: mail.process und mail.triage über die Freigaben; gesperrte Läufe übersprungen mit Begründung', async () => {
+test('Mail-KI: Agenten über die Freigaben (mail.triage, agent.mail); gesperrte Läufe übersprungen mit Begründung', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   // Agent betreut die Projektansicht; Sperre für ihn: Lauf übersprungen
@@ -456,27 +456,28 @@ test('Mail-KI: mail.process und mail.triage über die Freigaben; gesperrte Läuf
   await clearRules();
   assert.equal((await t.api(pl).patch(view, { agentUserId: morton.id })).statusCode, 200);
   await t.api(pl).patch(view, { agentUserId: null });
-  // „KI bearbeiten“: Sperre für die PL → Ordner nicht einrichtbar und „Projekt-KI bearbeitet direkt“ nicht einschaltbar (403 mit Begründung)
-  await rule(admin, { userId: t.ids.users.pl, feature: 'mail.process', effect: 'deny', note: 'nicht freigegeben' });
-  const folder = await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project });
+  // Ordner „KI Bearbeiten“: ohne Agent nicht einrichtbar; Sperre für den Agenten → Ordner nicht einrichtbar und nicht einschaltbar (403 mit Begründung)
+  assert.equal((await t.api(pl).patch(view, { aiProcess: true })).statusCode, 400, 'Ordner-Bearbeitung ohne Agent');
+  await rule(admin, { userId: morton.id, feature: 'mail.triage', effect: 'deny', note: 'nicht freigegeben' });
+  const folder = await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project, agentUserId: morton.id });
   assert.equal(folder.statusCode, 403);
   assert.match(folder.json().error, /nicht freigegeben/);
-  const on = await t.api(pl).patch(view, { aiProcess: true });
+  const on = await t.api(pl).patch(view, { aiProcess: true, agentUserId: morton.id });
   assert.equal(on.statusCode, 403);
   assert.match(on.json().error, /nicht freigegeben/);
   await clearRules();
-  assert.equal((await t.api(pl).patch(view, { aiProcess: true })).statusCode, 200);
+  assert.equal((await t.api(pl).patch(view, { aiProcess: true, agentUserId: morton.id })).statusCode, 200);
   // Sperre nach dem Einschalten: der Lauf wird übersprungen, ohne LLM-Aufruf; die Läufe sehen alle mit Zugriff auf die Ansicht, daher ohne Notiz
-  await rule(admin, { userId: t.ids.users.pl, feature: 'mail.process', effect: 'deny', note: 'Datenschutz Kunde' });
+  await rule(admin, { userId: morton.id, feature: 'mail.triage', effect: 'deny', note: 'Datenschutz Kunde' });
   const n = calls.length;
   t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'kunde@extern.de', name: 'Kunde' }, to: ['projekt-web@demo.local'], subject: 'Zweite Frage zur Website', text: 'Und die Preise?' } as any);
   await t.mail.syncAccount(t.ids.accounts.project);
   await flushAgentRuns();
   const second = await t.db.one(`select r.status, r.mode, r.error from mail_ai_runs r join mails m on m.id = r.mail_id where m.subject = 'Zweite Frage zur Website'`);
-  assert.deepEqual([second.status, second.mode, second.error], ['skipped', 'process', 'Gesperrt durch eine KI-Freigabe für diese Person, Ordner „KI Bearbeiten“']);
+  assert.deepEqual([second.status, second.mode, second.error], ['skipped', 'triage', 'Gesperrt durch Org-Admin (Alex Admin) für Morton, Agent schlägt zu Mails vor (als Mitglied): Datenschutz Kunde']);
   assert.equal(calls.length, n, 'kein LLM-Aufruf');
   await clearRules();
-  assert.equal((await t.api(pl).patch(view, { aiProcess: false })).statusCode, 200);
+  assert.equal((await t.api(pl).patch(view, { aiProcess: false, agentUserId: null })).statusCode, 200);
 });
 
 test('Abschluss-Antwort mit KI über die Freigabe assist.final_reply; ohne KI weiter möglich', async () => {

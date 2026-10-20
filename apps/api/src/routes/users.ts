@@ -124,6 +124,7 @@ export async function userRoutes(app: FastifyInstance) {
     if (settings.theme && !['light', 'dark', 'system'].includes(String(settings.theme))) throw badRequest('Theme: light, dark oder system');
     if (settings.language && !['de', 'en'].includes(String(settings.language))) throw badRequest('Sprache: de oder en');
     if (settings.mailNotifications && !['off', 'immediate', 'daily'].includes(String(settings.mailNotifications))) throw badRequest('Mail-Benachrichtigung: off, immediate oder daily');
+    if (settings.chatCards && !['needed', 'all'].includes(String(settings.chatCards))) throw badRequest('Bestätigungskarten: needed oder all');
     if (settings.pinnedProjects !== undefined) {
       const ids = settings.pinnedProjects;
       if (!Array.isArray(ids) || ids.some((x) => typeof x !== 'string' || !/^[0-9a-f-]{36}$/.test(x))) throw badRequest('Angeheftete Projekte: Liste von Projekt-IDs');

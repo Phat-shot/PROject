@@ -14,7 +14,7 @@ import { accountKind, accountBoundToProject, accountRights, accountUseIn, accoun
 import { projectLabelSql } from '../projectPolicy.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiFinalReply, finalReplyText, originMails, reSubject } from '../mail/origin.js';
-import { decideProposals } from '../ai/mailAi.js';
+import { decideProposals, enqueueForNewMail, suggestAgent } from '../ai/mailAi.js';
 import { seal } from '../secrets.js';
 import { queueAgentRun, queueMailAi } from '../ai/agentEvents.js';
 import { mapPage } from '../docs/service.js';
@@ -395,32 +395,34 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   /**
-   * Mail-KI an einer Ansicht: einschalten darf, wer sie inhaltlich verantwortet (persönliches Konto: Eigentümer;
-   * Projekt-/Organisationskonto: PL des Projekts, nicht der Org-Admin allein). Die Projekt-KI handelt dann im Auftrag
-   * dieser Person (KI-Freigabe mail.process: „KI nutzen“, Rechte „KI“ und „Arbeitspaket erzeugen“ an der Ansicht);
-   * der Agent muss Mitglied des Projekts und für mail.triage freigegeben sein.
+   * Agent an einer Ansicht: setzen darf, wer sie inhaltlich verantwortet (persönliches Konto: Eigentümer; Projekt-/
+   * Organisationskonto: PL des Projekts, nicht der Org-Admin allein). Der Agent muss aktives Mitglied sein und für seine Art
+   * freigegeben (agent.mail als stellvertretende PL, sonst mail.triage). Die Ordner-Bearbeitung (aiProcess) braucht einen Agenten:
+   * an der Ansicht oder den Projektagenten für Projektkonten.
    */
   async function setViewAi(user: User, v: any, a: AccountRow, b: { aiProcess?: boolean; agentUserId?: string | null }) {
     const m = await getMembership(db, v.project_id, user.id);
     void a;
     const owner = v.use === 'personal' ? v.use_user_id === user.id && Boolean(m) : m?.role === 'pl';
     if (!owner) throw forbidden(v.use === 'personal' ? 'Mail-KI am persönlichen Konto schaltet nur der Eigentümer (als Projektmitglied)' : 'Mail-KI an Projekt- und Organisationskonten schaltet die PL des Projekts');
-    if (b.aiProcess) {
-      const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: v.project_id, feature: 'mail.process', viewId: v.id, budget: false });
-      if (!cfg) throw aiError(decision);
-    }
-    if (b.agentUserId && !(await db.maybeOne(`select 1 from project_members pm join users u on u.id = pm.user_id where pm.project_id = $1 and pm.user_id = $2 and u.kind = 'agent' and u.active`, [v.project_id, b.agentUserId]))) throw badRequest('Agent ist kein aktives Mitglied des Projekts');
-    if (b.agentUserId) {
-      const d = await aiAllowed(db, { userId: b.agentUserId, projectId: v.project_id, feature: 'mail.triage', budget: false });
+    const agentId: string | null = 'agentUserId' in b ? b.agentUserId || null : v.agent_user_id ?? null;
+    if (agentId) {
+      const ag = await db.maybeOne(`select pm.role from project_members pm join users u on u.id = pm.user_id where pm.project_id = $1 and pm.user_id = $2 and u.kind = 'agent' and u.active`, [v.project_id, agentId]);
+      if (!ag) throw badRequest('Agent ist kein aktives Mitglied des Projekts');
+      const d = await aiAllowed(db, { userId: agentId, projectId: v.project_id, feature: ag.role === 'pl' ? 'agent.mail' : 'mail.triage', budget: false });
       if (!d.allowed && !d.missing) throw aiError(d, true);
     }
-    if ('aiProcess' in b) await db.query(`update mail_views set ai_process = $2, ai_process_by = case when $2 then $3::uuid else null end where id = $1`, [v.id, Boolean(b.aiProcess), user.id]);
+    if (b.aiProcess && !agentId) {
+      const pa = await db.one(`select agent_user_id, agent_mail from projects where id = $1`, [v.project_id]);
+      if (!(pa.agent_user_id && pa.agent_mail !== 'off' && v.use === 'project')) throw badRequest('Ordner-Bearbeitung braucht einen Agenten: an dieser Ansicht wählen oder den Projektagenten setzen (Einstellungen › Projekt)');
+    }
+    if ('aiProcess' in b) await db.query(`update mail_views set ai_process = $2 where id = $1`, [v.id, Boolean(b.aiProcess)]);
     if ('agentUserId' in b) await db.query(`update mail_views set agent_user_id = $2 where id = $1`, [v.id, b.agentUserId || null]);
     await audit(db, { orgId: user.orgId, projectId: v.project_id, userId: user.id, action: 'mail_view.ai', objectType: 'mail_view', objectId: v.id, details: { aiProcess: b.aiProcess, agentUserId: b.agentUserId } });
   }
 
-  // Ordner „KI Bearbeiten“ einrichten: Ordner im Konto, Ansicht darauf, Projekt-KI bearbeitet direkt im Auftrag der einrichtenden Person
-  app.post<{ Params: { id: string }; Body: { accountId: string } }>('/projects/:id/mail/ai-folder', async (req) => {
+  // Ordner „KI Bearbeiten“ einrichten: Ordner im Konto, Ansicht darauf; ein Agent (gewählt oder Projektagent) bearbeitet jede Mail dort sofort (als stellvertretende PL direkt, als Mitglied Vorschläge)
+  app.post<{ Params: { id: string }; Body: { accountId: string; agentUserId?: string | null } }>('/projects/:id/mail/ai-folder', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [req.body?.accountId, user.orgId]);
@@ -428,22 +430,27 @@ export async function mailRoutes(app: FastifyInstance) {
     const use = await viewUseFor(user, m, a, req.params.id);
     if (use.use === 'org') throw forbidden('Einrichten darf der Eigentümer des persönlichen Kontos oder die PL für das Projektkonto');
     if (!(await accountAllowedInProject(db, a, req.params.id))) throw forbidden(PERSONAL_MAIL_ONLY);
-    // Die Ansicht entsteht mit den Rechten „KI“ und „Arbeitspaket erzeugen“ für die einrichtende Person
-    const gate = await aiConfigFor(db, { userId: user.id, projectId: req.params.id, feature: 'mail.process', budget: false });
-    if (!gate.cfg) throw aiError(gate.decision);
+    const proj = await db.one(`select agent_user_id from projects where id = $1`, [req.params.id]);
+    const agentId: string | null = req.body?.agentUserId || proj.agent_user_id || null;
+    const agentRow = agentId ? await db.maybeOne(`select u.id, u.name, pm.role from users u join project_members pm on pm.user_id = u.id and pm.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [agentId, req.params.id]) : null;
+    if (!agentRow) throw badRequest('Kein Agent: einen KI-Agenten als Mitglied aufnehmen oder als Projektagent setzen (als stellvertretende PL legt er direkt an, als Mitglied schlägt er vor)');
+    const d = await aiAllowed(db, { userId: agentRow.id, projectId: req.params.id, feature: agentRow.role === 'pl' ? 'agent.mail' : 'mail.triage', budget: false });
+    if (!d.allowed && !d.missing) throw aiError(d, true);
     const p = app.mail.providerFor(a);
     const list = await p.listFolders(a);
     const folder = list.find((f) => f.name.toLowerCase() === 'ki bearbeiten')?.path ?? (await p.createFolder(a, 'KI Bearbeiten')).path;
     const existing = await db.maybeOne(`select id from mail_views where project_id = $1 and account_id = $2 and filter->'folders' = $3::jsonb`, [req.params.id, a.id, JSON.stringify([folder])]);
     const vid = existing?.id ?? (await db.one(`insert into mail_views (account_id, use_id, project_id, name, filter, created_by) values ($1,$2,$3,'KI Bearbeiten',$4,$5) returning id`, [a.id, use.id, req.params.id, JSON.stringify(normalizeFilter({ folders: [folder] })), user.id])).id;
     if (!existing) await db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,$3,true,true)`, [vid, user.id, use.use === 'project']);
-    await db.query(`update mail_views set ai_process = true, ai_process_by = $2 where id = $1`, [vid, user.id]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'mail_view.ai_folder', objectType: 'mail_view', objectId: vid, details: { account: a.address, folder } });
+    // Der Agent handelt an der Ansicht mit eigenen Rechten (als stellvertretende PL direkt, als Mitglied beim Annehmen die Rechte der Person)
+    await db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,$3,true,true) on conflict do nothing`, [vid, agentRow.id, use.use === 'project']);
+    await db.query(`update mail_views set ai_process = true, agent_user_id = $2 where id = $1`, [vid, agentRow.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'mail_view.ai_folder', objectType: 'mail_view', objectId: vid, details: { account: a.address, folder, agentId: agentRow.id } });
     await app.mail.syncAccount(a.id);
-    return { view: mapView(await loadView(vid), await getViewRights(db, vid, user, m)), folder };
+    return { view: mapView(await loadView(vid), await getViewRights(db, vid, user, m)), folder, agent: { id: agentRow.id, name: agentRow.name, mode: agentRow.role === 'pl' ? 'process' : 'triage' } };
   });
 
-  // „KI bearbeiten“ an einer Mail: in den KI-Ordner des Kontos legen und sofort bearbeiten (im eigenen Auftrag)
+  // „Bearbeiten lassen“ an einer Mail: ein Agent, der (stellvertretende) Projektleitung ist, legt sofort an; gibt es einen Ordner „KI Bearbeiten“, wandert die Mail dorthin
   app.post<{ Params: { mid: string }; Body: { projectId: string } }>('/mail/mails/:mid/ai-process', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
@@ -453,26 +460,28 @@ export async function mailRoutes(app: FastifyInstance) {
     if (mail.outgoing) throw badRequest('Gesendete Mails bearbeitet die KI nicht');
     const m = await requireProject(db, user, req.body?.projectId, 'member');
     if (!(await mailAllowedInProject(db, mail.id, m.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
-    const v = await db.maybeOne(`select * from mail_views where project_id = $1 and account_id = $2 and ai_process order by created_at limit 1`, [m.projectId, mail.account_id]);
-    if (!v) throw badRequest('Für dieses Konto gibt es im Projekt keinen Ordner „KI Bearbeiten“ (Einstellungen › Mail)');
-    const rights = await getViewRights(db, v.id, user, m);
-    if (!rights.canCreateTask || !(rights.canDraft || rights.canSend)) throw forbidden('Erfordert an der KI-Ansicht die Rechte „Arbeitspaket erzeugen“ und Entwurf');
     if (foreignPersonal(await accountUseIn(db, mail.account_id, m.projectId), user)) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
+    const agent = await suggestAgent(db, m.projectId, mail.account_id);
+    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › Projekt) oder Agent an der Mail-Ansicht setzen');
+    if (agent.role !== 'pl') throw badRequest(`${agent.name} ist Mitglied, nicht (stellvertretende) Projektleitung: nur „Vorschläge zur Mail“`);
     // Freigabe jetzt; das Tagesbudget hält den Lauf nur zurück
-    const gate = await aiConfigFor(db, { userId: user.id, projectId: m.projectId, feature: 'mail.process', viewId: v.id, budget: false });
+    const gate = await aiConfigFor(db, { userId: agent.id, projectId: m.projectId, feature: 'agent.mail', budget: false });
     if (!gate.cfg) throw aiError(gate.decision);
-    const target = (v.filter?.folders ?? [])[0];
+    const ki = await db.maybeOne(`select * from mail_views where project_id = $1 and account_id = $2 and ai_process order by created_at limit 1`, [m.projectId, mail.account_id]);
+    const v = ki ?? (await db.maybeOne(`select v.* from mail_views v join mail_view_matches x on x.view_id = v.id where x.mail_id = $1 and v.project_id = $2 order by v.created_at limit 1`, [mail.id, m.projectId]));
+    if (!v) throw badRequest('Die Mail gehört zu keiner Ansicht dieses Projekts');
+    const target = ki ? (ki.filter?.folders ?? [])[0] : null;
     if (target && String(mail.folder).toLowerCase() !== String(target).toLowerCase()) {
       const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [mail.account_id]);
       const moved = await app.mail.providerFor(account).move(account, { folder: mail.folder, uid: mail.uid }, target);
       await db.query(`update mails set folder = $2, uid = coalesce($3, uid) where id = $1`, [mail.id, target, moved.uid]);
     }
     await db.query(`insert into mail_view_matches (mail_id, view_id) values ($1,$2) on conflict do nothing`, [mail.id, v.id]);
-    const run = await db.maybeOne(`insert into mail_ai_runs (org_id, project_id, view_id, mail_id, mode, actor_user_id) values ($1,$2,$3,$4,'process',$5) on conflict do nothing returning id`, [user.orgId, m.projectId, v.id, mail.id, user.id]);
-    if (!run) throw badRequest('Diese Mail hat die KI im Projekt schon bearbeitet');
-    await audit(db, { orgId: user.orgId, projectId: m.projectId, userId: user.id, action: 'mail.ai_request', objectType: 'mail', objectId: mail.id, details: { runId: run.id } });
+    const run = await db.maybeOne(`insert into mail_ai_runs (org_id, project_id, view_id, mail_id, mode, actor_user_id, agent_user_id) values ($1,$2,$3,$4,'process',$5,$5) on conflict do nothing returning id`, [user.orgId, m.projectId, v.id, mail.id, agent.id]);
+    if (!run) throw badRequest('Diese Mail hat der Agent im Projekt schon bearbeitet');
+    await audit(db, { orgId: user.orgId, projectId: m.projectId, userId: user.id, action: 'mail.ai_request', objectType: 'mail', objectId: mail.id, details: { runId: run.id, agentId: agent.id } });
     queueMailAi(run.id);
-    return { runId: run.id };
+    return { runId: run.id, agent: { id: agent.id, name: agent.name } };
   });
 
   /** Läufe der Mail-KI für Ausgabe: nur in Projekten, in denen man Mitglied ist, und zu Mails, die man lesen darf. */
@@ -483,16 +492,47 @@ export async function mailRoutes(app: FastifyInstance) {
       if (!(await getMembership(db, r.project_id, user.id))) continue;
       if (!readable.has(r.mail_id)) readable.set(r.mail_id, (await mailReadable(user, r.mail_id)).ok);
       if (!readable.get(r.mail_id)) continue;
-      out.push({ id: r.id, mode: r.mode, status: r.status, summary: r.summary, error: r.error, agentName: r.agent_name ?? null, actorName: r.actor_name ?? null, createdAt: r.created_at, actions: r.actions ?? [], openPoints: r.open_points ?? [],
+      out.push({ id: r.id, mode: r.mode, status: r.status, summary: r.summary, error: r.error, agentName: r.agent_name ?? null, actorName: r.actor_name ?? null, requestedBy: r.mode === 'triage' ? r.actor_name ?? null : null, createdAt: r.created_at, actions: r.actions ?? [], openPoints: r.open_points ?? [],
         ...(r.subject !== undefined ? { mail: { id: r.mail_id, subject: r.subject, fromAddr: r.from_addr, fromName: r.from_name, date: r.date } } : {}) });
     }
     return out;
   }
   const AI_RUN_SELECT = `select r.*, ua.name as agent_name, uc.name as actor_name from mail_ai_runs r left join users ua on ua.id = r.agent_user_id left join users uc on uc.id = r.actor_user_id`;
-  app.get<{ Params: { mid: string } }>('/mail/mails/:mid/ai', async (req) => {
+  app.get<{ Params: { mid: string }; Querystring: { projectId?: string } }>('/mail/mails/:mid/ai', async (req) => {
     const user = requireUser(req);
     const rows = await db.query(`${AI_RUN_SELECT} where r.mail_id = $1 order by r.created_at desc`, [req.params.mid]);
-    return { runs: await mapAiRuns(user, rows.rows) };
+    // Agent des Projekts für diese Mail (Projektagent, sonst Agent an einer Ansicht des Kontos): schlägt per Chat vor, als (stellvertretende) PL bearbeitet er direkt
+    let agent: { id: string; name: string; canProcess: boolean } | null = null;
+    if (req.query.projectId && (await getMembership(db, req.query.projectId, user.id))) {
+      const mail = await db.maybeOne(`select account_id from mails where id = $1`, [req.params.mid]);
+      const a = mail ? await suggestAgent(db, req.query.projectId, mail.account_id) : null;
+      agent = a ? { id: a.id, name: a.name, canProcess: a.role === 'pl' } : null;
+    }
+    return { runs: await mapAiRuns(user, rows.rows), suggestAgent: agent };
+  });
+  // „Vorschläge zur Mail“: ein Agent des Projekts schlägt vor und antwortet der fragenden Person per Chat; angenommen wird an der Mail
+  app.post<{ Params: { mid: string }; Body: { projectId: string } }>('/mail/mails/:mid/ai-suggest', async (req) => {
+    const user = requireUser(req);
+    const mail = await loadMailRow(db, req.params.mid);
+    if (!mail) throw notFound('Mail nicht gefunden');
+    const access = await mailReadable(user, mail.id);
+    if (!access.ok || !access.rights.canAi) throw forbidden('Kein KI-Recht in dieser Ansicht');
+    if (mail.outgoing) throw badRequest('Zu gesendeten Mails gibt es keine Vorschläge');
+    const m = await requireProject(db, user, req.body?.projectId, 'member');
+    if (!(await mailAllowedInProject(db, mail.id, m.projectId))) throw forbidden(PERSONAL_MAIL_ONLY);
+    if (foreignPersonal(await accountUseIn(db, mail.account_id, m.projectId), user)) throw forbidden('Mails aus persönlichen Konten gibt nur der Eigentümer an die KI');
+    const agent = await suggestAgent(db, m.projectId, mail.account_id);
+    if (!agent) throw badRequest('Kein Agent im Projekt: Projektagent (Einstellungen › Projekt) oder Agent an der Mail-Ansicht setzen');
+    const gate = await aiConfigFor(db, { userId: agent.id, projectId: m.projectId, feature: 'mail.triage', budget: false });
+    if (!gate.cfg) throw aiError(gate.decision);
+    const view = await db.maybeOne(`select v.id from mail_views v join mail_view_matches x on x.view_id = v.id where x.mail_id = $1 and v.project_id = $2 order by v.created_at limit 1`, [mail.id, m.projectId]);
+    if (!view) throw badRequest('Die Mail gehört zu keiner Ansicht dieses Projekts');
+    const existing = await db.maybeOne(`select id, status from mail_ai_runs where mail_id = $1 and project_id = $2 and mode = 'triage'`, [mail.id, m.projectId]);
+    if (existing) return { runId: existing.id, existing: true, agent: { id: agent.id, name: agent.name } };
+    const run = await db.one(`insert into mail_ai_runs (org_id, project_id, view_id, mail_id, mode, actor_user_id, agent_user_id) values ($1,$2,$3,$4,'triage',$5,$6) returning id`, [user.orgId, m.projectId, view.id, mail.id, user.id, agent.id]);
+    await audit(db, { orgId: user.orgId, projectId: m.projectId, userId: user.id, action: 'mail.ai_suggest', objectType: 'mail', objectId: mail.id, details: { runId: run.id, agentId: agent.id } });
+    queueMailAi(run.id);
+    return { runId: run.id, existing: false, agent: { id: agent.id, name: agent.name } };
   });
   app.get<{ Params: { id: string } }>('/projects/:id/mail-ai', async (req) => {
     const user = requireUser(req);
@@ -677,6 +717,12 @@ export async function mailRoutes(app: FastifyInstance) {
     await db.query(`update mails set folder = $2, uid = coalesce($3, uid) where id = $1`, [r.id, target, moved.uid]);
     const views = await db.query(`select project_id from mail_views v join mail_view_matches x on x.view_id = v.id where x.mail_id = $1 limit 1`, [r.id]);
     await audit(db, { orgId: user.orgId, projectId: views.rows[0]?.project_id ?? account.managed_project_id ?? null, userId: user.id, action, objectType: 'mail', objectId: r.id, details: { from: r.folder, to: target } });
+    // Zielordner einer KI-Ansicht („KI Bearbeiten“ oder Agent an der Ansicht): die Mail gehört jetzt zur Ansicht und wird sofort bearbeitet
+    const ki = await db.query(`select v.id from mail_views v where v.account_id = $1 and (v.ai_process or v.agent_user_id is not null) and exists (select 1 from jsonb_array_elements_text(coalesce(v.filter->'folders', '[]'::jsonb)) f where lower(f) = lower($2))`, [account.id, target]);
+    if (ki.rows.length && !r.outgoing) {
+      for (const v of ki.rows) await db.query(`insert into mail_view_matches (mail_id, view_id) values ($1,$2) on conflict do nothing`, [r.id, v.id]);
+      await enqueueForNewMail(db, r.id, ki.rows.map((v: any) => v.id), { outgoing: false, autoLinked: false });
+    }
     return { folder: target };
   }
 

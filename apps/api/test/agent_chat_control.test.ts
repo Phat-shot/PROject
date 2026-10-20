@@ -122,6 +122,8 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   const max = await t.login('max@demo.local');
   const task = await t.db.one(`select t.*, p.key from tasks t join projects p on p.id = t.project_id where t.title = 'Lampen bestellen'`);
   const ref = `${task.key}-${task.number}`;
+  // Bestätigungskarten für Kleinigkeiten nur mit Einstellung chatCards = all (Standard: nur wenn nötig)
+  await t.api(pl).patch('/me', { settings: { chatCards: 'all' } });
   nextCommands = [C({ type: 'note', ref, text: 'Gesamtkonzept abgenommen' }), C({ type: 'priority', ref, level: 'hoch' }), C({ type: 'policy', ref, mode: 'confirm_all' }), C({ type: 'report', ref, every: 'daily' })];
   nextReply = 'Ich habe das vermerkt und die Priorität gesetzt.';
   await say(pl, dmPl, `${ref}: Gesamtkonzept abgenommen, Priorität hoch, bei allem rückfragen, täglich berichten.`);
@@ -133,6 +135,14 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   assert.match(card.body, /✓ WEB-\d+: im Log vermerkt \(Petra Lenz\)/); assert.match(card.body, /✓ WEB-\d+: Priorität high/); assert.match(card.body, /Selbstständigkeit confirm_all/); assert.match(card.body, /Zwischenstände daily/);
   const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
   assert.equal(reply.body, 'Ich habe das vermerkt und die Priorität gesetzt.', 'keine Ersetzung bei ausgeführten Befehlen');
+  // Standard (nur wenn nötig): die Notiz wird ausgeführt, aber ohne Karte
+  await t.api(pl).patch('/me', { settings: { chatCards: 'needed' } });
+  nextCommands = [C({ type: 'note', ref, text: 'Nur eine Notiz' })];
+  nextReply = 'Notiert.';
+  await say(pl, dmPl, `${ref}: nur eine Notiz`);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Nur eine Notiz'`, [task.id]));
+  assert.equal((await lastCard(dmPl)).id, card.id, 'keine Karte für die Notiz');
+  await t.api(pl).patch('/me', { settings: { chatCards: 'all' } });
   // Mitglied: policy verweigert, pause nur am eigenen AP
   nextCommands = [C({ type: 'policy', ref, mode: 'auto' }), C({ type: 'pause', ref })];
   await say(max, dmMax, `${ref} auf selbstständig und pausieren`);

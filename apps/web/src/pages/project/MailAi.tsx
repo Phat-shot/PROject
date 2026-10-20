@@ -3,7 +3,6 @@ import { Link } from 'react-router-dom';
 import type { MailAccount, MailAiRun } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { aiBlocked } from '../../lib/useAi';
 import { Modal, useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import type { ViewRow } from './MailView';
@@ -24,7 +23,7 @@ function label(a: MailAiRun['actions'][number]): string {
   }
 }
 
-/** Ein Lauf der Mail-KI: Projekt-KI (bereits ausgeführt) oder Vorschläge eines Agenten mit Annehmen/Verwerfen. */
+/** Ein Lauf eines Agenten an der Mail: ausgeführt (als stellvertretende PL) oder Vorschläge (als Mitglied) mit Annehmen/Verwerfen. */
 export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailAiRun; showMail?: boolean; onChanged: () => Promise<void> | void }) {
   const { detail, openTask } = useProject();
   const base = `/projekte/${detail.project.id}`;
@@ -34,8 +33,8 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
   return (
     <div className="ai-proposal">
       <div className="row between">
-        <div><span className="badge">{run.mode === 'process' ? (run.agentName ? `Projektagent ${run.agentName}` : 'Projekt-KI') : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{run.openPoints && run.openPoints.length > 0 && <span className="badge warn" style={{ marginLeft: 4 }} title={run.openPoints.join(' · ')}>{run.openPoints.length} offen</span>}{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
-        <span className="muted small">{STATUS[run.status]}{run.actorName && run.mode === 'process' ? ` · für ${run.actorName}` : ''} · {fmtDateTime(run.createdAt)}</span>
+        <div><span className="badge">{run.mode === 'process' ? `${run.agentName ?? 'Agent'} hat bearbeitet` : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{run.openPoints && run.openPoints.length > 0 && <span className="badge warn" style={{ marginLeft: 4 }} title={run.openPoints.join(' · ')}>{run.openPoints.length} offen</span>}{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
+        <span className="muted small">{STATUS[run.status]}{run.requestedBy ? ` · auf Anfrage von ${run.requestedBy} (Antwort per Chat)` : ''} · {fmtDateTime(run.createdAt)}</span>
       </div>
       {run.summary && <div className="small mt">{run.summary}</div>}
       {run.error && run.status !== 'ok' && <div className="small muted">{run.error}</div>}
@@ -63,11 +62,11 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
   );
 }
 
-/** An der Mail: was die KI damit gemacht hat bzw. vorschlägt; „KI bearbeiten“ legt sie in den KI-Ordner des Kontos. */
-export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }: { mailId: string; accountId: string; outgoing: boolean; views: ViewRow[]; canCreateTask: boolean }) {
-  const { detail, reloadTasks, ai } = useProject();
-  const d = useData<{ runs: MailAiRun[] }>(`/mail/mails/${mailId}/ai`, [mailId]);
-  const blocked = aiBlocked(ai, 'mail.process');
+/** An der Mail: „Agent übernimmt“ (ein Agent als stellvertretende PL legt sofort an) und was Agenten damit gemacht haben bzw. vorschlagen. */
+export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask, data }: { mailId: string; accountId: string; outgoing: boolean; views: ViewRow[]; canCreateTask: boolean; data: { data: { runs: MailAiRun[]; suggestAgent: { id: string; name: string; canProcess: boolean } | null } | null; reload: () => Promise<unknown> } }) {
+  const { detail, reloadTasks } = useProject();
+  const d = data;
+  const agent = d.data?.suggestAgent ?? null;
   const { busy, error, run } = useAsync();
   const busyRun = d.data?.runs.some((r) => r.status === 'queued' || r.status === 'running');
   // Solange ein Lauf wartet oder läuft, kurz nachsehen
@@ -76,9 +75,15 @@ export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }:
   const processed = d.data?.runs.some((r) => r.mode === 'process');
   const reload = async () => { await d.reload(); await reloadTasks(); };
   if (!d.data) return null;
+  const canProcess = Boolean(agent?.canProcess) && !processed && !outgoing && canCreateTask;
+  const why = !agent ? 'Kein Agent im Projekt (Projektagent unter Einstellungen › Projekt oder Agent an der Mail-Ansicht)' : !agent.canProcess ? `${agent.name} ist Mitglied, nicht (stellvertretende) Projektleitung: nur Vorschläge` : processed ? 'Diese Mail wurde schon bearbeitet' : outgoing ? 'Gesendete Mails bearbeitet die KI nicht' : !canCreateTask ? 'Erfordert das Recht „Arbeitspaket erzeugen“' : `${agent.name} legt sofort an: Arbeitspaket oder Aufgabe mit Ursprungsmail, Termin, Antwortentwurf, Ablage${kiView ? ` (die Mail wandert in den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“)` : ''}`;
   return (
     <div className="mb">
-      {kiView && !processed && !outgoing && canCreateTask && <button className="btn sm" disabled={busy || Boolean(blocked)} title={blocked ?? `In den Ordner „${(kiView.filter.folders ?? [])[0] ?? kiView.name}“ legen: die Projekt-KI legt Arbeitspaket, Termin und Antwortentwurf an`} onClick={() => void run(async () => { await api.post(`/mail/mails/${mailId}/ai-process`, { projectId: detail.project.id }); await d.reload(); })}>KI bearbeiten</button>}
+      <div className="row mb small">
+        <span className="muted" title="Ein Agent, der stellvertretende Projektleitung ist, bearbeitet die Mail sofort mit seinen Rechten">Agent übernimmt{agent?.canProcess ? ` (${agent.name})` : ''}:</span>
+        <button className="btn sm" disabled={!canProcess || busy} title={why} onClick={() => void run(async () => { await api.post(`/mail/mails/${mailId}/ai-process`, { projectId: detail.project.id }); await d.reload(); })}>Bearbeiten lassen</button>
+        {!canProcess && <span className="muted">{why}</span>}
+      </div>
       {error && <div className="error small">{error}</div>}
       {d.data.runs.map((r) => <MailAiRunCard key={r.id} run={r} onChanged={reload} />)}
     </div>
@@ -93,16 +98,20 @@ export function AiFolderDialog({ onClose, onDone }: { onClose: () => void; onDon
   // Projektkonten (PL) über die Projektbindung, eigene Konten über die persönliche Bindung
   const usable = [...(isPl ? (accounts.data?.accounts ?? []).map((a) => ({ ...a, via: 'Projektkonto' })) : []), ...(accounts.data?.personalAccounts ?? []).filter((a) => !(accounts.data?.accounts ?? []).some((x) => x.id === a.id)).map((a) => ({ ...a, via: 'persönlich' }))];
   const [accountId, setAccountId] = useState('');
+  const agents = detail.members.filter((m) => m.kind === 'agent');
+  const [agentId, setAgentId] = useState(detail.project.agentUserId ?? agents[0]?.userId ?? '');
   const { busy, error, run } = useAsync();
   useEffect(() => { if (!accountId && usable[0]) setAccountId(usable[0].id); }, [usable.length]);
   return (
     <Modal title="Ordner „KI Bearbeiten“ einrichten" onClose={onClose}>
-      <p className="small">Im Konto entsteht der Ordner „KI Bearbeiten“ und im Projekt eine Ansicht darauf. Jede Mail, die du dort ablegst (im Mailprogramm oder hier mit „KI bearbeiten“), bearbeitet die Projekt-KI sofort in deinem Auftrag: Arbeitspaket oder Aufgabe mit Ursprungsmail, Zuweisung (auch an KI-Agenten), Termin im Kalender, Antwortentwurf; danach legt sie die Mail ab („Archiv“ oder „In Arbeit“).</p>
+      <p className="small">Im Konto entsteht der Ordner „KI Bearbeiten“ und im Projekt eine Ansicht darauf. Jede Mail, die du dort ablegst (im Mailprogramm oder hier mit „Verschieben“), bearbeitet der gewählte Agent sofort: als stellvertretende Projektleitung legt er Arbeitspaket oder Aufgabe mit Ursprungsmail, Termin und Antwortentwurf direkt an und legt die Mail ab („Archiv“ oder „In Arbeit“); als Mitglied schlägt er dasselbe vor.</p>
       <p className="notice small">Der Inhalt dieser Mails wird für die Mitglieder des Projekts sichtbar (als Kopie am Arbeitspaket).</p>
       {usable.length === 0 ? <div className="empty">Kein passendes Konto: ein eigenes Konto (Einstellungen › Mail-Konten) oder als PL ein Projektkonto (Einstellungen › Mail).</div> :
         <label className="field"><span>Konto</span><select value={accountId} onChange={(e) => setAccountId(e.target.value)}>{usable.map((a) => <option key={a.id} value={a.id}>{a.address} · {a.via}</option>)}</select></label>}
+      {agents.length === 0 ? <div className="empty">Kein KI-Agent im Projekt: zuerst einen Agenten als Mitglied aufnehmen (Einstellungen › Mitglieder).</div> :
+        <label className="field"><span>Agent</span><select value={agentId} onChange={(e) => setAgentId(e.target.value)}>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name} · {a.role === 'pl' ? 'stellv. PL: legt direkt an' : 'Mitglied: schlägt vor'}</option>)}</select></label>}
       {error && <div className="error">{error}</div>}
-      <div className="row mt"><button className="btn primary" disabled={busy || !accountId} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/mail/ai-folder`, { accountId }); onDone(); })}>Einrichten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+      <div className="row mt"><button className="btn primary" disabled={busy || !accountId || !agentId} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/mail/ai-folder`, { accountId, agentUserId: agentId }); onDone(); })}>Einrichten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
     </Modal>
   );
 }

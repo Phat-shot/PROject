@@ -877,6 +877,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
+    if (errors.length) await reportRunErrors(db, agent, task, errors, run.id);
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
     await db.query(`update agent_runs set context_stats = $2 where id = $1`, [run.id, JSON.stringify(contextStats)]);
     if (ctx.webSourceIds.length) await db.query(`update agent_web_sources set run_id = $1 where id = any($2::uuid[])`, [run.id, ctx.webSourceIds]);
@@ -896,8 +897,24 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const msg = String(e?.message ?? e).slice(0, 300);
     const er = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, fingerprint) values ($1,$2,$3,$4,$5,'error',$6,$7) returning id`, [agent.org_id, agent.id, task.project_id, task.id, trigger, msg, await fingerprintOf(db, task.id)]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run_failed', objectType: 'task', objectId: task.id, details: { runId: er.id, trigger, error: msg } });
+    await reportRunErrors(db, agent, task, [msg], er.id).catch(() => undefined);
     return { runId: er.id, taskId: task.id, status: 'error', actions: [], error: msg };
   }
+}
+
+/**
+ * Fehler eines Laufs (abgelehnte Rechte, Konflikte, KI-Dienst) gehen als Direktnachricht des Agenten an den Ansprechpartner
+ * (Stufe 0 der Kette) mit Meldung; dieselbe Störung wie im Lauf davor wird nicht noch einmal gemeldet.
+ */
+async function reportRunErrors(db: Db, agent: { id: string; name: string; org_id: string }, task: any, errors: string[], runId: string): Promise<void> {
+  const text = errors.join(' | ');
+  const prev = await db.maybeOne(`select error from agent_runs where task_id = $1 and agent_user_id = $2 and id <> $3 order by created_at desc limit 1`, [task.id, agent.id, runId]);
+  if (prev && prev.error === text) return;
+  const contact = (await contactChain(db, task, { exclude: [agent.id] }))[0];
+  if (!contact) return;
+  const code = `${task.project_key}-${task.number}`;
+  const body = `Bei ${code} „${task.title}“ konnte ich nicht alles ausführen:\n${errors.slice(0, 5).map((e) => `- ${cut(e, 300)}`).join('\n')}${errors.length > 5 ? `\n- … und ${errors.length - 5} weitere` : ''}\nArbeitspaket: /projekte/${task.project_id}/board?task=${task.id}`;
+  await agentChatMessage(db, agent, { userId: contact.id }, body, task.project_id);
 }
 
 const ACTION_LABEL: Record<string, string> = {

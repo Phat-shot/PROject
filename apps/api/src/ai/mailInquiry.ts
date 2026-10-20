@@ -55,7 +55,7 @@ export interface OpenPointsInput {
   taskId: string | null;
   /** fragender Agent (Projektagent oder Agent der Ansicht); ohne Agent nur Log */
   asker: Asker | null;
-  /** Person, in deren Auftrag die Projekt-KI lief (Log-Eintrag ohne Agent) */
+  /** Ohne Agenten (nur noch Altfälle): Person für den Log-Eintrag */
   actorId: string | null;
   openPoints: string[];
 }

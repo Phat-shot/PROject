@@ -97,7 +97,7 @@ test('Entscheidung des Agenten: Empfänger nach Regel N, Direktnachricht genau a
   next = [A({ type: 'escalate', text: 'Budget für Elektro Süd freigeben?' })];
   await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   const n1 = (await t.db.query(`select n.* from notifications n join questions q on q.id = n.ref_id where n.type = 'escalation' and n.ref_type = 'question' and q.task_id = $1 and n.body like 'Budget%'`, [ap.id])).rows;
-  assert.deepEqual(n1.map((n: any) => [n.user_id, n.event, n.mail]), [[U().pl, 'decision', 'now']], 'Standard: verantwortliche PL');
+  assert.deepEqual(n1.map((n: any) => [n.user_id, n.event, n.mail]), [[U().pl, 'decision', 'digest']], 'Standard: verantwortliche PL');
   const budget = (await dmFrom(U().pl)).filter((m: any) => m.body.includes('Budget für Elektro Süd'));
   assert.deepEqual(budget.map((m: any) => m.kind), ['user'], 'Direktnachricht des Agenten, kein zusätzlicher Systembeitrag');
   // Projekt: Entscheidungen an PL und Stellvertretung

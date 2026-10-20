@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { AiFeature, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail, OutboundCheck, OutboundFinding, AudienceClass } from '@projekttool/shared';
+import type { AiFeature, MailAiRun, MailDetail, MailDraft, MailView as MailViewT, MailAccount, MailViewFilter, MailAction, DocFolder, DocPage, Group, MailFolder, InboxMail, OutboundCheck, OutboundFinding, AudienceClass } from '@projekttool/shared';
 import { AUDIENCE_LABEL } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
@@ -166,6 +166,8 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const [moveTo, setMoveTo] = useState('');
   const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
+  const aiRuns = useData<{ runs: MailAiRun[]; suggestAgent: { id: string; name: string; canProcess: boolean } | null }>(`/mail/mails/${mailId}/ai?projectId=${detail.project.id}`, [mailId]);
+  const suggestAgent = aiRuns.data?.suggestAgent ?? null;
   const [dialog, setDialog] = useState<null | 'link' | 'log' | 'adjust' | 'toPage' | 'appendPage' | 'createTask' | 'aiEssence' | 'aiMerge'>(null);
   const [summary, setSummary] = useState<string | null>(null);
   const [aiMsg, setAiMsg] = useState<string | null>(null);
@@ -185,7 +187,7 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
   const reason = (key: string) => actions.data?.rule.find((a) => a.key === key)?.reason ?? '';
   // KI-Knöpfe bleiben sichtbar und nennen den Grund, wenn sie nicht gehen: Recht an der Ansicht, sonst die KI-Freigaben
   const aiNo = (f: AiFeature) => (!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : aiBlocked(ai, f));
-  const aiReasons = [...new Set([aiNo('assist.summarize'), aiNo('assist.essence')].filter((x): x is string => Boolean(x)))];
+  const aiReasons = [...new Set([aiNo('assist.summarize'), aiNo('assist.essence'), aiNo('mail.triage')].filter((x): x is string => Boolean(x)))];
 
   /** Führt eine Aktion aus, die eine Bestätigung verlangen kann (Kopie wird für Mitglieder sichtbar). */
   const withConfirm = async (call: (confirmed: boolean) => Promise<any>, after: (res: any) => Promise<void>) => {
@@ -212,8 +214,10 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
         {m.ccJson.length > 0 && <div><strong>Cc:</strong> {m.ccJson.join(', ')}</div>}
         <div><strong>Datum:</strong> {fmtDateTime(m.date)} · Ordner {m.folder}</div>
       </div>
-      {d.data.canModify && (
-        <div className="mail-actions">
+      <div className="mail-actions">
+        <span className="muted small">Mail:</span>
+        {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
+        {d.data.canModify && (<>
           <button className="btn sm" onClick={() => folderAction(() => api.post(`/mail/mails/${m.id}/archive`))}>Archivieren</button>
           <button className="btn sm danger" onClick={() => void dlg.confirm({ title: 'Mail löschen', text: 'In den Papierkorb des Kontos verschieben? Verknüpfungen mit Arbeitspaketen bleiben.', confirmLabel: 'In Papierkorb', danger: true }).then((ok) => { if (ok) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); })}>Löschen</button>
           <select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} style={{ width: 'auto' }}>
@@ -225,30 +229,31 @@ function MailDetailPanel({ mailId, views, folders, base, onChanged, onGone, view
             if (moveTo === '__new') { setNewFolder(true); return; }
             folderAction(() => api.post(`/mail/mails/${m.id}/move`, { folder: moveTo }));
           }}>Verschieben</button>
-        </div>
-      )}
+        </>)}
+      </div>
       <div className="row mb">
-        {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`${base}/neu?reply=${m.id}&view=${view.id}`}>Antworten</Link>}
-        <span className="muted small">Arbeitspaket:</span>
+        <span className="muted small" title="Ohne KI: die Mail selbst wird übernommen">Projekt:</span>
+        <span className="muted small">Arbeitspaket</span>
         {enabled('create_task') && <button className="btn sm" onClick={() => setDialog('createTask')}>Erstellen</button>}
         {enabled('link_task') && <button className="btn sm" onClick={() => setDialog('link')}>Verknüpfen / Kopieren</button>}
         <button className="btn sm" disabled={!enabled('task_log')} title={reason('task_log')} onClick={() => setDialog('log')}>Ins Log übernehmen</button>
         <button className="btn sm" disabled={!enabled('task_adjust')} title={reason('task_adjust')} onClick={() => setDialog('adjust')}>Anpassen (Mail als Beleg)</button>
-        <span className="muted small" style={{ marginLeft: 8 }}>Doku:</span>
+        <span className="muted small" style={{ marginLeft: 8 }}>Doku</span>
         <button className="btn sm" disabled={!enabled('to_page')} title={reason('to_page')} onClick={() => setDialog('toPage')}>Ablegen</button>
         <button className="btn sm" disabled={!enabled('append_page')} title={reason('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
       </div>
       <div className="row mb small">
-        <span className="muted">KI:</span>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => setSummary((await api.post<{ summary: string }>(`/mail/mails/${m.id}/ai/summarize`)).summary))}>Zusammenfassen</button>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket (Vorschlag)</button>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite (Vorschlag)</button>
-        <Link className="btn sm link" to={`${base}/ki`}>Vorschläge</Link>
+        <span className="muted" title={suggestAgent ? `${suggestAgent.name} antwortet dir per Direktnachricht im Chat` : 'Kein Agent im Projekt (Projektagent unter Mitglieder oder Agent an der Mail-Ansicht): Ergebnisse erscheinen hier bzw. unter Vorschläge zur Freigabe'}>Agent schlägt vor{suggestAgent ? ` (Antwort im Chat von ${suggestAgent.name})` : ' (kein Agent im Projekt)'}:</span>
+        <button className="btn sm" disabled={!suggestAgent || Boolean(aiNo('mail.triage')) || Boolean(m.outgoing)} title={!suggestAgent ? 'Kein Agent im Projekt' : aiNo('mail.triage') ?? `${suggestAgent.name} prüft die Mail und schlägt Arbeitspaket, Termin, Antwort oder Ablage vor; die Vorschläge kommen per Chat, angenommen wird an der Mail`} onClick={() => void run(async () => { const res = await api.post<{ existing: boolean; agent: { name: string } }>(`/mail/mails/${m.id}/ai-suggest`, { projectId: detail.project.id }); setAiMsg(res.existing ? `${res.agent.name} hat zu dieser Mail schon Vorschläge gemacht (unten).` : `${res.agent.name} prüft die Mail und meldet sich per Chat.`); await aiRuns.reload(); })}>Vorschläge zur Mail</button>
+        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
+        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite</button>
+        <button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
+        <Link className="btn sm link" to={`${base}/ki`}>Offene Vorschläge</Link>
         {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
       </div>
-      <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} />
+      <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} data={aiRuns} />
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
-      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Zur Freigabe</Link></div>}
+      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`${base}/ki`}>Offene Vorschläge</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
           {d.data.links.length > 0 && <>{d.data.links.some((l) => l.origin) ? 'Daraus entstanden / verknüpft' : 'Verknüpft'}: {d.data.links.map((l) => l.projectId === detail.project.id

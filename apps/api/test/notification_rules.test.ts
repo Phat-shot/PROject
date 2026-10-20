@@ -506,7 +506,7 @@ test('Vorschau „Wer bekommt was?“: Personen je Klasse mit Rolle und Mail-Mod
   assert.equal(r.statusCode, 200, r.body);
   const ev = (k: string) => r.json().events.find((e: any) => e.event === k);
   assert.deepEqual(ev('blocked').people.map((p: any) => [p.name, p.roleLabel]), [['Max Keller', 'TP-Verantwortung']]);
-  assert.deepEqual(ev('decision').people.map((p: any) => [p.name, p.mail]), [['Petra Lenz', 'now']]);
+  assert.deepEqual(ev('decision').people.map((p: any) => [p.name, p.mail]), [['Petra Lenz', 'digest']]);
   assert.deepEqual(ev('log').perEvent, ['Beteiligte', 'Erwähnte']);
   const without = (await t.api(pl).get(`/projects/${web()}/notification-rules/effective`)).json();
   assert.deepEqual(without.events.find((e: any) => e.event === 'assigned').perEvent, ['Zuständige(r)'], 'ohne AP: je Ereignis');

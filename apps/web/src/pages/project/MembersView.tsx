@@ -502,21 +502,23 @@ function MailViewsCard() {
       <p className="muted small">Eine Ansicht ist ein Filter auf ein Konto. Nur Treffer werden gespeichert. Rechte (Lesen, Entwurf, Senden, Arbeitspaket erzeugen) hängen an der Ansicht: je Person, Rolle oder Gruppe.</p>
       {views.data && views.data.views.length === 0 && <div className="empty">Noch keine Ansicht. Ohne Ansicht werden keine Mails geladen.</div>}
       {error && <div className="error small">{error}</div>}
-      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th title="Projekt-KI bearbeitet neue Mails direkt; ein Agent betreut die Ansicht und schlägt vor">KI</th><th /></tr></thead><tbody>
+      {views.data && views.data.views.length > 0 && <table className="table"><thead><tr><th>Ansicht</th><th>Konto</th><th>Filter</th><th title="Ein Agent bearbeitet neue Mails der Ansicht: als stellvertretende PL direkt, als Mitglied Vorschläge; „Ordner“ heißt: jede Mail dort sofort">Agent</th><th /></tr></thead><tbody>
         {views.data.views.map((v) => <tr key={v.id}><td>{v.name}</td><td className="small">{v.accountAddress}<div className="muted">{v.accountType === 'personal' ? 'persönlich' : v.accountType === 'org' ? 'Organisation' : 'Projektkonto'}</div></td><td className="small muted">{f(v)}</td>
           <td className="small">{(() => {
             const may = v.canManage && (v.accountType === 'personal' || isPl);
-            if (!may) return <span className="muted">{v.aiProcess ? 'Projekt-KI bearbeitet' : v.agentName ? `${v.agentName} schlägt vor` : '–'}</span>;
+            const projectAgent = v.accountType === 'project' && detail.project.agentUserId && detail.project.agentMail !== 'off' ? agents.find((a) => a.userId === detail.project.agentUserId) : null;
+            const label = (a: { name: string; role: string }) => `${a.name} (${a.role === 'pl' ? 'stellv. PL: legt direkt an' : 'Mitglied: schlägt vor'})`;
+            if (!may) return <span className="muted">{v.agentName ? `${v.agentName}${v.aiProcess ? ' · Ordner' : ''}` : projectAgent ? `Projektagent ${projectAgent.name}` : '–'}</span>;
             return <>
-              <label className="check" title={detail.project.aiProfileId ? 'Jede neue Mail dieser Ansicht bearbeitet die Projekt-KI sofort in deinem Auftrag' : 'Projekt-KI ist aus'}><input type="checkbox" checked={Boolean(v.aiProcess)} disabled={busy || (!v.aiProcess && !detail.project.aiProfileId)} onChange={(e) => void setAi(v, { aiProcess: e.target.checked })} /> Projekt-KI bearbeitet direkt</label>
-              {!v.aiProcess && <select value={v.agentUserId ?? ''} disabled={busy} style={{ width: 'auto', marginTop: 4 }} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">– kein Agent schlägt vor –</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{a.name} schlägt vor</option>)}</select>}
+              <select value={v.agentUserId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">{projectAgent ? `– Projektagent ${projectAgent.name} –` : '– kein Agent –'}</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{label(a)}</option>)}</select>
+              <label className="check" title="Jede Mail, die in diesem Ordner landet, bearbeitet der Agent sofort (Ordner „KI Bearbeiten“)"><input type="checkbox" checked={Boolean(v.aiProcess)} disabled={busy || (!v.aiProcess && !v.agentUserId && !projectAgent)} onChange={(e) => void setAi(v, { aiProcess: e.target.checked })} /> Ordner: sofort bearbeiten</label>
             </>;
           })()}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
       <ProjectAccountsCard onCreate={() => setAccount(true)} onOauth={(p) => setOauthStart(p)} providers={oauth.data?.providers ?? []} />
       {oauthStart && <OAuthStartDialog provider={oauthStart} projects={[detail.project]} fixedProject={detail.project} onClose={() => setOauthStart(null)} />}
-      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><button className="btn sm" disabled={!detail.project.aiProfileId} title={detail.project.aiProfileId ? 'Ordner im Konto, dessen Mails die Projekt-KI direkt bearbeitet' : 'Erst unter Projekt eine Projekt-KI zuweisen'} onClick={() => setAiFolder(true)}>Ordner „KI Bearbeiten“ einrichten</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
+      <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><button className="btn sm" disabled={agents.length === 0} title={agents.length ? 'Ordner im Konto, dessen Mails ein Agent sofort bearbeitet (als stellv. PL direkt, als Mitglied Vorschläge)' : 'Erst einen KI-Agenten als Mitglied aufnehmen'} onClick={() => setAiFolder(true)}>Ordner „KI Bearbeiten“ einrichten</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
       {aiFolder && <AiFolderDialog onClose={() => setAiFolder(false)} onDone={() => { setAiFolder(false); void views.reload(); }} />}
       {account && <AccountForm projects={[detail.project]} fixedProject={detail.project} onClose={() => setAccount(false)} onSaved={async () => { setAccount(false); await reload(); await views.reload(); }} />}
       {newView && <NewView onClose={() => setNewView(false)} onCreated={() => { setNewView(false); void views.reload(); }} />}
@@ -619,7 +621,7 @@ function ProjectAgentSelect({ readOnly = false }: { readOnly?: boolean }) {
   const agents = detail.members.filter((m) => m.kind === 'agent');
   const cur = agents.find((a) => a.userId === detail.project.agentUserId);
   const mode = detail.project.agentMail ?? 'off';
-  const MODE: Record<string, string> = { off: 'nur Rolle (Mails über Ordner „KI Bearbeiten“ oder Agent je Ansicht)', triage: 'schlägt zu neuen Mails der Projektkonten vor', process: 'bearbeitet neue Mails der Projektkonten direkt' };
+  const MODE: Record<string, string> = { off: 'nur Rolle (Mails nur über Ordner „KI Bearbeiten“ oder Agent je Ansicht)', triage: 'schlägt zu neuen Mails der Projektkonten nur vor', process: 'bearbeitet neue Mails der Projektkonten direkt (als stellvertretende PL)' };
   if (readOnly) return <>{cur ? `${cur.name} · ${MODE[mode]}` : <span className="muted">keiner</span>}</>;
   const set = (agentUserId: string | null, agentMail: string) => void run(async () => { await api.put(`/projects/${detail.project.id}/agent`, { agentUserId, agentMail }); await reload(); });
   return <span className="stack" style={{ gap: 4 }}>

@@ -45,6 +45,8 @@ export interface UserSettings {
   mailNotifications?: 'off' | 'immediate' | 'daily';
   /** In der Seitenleiste angeheftete Projekte (höchstens 5, in dieser Reihenfolge) */
   pinnedProjects?: string[];
+  /** Bestätigungskarten der Agenten im Chat: needed (Standard) nur bei Abgelehntem, Angehaltenem, Aufträgen und Bestätigungen; all auch bei Notiz, Priorität usw. */
+  chatCards?: 'needed' | 'all';
 }
 
 export interface Membership {
@@ -74,7 +76,7 @@ export interface Project {
   visibility: 'members' | 'org';
   /** Persönliches Projekt: nur der Ersteller (PL) und KI-Agenten */
   personal?: boolean;
-  /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung, bearbeitet Mails der Projektkonten nach agentMail */
+  /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung; agentMail: off = nur Rolle, process = bearbeitet neue Mails der Projektkonten direkt, triage = schlägt nur vor */
   agentUserId?: string | null;
   agentMail?: AgentMailMode;
   /** Agenten-Policy des Projekts (Rohwert; wirksam über GET /projects/:id/agent-policy) */
@@ -176,9 +178,8 @@ export const AI_FEATURES = [
   { key: 'assist.report', category: 'assist', label: 'Statusbericht-Entwurf', who: 'person' },
   { key: 'assist.ask', category: 'assist', label: 'Frage ans Projekt', who: 'person' },
   { key: 'assist.final_reply', category: 'assist', label: 'Abschluss-Antwort mit KI', who: 'person' },
-  { key: 'mail.process', category: 'mail', label: 'Ordner „KI Bearbeiten“', who: 'person' },
-  { key: 'mail.triage', category: 'mail', label: 'Agent betreut Mail-Ansicht', who: 'agent' },
-  { key: 'agent.mail', category: 'mail', label: 'Projektagent bearbeitet Mails der Projektkonten', who: 'agent' },
+  { key: 'mail.triage', category: 'mail', label: 'Agent schlägt zu Mails vor (als Mitglied)', who: 'agent' },
+  { key: 'agent.mail', category: 'mail', label: 'Agent bearbeitet Mails direkt (als stellvertretende PL)', who: 'agent' },
   { key: 'agent.run', category: 'agent', label: 'Agentenläufe', who: 'agent' },
   { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
   { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both' },
@@ -604,17 +605,17 @@ export const NOTIFY_EVENTS: NotifyEventDef[] = [
 ];
 /** Ebene „Code“ (L0): Standard je Klasse; „–“ beim Doku-Kanal heißt aus, bis die PL die Seite einschaltet. */
 export const NOTIFY_DEFAULTS: Record<NotifyEvent, { recipients: string[]; chat: NotifyChat; mail: NotifyMail; log: boolean; doc: string | false; remindH?: number; escalateH?: number; expireH?: number; every?: NotifyEvery }> = {
-  question: { recipients: [], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 48, escalateH: 120 },
-  decision: { recipients: ['pl'], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 48 },
+  question: { recipients: [], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 48, escalateH: 120 },
+  decision: { recipients: ['pl'], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 24, escalateH: 48 },
   approval: { recipients: ['flag:can_approve'], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 24, escalateH: 72, expireH: 336 },
   synergy: { recipients: [], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 72 },
-  confirm: { recipients: ['responsible'], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 72 },
-  order_request: { recipients: ['pl'], chat: 'thread', mail: 'now', log: false, doc: false, remindH: 48 },
-  external_referral: { recipients: [], chat: 'thread', mail: 'now', log: true, doc: false, remindH: 24, escalateH: 72 },
+  confirm: { recipients: ['responsible'], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 24, escalateH: 72 },
+  order_request: { recipients: ['pl'], chat: 'thread', mail: 'digest', log: false, doc: false, remindH: 48 },
+  external_referral: { recipients: [], chat: 'thread', mail: 'digest', log: true, doc: false, remindH: 24, escalateH: 72 },
   progress: { recipients: ['requester'], chat: 'thread', mail: 'off', log: false, doc: false, every: 'milestones' },
   assigned: { recipients: ['responsible'], chat: 'off', mail: 'digest', log: false, doc: false },
-  blocked: { recipients: ['subproject_lead|pl'], chat: 'off', mail: 'now', log: true, doc: false },
-  escalation: { recipients: ['escalation_contact'], chat: 'off', mail: 'now', log: false, doc: false },
+  blocked: { recipients: ['subproject_lead|pl'], chat: 'off', mail: 'digest', log: true, doc: false },
+  escalation: { recipients: ['escalation_contact'], chat: 'off', mail: 'digest', log: false, doc: false },
   review: { recipients: [], chat: 'off', mail: 'digest', log: false, doc: false },
   mail_in: { recipients: [], chat: 'off', mail: 'off', log: true, doc: false },
   log: { recipients: ['participants', 'mentioned'], chat: 'off', mail: 'digest', log: false, doc: false },
@@ -793,17 +794,19 @@ export interface MailView {
   name: string;
   filter: MailViewFilter;
   myRights: MailViewRights;
-  /** Projekt-KI bearbeitet neue Mails dieser Ansicht direkt (Ordner „KI Bearbeiten“) */
+  /** Ordner-Ansicht („KI Bearbeiten“): neue Mails bearbeitet der Agent sofort (als stellvertretende PL direkt, als Mitglied Vorschläge) */
   aiProcess?: boolean;
   /** Agent, der die Ansicht betreut und Vorschläge macht */
   agentUserId?: string | null;
   agentName?: string | null;
 }
 
-/** Lauf der Mail-KI an einer Mail: Projekt-KI (ausgeführt) oder Agent (Vorschläge) */
+/** Lauf eines Agenten an einer Mail: ausgeführt (als stellvertretende PL) oder Vorschläge (als Mitglied) */
 export interface MailAiRun {
   id: string;
   mode: 'process' | 'triage';
+  /** Vorschläge auf Anfrage einer Person (Antwort per Chat) */
+  requestedBy?: string | null;
   status: 'queued' | 'running' | 'ok' | 'error' | 'skipped';
   summary: string | null;
   error: string | null;

@@ -24,27 +24,30 @@ let agent: any;
 let kiView = '';
 const inject = async (x: Record<string, unknown>) => { t.mail.dev.inject(t.ids.accounts.project, { from: { address: 'handwerker@extern.de', name: 'Elektro Kurz' }, to: ['projekt-web@demo.local'], ...x } as any); await t.mail.syncAccount(t.ids.accounts.project); await flushAgentRuns(); };
 
-test('Ordner „KI Bearbeiten“ einrichten: nur mit Projekt-KI, Projektkonto nur durch die PL', async () => {
+test('Ordner „KI Bearbeiten“ einrichten: nur mit Agent, Projektkonto nur durch die PL', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
-  assert.equal((await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project })).statusCode, 400, 'ohne Projekt-KI');
+  assert.equal((await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project })).statusCode, 400, 'ohne Agent');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
   await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
   await t.api(pl).patch(`/projects/${web()}`, { aiProfileId: p.id });
   agent = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member' });
   assert.equal((await t.api(max).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project })).statusCode, 403);
-  const r = await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project });
+  assert.equal((await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project })).statusCode, 400, 'kein Agent gewählt, kein Projektagent');
+  const r = await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project, agentUserId: agent.id });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal(r.json().view.aiProcess, true);
+  assert.deepEqual([r.json().view.agentUserId, r.json().agent.mode], [agent.id, 'triage'], 'Morton ist Mitglied: schlägt vor');
   assert.deepEqual(r.json().view.filter.folders, ['KI Bearbeiten']);
   kiView = r.json().view.id;
   assert.equal((await t.api(admin).patch(`/mail/views/${kiView}`, { aiProcess: false })).statusCode, 403, 'Org-Admin schaltet die Mail-KI eines Projekts nicht');
 });
 
-test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Agent, Termin, Antwortentwurf, Ablage; einmal je Mail', async () => {
+test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail, Termin, Antwortentwurf, Ablage; einmal je Mail', async () => {
   const pl = await t.login('pl@demo.local');
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'process' })).statusCode, 200);
   mailNext = [
     M({ type: 'create_ap', title: 'Angebot Elektrik einholen', text: 'Angebot für die Elektrik im Gästezimmer bis 20.11.', dueDate: '2026-11-20', responsible: agent.email, items: ['Drei Angebote anfragen', 'Vergleich'] }),
     M({ type: 'create_event', title: 'Besichtigung Elektro Kurz', startsAt: '2026-11-05T14:00', location: 'Gästezimmer' }),
@@ -58,7 +61,7 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   const run = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [mail.id]);
   assert.equal(run.status, 'ok', run.error ?? '');
   assert.equal(run.mode, 'process');
-  assert.equal(run.actor_user_id, t.ids.users.pl);
+  assert.deepEqual([run.actor_user_id, run.agent_user_id], [agent.id, agent.id], 'der Agent handelt selbst');
   const task = await t.db.one(`select t.*, l.origin, l.copied from tasks t join mail_task_links l on l.task_id = t.id where l.mail_id = $1`, [mail.id]);
   assert.equal(task.title, 'Angebot Elektrik einholen');
   assert.equal(task.responsible_user_id, agent.id, 'direkt dem Agenten zugewiesen');
@@ -68,7 +71,7 @@ test('Projekt-KI bearbeitet Mails im Ordner direkt: AP mit Ursprungsmail und Age
   assert.ok(await t.db.maybeOne(`select 1 from meetings m join meeting_tasks mt on mt.meeting_id = m.id where m.title = 'Besichtigung Elektro Kurz' and mt.task_id = $1 and m.tentative`, [task.id]), 'Projekt-KI trägt nur vorläufig ein');
   const draft = await t.db.one(`select * from mail_drafts where in_reply_to = $1`, [mail.message_id]);
   assert.equal(draft.status, 'draft');
-  assert.equal(draft.user_id, t.ids.users.pl);
+  assert.equal(draft.user_id, agent.id);
   assert.equal(draft.task_id, task.id);
   // Antwortentwurf an Externe: Außenprüfung als Hinweis protokolliert (Absender hat Bezug zum neuen AP: Ursprungsmail)
   const check = await t.db.one(`select * from outbound_checks where mail_draft_id = $1`, [draft.id]);
@@ -102,9 +105,11 @@ test('Antwortentwurf der Mail-KI an Externe mit Projektinternem: Hinweis am Entw
   assert.equal((await t.db.one(`select status from mail_drafts where id = $1`, [reply.result.draftId])).status, 'draft', 'Entwurf bleibt bei der Person');
 });
 
-test('„KI bearbeiten“ an einer Mail, Tagesbudget hält Läufe zurück', async () => {
+test('„Bearbeiten lassen“ an einer Mail (Agent als stellv. PL, Projektagent nur mit Rolle), Tagesbudget hält Läufe zurück', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
+  // Projektagent nur mit Rolle (agentMail aus): neue Mails im Posteingang bleiben liegen, bis jemand „Bearbeiten lassen“ klickt oder sie in den Ordner legt
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'off' })).statusCode, 200);
   mailNext = [M({ type: 'none', reason: 'nur Info' }), M({ type: 'move', folder: 'Archiv' })];
   await inject({ subject: 'Zur Info', text: 'Nur zur Kenntnis.' });
   const info = (await t.api(pl).get(`/mail/views/${t.ids.views.project}/mails`)).json().mails.find((m: any) => m.subject === 'Zur Info');
@@ -121,10 +126,26 @@ test('„KI bearbeiten“ an einer Mail, Tagesbudget hält Läufe zurück', asyn
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
 });
 
-test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den Rechten der freigebenden Person', async () => {
+test('Verschieben in „KI Bearbeiten“ (hier im Postfach) startet die Bearbeitung sofort', async () => {
+  const pl = await t.login('pl@demo.local');
+  // Projektagent nur mit Rolle (agentMail aus): neue Mails im Posteingang bleiben liegen, der Ordner „KI Bearbeiten“ (Agent Morton als stellv. PL) bearbeitet direkt
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'off' })).statusCode, 200);
+  mailNext = [M({ type: 'none', reason: 'nur Info' })];
+  await inject({ subject: 'Später bearbeiten', text: 'Bitte prüfen.' });
+  const mail = await t.db.one(`select id from mails where subject = 'Später bearbeiten'`);
+  assert.equal(await t.db.maybeOne(`select 1 from mail_ai_runs where mail_id = $1`, [mail.id]), null, 'im Posteingang nichts');
+  assert.equal((await t.api(pl).post(`/mail/mails/${mail.id}/move`, { folder: 'KI Bearbeiten' })).statusCode, 200);
+  await flushAgentRuns();
+  const run = await t.db.one(`select mode, status, actor_user_id, view_id from mail_ai_runs where mail_id = $1`, [mail.id]);
+  assert.deepEqual([run.mode, run.status, run.actor_user_id, run.view_id], ['process', 'ok', agent.id, kiView]);
+});
+
+test('Agent als Mitglied betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den Rechten der freigebenden Person', async () => {
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
   const leser = await t.login('leser@demo.local');
+  // Morton wieder Mitglied (kein Projektagent): er schlägt nur noch vor
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: null })).statusCode, 200);
   assert.equal((await t.api(max).patch(`/mail/views/${t.ids.views.project}`, { agentUserId: agent.id })).statusCode, 403);
   assert.equal((await t.api(pl).patch(`/mail/views/${t.ids.views.project}`, { agentUserId: t.ids.users.max })).statusCode, 400, 'nur Agenten');
   assert.equal((await t.api(pl).patch(`/mail/views/${t.ids.views.project}`, { agentUserId: agent.id })).statusCode, 200);
@@ -174,4 +195,26 @@ test('Agent betreut eine Ansicht: Vorschläge, Freigabe mit einem Klick und den 
   assert.equal((await t.api(pl).post(`/mail/ai-runs/${hr.id}/decide`, { index: 0, approve: true })).json().runs[0].actions[0].status, 'approved');
   // Liste im Projekt: Leser sieht nur Läufe zu Mails, die er lesen darf
   assert.ok((await t.api(pl).get(`/projects/${web()}/mail-ai`)).json().runs.length >= 3);
+});
+
+test('„Vorschläge zur Mail“: der Agent der Ansicht schlägt auf Anfrage vor und antwortet der fragenden Person per Chat; „Bearbeiten lassen“ nur für Agenten als (stellv.) PL', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const auto = await t.db.one(`select id from mails where subject = 'Re: Stand'`);
+  const info = (await t.api(pl).get(`/mail/mails/${auto.id}/ai?projectId=${web()}`)).json();
+  assert.deepEqual([info.suggestAgent?.name, info.suggestAgent?.canProcess], ['Morton', false], 'Agent der Ansicht, als Mitglied nur Vorschläge');
+  const proc = await t.api(pl).post(`/mail/mails/${auto.id}/ai-process`, { projectId: web() });
+  assert.equal(proc.statusCode, 400); assert.match(proc.json().error, /Mitglied, nicht \(stellvertretende\) Projektleitung/);
+  const t4 = await t.db.one(`select number from tasks where id = $1`, [t.ids.tasks.t4]);
+  mailNext = [M({ type: 'link', ref: `WEB-${t4.number}`, text: 'Erledigt laut Mail' })];
+  const r = await t.api(max).post(`/mail/mails/${auto.id}/ai-suggest`, { projectId: web() });
+  assert.equal(r.statusCode, 200, r.body); assert.equal(r.json().existing, false);
+  await flushAgentRuns();
+  const run = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [auto.id]);
+  assert.deepEqual([run.mode, run.status, run.actor_user_id, run.agent_user_id], ['triage', 'ok', t.ids.users.max, agent.id]);
+  const dm = await t.db.one(`select m.body from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members x on x.channel_id = c.id and x.user_id = $1 where m.user_id = $2 order by m.created_at desc limit 1`, [t.ids.users.max, agent.id]);
+  assert.match(dm.body, new RegExp(`^Zu „Re: Stand“ \\(von .*\\) schlage ich vor:\\n1\\) Zu WEB-${t4.number}: Erledigt laut Mail\\nAnnehmen oder verwerfen an der Mail: /projekte/${web()}/mail/m/${auto.id}$`));
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and type = 'chat.dm' and title = 'Nachricht von Morton'`, [t.ids.users.max]), 'Max bekommt die Direktnachricht gemeldet');
+  assert.equal((await t.api(max).post(`/mail/mails/${auto.id}/ai-suggest`, { projectId: web() })).json().existing, true, 'einmal je Mail');
+  assert.equal((await t.api(pl).get(`/mail/mails/${auto.id}/ai`)).json().runs[0].requestedBy, 'Max Keller');
 });

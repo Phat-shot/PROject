@@ -143,10 +143,18 @@ test('Ablehnen mit Grund: Vorschlag und Abhängige abgelehnt, Log, 14 Tage nicht
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'rejected'`, [task.id]), 'Lauf mit Anlass rejected');
   // Erneuter Vorschlag derselben Aktion: Gate lehnt ab, keine neue Frage
   nextActions = [{ type: 'doc_status', pageId: page.id, status: 'final' }];
+  const dmCount = async () => (await t.db.one(`select count(*)::int as c from chat_messages where user_id = $1 and kind = 'user' and body like 'Bei WEB-% konnte ich nicht alles ausführen:%'`, [agent.id])).c;
+  const before = await dmCount();
   const run = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
   assert.equal(run.status, 'error');
   assert.match(run.error ?? '', /abgelehnt; nicht erneut vorschlagen/);
   assert.equal(await openApproval(), null);
+  // Fehler im Lauf: Direktnachricht des Agenten an den Ansprechpartner; dieselbe Störung wird nicht noch einmal gemeldet
+  assert.equal(await dmCount(), before + 1, 'Info per Chat');
+  const dm = await t.db.one(`select body from chat_messages where user_id = $1 and kind = 'user' and body like 'Bei WEB-% konnte ich nicht alles ausführen:%' order by created_at desc limit 1`, [agent.id]);
+  assert.match(dm.body, /abgelehnt; nicht erneut vorschlagen/); assert.match(dm.body, new RegExp(`/projekte/[0-9a-f-]+/board\\?task=${task.id}`));
+  await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
+  assert.equal(await dmCount(), before + 1, 'gleiche Störung nur einmal');
 });
 
 test('KI-Freigabe sperrt eine Klasse (agent.close): nicht ausgeführt, nicht vorgeschlagen; selbstständig (auto) läuft Erledigt direkt; Ordner mit Agentenzugriff „nur lesen“ sperrt Schreiben', async () => {

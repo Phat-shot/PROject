@@ -69,7 +69,7 @@ Antworte ausschließlich mit JSON nach dem Schema: reply = deine Chat-Antwort, o
 
 ## Regeln für Mail-Läufe
 
-Gilt für den Ordner „KI Bearbeiten“ (Projekt-KI legt direkt an) und für Agenten, die eine Mail-Ansicht betreuen (Vorschläge zur Freigabe).
+Gilt für Agenten an Mail-Ansichten und im Ordner „KI Bearbeiten“: als (stellvertretende) PL legen sie direkt an, als Mitglied schlagen sie vor (Freigabe mit einem Klick).
 
 ```text
 # Mail bearbeiten: Aktionen und Antwortformat

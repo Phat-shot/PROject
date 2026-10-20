@@ -265,6 +265,13 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
 /** Systemkarte mit den Ergebnissen; Freigabekarten hängen an der Frage. */
 export async function postResults(ctx: CommandCtx, results: CommandResult[], agentRunId: string | null): Promise<string | null> {
   if (!results.length) return null;
+  // Karte nur, wenn sie etwas zu entscheiden oder zu erklären hat (abgelehnt, angehalten, Auftrag mit Rückgängig, Bestätigung); Bestätigungen von Kleinigkeiten (Notiz, Priorität …) nur mit Einstellung chatCards = all
+  const needed = results.some((r) => r.status !== 'ok' || r.questionId || (r.type === 'order' && r.undoUntil));
+  if (!needed) {
+    const u = await ctx.db.maybeOne(`select settings from users where id = $1`, [ctx.sender.id]);
+    const settings = typeof u?.settings === 'string' ? JSON.parse(u.settings) : u?.settings ?? {};
+    if (settings.chatCards !== 'all') return null;
+  }
   const mark = (r: CommandResult) => (r.status === 'ok' ? '✓' : r.status === 'held' ? '◔' : '✗');
   const body = results.map((r) => `${mark(r)} ${r.status === 'denied' ? 'Nicht ausgeführt: ' : ''}${r.text}`).join('\n');
   const order = results.find((r) => r.type === 'order' && r.status === 'ok');

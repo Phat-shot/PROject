@@ -23,7 +23,7 @@ export interface AiQuery {
   feature: AiQueryFeature;
   /** Lauf an einem Arbeitspaket: Pause des Agenten dort */
   taskId?: string | null;
-  /** mail.process: Rechte „KI“ und „Arbeitspaket erzeugen“ an dieser Ansicht */
+  /** Ansicht, auf die sich die Anfrage bezieht (derzeit ohne eigene Prüfung) */
   viewId?: string | null;
   /** Verbindungstest eines bestimmten Profils (profile.test, pl.own_llm) */
   profileId?: string | null;
@@ -180,10 +180,6 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
     // Leser: nur Auskunft (Frage ans Projekt, Chat mit Agenten), mit „KI nutzen“
     if (m.role === 'reader' && f !== 'assist.ask' && f !== 'agent.chat') return deny('project', 'Leser stellen nur Fragen ans Projekt');
     if (m.role !== 'pl' && !m.canUseAi) return deny('project', NO_AI_RIGHT);
-    if (f === 'mail.process' && q.viewId) {
-      const r = await getViewRights(db, q.viewId, { id: subj.id, orgId: subj.org_id } as User, m);
-      if (!r.canAi || !r.canCreateTask) return deny('project', 'An der Mail-Ansicht fehlen die Rechte „KI“ und „Arbeitspaket erzeugen“');
-    }
     pass('project', m.role === 'pl' ? 'PL im Projekt' : `${m.role === 'reader' ? 'Leser' : 'Mitglied'} mit „KI nutzen“`);
   } else if (f === 'agent.chat') pass('project', 'ohne Projekt: nur Regeln für Person und Mandant; Auskunft nur aus Projekten mit „KI nutzen“');
   else return deny('project', `${def.label}: nur in einem Projekt`);
@@ -201,7 +197,7 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
     cfg = profileConfig(await db.maybeOne<AiProfileRow>(`select * from ai_profiles where id = $1 and project_id = $2`, [q.profileId, project!.id]));
     if (!cfg) return deny('profile', 'LLM unvollständig, inaktiv oder vom Org-Admin gesperrt', true);
     pass('profile', `Eigenes LLM ${cfg.name}`);
-  } else if (f.startsWith('assist.') || f === 'mail.process') {
+  } else if (f.startsWith('assist.')) {
     if (!project!.ai_profile_id) return deny('profile', 'KI im Projekt nicht aktiv: keine Projekt-KI gewählt (Einstellungen › Projekt › Projekt-KI)', true);
     cfg = await aiConfigForProject(db, project!.id);
     if (!cfg) return deny('profile', 'Kein freigegebenes KI-Profil im Projekt (Freigabe entzogen oder LLM gesperrt; die PL wählt ein anderes)', true);
@@ -216,10 +212,6 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
       const left = await agentBudgetLeft(db, subj, now);
       if (left <= 0) return deny('budget', `Tagesbudget von ${subj.name} ist aufgebraucht (Verwaltung › KI)`);
       pass('budget', `noch ${left} Läufe heute`);
-    } else if (f === 'mail.process') {
-      const used = (await db.one(`select count(*)::int as c from mail_ai_runs where project_id = $1 and mode = 'process' and status in ('ok','error') and started_at >= $2::date`, [project!.id, today])).c;
-      if (used >= settings.agentDailyBudget) return deny('budget', `Tagesbudget der Mail-KI im Projekt erreicht (${settings.agentDailyBudget} Läufe)`);
-      pass('budget', `noch ${settings.agentDailyBudget - used} Läufe heute`);
     } else if (f.startsWith('assist.')) {
       const used = (await db.one(`select count(*)::int as c from audit_log where project_id = $1 and action in ('ai.call','ai.final_reply') and created_at >= $2::date`, [project!.id, today])).c;
       if (used >= settings.assistDailyBudget) return deny('budget', `Tagesbudget der KI-Assistenz im Projekt erreicht (${settings.assistDailyBudget} Anfragen)`);
@@ -245,7 +237,7 @@ export function aiError(d: AiDecision, shared = false): HttpError {
 const cap = (d: AiDecision, shared = false): AiCapability => ({ allowed: d.allowed, reason: shared ? d.publicReason : d.reason, stage: d.stage });
 
 /** Funktionen, die eine Person im Projekt nutzt; für die Knöpfe der Oberfläche. */
-const PERSON_FEATURES: AiFeature[] = ['assist.summarize', 'assist.essence', 'assist.report', 'assist.ask', 'assist.final_reply', 'mail.process', 'agent.chat', 'pl.agents', 'pl.own_llm'];
+const PERSON_FEATURES: AiFeature[] = ['assist.summarize', 'assist.essence', 'assist.report', 'assist.ask', 'assist.final_reply', 'agent.chat', 'pl.agents', 'pl.own_llm'];
 
 /** Fähigkeiten im Projekt: je Funktion erlaubt oder die Begründung; für jeden Agenten des Projekts Läufe und Chat. */
 export async function aiCapabilities(db: Db, user: User, projectId: string): Promise<AiCapabilities> {

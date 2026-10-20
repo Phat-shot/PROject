@@ -21,7 +21,7 @@ Für Projektleitung, Mitglieder und Verwaltung. Dieses Handbuch beschreibt, was 
 | Ressourcen | Räume, Geräte, externe Personen buchen (immer vorläufig, eine Person bestätigt) | übersteuert nie einen Konflikt |
 | Wissen | Überblick über das Projekt, passende Seiten, ähnliche Arbeitspakete; Suche im Projekt; Überschneidungen melden | nur, was er sehen darf |
 | Recherche online | Suchen und Seiten lesen, Quellen an die Seite hängen | nur mit Freigabe; nur lesen, keine Kontaktaufnahme |
-| Mail-Bearbeitung | als Projektagent neue Mails der Projektkonten bearbeiten oder vorschlagen; offene Punkte nachfragen | Inhalte persönlicher Konten nur mit Freigabe |
+| Mail-Bearbeitung | als (stellvertretende) Projektleitung Mails direkt bearbeiten, als Mitglied vorschlagen (neue Mails der Projektkonten, Ordner „KI Bearbeiten“, „Bearbeiten lassen“, „Vorschläge zur Mail“ mit Antwort per Chat); offene Punkte nachfragen | Inhalte persönlicher Konten nur mit Freigabe |
 
 ### Was er nie tut
 
@@ -37,7 +37,7 @@ Projekte, Mitglieder, Rechte oder Einstellungen ändern; Zusagen mit Geld- oder 
 
 ### Projektagent
 
-Die Projektleitung kann einen Agenten als **Projektagent** setzen (Einstellungen › Mitglieder). Er ist stellvertretende Projektleitung und bearbeitet mit Mail-Modus „bearbeiten“ oder „vorschlagen“ neue Mails der Projektkonten. Offene Punkte aus einer Mail klärt er je **Mail-Rückfrage**: Er fragt die Projektleitung (klar oder Infos kommen, im Projekt fragen mit Frist, beim Absender rückfragen). Mit Reichweite „ganzes Projekt“ läuft werktags der **Projektdurchlauf** (Kapitel 4).
+Die Projektleitung kann einen Agenten als **Projektagent** setzen (Einstellungen › Mitglieder). Er ist stellvertretende Projektleitung und bearbeitet mit Mail-Modus „bearbeiten“ neue Mails der Projektkonten direkt; mit „vorschlagen“ schlägt er nur vor. Mails bearbeitet immer ein Agent, nie eine „Projekt-KI“: Welcher Agent, ergibt sich aus Projektagent oder Agent an der Mail-Ansicht; ob er direkt anlegt oder vorschlägt, aus seiner Rolle (stellvertretende PL oder Mitglied). Offene Punkte aus einer Mail klärt er je **Mail-Rückfrage**: Er fragt die Projektleitung (klar oder Infos kommen, im Projekt fragen mit Frist, beim Absender rückfragen). Mit Reichweite „ganzes Projekt“ läuft werktags der **Projektdurchlauf** (Kapitel 4).
 
 ### Auftrag im Chat
 
@@ -133,6 +133,8 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 - **Projekt › KI › Agenten-Läufe:** jeder Lauf mit Anlass, Begründung, Aktionen, Token, Suchen, Kontextumfang und Fehlern; Projektdurchläufe mit Kennzeichen.
 - **Im Arbeitspaket:** Wartezustand mit nächster Prüfung, offene Fragen, Freigaben, Quellen, verwandte Arbeitspakete, Ressourcen, „Läuft nicht: …“ mit Grund.
 - **Mail › Freigaben:** Entwürfe ohne Senderecht, erste Kontakte, von der Außenprüfung angehaltene Mails, geplanter Versand außerhalb des Arbeitszeitfensters.
+- **Fehler im Lauf** (fehlendes Recht, Konflikt, KI-Dienst): Direktnachricht des Agenten an den Ansprechpartner mit Link zum Arbeitspaket; dieselbe Störung nur einmal.
+- **Bestätigungskarten im Chat** nur bei Bedarf (abgelehnt, angehalten, Auftrag mit Rückgängig, Bestätigung); „auch für Kleinigkeiten“ in den Benutzereinstellungen.
 - **Audit-Log** (Verwaltung): Läufe, Aktionen, Policy-Änderungen, Außenprüfungen, Buchungen.
 
 ## 9. Häufige Fragen

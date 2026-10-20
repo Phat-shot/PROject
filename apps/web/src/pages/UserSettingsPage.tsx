@@ -17,6 +17,7 @@ export function UserSettingsPage() {
   const [name, setName] = useState(user?.name ?? '');
   const [theme, setTheme] = useState<NonNullable<UserSettings['theme']>>(s.theme ?? 'system');
   const [language, setLanguage] = useState<NonNullable<UserSettings['language']>>(s.language ?? 'de');
+  const [chatCards, setChatCards] = useState<NonNullable<UserSettings['chatCards']>>(s.chatCards ?? 'needed');
   const [pw, setPw] = useState({ current: '', next: '', repeat: '' });
   const [msg, setMsg] = useState<string | null>(null);
   const { busy, error, run } = useAsync();
@@ -44,9 +45,13 @@ export function UserSettingsPage() {
                 <select value={language} onChange={(e) => setLanguage(e.target.value as NonNullable<UserSettings['language']>)}>
                   <option value="de">Deutsch</option><option value="en">English (Oberfläche folgt)</option>
                 </select></label>
+              <label className="field"><span>Bestätigungskarten der Agenten im Chat</span>
+                <select value={chatCards} onChange={(e) => setChatCards(e.target.value as NonNullable<UserSettings['chatCards']>)}>
+                  <option value="needed">nur wenn nötig (abgelehnt, angehalten, Auftrag, Bestätigung)</option><option value="all">auch für Kleinigkeiten (Notiz, Priorität …)</option>
+                </select></label>
               {error && <div className="error">{error}</div>}
               {msg && <div className="muted small">{msg}</div>}
-              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language } }, 'Gespeichert.')}>Speichern</button></div>
+              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language, chatCards } }, 'Gespeichert.')}>Speichern</button></div>
             </div>
           </div>
           <TotpCard />

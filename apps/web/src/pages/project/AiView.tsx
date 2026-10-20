@@ -53,7 +53,7 @@ export function AiView() {
       {profileName && <p className="muted small">Projekt-KI: {profileName}</p>}
       {(mailAi.data?.runs.length ?? 0) > 0 && <div className="card mb">
         <h2 style={{ marginTop: 0 }}>Mail-KI</h2>
-        <p className="muted small">Mails aus dem Ordner „KI Bearbeiten“ bearbeitet die Projekt-KI direkt; Agenten, die eine Ansicht betreuen, schlagen vor. Angenommen wird mit einem Klick, ausgeführt mit deinen Rechten.</p>
+        <p className="muted small">Mails bearbeiten Agenten: als stellvertretende Projektleitung legen sie direkt an, als Mitglied schlagen sie vor. Vorschläge nimmst du mit einem Klick an; ausgeführt wird dann mit deinen Rechten.</p>
         {mailAi.data!.runs.slice(0, 30).map((r) => <MailAiRunCard key={r.id} run={r} showMail onChanged={async () => { await mailAi.reload(); await reloadTasks(); }} />)}
       </div>}
       <div className="card mb">

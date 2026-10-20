@@ -176,7 +176,7 @@ Der Katalog steht als `AI_FEATURES` in shared. Eine Regel bezieht sich auf eine 
 | Funktion | Einstiegspunkt heute | geprüft wird |
 |---|---|---|
 | `assist.summarize`, `assist.essence`, `assist.report`, `assist.ask`, `assist.final_reply` | ai.ts:192/208/227/312/327, mail.ts:771 | die Person |
-| `mail.process` (Ordner „KI Bearbeiten“) | mail.ts:271/283/303, mailAi.ts:100 | `ai_process_by`, beim Einschalten und bei jedem Lauf |
+| ~~`mail.process`~~ (entfallen mit Migration 059: Mails bearbeiten nur Agenten, `agent.mail` als stellv. PL, `mail.triage` als Mitglied) | – | – |
 | `mail.triage` (Agent betreut eine Ansicht) | mailAi.ts:111 | der Agent |
 | `agent.run` | agent.ts (Worker, Ereignis), agents.ts:154 | der Agent |
 | `agent.chat` | chat.ts:130/222, agentChat.ts | Absender und Agent |
@@ -198,10 +198,9 @@ Die erste Sperre gewinnt. Das Ergebnis hat die Form `{allowed, reason, stage, ru
    - Für `assist.*` muss eine Projekt-KI gewählt sein.
    - Agenten müssen aktiv und Mitglied sein. Für einen Lauf gilt zusätzlich `agent_paused`.
    - Für Agenten einer PL wird zusätzlich `pl.agents` geprüft (Lücke 8).
-   - Für `mail.process` braucht die einschaltende Person `can_use_ai` sowie `can_ai` und `can_create_task` an der Ansicht.
 3. **Profil:** `aiConfigForProject` bzw. `aiConfigForAgent` liefert null, Begründung „Kein freigegebenes KI-Profil im Projekt“. Die Profilachse bleibt unverändert (3.6).
 4. **Budget:**
-   - `agent.*` je Agent, `mail.process` je Projekt (wie heute).
+   - `agent.*` und `mail.triage` je Agent.
    - Neu: `assist.*` je Projekt über `orgs.settings.ai.assistDailyBudget` (Standard 200).
    - Der Wert 0 bedeutet gesperrt (`?? 50` statt `|| 50`).
    - Gezählt werden nur Läufe mit Status `ok` oder `error`.
@@ -227,7 +226,7 @@ Für Benutzer oder Agent u, Projekt p und Funktion f entscheidet die erste zutre
 | Projekt BAU `agent` gesperrt | auch Agenten der Org laufen in BAU nicht |
 | Agent Morton `agent.send_external` gesperrt | Morton schreibt nur noch Entwürfe; andere Agenten bleiben unberührt |
 
-**Wirkung von „KI sperren für eine PL“:** Eine Personenregel für die PL sperrt deren eigene Nutzung. Das betrifft `assist`, `mail.process` als einschaltende Person, `agent.chat` und `agent.order` als Absenderin und `pl.agents`/`pl.own_llm`. Agenten, die in ihren Projekten laufen, regelt eine Projekt- oder Agentenregel, denn ihr „Wer“ ist der Agent.
+**Wirkung von „KI sperren für eine PL“:** Eine Personenregel für die PL sperrt deren eigene Nutzung. Das betrifft `assist`, `agent.chat` und `agent.order` als Absenderin und `pl.agents`/`pl.own_llm`. Agenten, die in ihren Projekten laufen, regelt eine Projekt- oder Agentenregel, denn ihr „Wer“ ist der Agent.
 
 ### 3.4 Wer kann was sperren oder freigeben
 
@@ -265,19 +264,21 @@ In einer DM mit einem Agenten der Org gilt für den Absender: Stufen 0 und 1 wer
 
 Die 20 heutigen `notifications.type` bleiben, damit Links und Tests weiter funktionieren. Jeder Typ gehört zu genau einer Klasse (`EVENT_OF_TYPE` in shared).
 
+Mail-Standard für alle Klassen ist der Tages-Digest (Änderung 20.10.2026); „sofort“ setzt eine Regel je Org, Projekt, AP oder Person.
+
 | Klasse | Typen | Standard-Empfänger | Chat | Mail | Log | Fristen (Erinnern/Weitergeben) |
 |---|---|---|---|---|---|---|
-| `question` | Frage (neu) | Kette ab Stufe 0 | thread (fest) | sofort | ja | 48 h / 120 h |
-| `decision` | Entscheidung, Agent-`escalate` | Kette ab PL | thread (fest) | sofort | ja | 24 h / 48 h |
+| `question` | Frage (neu) | Kette ab Stufe 0 | thread (fest) | Digest | ja | 48 h / 120 h |
+| `decision` | Entscheidung, Agent-`escalate` | Kette ab PL | thread (fest) | Digest | ja | 24 h / 48 h |
 | `approval` | Bestätigung angehaltener Agentenaktionen | Kette, nur Freigabeberechtigte | thread (fest) | Digest | ja | 24 h / 72 h, Ablauf 336 h |
 | `synergy` | Überschneidung | beide Zuständige, sonst PL | thread (fest) | Digest | ja | 72 h / – |
-| `confirm` | vorläufiger Termin oder vorläufige Buchung | Stufe 0 | thread (fest) | sofort | ja | 24 h / 72 h |
-| `order_request` | Auftragsvorschlag eines Mitglieds | PL | thread | sofort | – | 48 h / – |
-| `external_referral` | Rückfrage eines Externen außerhalb seiner Aufgabe | Kette ab Auftraggeber | thread | sofort | ja | 24 h / 72 h |
+| `confirm` | vorläufiger Termin oder vorläufige Buchung | Stufe 0 | thread (fest) | Digest | ja | 24 h / 72 h |
+| `order_request` | Auftragsvorschlag eines Mitglieds | PL | thread | Digest | – | 48 h / – |
+| `external_referral` | Rückfrage eines Externen außerhalb seiner Aufgabe | Kette ab Auftraggeber | thread | Digest | ja | 24 h / 72 h |
 | `progress` | Zwischenstand eines Auftrags | `requester` | thread | aus (am AP wählbar) | – | every = milestones |
 | `assigned` | task.assigned, plan.shifted | Zuständige(r) | off | Digest | – | – |
-| `blocked` | „blockiert“ (Mensch oder Agent) | TP-Verantwortung, sonst PL | off | sofort | ja | – |
-| `escalation` | Worker- und manuelle Eskalation, Stufe-3-Mail | Stufen aus `projects.escalation` | off | sofort | (Aufrufer) | – |
+| `blocked` | „blockiert“ (Mensch oder Agent) | TP-Verantwortung, sonst PL | off | Digest | ja | – |
+| `escalation` | Worker- und manuelle Eskalation, Stufe-3-Mail | Stufen aus `projects.escalation` | off | Digest | (Aufrufer) | – |
 | `review` | page.review, report.review, ai.proposal, workflow.approval, mail.approval, draft.review, Außenprüfung angehalten | Freigabeberechtigte | off | Digest | – | – |
 | `mail_in` | Mail einem AP zugeordnet (neu) | keine (nur Log) | off | – | ja | – |
 | `log` | task.comment, mention, Log-Eintrag eines Agenten | Beteiligte, Erwähnte | off | Digest | – | – |
@@ -528,7 +529,7 @@ Festlegungen zur Tabelle:
 - `create_event` und `book_resource` legen immer vorläufig an. Das Vorläufige ist selbst die Rückfrage (Frage `confirm`); sie werden nie zusätzlich angehalten.
 - Agenten löschen nie und bestätigen nie Termine (meetings.ts:180).
 - Eine `mail` an interne Projektmitglieder wird verworfen: „Interne per ask/chat“. Org-Benutzer ohne Zugriff auf das Projekt gelten als Nicht-Interne (`outside`).
-- Mail-KI „KI Bearbeiten“ handelt mit den Rechten der einschaltenden Person; für sie gilt diese Policy nicht. Triage schlägt weiterhin nur vor.
+- Mail-Bearbeitung durch einen Agenten als stellv. PL handelt mit dessen Rechten (Ordner „KI Bearbeiten“, Projektagent, „Bearbeiten lassen“); Agenten als Mitglied schlagen nur vor.
 
 ### 6.3 Regel A: Vererbung
 
@@ -1526,3 +1527,12 @@ Alles andere (Board, Plan, Doku, Besprechungen, Kalender, Workflows, Zeiten, Res
 - **Bestand (Leitlinie 0.6):** Die Migration trägt für jedes persönliche Projekt, das heute ein `all`-Profil als Projekt-KI nutzt oder in dem ein Agent (PL-Agent oder Org-Agent, Profil oder Standardprofil) auf einem `all`-Profil läuft, eine Auswahl in `ai_profile_projects` ein (Audit `ai.profile.personal_scope.migrated`); so ändert sich für Bestand nichts, neue persönliche Projekte sehen standardmäßig keine Org-Profile, und der Org-Admin kann die Altfreigaben als „ausgewählt: persönlich (Name)“ entziehen.
 - Stellen: client.ts:55–57 (SQL), 71–78 (aiStatus: `personalScope`), 98–104 (aiConfigForAgent mit projectId), policy.ts:192–194 (Aufruf mit `project.id`), routes/ai.ts (POST/PATCH /ai/profiles), AdminPage (Profilkarte: Kästchen nur bei „alle Projekte“, bei „ausgewählte“ Hinweis), shared (`AiStatus.profiles[].personalScope`), Handbuch §11.
 - Tests: `project_llms.test.ts` (persönliches Projekt sieht Org-Profil nur mit Flag/Auswahl; eigenes LLM wie bisher), `personal_project.test.ts` (Profil A bekommt `personalScope` oder erwartet erst 400 „Dieses LLM ist im Projekt nicht verfügbar“, dann Freigabe), `agent_chat.test.ts` (DM an Org-Agent liefert keine APs aus persönlichen Projekten ohne Freigabe), `ai_policy.test.ts` (Spur „Profil im persönlichen Projekt nicht freigegeben“), Migrationstest für den Backfill.
+
+## 17.3 Mails bearbeiten nur Agenten (Ergänzung 20.10.2026, Migration 059)
+
+- Die „Projekt-KI“ als Bearbeiterin im Auftrag einer Person entfällt (Freigabe `mail.process`, Spalte `mail_views.ai_process_by`). Es handelt immer ein Agent; seine Rolle entscheidet (`mailModeOf`): **(stellvertretende) PL → process** (direkt, Freigabe `agent.mail`), **Mitglied → triage** (Vorschläge, Freigabe `mail.triage`). Der Projektagent mit Mail-Modus „triage“ schlägt nur vor.
+- Welcher Agent: für Projektkonten der Projektagent (Mail-Modus nicht aus), sonst der Agent an der Ansicht (`agent_user_id`). Der Ordner „KI Bearbeiten“ (`ai_process`) ist eine Ansicht mit Agent, deren Mails sofort bearbeitet werden; einrichten mit Wahl des Agenten (Vorgabe Projektagent). Verschieben in der App in einen solchen Ordner löst die Bearbeitung sofort aus (bisher erst beim nächsten Sync).
+- An der Mail: *Agent schlägt vor* (`POST /mail/mails/:id/ai-suggest`, Lauf triage mit `actor_user_id` = fragende Person; die Antwort kommt als Direktnachricht des Agenten mit Vorschlagsliste und Link, angenommen wird an der Mail; Essenz- und Zusammenfassungs-Ergebnisse gehen ebenfalls per Direktnachricht, wenn das Projekt einen Agenten hat) und *Agent übernimmt* (`ai-process`, nur Agent als stellv. PL).
+- Fehler eines Agentenlaufs (fehlendes Recht, Konflikt, KI-Dienst) meldet der Agent per Direktnachricht an Stufe 0 der Kette, dieselbe Störung nur einmal.
+- Chat-Bestätigungskarten nur bei Bedarf (abgelehnt, angehalten, Auftrag, Bestätigung); `users.settings.chatCards = 'all'` zeigt sie auch für Kleinigkeiten.
+- Mail-Standard aller Meldungsklassen: Digest (Tabelle 4.1).

@@ -50,7 +50,7 @@ test('ask: Frage an die Kette als Chat-Thread, Meldung mit Bezug, Log, Warten; D
   assert.ok(Math.abs(new Date(q.remind_at).getTime() - Date.now() - 24 * 3600_000) < 60_000, 'Nachfassen nach 24 h');
   assert.ok(Math.abs(new Date(q.escalate_at).getTime() - Date.now() - 120 * 3600_000) < 60_000, 'Weitergabe nach 120 h');
   const n = await t.db.one(`select * from notifications where ref_type = 'question' and ref_id = $1`, [q.id]);
-  assert.equal(n.user_id, t.ids.users.pl); assert.equal(n.event, 'question'); assert.equal(n.mail, 'now'); assert.equal(n.resolved_at, null);
+  assert.equal(n.user_id, t.ids.users.pl); assert.equal(n.event, 'question'); assert.equal(n.mail, 'digest'); assert.equal(n.resolved_at, null);
   assert.match(n.link, new RegExp(`^/chat/${q.channel_id}\\?thread=${q.message_id}&msg=${q.message_id}$`));
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and question_id = $2 and body like 'Frage an Petra Lenz (Chat):%'`, [ap.id, q.id]), 'Log');
   const task = (await t.api(pl).get(`/tasks/${ap.id}`)).json().task;

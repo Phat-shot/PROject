@@ -45,6 +45,6 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 ## Mail und KI
 
 - **Ursprungsmail:** Aus einer Mail entstandene APs merken sich die Mail. Erledigt? „Ursprungsmail beantworten“ im AP schreibt das Ergebnis als Antwort (nicht ins Log).
-- **Ordner „KI Bearbeiten“:** Mail dort ablegen (oder „KI bearbeiten“ an der Mail): Die Projekt-KI legt AP/Aufgabe, Termin und Antwortentwurf an, weist passend auch Agenten zu und legt die Mail ab („Archiv“ oder „In Arbeit“).
+- **Ordner „KI Bearbeiten“:** Mail dort ablegen (oder „Bearbeiten lassen“ an der Mail): Der Agent legt als stellv. PL AP/Aufgabe, Termin und Antwortentwurf an, weist passend auch Agenten zu und legt die Mail ab („Archiv“ oder „In Arbeit“).
 - **Agent betreut eine Ansicht:** Er schlägt für neue Mails Aktionen vor; annehmen mit einem Klick an der Mail oder unter Projekt › KI.
 - **Persönliches Projekt:** nur du und KI-Agenten, als Assistent mit eigenem Postfach und KI-Ordner.
