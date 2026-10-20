@@ -65,6 +65,15 @@ test('ask: Frage an die Kette als Chat-Thread, Meldung mit Bezug, Log, Warten; D
   const msgInfo = (await t.api(pl).get(`/chat/messages/${q.message_id}`)).json();
   assert.equal(msgInfo.question.id, q.id); assert.equal(msgInfo.question.status, 'open'); assert.equal(msgInfo.channel.kind, 'dm');
   assert.equal((await t.api(await t.login('max@demo.local')).get(`/chat/messages/${q.message_id}`)).statusCode, 403, 'fremde DM');
+  // Gruß ohne Inhalt in der DM („hi“): keine Rückmeldung, kein Log, die Frage bleibt offen; der Agent antwortet nur im Chat
+  const nHi = calls.length;
+  await t.api(pl).post(`/chat/channels/${q.channel_id}/messages`, { body: 'hi Morton' });
+  await flushAgentRuns();
+  assert.equal((await t.db.one(`select status from questions where id = $1`, [q.id])).status, 'open', 'Gruß beantwortet nichts');
+  assert.equal(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Rückmeldung per Chat%hi%'`, [ap.id]), null, 'kein Log-Eintrag');
+  const hiPrompt = String(calls.slice(nHi).find((c) => String(c.messages?.[0]?.content ?? '').includes('Man erreicht dich im Chat'))?.messages?.at(-1)?.content ?? '');
+  assert.match(hiPrompt, /nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung/);
+  assert.match(hiPrompt, /deine offene Frage bleibt offen/);
   // Antwort im Thread der Frage (Regel F Schritt 1)
   next = [A({ type: 'comment', text: 'Farbe notiert.' })];
   const n0 = calls.length;

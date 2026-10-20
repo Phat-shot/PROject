@@ -9,7 +9,7 @@ import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 import { isInternal } from '../outbound.js';
-import { answerQuestion, type QuestionRow } from '../questions.js';
+import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
@@ -306,6 +306,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     : await db.query(`select m.id, m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
   // Thema der Nachricht (Abschnitt 6 des Agenten-Konzepts): bestimmt das System, nicht das Modell
   const scope = await resolveChatScope(db, { channel, message: msg, history: history.rows, senderId: msg.user_id, agent }, now);
+  // Gruß oder Kurzmeldung ohne Inhalt: keine Rückmeldung auf offene Fragen, keine Notizen, keine Bezugszeile
+  const small = isSmallTalk(msg.body, [agent.name]);
   const scopeText = `${scope.refs.length ? scope.refs.join(', ') : scope.projects.map((p) => p.key).join(', ') || '–'} (${scope.how})`;
   /** Antwort ohne LLM-Aufruf (zählt nicht gegen das Budget): als übersprungener Lauf mit Begründung protokolliert. */
   const direct = async (reply: string, logged: string): Promise<AgentChatResult> => {
@@ -400,7 +402,7 @@ ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Tite
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-${scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine Antwort mit „Zu ${scope.refs[0] ?? scope.projects[0]?.key}:“.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
+${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Bezugszeile „Zu …:“${openQs.rows.length ? '; erinnere höchstens in einem Satz daran, worauf du wartest' : ''}.` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf: Beginne deine Antwort mit „Zu ${scope.refs[0] ?? scope.projects[0]?.key}:“.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
@@ -410,9 +412,9 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
     const results = cmds.length ? await runCommands(ctxCmd, cmds) : [];
     const acted = results.some((x) => x.status === 'ok' && x.type !== 'note');
     const notedCmd = results.some((x) => x.status === 'ok' && x.type === 'note');
-    const notes = (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);
+    const notes = small ? [] : (Array.isArray(j.notes) ? j.notes : []).filter((n) => known.has(n.taskId) && String(n.text ?? '').trim()).slice(0, 3);
     // Antworten auf offene Fragen (nur eigene, hier gestellte): Frage schließen, Log, Lauf am Arbeitspaket (Anlass answer)
-    const answers = (Array.isArray(j.answers) ? j.answers : []).filter((a) => openQs.rows.some((q: any) => q.id === a.questionId)).slice(0, 3);
+    const answers = small ? [] : (Array.isArray(j.answers) ? j.answers : []).filter((a) => openQs.rows.some((q: any) => q.id === a.questionId)).slice(0, 3);
     for (const a of answers) {
       const q = await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and status = 'open'`, [a.questionId]);
       if (q) await answerQuestion(db, q, { source: 'chat', userId: msg.user_id, text: String(a.text ?? '').trim() || msg.body, messageId: msg.id, now });

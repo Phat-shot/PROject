@@ -7,7 +7,7 @@ import { notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
-import { answerQuestion, canAnswer, FREE_TEXT_KINDS, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
+import { answerQuestion, canAnswer, FREE_TEXT_KINDS, isSmallTalk, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -194,10 +194,13 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     // Regel F: offene Frage zu dieser Nachricht (Thread-Wurzel oder einzige offene Frage des Agenten an die Person in der DM) → Antwort
     const dmAgent = channel.kind === 'dm' ? [...agents][0] ?? null : null;
-    let matched = await matchQuestion(db, { channelId: channel.id, threadId, userId: user.id, agentId: dmAgent });
+    // Gruß oder Kurzmeldung ohne Inhalt („hi“): keine Rückmeldung, kein Log; der Agent antwortet nur im Chat
+    const agentNames = agents.size ? (await db.query(`select name from users where id = any($1::uuid[])`, [[...agents]])).rows.map((x: any) => String(x.name)) : [];
+    const small = isSmallTalk(body, agentNames);
+    let matched = small ? null : await matchQuestion(db, { channelId: channel.id, threadId, userId: user.id, agentId: dmAgent });
     // Rückfall (mehrere offene Fragen in der DM oder alte Agentennachricht ohne Frage-Objekt): die letzte Frage des Agenten („KEY-n „…“) in diesem Gespräch
     const fallbacks = new Map<string, any>();
-    if (!matched && (channel.kind === 'dm' || threadId)) for (const a of agents) {
+    if (!matched && !small && (channel.kind === 'dm' || threadId)) for (const a of agents) {
       const t = await answeredTask(a, channel.id, threadId, user, r.id);
       if (!t) continue;
       const q = await db.maybeOne(`select * from questions where message_id = $1 and status = 'open' and kind = any($2::text[])`, [t.message_id, FREE_TEXT_KINDS]);

@@ -251,6 +251,19 @@ export async function canAnswer(db: Db, q: QuestionRow, userId: string): Promise
   return !t || canSeeSubproject(db, userId, t.subproject_id);
 }
 
+/**
+ * Gruß oder Kurzmeldung ohne Inhalt („hi“, „danke“, „hallo Morton“, „bist du da?“): nie eine Rückmeldung auf eine offene Frage und
+ * nie ein Log-Eintrag (Regel F). Bestätigungen wie „ok“, „passt“, „ja“ oder „nein“ zählen dagegen als Inhalt.
+ */
+const SMALL_TALK = new Set(['hi', 'hallo', 'hey', 'hej', 'hallöchen', 'huhu', 'moin', 'servus', 'grüezi', 'grüß', 'gruß', 'gott', 'guten', 'morgen', 'tag', 'abend', 'mahlzeit', 'danke', 'dankeschön', 'dankeschoen', 'vielen', 'dank', 'merci', 'thx', 'thanks', 'bitte', 'gerne', 'test', 'ping', 'tschüss', 'ciao', 'bye', 'schönen', 'schönes', 'wochenende', 'feierabend', 'bis', 'dann', 'später', 'morgen', 'und', 'dir', 'ihnen', 'wie', 'gehts', 'geht', 'es', 'du', 'sie', 'da', 'bist', 'sind', 'jemand', 'noch', 'erreichbar', 'kurz', 'mal', 'frage', 'eine', 'hätte', 'ich', 'hab', 'habe']);
+export function isSmallTalk(body: string, names: string[] = []): boolean {
+  const skip = new Set([...SMALL_TALK, ...names.flatMap((n) => n.toLowerCase().split(/\s+/))]);
+  const words = String(body ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return true;
+  if (words.length > 6) return false;
+  return words.every((w) => skip.has(w));
+}
+
 export async function matchQuestion(db: Db, m: { channelId: string; threadId: string | null; userId: string; agentId: string | null }): Promise<QuestionRow | null> {
   if (m.threadId) {
     const q = await db.maybeOne<QuestionRow>(`select * from questions where message_id = $1 and status = 'open'`, [m.threadId]);

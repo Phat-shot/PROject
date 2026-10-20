@@ -137,6 +137,8 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 ## 9. Häufige Fragen
 
+**Warum gilt mein „hi“ nicht als Antwort?** Grüße und Kurzmeldungen ohne Inhalt beantworten keine offene Frage und stehen nicht im Log; der Agent antwortet nur im Chat und wartet weiter. Kurze Bestätigungen wie „ok“, „passt“ oder „ja“ zählen als Antwort.
+
 **Warum fragt er?** Weil ihm eine Information oder Entscheidung fehlt, die weder in Log, Mails, Chat noch Doku steht, oder weil die Policy für diesen Schritt eine Bestätigung verlangt. Fragen haben ein Thema und eine Frist; nach der Frist fasst er nach und gibt weiter.
 
 **Warum hat er nicht gesendet?** Mögliche Gründe stehen im Log unter seinem Namen: kein Senderecht (Entwurf in Mail › Freigaben), erster Kontakt zu einer Adresse ohne Bezug (Entwurf), Außenprüfung angehalten (Fundstellen), Bestätigungspflicht laut Policy, außerhalb des Arbeitszeitfensters (geplanter Versand), kein Mailkonto. Den Versandstatus schreibt immer das System.
