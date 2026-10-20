@@ -36,18 +36,14 @@ export interface User {
 }
 
 export interface UserSettings {
-  language?: 'de' | 'en';
   theme?: 'light' | 'dark' | 'system';
-  /**
-   * Veraltet (eine Version lang mitgeschrieben): Mail-Modus für alle Meldungen; gilt jetzt als Benutzerregel „*“
-   * der Benachrichtigungsregeln (immediate = sofort, daily = Digest)
-   */
-  mailNotifications?: 'off' | 'immediate' | 'daily';
   /** In der Seitenleiste angeheftete Projekte (höchstens 5, in dieser Reihenfolge) */
   pinnedProjects?: string[];
   /** Bestätigungskarten der Agenten im Chat: needed (Standard) nur bei Abgelehntem, Angehaltenem, Aufträgen und Bestätigungen; all auch bei Notiz, Priorität usw. */
   chatCards?: 'needed' | 'all';
 }
+/** Schlüssel, die PATCH /me in settings annimmt (null löscht den Schlüssel) */
+export const USER_SETTING_KEYS = ['theme', 'pinnedProjects', 'chatCards'] as const satisfies readonly (keyof UserSettings)[];
 
 export interface Membership {
   projectId: string;
@@ -156,7 +152,7 @@ export interface OrgSettings {
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
   /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
   notify?: { digestHour?: number };
-  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; profileIds?: string[]; maxBudget?: number }; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy; /** Online-Recherche (Konzept 8): Suchdienst für lokale Profile, Grenzen, Domains */ web?: WebSearchSettings; /** Arbeitszeitfenster für Mails der Agenten nach außen (Standard Mo–Fr 07–19 Europe/Berlin) */ externalWindow?: ExternalWindow };
+  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; /** Höchstes Tagesbudget eigener Agenten der PL (nie über agentDailyBudget) */ plAgents?: { maxBudget?: number }; /** Eigene LLMs der Projekte: aus, nur persönliche Projekte (Standard) oder alle */ ownLlm?: 'off' | 'personal' | 'all'; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy; /** Online-Recherche (Konzept 8): Suchdienst für lokale Profile, Grenzen, Domains */ web?: WebSearchSettings; /** Arbeitszeitfenster für Mails der Agenten nach außen (Standard Mo–Fr 07–19 Europe/Berlin) */ externalWindow?: ExternalWindow };
 }
 
 /**

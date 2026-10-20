@@ -83,7 +83,7 @@ export async function agentRoutes(app: FastifyInstance) {
     return { agent: mapAgent(await db.one(`select u.*, coalesce((select json_agg(x.project_id) from agent_projects x where x.agent_user_id = u.id), '[]'::json) as scope_project_ids from users u where u.id = $1`, [r.id])) };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[] } }>('/agents/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
     if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung');
     const a = await db.maybeOne(`select * from users where id = $1 and org_id = $2 and kind = 'agent'`, [req.params.id, user.orgId]);
@@ -96,6 +96,11 @@ export async function agentRoutes(app: FastifyInstance) {
     if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
     if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, b.thinkingMode ?? null]);
     if ('signature' in b) await db.query(`update users set signature = $2 where id = $1`, [a.id, cleanSignature(b.signature)]);
+    // Tagesbudget des Agenten (Läufe); null = Mandantenwert; wirksam ist das Minimum aus beidem
+    if ('dailyBudget' in b) {
+      if (b.dailyBudget !== null && !(Number.isInteger(b.dailyBudget) && Number(b.dailyBudget) >= 0 && Number(b.dailyBudget) <= 1000)) throw badRequest('Tagesbudget: 0 bis 1000 oder leer');
+      await db.query(`update users set agent_daily_budget = $2 where id = $1`, [a.id, b.dailyBudget]);
+    }
     if (b.scope !== undefined) await db.query(`update users set agent_scope = $2 where id = $1`, [a.id, validScope(b.scope)]);
     if (Array.isArray(b.projectIds)) await setAgentProjects(user.orgId, a.id, b.projectIds);
     await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active), ai_profile_id = case when $4 then $5::uuid else ai_profile_id end, persona = case when $6 then $7 else persona end where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null, 'aiProfileId' in b, b.aiProfileId ?? null, 'persona' in b, persona]);

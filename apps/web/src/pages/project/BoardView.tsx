@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import type { Task } from '@projekttool/shared';
+import { LABEL_COLORS, type Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
@@ -343,7 +343,7 @@ export function LabelPicker({ value, onChange }: { value: string[]; onChange: (v
       {!adding ? <button type="button" className="btn sm link" onClick={() => setAdding(true)}>+ Label</button> : (
         <span className="row" style={{ gap: 4 }}>
           <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" style={{ width: 110 }} />
-          <select value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 'auto' }}>{['gray', 'blue', 'green', 'yellow', 'orange', 'red', 'purple', 'teal'].map((c) => <option key={c} value={c}>{c}</option>)}</select>
+          <select value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 'auto' }}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
           <button type="button" className="btn sm" onClick={() => void api.post<{ label: { id: string } }>(`/projects/${detail.project.id}/labels`, { name, color }).then(async (r) => { await reload(); onChange([...value, r.label.id]); setAdding(false); setName(''); })}>OK</button>
         </span>
       )}

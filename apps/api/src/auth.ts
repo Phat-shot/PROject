@@ -1,6 +1,6 @@
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
-import type { User } from '@projekttool/shared';
+import type { OrgSettings, User } from '@projekttool/shared';
 import type { Db } from './db.js';
 import { unauthorized } from './errors.js';
 
@@ -38,6 +38,12 @@ export function mapUser(row: any): User {
 }
 
 /** Verwaltet die Person mindestens eine Gruppe (group_members.is_manager)? Für den Menüpunkt Verwaltung. */
+/** Teil der Mandanten-Einstellungen, den jede angemeldete Person sieht (Module, Darstellung); Rest nur über Org-Admin-Endpoints. */
+export function publicOrgSettings(settings: any): OrgSettings {
+  const s = settings ?? {};
+  return { company: s.company, accentColor: s.accentColor, timeTracking: s.timeTracking, personalProjects: s.personalProjects, ai: s.ai ? { enabled: s.ai.enabled } : undefined };
+}
+
 export async function withManagedGroups(db: Db, user: User): Promise<User> {
   const r = await db.maybeOne(`select 1 from group_members where user_id = $1 and is_manager limit 1`, [user.id]);
   return { ...user, managesGroups: Boolean(r) };

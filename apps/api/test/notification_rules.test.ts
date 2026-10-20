@@ -361,18 +361,6 @@ test('Mail am AP (Klasse mail_in): neue Zuordnung schreibt einmal ins Log, Meldu
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'mail_in' }] });
 });
 
-test('PATCH /me mit mailNotifications schreibt die Benutzerregel „*“ (Übergang)', async () => {
-  const anna = await login('anna');
-  await t.api(anna).patch('/me', { settings: { mailNotifications: 'immediate' } });
-  const rule = await t.db.one(`select channels from notification_rules where user_id = $1 and event = '*' and project_id is null`, [U().anna]);
-  assert.equal(rule.channels.mail, 'now');
-  await t.api(anna).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'now', chat: 'off' } }] });
-  await t.api(anna).patch('/me', { settings: { mailNotifications: 'off' } });
-  const after = await t.db.one(`select channels from notification_rules where user_id = $1 and event = '*' and project_id is null`, [U().anna]);
-  assert.deepEqual(after.channels, { mail: 'off', chat: 'off' }, 'andere Angaben bleiben');
-  assert.equal((await t.db.one(`select settings from users where id = $1`, [U().anna])).settings.mailNotifications, 'off', 'Einstellung wird mitgeschrieben');
-});
-
 test('Migration: Mail-Modus aus users.settings wird Benutzerregel, offene Meldungen behalten ihn, Klassen und Bezüge', async () => {
   const here = path.dirname(fileURLToPath(import.meta.url));
   const src = path.resolve(here, '..', 'migrations');

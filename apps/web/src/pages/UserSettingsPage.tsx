@@ -10,13 +10,12 @@ import { AbsencesCard } from '../components/Resources';
 import QRCode from 'qrcode';
 import { useEffect } from 'react';
 
-/** Benutzereinstellungen: Name, Sprache, Theme, Benachrichtigungen, Passwort. Gilt nur für die eigene Person. */
+/** Benutzereinstellungen: Name, Theme, Benachrichtigungen, Passwort. Gilt nur für die eigene Person. */
 export function UserSettingsPage() {
   const { user, setUser } = useAuth();
   const s: UserSettings = user?.settings ?? {};
   const [name, setName] = useState(user?.name ?? '');
   const [theme, setTheme] = useState<NonNullable<UserSettings['theme']>>(s.theme ?? 'system');
-  const [language, setLanguage] = useState<NonNullable<UserSettings['language']>>(s.language ?? 'de');
   const [chatCards, setChatCards] = useState<NonNullable<UserSettings['chatCards']>>(s.chatCards ?? 'needed');
   const [pw, setPw] = useState({ current: '', next: '', repeat: '' });
   const [msg, setMsg] = useState<string | null>(null);
@@ -41,17 +40,13 @@ export function UserSettingsPage() {
                 <select value={theme} onChange={(e) => { const v = e.target.value as NonNullable<UserSettings['theme']>; setTheme(v); applyTheme(v); }}>
                   <option value="system">wie System</option><option value="light">hell</option><option value="dark">dunkel</option>
                 </select></label>
-              <label className="field"><span>Sprache</span>
-                <select value={language} onChange={(e) => setLanguage(e.target.value as NonNullable<UserSettings['language']>)}>
-                  <option value="de">Deutsch</option><option value="en">English (Oberfläche folgt)</option>
-                </select></label>
               <label className="field"><span>Bestätigungskarten der Agenten im Chat</span>
                 <select value={chatCards} onChange={(e) => setChatCards(e.target.value as NonNullable<UserSettings['chatCards']>)}>
                   <option value="needed">nur wenn nötig (abgelehnt, angehalten, Auftrag, Bestätigung)</option><option value="all">auch für Kleinigkeiten (Notiz, Priorität …)</option>
                 </select></label>
               {error && <div className="error">{error}</div>}
               {msg && <div className="muted small">{msg}</div>}
-              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, language, chatCards } }, 'Gespeichert.')}>Speichern</button></div>
+              <div><button className="btn primary" disabled={busy || !name.trim()} onClick={() => void save({ name, settings: { theme, chatCards } }, 'Gespeichert.')}>Speichern</button></div>
             </div>
           </div>
           <TotpCard />

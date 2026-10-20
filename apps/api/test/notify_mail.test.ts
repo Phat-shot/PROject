@@ -15,8 +15,8 @@ test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Diges
   const max = await maxId();
   const maxC = await t.login('max@demo.local');
   const admin = await t.login('admin@demo.local');
-  // Übergang: PATCH /me mit mailNotifications schreibt die Benutzerregel „*“ (immediate = sofort)
-  assert.equal((await t.api(maxC).patch('/me', { settings: { mailNotifications: 'immediate' } })).statusCode, 200);
+  // Benutzerregel „*“: Mail sofort
+  assert.equal((await t.api(maxC).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'now' } }] })).statusCode, 200);
   await notify(t.db, { userId: max, type: 'test', title: 'Erste Meldung', body: 'Details', link: '/dashboard' });
   await notify(t.db, { userId: max, type: 'test', title: 'Zweite Meldung' });
   assert.deepEqual((await t.db.query(`select mail from notifications where user_id = $1 and title like '%Meldung'`, [max])).rows.map((r: any) => r.mail), ['now', 'now'], 'Modus beim Erzeugen festgeschrieben');
@@ -31,7 +31,7 @@ test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Diges
   assert.equal(mailsTo('max@demo.local').length, before + 1, 'nichts doppelt');
 
   // Digest: Stunde der Org (Standard 7 Uhr in Europe/Berlin, im Oktober 05:00 UTC)
-  await t.api(maxC).patch('/me', { settings: { mailNotifications: 'daily' } });
+  await t.api(maxC).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'digest' } }] });
   await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Dritte Meldung' }), '2026-10-18T04:00:00Z');
   await runNotificationMails(t.db, t.mail, new Date('2026-10-18T04:30:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 1, 'vor 7 Uhr Berlin kein Digest');
@@ -51,9 +51,9 @@ test('Meldungen per Mail: Modus je Meldung nach Regel N, sofort gesammelt, Diges
   assert.match(String(mailsTo('max@demo.local').at(-1)!.msg.subject), /Vierte Meldung/);
 
   // Eine Meldung behält ihren Modus: „sofort“ geht auch nach dem Umstellen auf „aus“ noch raus, neue Meldungen nicht mehr
-  await t.api(maxC).patch('/me', { settings: { mailNotifications: 'immediate' } });
+  await t.api(maxC).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'now' } }] });
   await notify(t.db, { userId: max, type: 'test', title: 'Fünfte Meldung' });
-  await t.api(maxC).patch('/me', { settings: { mailNotifications: 'off' } });
+  await t.api(maxC).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'off' } }] });
   await notify(t.db, { userId: max, type: 'test', title: 'Sechste Meldung' });
   await runNotificationMails(t.db, t.mail, new Date('2026-10-20T08:00:00Z'));
   assert.equal(mailsTo('max@demo.local').length, before + 4);
@@ -66,7 +66,7 @@ test('Digest-Fenster: war zur Digest-Stunde nichts offen, warten spätere Digest
   const max = await maxId();
   const maxC = await t.login('max@demo.local');
   await t.api(await t.login('admin@demo.local')).put('/org/notification-rules', { digestHour: 7 });
-  await t.api(maxC).patch('/me', { settings: { mailNotifications: 'daily' } });
+  await t.api(maxC).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'digest' } }] });
   await t.db.query(`update notifications set mailed_at = now() where user_id = $1 and mailed_at is null`, [max]);
   // Digest am Vortag 07:05 Berlin
   await createdAt(await notify(t.db, { userId: max, type: 'test', title: 'Vortag' }), '2026-10-21T04:00:00Z');
@@ -91,7 +91,7 @@ test('Digest-Fenster: war zur Digest-Stunde nichts offen, warten spätere Digest
 
 test('Gelesene Meldungen werden nicht per Mail verschickt', async () => {
   const max = await maxId();
-  await t.api(await t.login('max@demo.local')).patch('/me', { settings: { mailNotifications: 'immediate' } });
+  await t.api(await t.login('max@demo.local')).put('/me/notification-rules', { rules: [{ event: '*', channels: { mail: 'now' } }] });
   await t.db.query(`update notifications set mailed_at = now() where user_id = $1 and mailed_at is null`, [max]);
   await notify(t.db, { userId: max, type: 'test', title: 'Schon gelesen' });
   assert.equal((await t.db.one(`select mail from notifications where title = 'Schon gelesen'`)).mail, 'now');

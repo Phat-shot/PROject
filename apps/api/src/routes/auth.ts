@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
-import { createSession, hashPassword, mapUser, requireUser, SESSION_COOKIE, setSessionCookie, verifyPassword, withManagedGroups } from '../auth.js';
+import { createSession, hashPassword, mapUser, publicOrgSettings, requireUser, SESSION_COOKIE, setSessionCookie, verifyPassword, withManagedGroups } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, notFound, unauthorized } from '../errors.js';
 import { publicBase } from '../docs/share.js';
@@ -24,7 +24,7 @@ export async function authRoutes(app: FastifyInstance) {
     setSessionCookie(reply, token);
     await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id });
     const org = await app.db.one(`select name, settings from orgs where id = $1`, [row.org_id]);
-    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: org.settings ?? {} };
+    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: publicOrgSettings(org.settings) };
   });
 
   app.post<{ Body: { challenge: string; code: string } }>('/auth/login/totp', async (req, reply) => {
@@ -38,7 +38,7 @@ export async function authRoutes(app: FastifyInstance) {
     setSessionCookie(reply, token);
     await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'login', objectType: 'user', objectId: row.id, details: { mfa: true } });
     const org = await app.db.one(`select name, settings from orgs where id = $1`, [row.org_id]);
-    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: org.settings ?? {} };
+    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: publicOrgSettings(org.settings) };
   });
 
   app.post('/auth/logout', async (req, reply) => {
@@ -95,12 +95,12 @@ export async function authRoutes(app: FastifyInstance) {
     setSessionCookie(reply, token);
     const row = await app.db.one(`select * from users where id = $1`, [r.user_id]);
     const org = await app.db.one(`select name, settings from orgs where id = $1`, [row.org_id]);
-    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: org.settings ?? {} };
+    return { user: await withManagedGroups(app.db, mapUser(row)), orgName: org.name, orgSettings: publicOrgSettings(org.settings) };
   });
 
   app.get('/auth/me', async (req) => {
     const user = requireUser(req);
     const org = await app.db.one(`select name, settings from orgs where id = $1`, [user.orgId]);
-    return { user: await withManagedGroups(app.db, user), orgName: org.name, orgSettings: org.settings ?? {} };
+    return { user: await withManagedGroups(app.db, user), orgName: org.name, orgSettings: publicOrgSettings(org.settings) };
   });
 }

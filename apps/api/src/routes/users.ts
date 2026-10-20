@@ -1,16 +1,15 @@
 import type { FastifyInstance } from 'fastify';
-import { hashPassword, mapUser, requireUser, verifyPassword, withManagedGroups } from '../auth.js';
+import { hashPassword, mapUser, publicOrgSettings, requireUser, verifyPassword, withManagedGroups } from '../auth.js';
 import { audit } from '../audit.js';
-import { badRequest, forbidden, HttpError, notFound } from '../errors.js';
+import { badRequest, forbidden, notFound } from '../errors.js';
 import { randomBytes } from 'node:crypto';
 import { createSession, setSessionCookie } from '../auth.js';
 import { publicBase } from '../docs/share.js';
 import type { Group, Invitation, MailInquiry, User } from '@projekttool/shared';
 import { DEFAULT_INQUIRY, parseInquiry } from '../ai/mailInquiry.js';
-import { ORG_RIGHTS } from '@projekttool/shared';
+import { ORG_RIGHTS, USER_SETTING_KEYS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
-import { setRules } from '../rules.js';
 import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { orgAccount as orgAccountOf, releaseUserAccounts } from '../mail/accounts.js';
 
@@ -109,7 +108,7 @@ export async function userRoutes(app: FastifyInstance) {
     return { user: mapUser(await app.db.one(`select * from users where id = $1`, [target.id])), releasedTasks };
   });
 
-  // Eigene Einstellungen: Name, Sprache, Theme, Passwort
+  // Eigene Einstellungen: Name, Theme, Chat-Karten, angeheftete Projekte, Passwort. Nur bekannte Schlüssel werden gespeichert.
   app.patch<{ Body: { name?: string; settings?: Record<string, unknown>; password?: string; currentPassword?: string } }>('/me', async (req) => {
     const user = requireUser(req);
     const b = req.body ?? {};
@@ -120,10 +119,12 @@ export async function userRoutes(app: FastifyInstance) {
       await app.db.query(`update users set password_hash = $2 where id = $1`, [user.id, hashPassword(b.password)]);
       await app.db.query(`delete from sessions where user_id = $1 and token <> $2`, [user.id, req.cookies.pt_session ?? '']);
     }
-    const settings = { ...(row.settings ?? {}), ...(b.settings ?? {}) };
+    const incoming = b.settings ?? {};
+    const unknown = Object.keys(incoming).filter((k) => !USER_SETTING_KEYS.includes(k as (typeof USER_SETTING_KEYS)[number]));
+    if (unknown.length) throw badRequest(`Unbekannte Einstellung: ${unknown.join(', ')}`);
+    const settings: Record<string, unknown> = { ...(row.settings ?? {}) };
+    for (const k of USER_SETTING_KEYS) if (k in incoming) { if (incoming[k] === null) delete settings[k]; else settings[k] = incoming[k]; }
     if (settings.theme && !['light', 'dark', 'system'].includes(String(settings.theme))) throw badRequest('Theme: light, dark oder system');
-    if (settings.language && !['de', 'en'].includes(String(settings.language))) throw badRequest('Sprache: de oder en');
-    if (settings.mailNotifications && !['off', 'immediate', 'daily'].includes(String(settings.mailNotifications))) throw badRequest('Mail-Benachrichtigung: off, immediate oder daily');
     if (settings.chatCards && !['needed', 'all'].includes(String(settings.chatCards))) throw badRequest('Bestätigungskarten: needed oder all');
     if (settings.pinnedProjects !== undefined) {
       const ids = settings.pinnedProjects;
@@ -132,14 +133,6 @@ export async function userRoutes(app: FastifyInstance) {
       settings.pinnedProjects = [...new Set(ids as string[])];
     }
     const r = await app.db.one(`update users set name = coalesce($2, name), settings = $3 where id = $1 returning *`, [user.id, b.name?.trim() || null, JSON.stringify(settings)]);
-    // Übergang (eine Version lang): der alte Mail-Modus schreibt in die Benutzerregel „*“ der Benachrichtigungsregeln
-    if (b.settings && 'mailNotifications' in b.settings && settings.mailNotifications) {
-      const mode = ({ immediate: 'now', daily: 'digest', off: 'off' } as const)[settings.mailNotifications as 'immediate' | 'daily' | 'off'];
-      const star = await app.db.maybeOne(`select channels from notification_rules where org_id = $1 and user_id = $2 and project_id is null and task_id is null and event = '*'`, [user.orgId, user.id]);
-      const channels = typeof star?.channels === 'string' ? JSON.parse(star.channels) : star?.channels ?? {};
-      // Sperrt die Org den Mail-Modus, bleibt es bei der Einstellung (die Regel würde ohnehin nicht gelten)
-      try { await setRules(app.db, user, 'user', { orgId: user.orgId, userId: user.id }, [{ event: '*', channels: { ...channels, mail: mode } }]); } catch (e) { if (!(e instanceof HttpError)) throw e; }
-    }
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     // Die Web-App ersetzt damit den angemeldeten Benutzer: managesGroups wie bei /auth/me (Menüpunkt Verwaltung)
     return { user: await withManagedGroups(app.db, mapUser(r)) };
@@ -397,7 +390,7 @@ export async function userRoutes(app: FastifyInstance) {
   app.get('/org/settings', async (req) => {
     const user = requireUser(req);
     const o = await app.db.one(`select name, settings from orgs where id = $1`, [user.orgId]);
-    return { name: o.name, settings: o.settings ?? {} };
+    return { name: o.name, settings: user.globalRole === 'org_admin' ? o.settings ?? {} : publicOrgSettings(o.settings) };
   });
   app.put<{ Body: { company?: string; accentColor?: string; footerText?: string; timeTracking?: boolean; personalProjects?: boolean; mailInquiry?: MailInquiry | null } }>('/org/settings', async (req) => {
     const user = requireUser(req);

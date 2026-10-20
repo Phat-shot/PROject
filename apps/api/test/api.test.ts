@@ -545,10 +545,10 @@ test('Mail: Ordner, Archivieren, Papierkorb, Verschieben in Unterordner mit Rech
   assert.ok(Array.isArray(det.viewIds) && det.canModify === true);
 });
 
-test('Benutzereinstellungen: Theme, Sprache, Name, Passwort; Org-Admin verwaltet Projekt- und Org-Konten', async () => {
+test('Benutzereinstellungen: Theme, Name, Passwort; Org-Admin verwaltet Projekt- und Org-Konten', async () => {
   const max = await t.login('max@demo.local');
   assert.equal((await t.api(max).patch('/me', { settings: { theme: 'neon' } })).statusCode, 400);
-  const r = await t.api(max).patch('/me', { name: 'Max K.', settings: { theme: 'dark', language: 'de' } });
+  const r = await t.api(max).patch('/me', { name: 'Max K.', settings: { theme: 'dark' } });
   assert.equal(r.statusCode, 200, r.body);
   assert.equal(r.json().user.settings.theme, 'dark');
   assert.equal((await t.api(max).get('/auth/me')).json().user.name, 'Max K.');

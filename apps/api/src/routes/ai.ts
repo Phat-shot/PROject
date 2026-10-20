@@ -139,7 +139,7 @@ export async function aiRoutes(app: FastifyInstance) {
   const ownAllowed = (orgId: string, projectId: string) => ownLlmAllowed(db, orgId, projectId);
   /** Kontextfenster des Modells in Token (leer = Standard 32k); die Eingabe belegt höchstens 45 % (Konzept 6.8) */
   const validContext = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); if (!Number.isInteger(n) || n < 4000 || n > 2_000_000) throw badRequest('Kontextgröße: ganze Zahl ab 4000 Token'); return n; };
-  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
+  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), webSearch: Boolean(r.web_search), contextTokens: r.context_tokens ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
   const ownReason = (user: User, projectId: string) => ownLlmReason(db, user, projectId);
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
@@ -156,8 +156,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (reason) throw forbidden(reason);
     const b: any = req.body ?? {};
     const v = validProfile(b);
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_id, project_scope, created_by) values ($1,$2,$3,$4,$5,$6,$7,$8,'none',$9) returning *`,
-      [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, req.params.id, user.id]);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_id, project_scope, created_by, web_search) values ($1,$2,$3,$4,$5,$6,$7,$8,'none',$9,$10) returning *`,
+      [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, req.params.id, user.id, b.webSearch === true]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'ai.project_llm.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl } });
     return { llm: mapOwn(r) };
   });
@@ -169,10 +169,10 @@ export async function aiRoutes(app: FastifyInstance) {
     const v = validProfile(b, cur);
     // Ohne Freigabe (Profilachse, pl.own_llm) nur einschränken: deaktivieren oder Schlüssel entfernen; jede andere Änderung wie Einbinden
     const changes = v.name !== cur.name || v.provider !== cur.provider || v.baseUrl !== cur.base_url || v.model !== cur.model || Boolean(b.apiKey?.trim?.())
-      || (b.active === true && !cur.active) || (typeof b.thinkingOff === 'boolean' && b.thinkingOff !== Boolean(cur.thinking_off));
+      || (b.active === true && !cur.active) || (typeof b.thinkingOff === 'boolean' && b.thinkingOff !== Boolean(cur.thinking_off)) || (b.webSearch === true && !cur.web_search);
     if (changes) { const reason = await ownReason(user, req.params.id); if (reason) throw forbidden(reason); }
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
-    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off)]);
+    await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off), typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search)]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'ai.project_llm.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, keyChanged: b.apiKey !== undefined } });
     return { llm: mapOwn(await db.one(`select * from ai_profiles where id = $1`, [cur.id])) };
   });
