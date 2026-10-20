@@ -186,7 +186,7 @@ Der Weg im Code bleibt einer: `aiConfigFor()`/`aiAllowed()` für die Freigabe (m
 
 | Dokument | Für wen | Inhalt |
 |---|---|---|
-| `docs/KI-Handbuch.md` (neu) | PL, Mitglieder, Org-Admin | Was ein Agent tut und nicht tut (1, 2, 5), Einsatz (Aufnahme, Zuweisung, Auftrag im Chat, Beispiele mit Chat-Verläufen), Steuerung (Rechte, Freigaben, Policy: Selbstständigkeit, Reichweite, Tiefe, Zeiten, Budget, Pause, Befehle), Wissen und Vererbung (8), Recherche, Außengrenze, FAQ („Warum fragt er?“, „Warum hat er nicht gesendet?“, „Woher weiß ich, was er getan hat?“) |
+| `docs/KI-Handbuch.md` (umgesetzt; Hilfe › KI-Agenten, verlinkt aus Projekt › KI und Mitglieder › Projektagent) | PL, Mitglieder, Org-Admin | Was ein Agent tut und nicht tut (1, 2, 5), Einsatz (Aufnahme, Zuweisung, Auftrag im Chat, Beispiele mit Chat-Verläufen), Steuerung (Rechte, Freigaben, Policy: Selbstständigkeit, Reichweite, Tiefe, Zeiten, Budget, Pause, Befehle), Wissen und Vererbung (8), Recherche, Außengrenze, FAQ („Warum fragt er?“, „Warum hat er nicht gesendet?“, „Woher weiß ich, was er getan hat?“) |
 | `docs/KI-Sheet.md` | Betreiber, Entwickler | Prompt-Quelle; neue Sätze in `CHAT_RULES` (Ton, Status, Thema), Sheet unverändert |
 | `docs/Handbuch.md` §11–12 | alle | Verweis auf das KI-Handbuch, Kurzfassung |
 | Hilfe in der App | alle | Seite „KI-Agenten“ (Kurzfassung), verlinkt aus Projekt › KI und Mitglieder › Agent |

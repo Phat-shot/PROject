@@ -98,7 +98,7 @@ export function AiView() {
         </div>}
       </div>
       <div className="card mb">
-        <div className="row between"><h2 style={{ margin: 0 }}>Agenten-Läufe</h2><button className="btn sm" onClick={() => void runs.reload()}>Aktualisieren</button></div>
+        <div className="row between"><h2 style={{ margin: 0 }}>Agenten-Läufe</h2><span className="row" style={{ gap: 4 }}><Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch: was Agenten tun, wie man sie steuert">Hilfe zu Agenten</Link><button className="btn sm" onClick={() => void runs.reload()}>Aktualisieren</button></span></div>
         <p className="muted small">KI-Agenten sind Mitglieder oder stellvertretende PL; sie handeln bei Arbeitspaketen und Aufgaben, für die sie zuständig sind (direkt oder geerbt, z. B. über ein Teilprojekt). Jeder Lauf zeigt Anlass, Protokollnotiz und ausgeführte Aktionen; Log-Einträge stehen am Arbeitspaket unter dem Namen des Agenten.</p>
         {runs.data && runs.data.runs.length === 0 && <div className="empty">Noch keine Läufe. Einen Agenten unter Einstellungen › Mitglieder aufnehmen und ihm ein Arbeitspaket zuweisen.</div>}
         {(runs.data?.runs ?? []).slice(0, 40).map((r) => (

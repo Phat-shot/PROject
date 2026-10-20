@@ -128,7 +128,7 @@ export function Layout({ children }: { children: ReactNode }) {
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>
-          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button><button data-tour="hilfe" onClick={() => nav('/hilfe')} title="Kurzanleitung, Handbuch, KI-Sheet">Hilfe</button>{version && <span className="small" title="Build-Version" style={{ marginLeft: 'auto', opacity: 0.6 }}>{version}</span>}</div>
+          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button><button data-tour="hilfe" onClick={() => nav('/hilfe')} title="Kurzanleitung, Handbuch, KI-Agenten, KI-Sheet">Hilfe</button>{version && <span className="small" title="Build-Version" style={{ marginLeft: 'auto', opacity: 0.6 }}>{version}</span>}</div>
         </div>
       </nav>
       <MenuCtx.Provider value={() => setMenu(true)}>

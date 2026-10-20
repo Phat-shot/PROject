@@ -188,6 +188,8 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 ## 12. Mit KI-Agenten arbeiten
 
+Kurzfassung; die vollständige Anleitung mit Beispielen, Steuerung und häufigen Fragen steht im **KI-Handbuch** (`docs/KI-Handbuch.md`, in der App unter Hilfe › KI-Agenten).
+
 **Was ein Agent ist:** ein Benutzer ohne Login, nie verantwortliche PL oder Org-Admin, im Projekt **Mitglied** oder **stellvertretende PL**. Er arbeitet an APs und Aufgaben, für die er zuständig ist: direkt zugewiesen oder geerbt (z. B. als Verantwortung eines Teilprojekts: dann alle APs darin ohne eigene Zuständigkeit, und Aufgaben eines seiner APs). Projekte legt er nie an.
 
 **Einrichten**

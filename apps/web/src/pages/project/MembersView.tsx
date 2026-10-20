@@ -87,7 +87,7 @@ export function MembersView() {
               {(detail.project.timeTrackingEnabled || detail.project.budgetHours) && <><dt>Budget (Stunden)</dt><dd>{isPl ? <BudgetInput /> : detail.project.budgetHours ?? '–'}</dd></>}</>}
               {!timeTracking && <><dt>Zeiterfassung</dt><dd className="muted">mandantenweit deaktiviert (Verwaltung)</dd></>}
               <dt>Projekt-KI (LLM)</dt><dd><ProjectAiSelect readOnly={!isPl} /></dd>
-              <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /></dd>
+              <dt>Projektagent</dt><dd><ProjectAgentSelect readOnly={!isPl} /> <Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch">Hilfe</Link></dd>
               <dt>Mail-Rückfrage</dt><dd><MailInquirySelect readOnly={!isPl} /></dd>
               <dt>Agenten-Policy</dt><dd><ProjectAgentPolicy readOnly={!isPl} /></dd>
             </dl>
