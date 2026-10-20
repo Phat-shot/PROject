@@ -78,8 +78,9 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 - **Direktnachrichten** mit jeder Person des Mandanten und mit KI-Agenten („+ Neu“).
 
 **Mail**
-- Konten: persönlich, Projektkonto oder Organisationskonto (Konfiguration). Geteilt werden nie ganze Konten, sondern **Ansichten** mit Filtern (Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum). Gespeichert werden nur Treffer.
-- Rechte je Ansicht: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen. Aus persönlichen Konten sendet nur der Eigentümer.
+- **Konten: Verwalter und Verwendungen.** Ein Konto hat einen Verwalter (du, ein Projekt über seine PL oder der Org-Admin) und beliebige Verwendungen: *persönlich* („Meine Konten“: Ansichten teilst nur du, senden darfst nur du), *Projektkonto* (Antwortadresse mit Plus-Code, Absender für Agenten, Einladungen, Erinnerungen, Berichte, Workflows; je Projekt genau eines als **Standard-Ausgangskonto**, das die PL unter Einstellungen › Mail setzt) oder *Org-Postfach* (Systemmails, höchstens eines, nur der Org-Admin). Konten legt jede Person an (Konfiguration); die PL bindet eigene oder vom Projekt verwaltete Konten an ihr Projekt, nie an fremde; der Org-Admin kann Konten der Organisation jedem Projekt **anbieten** (auch persönlichen), ohne dort Ansichten oder Inhalte zu sehen; angebotene Konten werden nie automatisch Standard. Eine PL setzt nie „Org-Postfach“.
+- Geteilt werden nie ganze Konten, sondern **Ansichten** mit Filtern (Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum). Gespeichert werden nur Treffer. Jede Ansicht besteht über eine Verwendung: über die Projektbindung gelten Rollenrechte, über die persönliche Bindung die Eigentümerregeln.
+- Rechte je Ansicht: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen. Über eine persönliche Bindung sendet nur der Eigentümer.
 - Aktionen an einer Mail: mit AP verknüpfen oder kopieren, ins Log übernehmen, AP anpassen (Mail als Beleg), AP erstellen, in Doku ablegen oder an eine Seite anhängen.
 - Entwürfe ohne Senderecht gehen in die **Freigaben** des Projekts; die PL sendet sie. Entwürfe aus persönlichen Konten sieht und sendet nur der Eigentümer. Entwürfe eines KI-Agenten am Projektkonto ändert, sendet oder lehnt ab, wer das Konto verwaltet (PL). Eine Ablehnung steht im Log des AP, und der Agent läuft daraufhin erneut.
 - **Außenprüfung angehalten** (oben in den Freigaben): Agenten-Mails an Externe, in denen die Prüfung Projektinternes gefunden hat, mit Fundstellen und dem, was die Neuformulierung zurückgehalten hat. „Bearbeiten und senden“, „Unverändert senden“ oder „Ablehnen“; entscheiden darf, wer den Entwurf senden darf (Senderecht der Ansicht bzw. PL), auch die verfassende Person nur mit Senderecht. Eine genannte Seite lässt sich dabei für die Empfänger freigeben (nur lesen; PL oder „Final setzen / Versand“). Entwürfe der Mail-KI zeigen Fundstellen nur als Hinweis.
@@ -226,7 +227,7 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 ## 13. Einstellungen und Verwaltung
 
 - **Benutzereinstellungen:** Name, Theme, Sprache, Benachrichtigungen (Chat und Mail je Ereignisklasse, für alle oder je Projekt, stummschalten), Passwort, zweiter Faktor (Authenticator-App), Kalender-Abo und Kalender schreiben.
-- **Konfiguration:** Mail-Konten (persönlich, Projekt, Organisation; Microsoft 365 und Google per OAuth).
+- **Konfiguration:** Mail-Konten mit Verwalter und Verwendungen (persönlich, Projektkonto, Org-Postfach; Microsoft 365 und Google per OAuth); Verwendung hinzufügen oder lösen, Verwalter wechseln (Org-Admin). Wird eine Person deaktiviert, verschwinden ihre nur persönlich genutzten Konten; Konten mit Projekt- oder Org-Verwendung gehen an das Projekt bzw. die Organisation.
 - **Verwaltung (Org-Admin):** Benutzer einladen; globale Rolle und Org-Rechte (KI verwalten, Gruppen verwalten, Ressourcen-Pool) ändern, deaktivieren und reaktivieren (den eigenen Zugang deaktiviert man nicht selbst, der letzte aktive Org-Admin bleibt erhalten); Gruppen mit Verwaltern; Projekte mit verantwortlicher PL (neu bestimmen, nie sich selbst; die bisherige wird Stellvertretung und bekommt eine Meldung); Kommunikation (Benachrichtigungsregeln des Mandanten mit Sperren, Tages-Digest-Stunde), PDF-Stil, Module (Zeiterfassung, persönliche Projekte für alle), KI-Freigaben mit Notaus, KI-Profile, Budgets, Außenprüfung (streng oder nur prüfen), eigene LLMs der Projekte, KI-Agenten, Projekt- und Doku-Vorlagen, Audit-Export. Mit „KI verwalten“ sieht man nur die KI-Karten, mit „Gruppen verwalten“ alle Gruppen, als Verwalter einer Gruppe nur diese und pflegt deren Mitglieder.
 - **Anmeldung:** Passwort mit optionalem zweiten Faktor oder Single Sign-on (OIDC), falls eingerichtet.
 
@@ -238,7 +239,7 @@ Ein persönliches Projekt ist ein normales Projekt (Board, Plan, Doku, Besprechu
 2. Mitglieder: nur der Ersteller (PL) und KI-Agenten; weitere Personen, Gruppen und Einladungen sind gesperrt.
 3. Sichtbar nur für Mitglieder („Organisation“ ist nicht wählbar).
 4. Der Org-Admin hat keinen Inhaltszugriff, verwaltet die Projektkonten nicht, sieht das Projekt nicht in der Verwaltungsliste, bestimmt keine neue PL und bekommt im Audit-Export Aktion, Person und Zeit, aber keine Details.
-5. Postfächer: nur eigene (siehe unten); Workflow-Mailschritte fallen nicht auf das Organisationspostfach zurück.
+5. Postfächer: nur eigene (persönlich gebundene des Eigentümers, Projektkonten dieses Projekts, dazu ausdrücklich vom Org-Admin angebotene Konten); Workflow-Mailschritte fallen nicht auf das Organisationspostfach zurück.
 6. KI: eigenes LLM je Mandantenschalter; Org-Profile nur mit Freigabe (siehe unten).
 7. Meldungen schreiben keine Systembeiträge in den Projektkanal (der Kanal selbst bleibt für Agenten-Gespräche).
 8. Startet leer: keine Standardordner, keine Vorlage.

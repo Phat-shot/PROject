@@ -1460,7 +1460,7 @@ alter table mail_views alter column use_id set not null;
 
 `type`, `owner_user_id`, `project_id` bleiben eine Version lang als Spiegel des Verwalters (der Server setzt `type` beim Anlegen aus dem Verwalter); sie werden nicht mehr als Bindung ausgewertet und entfallen danach. Teilindizes und `nulls not distinct` laufen bereits unter PGlite (001, 031, 043, 047). Die Migration wählt als Standard dasselbe Konto wie heute `order by created_at limit 1`.
 
-### 17.4 Betroffene Stellen und Helfer
+### 17.4 Betroffene Stellen und Helfer (Schritt D, umgesetzt; `mail/accounts.ts`, Migration 049)
 
 `mail/accounts.ts` (neu): `projectAccount()`, `orgAccount(orgId, {fallbackAllowed})`, `personalAccounts(user)`, `accountUses(account)`, `accountBoundToProject(accountId, projectId)`, `viewUse(viewId)`, `canManageAccount()` (nach Verwalter), `canBind(user, account, use, target)`, `accountRights(user, account, projectId)`, `setDefault()`, `unbind()`.
 

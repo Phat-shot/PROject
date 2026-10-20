@@ -11,6 +11,7 @@ import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
 import { setRules } from '../rules.js';
 import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
+import { orgAccount as orgAccountOf, releaseUserAccounts } from '../mail/accounts.js';
 
 export async function userRoutes(app: FastifyInstance) {
   // Alle Benutzer des Mandanten (für Einladungen, Zuweisungen); ?all=1 mit Deaktivierten (Org-Admin, zum Reaktivieren)
@@ -57,8 +58,8 @@ export async function userRoutes(app: FastifyInstance) {
     if (plOf.rows.length) throw badRequest(`Benutzer ist PL in: ${plOf.rows.map((r: any) => r.key).join(', ')}. Erst eine neue PL bestimmen (Verwaltung › Projekte).`);
     await app.db.query(`update users set active = false where id = $1`, [target.id]);
     await app.db.query(`delete from sessions where user_id = $1`, [target.id]);
-    // Persönliche Konten trennen: Ansichten verschwinden, Kopien in Arbeitspaketen bleiben.
-    await app.db.query(`delete from mail_accounts where owner_user_id = $1 and type = 'personal'`, [target.id]);
+    // Konten der Person: ohne weitere Bindung löschen (Ansichten verschwinden, Kopien in Arbeitspaketen bleiben), sonst Verwaltung an Projekt oder Org
+    await releaseUserAccounts(app.db, user.orgId, target.id, user.id);
     // Ausdrückliche Zuständigkeiten fallen zurück auf die Ebene darüber.
     const tasks = await app.db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 returning id, project_id, title`, [target.id]);
     await app.db.query(`update subprojects set responsible_user_id = null where responsible_user_id = $1`, [target.id]);
@@ -187,7 +188,7 @@ export async function userRoutes(app: FastifyInstance) {
     if (!inv.project_id) return false;
     try { await requireProject(app.db, user, inv.project_id, 'pl'); return true; } catch { return false; }
   };
-  const orgAccount = (orgId: string) => app.db.maybeOne(`select * from mail_accounts where org_id = $1 and type = 'org' order by created_at limit 1`, [orgId]);
+  const orgAccount = (orgId: string) => orgAccountOf(app.db, orgId);
   const sendInvitation = async (inv: any, inviter: { id: string; name: string }) => {
     const account = await orgAccount(inv.org_id);
     if (!account) {

@@ -4,7 +4,7 @@ import { api, fmtDate } from '../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../components/ui';
 import { MilestonesTable, SubprojectsTable } from './planForms';
 import { InviteCard } from './InviteCard';
-import { AccountForm, OAuthStartDialog } from '../MailAccountsPage';
+import { AccountForm, OAuthStartDialog, managerLabel, useLabel } from '../MailAccountsPage';
 import { useAiStatus } from '../../lib/useAi';
 import { TrashCard } from './TrashCard';
 import { ContactsCard } from './ContactsCard';
@@ -18,7 +18,7 @@ import { useAuth } from '../../lib/auth';
 import { FilterEditor, NewView, RightsEditor, type ViewRow } from './MailView';
 import { AiFolderDialog } from './MailAi';
 import { ProjectNotifyCard } from '../../components/NotifyRules';
-import type { AgentUser, AiFeatureDef, DocPage, DocTemplate, Group, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
+import type { AgentUser, AiFeatureDef, DocPage, DocTemplate, Group, MailAccount, ProjectGroup, ReportingPolicy } from '@projekttool/shared';
 import { useProjectPolicy } from '../../lib/useProjectPolicy';
 
 export function MembersView() {
@@ -432,6 +432,44 @@ function EscalationForm() {
   );
 }
 
+/** Konten des Projekts: Projektbindungen mit Standard-Ausgangskonto, angebotene Konten der Organisation, Anbinden eigener oder verwalteter Konten. */
+function ProjectAccountsCard({ onCreate, onOauth, providers }: { onCreate: () => void; onOauth: (p: { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }) => void; providers: { key: 'microsoft' | 'google'; label: string; mailProvider: 'graph' | 'imap' }[] }) {
+  const { detail, reload } = useProject();
+  const { user } = useAuth();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const data = useData<{ accounts: MailAccount[]; bindable: MailAccount[] }>(`/projects/${detail.project.id}/mail/accounts`);
+  const [bindId, setBindId] = useState('');
+  const { busy, error, run } = useAsync();
+  const dialog = useDialog();
+  const refresh = async () => { await data.reload(); await reload(); };
+  const accounts = data.data?.accounts ?? [];
+  const bindable = data.data?.bindable ?? [];
+  return (
+    <div className="mt" id="konten">
+      <h3>Projektkonten</h3>
+      <p className="muted small">Projektkonten sind Antwortadresse (Plus-Code), Absender für Agenten, Einladungen, Erinnerungen, Berichte und Workflows. Genau eines ist Standard für ausgehende Mails; die PL bindet eigene oder vom Projekt verwaltete Konten an, der Org-Admin kann Konten der Organisation anbieten.</p>
+      {error && <div className="error small">{error}</div>}
+      {accounts.length === 0 && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.</p>}
+      {accounts.length > 0 && <table className="table"><thead><tr><th>Standard</th><th>Konto</th><th>Verwalter</th><th /></tr></thead><tbody>
+        {accounts.map((a) => <tr key={a.id}>
+          <td><input type="radio" name="default-account" checked={Boolean(a.isDefault)} disabled={!isPl || busy} title={isPl ? 'Als Standard für ausgehende Mails setzen' : 'Standard-Ausgangskonto'} onChange={() => void run(async () => { await api.put(`/projects/${detail.project.id}/mail/default-account`, { accountId: a.id }); await refresh(); })} /></td>
+          <td>{a.name}<div className="muted small">{a.address}{a.offered && <span className="badge" style={{ marginLeft: 6 }} title="Vom Org-Admin angeboten; wird nie automatisch Standard">angeboten</span>}</div></td>
+          <td className="small">{managerLabel(a, user?.id, [detail.project])}</td>
+          <td className="nowrap">{isPl && <button className="btn sm link" disabled={busy} onClick={() => { const u = a.uses?.find((x) => x.use === 'project' && x.projectId === detail.project.id); if (u) void dialog.confirm({ title: 'Projektbindung lösen', text: `${a.address} nicht mehr als Projektkonto nutzen? Ansichten darüber verschwinden, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Lösen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}/uses/${u.id}`); await refresh(); }); }); }}>Bindung lösen</button>}</td>
+        </tr>)}
+      </tbody></table>}
+      {isPl && <div className="row mt">
+        <button className="btn sm primary" onClick={onCreate}>Neues Projektkonto anbinden</button>
+        {providers.map((p) => <button key={p.key} className="btn sm" onClick={() => onOauth(p)}>Mit {p.label} verbinden</button>)}
+        {bindable.length > 0 && <>
+          <select value={bindId} onChange={(e) => setBindId(e.target.value)} style={{ width: 'auto' }}><option value="">– vorhandenes Konto binden –</option>{bindable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) · {(a.uses ?? []).map(useLabel).join(', ') || 'ohne Verwendung'}</option>)}</select>
+          <button className="btn sm" disabled={!bindId || busy} onClick={() => void run(async () => { await api.post(`/mail/accounts/${bindId}/uses`, { use: 'project', projectId: detail.project.id }); setBindId(''); await refresh(); })}>Binden</button>
+        </>}
+      </div>}
+    </div>
+  );
+}
+
 function MailViewsCard() {
   const { detail, reload } = useProject();
   const [account, setAccount] = useState(false);
@@ -464,7 +502,7 @@ function MailViewsCard() {
           })()}</td>
           <td className="nowrap">{v.canManage && <><button className="btn sm link" onClick={() => setFilterFor(v)}>Filter</button><button className="btn sm link" onClick={() => setRightsFor(v)}>Rechte</button></>}</td></tr>)}
       </tbody></table>}
-      {!detail.project.mailAddress && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.{isPl && <> <button className="btn sm primary" style={{ marginLeft: 6 }} onClick={() => setAccount(true)}>Projektkonto anbinden</button>{oauth.data?.providers.map((p) => <button key={p.key} className="btn sm" style={{ marginLeft: 6 }} onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}</>}</p>}
+      <ProjectAccountsCard onCreate={() => setAccount(true)} onOauth={(p) => setOauthStart(p)} providers={oauth.data?.providers ?? []} />
       {oauthStart && <OAuthStartDialog provider={oauthStart} projects={[detail.project]} fixedProject={detail.project} onClose={() => setOauthStart(null)} />}
       <div className="row mt"><button className="btn sm" onClick={() => setNewView(true)}>+ Ansicht</button><button className="btn sm" disabled={!detail.project.aiProfileId} title={detail.project.aiProfileId ? 'Ordner im Konto, dessen Mails die Projekt-KI direkt bearbeitet' : 'Erst unter Projekt eine Projekt-KI zuweisen'} onClick={() => setAiFolder(true)}>Ordner „KI Bearbeiten“ einrichten</button><Link className="btn sm link" to="/einstellungen/konfiguration">Konten verwalten</Link></div>
       {aiFolder && <AiFolderDialog onClose={() => setAiFolder(false)} onDone={() => { setAiFolder(false); void views.reload(); }} />}

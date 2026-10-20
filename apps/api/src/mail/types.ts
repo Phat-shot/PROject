@@ -32,9 +32,12 @@ export interface OutgoingMessage {
 export interface AccountRow {
   id: string;
   org_id: string;
+  /** Spiegel des Verwalters (eine Version lang); Bindungen stehen in mail_account_uses */
   type: 'personal' | 'project' | 'org';
   owner_user_id: string | null;
   project_id: string | null;
+  managed_user_id?: string | null;
+  managed_project_id?: string | null;
   name: string;
   address: string;
   provider: 'imap' | 'dev' | 'graph';

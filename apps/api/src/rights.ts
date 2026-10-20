@@ -83,17 +83,16 @@ export const NO_RIGHTS: MailViewRights = { canRead: false, canDraft: false, canS
 export const ALL_RIGHTS: MailViewRights = { canRead: true, canDraft: true, canSend: true, canAi: true, canCreateTask: true };
 
 /**
- * Rechte an einer Mail-Ansicht: Eigentümer eines persönlichen Kontos hat alles,
- * sonst Vereinigung aus personenbezogener Zeile und Rollenzeile.
- * Senden aus persönlichen Konten nur der Eigentümer.
+ * Rechte an einer Mail-Ansicht hängen an ihrer Bindung (mail_views.use_id): über eine persönliche Bindung hat der Eigentümer
+ * alles und nur er sendet; sonst Vereinigung aus personenbezogener Zeile, Gruppenzeilen und Rollenzeile.
  */
 export async function getViewRights(db: Db, viewId: string, user: User, membership: Membership | null): Promise<MailViewRights> {
   const view = await db.maybeOne(
-    `select v.*, a.type as account_type, a.owner_user_id from mail_views v join mail_accounts a on a.id = v.account_id where v.id = $1`,
+    `select v.*, u.use, u.user_id as use_user_id from mail_views v join mail_account_uses u on u.id = v.use_id where v.id = $1`,
     [viewId]
   );
   if (!view) return NO_RIGHTS;
-  if (view.account_type === 'personal' && view.owner_user_id === user.id) return ALL_RIGHTS;
+  if (view.use === 'personal' && view.use_user_id === user.id) return ALL_RIGHTS;
   if (!membership) return NO_RIGHTS;
   const rows = await db.query(
     `select * from mail_view_rights where view_id = $1 and (user_id = $2 or role = $3 or group_id in (select group_id from group_members where user_id = $2))`,
@@ -107,7 +106,7 @@ export async function getViewRights(db: Db, viewId: string, user: User, membersh
     r.canAi ||= row.can_ai;
     r.canCreateTask ||= row.can_create_task;
   }
-  if (view.account_type === 'personal') r.canSend = false;
+  if (view.use === 'personal') r.canSend = false;
   return r;
 }
 

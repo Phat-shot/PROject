@@ -74,7 +74,7 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - Dashboard (nur global, nach Projekt filterbar): Reiter „Meine Arbeit“ (Soll/Ist der eigenen Arbeit: offen, überfällig, fällig, blockiert, im Plan; Termine, Meldungen, geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task), „Projekte“ (früher Portfolio: Ampel manuell oder berechnet, Fortschritt, Verzug, Meilenstein, Budget, Auslastung und Zeiten über Projekte) und „Alle Arbeitspakete“; mit Projektfilter zeigt „Meine Arbeit“ das Projekt-Dashboard und die eigene Arbeit im Projekt
 - Kanban-Spaltenarten Geplant / in Bearbeitung / Zurückgestellt / Erledigt; nur aktive Spalten zählen als Stillstand für die Eskalation
 - Projekt-Postfach als Posteingang aller Ansichten mit Ordnern (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), Filter je Ansicht; Mails archivieren, löschen, verschieben, Unterordner anlegen (IMAP und Datenbank synchron); Ansichten und Filter in den Projekteinstellungen
-- Einstellungen: Benutzereinstellungen (Name, Theme hell/dunkel/System, Sprache, Passwort), Konfiguration (Mail-Konten persönlich, Projekt, Organisation; Org-Admin verwaltet Projekt- und Org-Konten, PL die Konten seiner Projekte), Verwaltung
+- Einstellungen: Benutzereinstellungen (Name, Theme hell/dunkel/System, Sprache, Passwort), Konfiguration (Mail-Konten mit Verwalter und Verwendungen: persönlich, Projektkonto mit Standard je Projekt, Org-Postfach; Org-Admin bietet Konten der Organisation an und wechselt Verwalter, PL bindet Konten ihrer Projekte), Verwaltung
 - Tasks mit externer Mail-Zuständigkeit; „Stand nachfragen“ aus Arbeitspaket und Task mit vorbelegter Mail, Antwort landet über die Antwortadresse im Arbeitspaket
 - Zeiterfassung als optionales Modul je Projekt: Buchung je Aufgabe oder frei, Schätzung je Aufgabe, Budget je Projekt, Auswertung je Person und Teilprojekt, CSV-Export, „Meine Zeiten“; Mitglieder sehen eigene Buchungen, PL alle (auch im AP)
 - Plan: Balken Start–Deadline, Punkt bei reiner Deadline, Teilprojekt-Sammelbalken, Meilensteine, Abhängigkeiten Ende → Anfang
@@ -82,7 +82,7 @@ Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token m
 - „Meine Aufgaben“ über alle Projekte, Suche, Audit-Log je Projekt (Mitglieder sehen eigene Aktionen)
 
 **Mail**
-- Konten persönlich oder Projektkonto; Adapter: IMAP/SMTP (imapflow, nodemailer), Microsoft Graph und Dev-Postfach im Speicher; OAuth2 für Microsoft 365 (Graph oder IMAP-XOAUTH2) und Google (IMAP/SMTP-XOAUTH2) mit Token-Refresh, Knöpfe „Mit Microsoft 365/Google verbinden“ in Konfiguration und Projekteinstellungen (Variablen `OAUTH_*` in `.env.example`)
+- Konten mit Verwalter (Person, Projekt, Org-Admin) und Bindungen (`mail_account_uses`: org | project mit Standard-Ausgangskonto | personal); Rechte und Inhaltsgrenzen hängen an der Bindung der Ansicht; Adapter: IMAP/SMTP (imapflow, nodemailer), Microsoft Graph und Dev-Postfach im Speicher; OAuth2 für Microsoft 365 (Graph oder IMAP-XOAUTH2) und Google (IMAP/SMTP-XOAUTH2) mit Token-Refresh, Knöpfe „Mit Microsoft 365/Google verbinden“ in Konfiguration und Projekteinstellungen (Variablen `OAUTH_*` in `.env.example`)
 - Konto ≠ Ansicht: geteilt werden nur Ansichten (Filter: Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum)
 - Gespeichert werden **nur Treffer** einer Ansicht; Kopfdaten werden vor dem Laden des Bodys geprüft
 - Rechte je Ansicht pro Person oder Rolle: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen; aus persönlichen Konten sendet nur der Eigentümer

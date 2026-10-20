@@ -2,6 +2,7 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { dispatch, notify } from '../notify.js';
 import { dateStr, loadTasks, resolveProjectLead } from './service.js';
+import { projectAccount } from '../mail/accounts.js';
 
 /**
  * Eskalationsregelwerk (Regel vor KI). Die KI liefert später nur Text und Einschätzung aus Mailinhalten;
@@ -150,7 +151,7 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
   await audit(db, { orgId: pr.org_id, projectId: pr.id, userId: null, action: 'escalation.raise', objectType: 'task', objectId: row.taskId, details: { level: row.targetLevel, reason: row.reason, score: row.score, overdueDays: row.overdueDays, staleDays: row.staleDays } });
   // Stufe 3 mit externer Adresse: Mail über das Projektkonto, als Entwurf zur Freigabe oder direkt
   if (row.targetLevel >= 3 && p.contactEmail) {
-    const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [pr.id]);
+    const account = await projectAccount(db, pr.id);
     if (account) {
       const text = `Guten Tag,\n\nim Projekt „${pr.name}“ ist das Arbeitspaket „${row.title}“ ${row.reason}. Zuständig: ${row.responsible ?? '–'}. Fällig: ${row.dueDate ?? '–'}.\n\nWir bitten um Entscheidung bzw. Unterstützung.\n\nMit freundlichen Grüßen\n${lead.name ?? 'Projektleitung'}`;
       const d = await db.one(

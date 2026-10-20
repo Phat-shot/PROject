@@ -88,9 +88,10 @@ export function MailAiBox({ mailId, accountId, outgoing, views, canCreateTask }:
 /** Einstellungen › Mail: Ordner „KI Bearbeiten“ für ein Konto einrichten. */
 export function AiFolderDialog({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { detail } = useProject();
-  const accounts = useData<{ accounts: MailAccount[] }>('/mail/accounts');
+  const accounts = useData<{ accounts: MailAccount[]; personalAccounts: MailAccount[] }>(`/projects/${detail.project.id}/mail/accounts`);
   const isPl = detail.project.myMembership.role === 'pl';
-  const usable = (accounts.data?.accounts ?? []).filter((a) => a.type === 'personal' || (a.type === 'project' && a.projectId === detail.project.id && isPl));
+  // Projektkonten (PL) über die Projektbindung, eigene Konten über die persönliche Bindung
+  const usable = [...(isPl ? (accounts.data?.accounts ?? []).map((a) => ({ ...a, via: 'Projektkonto' })) : []), ...(accounts.data?.personalAccounts ?? []).filter((a) => !(accounts.data?.accounts ?? []).some((x) => x.id === a.id)).map((a) => ({ ...a, via: 'persönlich' }))];
   const [accountId, setAccountId] = useState('');
   const { busy, error, run } = useAsync();
   useEffect(() => { if (!accountId && usable[0]) setAccountId(usable[0].id); }, [usable.length]);
@@ -98,8 +99,8 @@ export function AiFolderDialog({ onClose, onDone }: { onClose: () => void; onDon
     <Modal title="Ordner „KI Bearbeiten“ einrichten" onClose={onClose}>
       <p className="small">Im Konto entsteht der Ordner „KI Bearbeiten“ und im Projekt eine Ansicht darauf. Jede Mail, die du dort ablegst (im Mailprogramm oder hier mit „KI bearbeiten“), bearbeitet die Projekt-KI sofort in deinem Auftrag: Arbeitspaket oder Aufgabe mit Ursprungsmail, Zuweisung (auch an KI-Agenten), Termin im Kalender, Antwortentwurf; danach legt sie die Mail ab („Archiv“ oder „In Arbeit“).</p>
       <p className="notice small">Der Inhalt dieser Mails wird für die Mitglieder des Projekts sichtbar (als Kopie am Arbeitspaket).</p>
-      {usable.length === 0 ? <div className="empty">Kein passendes Konto: ein persönliches Konto (Einstellungen › Mail-Konten) oder als PL das Projektkonto.</div> :
-        <label className="field"><span>Konto</span><select value={accountId} onChange={(e) => setAccountId(e.target.value)}>{usable.map((a) => <option key={a.id} value={a.id}>{a.address} · {a.type === 'personal' ? 'persönlich' : 'Projektkonto'}</option>)}</select></label>}
+      {usable.length === 0 ? <div className="empty">Kein passendes Konto: ein eigenes Konto (Einstellungen › Mail-Konten) oder als PL ein Projektkonto (Einstellungen › Mail).</div> :
+        <label className="field"><span>Konto</span><select value={accountId} onChange={(e) => setAccountId(e.target.value)}>{usable.map((a) => <option key={a.id} value={a.id}>{a.address} · {a.via}</option>)}</select></label>}
       {error && <div className="error">{error}</div>}
       <div className="row mt"><button className="btn primary" disabled={busy || !accountId} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/mail/ai-folder`, { accountId }); onDone(); })}>Einrichten</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
     </Modal>

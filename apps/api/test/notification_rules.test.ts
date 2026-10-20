@@ -432,9 +432,8 @@ test('notifyMail: PDF nur an interne Empfänger mit Leserecht, Fehler ins Audit,
   await t.db.query(`update notifications set mailed_at = now() where mailed_at is null`);
 
   // Ohne Org-Postfach: nur Lieferungen, einzeln über das Projektkonto
-  await t.db.query(`update mail_accounts set org_id = (select id from orgs where id <> $1 limit 1) where type = 'org' and org_id = $1`, [t.ids.org]).catch(() => undefined);
-  const org = await t.db.maybeOne(`select id from mail_accounts where type = 'org' and org_id = $1`, [t.ids.org]);
-  if (org) await t.db.query(`update mail_accounts set type = 'personal', owner_user_id = $2 where id = $1`, [org.id, U().admin]);
+  // Org-Bindung vorübergehend lösen (das Konto bleibt), danach wieder setzen
+  const orgUse = await t.db.maybeOne(`delete from mail_account_uses where use = 'org' and org_id = $1 returning account_id`, [t.ids.org]);
   await notify(t.db, { userId: U().pl, projectId: web(), type: 'report.sent', title: 'Lieferung ohne Org', ref: { type: 'page', id: page.id }, attach: true });
   await notify(t.db, { userId: U().pl, projectId: web(), type: 'report.sent', title: 'Ohne Anhang' });
   const b2 = t.mail.dev.sent.length;
@@ -444,7 +443,7 @@ test('notifyMail: PDF nur an interne Empfänger mit Leserecht, Fehler ins Audit,
   assert.equal(s2[0].msg.from.address, 'projekt-web@demo.local');
   assert.match(String(s2[0].msg.subject), /Lieferung ohne Org/);
   assert.equal((await notes(U().pl, `title = 'Ohne Anhang'`))[0].mailed_at, null, 'normale Meldungen brauchen das Org-Postfach');
-  if (org) await t.db.query(`update mail_accounts set type = 'org', owner_user_id = null where id = $1`, [org.id]);
+  if (orgUse) await t.db.query(`insert into mail_account_uses (org_id, account_id, use) values ($1,$2,'org')`, [t.ids.org, orgUse.account_id]);
   await t.api(pl).put('/me/notification-rules', { rules: [{ event: '*' }] });
   await t.api(admin).put('/me/notification-rules', { rules: [{ event: '*' }] });
 });

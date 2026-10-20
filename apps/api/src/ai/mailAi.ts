@@ -13,6 +13,7 @@ import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, createPlannedEvent, createP
 import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
 import { checkHint } from '../outbound.js';
+import { USE_LATERAL } from '../mail/accounts.js';
 
 /**
  * Mail-KI an einer Ansicht.
@@ -95,7 +96,7 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
   const requeue = (error: string) => db.query(`update mail_ai_runs set status = 'queued', error = $2 where id = $1`, [run.id, error]);
   try {
     const project = await db.maybeOne(`select * from projects where id = $1 and status = 'active'`, [run.project_id]);
-    const m = await db.maybeOne(`select m.*, a.type as account_type, a.owner_user_id, a.address as account_address from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [run.mail_id]);
+    const m = await db.maybeOne(`select m.*, ux.use, ux.use_user_id, a.address as account_address from mails m join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where m.id = $1`, [run.mail_id, run.project_id]);
     const view = run.view_id ? await db.maybeOne(`select * from mail_views where id = $1`, [run.view_id]) : null;
     if (!project || !m || !view) return void (await finish('skipped', { error: 'Projekt, Mail oder Ansicht nicht mehr vorhanden' }));
 
@@ -150,7 +151,7 @@ Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.sp
       await notify(db, { userId: actor.id, projectId: project.id, type: 'mail.ai', title: `KI hat Mail bearbeitet: ${cut(m.subject, 80)}`, body: summary, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
     } else {
       stored = proposed.map((a) => ({ ...clean(a), status: 'pending' as const }));
-      const owners = account.type === 'personal' && account.owner_user_id ? [account.owner_user_id] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent'`, [project.id])).rows.map((x: any) => x.user_id);
+      const owners = m.use === 'personal' && m.use_user_id ? [m.use_user_id] : (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.role = 'pl' and u.kind <> 'agent'`, [project.id])).rows.map((x: any) => x.user_id);
       const n = stored.filter((x) => x.type !== 'none').length;
       if (n) for (const u of owners) await notify(db, { userId: u, projectId: project.id, type: 'mail.ai', title: `${agent.name}: ${n} Vorschl${n === 1 ? 'ag' : 'äge'} zu „${cut(m.subject, 60)}“`, body: summary, link: `/projekte/${project.id}/mail/m/${m.id}`, dedupeKey: null });
       // Für Budget und Übersicht der Agentenläufe: ohne Inhalt aus der Mail (die Läufe sehen alle Mitglieder, die Mail ggf. nicht)
@@ -198,7 +199,7 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
   const copied = ctx.run.mode === 'process';
   const linkMail = (taskId: string, origin: boolean) => linkMailToTask(db, { mailId: mail.id, taskId, copied, linkedBy: actor.id, origin, actorId: actor.id, logged: true });
   // Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an (Inhalt würde sonst ins Projekt gelangen)
-  if (ctx.run.mode === 'triage' && mail.account_type === 'personal' && mail.owner_user_id !== actor.id && a.type !== 'none') fail('Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an');
+  if (ctx.run.mode === 'triage' && mail.use === 'personal' && mail.use_user_id !== actor.id && a.type !== 'none') fail('Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an');
   const title = String(a.title ?? '').trim().slice(0, 200);
   const start = ymd(a.startDate); const due = ymd(a.dueDate);
   if (start === undefined || due === undefined) fail('Datum nicht als YYYY-MM-DD');
@@ -300,7 +301,7 @@ export async function decideProposals(db: Db, svc: MailService, runId: string, u
   const run = await db.maybeOne(`select r.*, u.name as agent_name from mail_ai_runs r left join users u on u.id = r.agent_user_id where r.id = $1 and r.mode = 'triage'`, [runId]);
   if (!run) fail('Vorschläge nicht gefunden');
   const project = await db.one(`select * from projects where id = $1`, [run.project_id]);
-  const mail = await db.one(`select m.*, a.type as account_type, a.owner_user_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [run.mail_id]);
+  const mail = await db.one(`select m.*, ux.use, ux.use_user_id from mails m join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where m.id = $1`, [run.mail_id, run.project_id]);
   const view = run.view_id ? await db.maybeOne(`select * from mail_views where id = $1`, [run.view_id]) : null;
   if (!view) fail('Ansicht gibt es nicht mehr');
   const actions: StoredAction[] = run.actions ?? [];

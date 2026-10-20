@@ -58,7 +58,7 @@ test('Kalenderziele: ohne Einrichtung keine; CalDAV speichern prüft per PROPFIN
 test('Microsoft 365: persönliches Graph-Konto wird Kalenderziel, Termin anlegen dann aktualisieren (PATCH mit gemerkter Kennung), Token wird aufgefrischt', async () => {
   const pl = await t.login('pl@demo.local');
   const pid = t.ids.projects.web;
-  await t.db.query(`insert into mail_accounts (org_id, type, owner_user_id, name, address, provider, oauth_provider, oauth_access_token, oauth_refresh_token, oauth_expires_at) values ($1,'personal',$2,'M365','petra@contoso.com','graph','microsoft',$3,$4, now() - interval '1 minute')`, [t.ids.org, t.ids.users.pl, seal('alt'), seal('rt')]);
+  await t.db.query(`insert into mail_accounts (org_id, type, owner_user_id, managed_user_id, name, address, provider, oauth_provider, oauth_access_token, oauth_refresh_token, oauth_expires_at) values ($1,'personal',$2,$2,'M365','petra@contoso.com','graph','microsoft',$3,$4, now() - interval '1 minute')`, [t.ids.org, t.ids.users.pl, seal('alt'), seal('rt')]);
   const targets = (await t.api(pl).get('/me/calendar-targets')).json().targets;
   assert.deepEqual(targets.map((x: any) => x.key), ['microsoft']);
   const m = (await t.api(pl).post(`/projects/${pid}/meetings`, { title: 'Review', startsAt: '2026-11-05T13:00:00.000Z', durationMinutes: 30, location: 'Raum 2' })).json().meeting;

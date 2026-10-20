@@ -444,7 +444,8 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
   const [finalInfo, setFinalInfo] = useState<string | null>(final ? 'Antwort wird vorbereitet …' : null);
   // KI-Text an Externe: Fundstellen der Außenprüfung nur als Hinweis
   const [hints, setHints] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
-  const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend);
+  // Schreibbare Ansichten, das Standard-Projektkonto (Projekt-Mailadresse) zuerst
+  const writable = views.filter((v) => v.myRights.canDraft || v.myRights.canSend).sort((a, b) => Number(b.accountAddress === detail.project.mailAddress) - Number(a.accountAddress === detail.project.mailAddress));
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   // Eigene Mail an Externe: Fundstellen der Außenprüfung vor dem Senden als Hinweis, gesendet wird trotzdem auf Wunsch
   const [check, setCheck] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
@@ -645,16 +646,18 @@ function EditDraft({ draft, onSaved }: { draft: MailDraft; onSaved: () => Promis
 
 export function NewView({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { detail } = useProject();
-  const accounts = useData<{ accounts: MailAccount[] }>('/mail/accounts');
+  const accounts = useData<{ accounts: MailAccount[]; personalAccounts: MailAccount[] }>(`/projects/${detail.project.id}/mail/accounts`);
   const [f, setF] = useState({ accountId: '', name: '', folders: '', from: '', to: '', subject: '', keyword: '', since: '', memberRead: true, memberDraft: true, memberTask: true, readerRead: false });
   const { busy, error, run } = useAsync();
-  const usable = (accounts.data?.accounts ?? []).filter((a) => a.type === 'personal' || a.projectId === detail.project.id);
+  const isPl = detail.project.myMembership.role === 'pl';
+  // Projektkonten (nur PL) über ihre Projektbindung, eigene Konten über die persönliche Bindung
+  const usable = [...(isPl ? (accounts.data?.accounts ?? []).map((a) => ({ ...a, via: 'Projektkonto' })) : []), ...(accounts.data?.personalAccounts ?? []).filter((a) => !(accounts.data?.accounts ?? []).some((x) => x.id === a.id)).map((a) => ({ ...a, via: 'persönlich' }))];
   return (
     <Modal title="Neue Mail-Ansicht" onClose={onClose}>
       <div className="form cols-2">
         <label className="field full"><span>Konto</span>
-          <select value={f.accountId} onChange={(e) => setF({ ...f, accountId: e.target.value })}><option value="">– wählen –</option>{usable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) – {a.type === 'personal' ? 'persönlich' : 'Projektkonto'}</option>)}</select></label>
-        {usable.length === 0 && <p className="notice small full">Kein Konto verfügbar. Lege unter „Mail-Konten“ ein persönliches Konto an oder als PL ein Projektkonto.</p>}
+          <select value={f.accountId} onChange={(e) => setF({ ...f, accountId: e.target.value })}><option value="">– wählen –</option>{usable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) – {a.via}</option>)}</select></label>
+        {usable.length === 0 && <p className="notice small full">Kein Konto verfügbar. Lege unter „Mail-Konten“ ein eigenes Konto an oder binde als PL ein Projektkonto an (Einstellungen › Mail).</p>}
         <label className="field full"><span>Name der Ansicht</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="z. B. Kunde Müller" /></label>
         <label className="field"><span>Absender (Adresse oder @domain, Komma)</span><input type="text" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} placeholder="@mueller-design.de" /></label>
         <label className="field"><span>Empfänger enthält</span><input type="text" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></label>
@@ -662,7 +665,7 @@ export function NewView({ onClose, onCreated }: { onClose: () => void; onCreated
         <label className="field"><span>Stichwort im Text</span><input type="text" value={f.keyword} onChange={(e) => setF({ ...f, keyword: e.target.value })} /></label>
         <label className="field"><span>Ordner (leer = INBOX)</span><input type="text" value={f.folders} onChange={(e) => setF({ ...f, folders: e.target.value })} placeholder="INBOX, Sent" /></label>
         <label className="field"><span>Ab Datum</span><input type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} /></label>
-        <div className="full"><strong className="small">Rechte für Rollen</strong> <span className="muted small">(du selbst erhältst alle Rechte; Senden aus persönlichen Konten nur du)</span></div>
+        <div className="full"><strong className="small">Rechte für Rollen</strong> <span className="muted small">(du selbst erhältst alle Rechte; über eine persönliche Bindung sendest nur du)</span></div>
         <label className="check"><input type="checkbox" checked={f.memberRead} onChange={(e) => setF({ ...f, memberRead: e.target.checked })} /> Mitglieder lesen</label>
         <label className="check"><input type="checkbox" checked={f.memberDraft} onChange={(e) => setF({ ...f, memberDraft: e.target.checked })} /> Mitglieder entwerfen</label>
         <label className="check"><input type="checkbox" checked={f.memberTask} onChange={(e) => setF({ ...f, memberTask: e.target.checked })} /> Mitglieder: Arbeitspaket erzeugen</label>
@@ -710,7 +713,7 @@ export function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onCl
         <button className="btn sm" disabled={!addUser} onClick={() => { const [kind, id] = addUser.split(':'); setRows([...rows, { userId: kind === 'user' ? id : null, role: kind === 'role' ? id : null, groupId: kind === 'group' ? id : null, canRead: true, canDraft: false, canSend: false, canAi: false, canCreateTask: false }]); setAddUser(''); }}>Hinzufügen</button>
         <button className="btn sm right" onClick={() => setFilterEdit(true)}>Filter bearbeiten</button>
       </div>
-      {view.accountType === 'personal' && <p className="muted small mt">Persönliches Konto: Senden bleibt beim Eigentümer.</p>}
+      {view.accountType === 'personal' && <p className="muted small mt">Ansicht über eine persönliche Bindung: Senden bleibt beim Eigentümer.</p>}
       {error && <div className="error mt">{error}</div>}
       <div className="row mt">
         <button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.put(`/mail/views/${view.id}/rights`, { rights: rows }); onChanged(); onClose(); })}>Speichern</button>

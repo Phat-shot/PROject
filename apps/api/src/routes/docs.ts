@@ -16,6 +16,7 @@ import { queueAgentRun } from '../ai/agentEvents.js';
 import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
 import { htmlToMd, mdToHtml, sanitizeHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
+import { accountBoundToProject, projectAccount } from '../mail/accounts.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
@@ -306,8 +307,8 @@ export async function docRoutes(app: FastifyInstance) {
     const list: string[] = override.length ? override : (r.distribution_list?.length ? r.distribution_list : r.settings?.recipients ?? []);
     if (!list.length) throw badRequest('Kein Verteiler: weder am Ordner noch an der Seite');
     const account = req.body?.accountId
-      ? await db.maybeOne(`select * from mail_accounts where id = $1 and project_id = $2 and type = 'project'`, [req.body.accountId, r.project_id])
-      : await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [r.project_id]);
+      ? (await accountBoundToProject(db, req.body.accountId, r.project_id)) ? await db.maybeOne(`select * from mail_accounts where id = $1`, [req.body.accountId]) : null
+      : await projectAccount(db, r.project_id);
     if (!account) throw badRequest('Kein Projektkonto vorhanden');
     const project = await db.one(`select name from projects where id = $1`, [r.project_id]);
     const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await layoutFor(r.id));
@@ -358,7 +359,7 @@ export async function docRoutes(app: FastifyInstance) {
     const share = mapShare({ ...r, page_title: page.title });
     let sent = false;
     if (b.send) {
-      const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [page.project_id]);
+      const account = await projectAccount(db, page.project_id);
       if (!account) throw badRequest('Kein Projektkonto für den Versand. Link wurde erstellt, bitte manuell weitergeben.');
       const project = await db.one(`select name from projects where id = $1`, [page.project_id]);
       const text = `${b.message?.trim() ? b.message.trim() + '\n\n' : ''}${user.name} hat die Seite „${page.title}“ aus dem Projekt „${project.name}“ für Sie freigegeben (${b.mode === 'write' ? 'lesen und bearbeiten' : 'nur lesen'}${share.includeChildren ? ', inkl. Unterseiten' : ''}).\n\nLink: ${share.url}${expires ? `\nGültig bis ${expires.toLocaleDateString('de-DE')}` : ''}\n\nDer Link ist persönlich; bitte nicht weitergeben.`;

@@ -3,6 +3,7 @@ import type { MailService } from '../mail/service.js';
 import type { ReminderPolicy } from '@projekttool/shared';
 import { loadTasks, resolveProjectLead } from './service.js';
 import { publicBase } from '../docs/share.js';
+import { projectAccount } from '../mail/accounts.js';
 
 const DEFAULT: ReminderPolicy = { enabled: false, daysBefore: [3, 0], overdueEveryDays: 3, includeInternal: false };
 
@@ -21,11 +22,12 @@ const daysBetween = (a: string, b: string) => Math.round((Date.parse(b + 'T00:00
  * an interne. Antworten landen über die Plus-Adresse im Arbeitspaket. Je Arbeitspaket, Art und Tag höchstens eine Mail.
  */
 export async function runReminders(db: Db, mail: MailService, today: string): Promise<{ sent: number }> {
-  const projects = await db.query(`select p.*, a.id as account_id from projects p join mail_accounts a on a.project_id = p.id and a.type = 'project' where p.status = 'active' and (p.reminders->>'enabled')::boolean`);
+  const projects = await db.query(`select p.* from projects p where p.status = 'active' and (p.reminders->>'enabled')::boolean`);
   let sent = 0;
   for (const p of projects.rows) {
     const policy = remindersOf(p.reminders);
-    const account = await db.one(`select * from mail_accounts where id = $1`, [p.account_id]);
+    const account = await projectAccount(db, p.id);
+    if (!account) continue;
     const lead = await resolveProjectLead(db, p.id);
     const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and t.due_date is not null`, [p.id], lead);
     for (const t of tasks) {

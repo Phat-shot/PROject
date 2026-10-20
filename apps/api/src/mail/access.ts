@@ -29,15 +29,18 @@ export async function mailAccess(db: Db, user: User, mailId: string): Promise<{ 
 
 export const PERSONAL_MAIL_ONLY = TEXT.mailOwnOnly;
 
-/** Projekte mit projectPolicy.mail.ownOnly sehen nur eigene Postfächer: persönliche Konten des Eigentümers und das Projektkonto des Projekts; alle anderen jedes Konto. */
-export async function accountAllowedInProject(db: Db, account: { type: string; owner_user_id: string | null; project_id: string | null }, projectId: string): Promise<boolean> {
+/**
+ * Projekte mit projectPolicy.mail.ownOnly sehen nur eigene Postfächer: Konten mit persönlicher Bindung des Eigentümers oder mit
+ * project-Bindung für dieses Projekt (dazu zählt ein vom Org-Admin ausdrücklich angebotenes Konto); alle anderen jedes Konto.
+ */
+export async function accountAllowedInProject(db: Db, account: { id: string }, projectId: string): Promise<boolean> {
   const p = await db.maybeOne(`select personal, created_by from projects where id = $1`, [projectId]);
   if (!p || !projectPolicy(p).mail.ownOnly) return true;
-  return (account.type === 'personal' && account.owner_user_id === p.created_by) || (account.type === 'project' && account.project_id === projectId);
+  return Boolean(await db.maybeOne(`select 1 from mail_account_uses where account_id = $1 and ((use = 'personal' and user_id = $2) or (use = 'project' and project_id = $3))`, [account.id, p.created_by, projectId]));
 }
 
 /** Wie accountAllowedInProject, für eine Mail (über ihr Konto). */
 export async function mailAllowedInProject(db: Db, mailId: string, projectId: string): Promise<boolean> {
-  const a = await db.maybeOne(`select a.type, a.owner_user_id, a.project_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [mailId]);
+  const a = await db.maybeOne(`select account_id as id from mails where id = $1`, [mailId]);
   return Boolean(a) && accountAllowedInProject(db, a, projectId);
 }

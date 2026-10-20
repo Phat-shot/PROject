@@ -4,6 +4,7 @@ import { publicBase } from './docs/share.js';
 import { pagePdf } from './docs/layout.js';
 import { audit } from './audit.js';
 import { beforeLocal, dueLocal } from './localTime.js';
+import { orgAccount, projectAccount } from './mail/accounts.js';
 
 /** Stunde des Tages-Digests ohne Einstellung der Org (orgs.settings.notify.digestHour, Europe/Berlin). */
 export const DEFAULT_DIGEST_HOUR = 7;
@@ -29,8 +30,8 @@ export async function runNotificationMails(db: Db, mail: MailService, now = new 
     [now]
   );
   const orgAccounts = new Map<string, any>();
-  const orgAccount = async (orgId: string) => {
-    if (!orgAccounts.has(orgId)) orgAccounts.set(orgId, await db.maybeOne(`select * from mail_accounts where org_id = $1 and type = 'org' order by created_at limit 1`, [orgId]));
+  const orgAccountOf = async (orgId: string) => {
+    if (!orgAccounts.has(orgId)) orgAccounts.set(orgId, await orgAccount(db, orgId));
     return orgAccounts.get(orgId);
   };
   let sent = 0;
@@ -44,13 +45,13 @@ export async function runNotificationMails(db: Db, mail: MailService, now = new 
     const digest = dueLocal(now, hour, u.last_digest);
     const due = rows.filter((n: any) => n.mail === 'now' || (digest && beforeLocal(n.created_at, now, hour)));
     if (!due.length) continue;
-    const account = await orgAccount(u.org_id);
+    const account = await orgAccountOf(u.org_id);
     if (account) {
       if (await send(db, mail, account, u, due, digest && due.some((n: any) => n.mail === 'digest'), now)) sent++;
     } else {
       // Ohne Org-Postfach: Lieferungen einzeln über das Projektkonto ihres Projekts
       for (const n of due.filter((x: any) => x.attach && x.project_id)) {
-        const pa = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [n.project_id]);
+        const pa = await projectAccount(db, n.project_id);
         if (pa && (await send(db, mail, pa, u, [n], false, now))) sent++;
       }
     }

@@ -1,4 +1,5 @@
 import type { Db } from '../db.js';
+import { USE_LATERAL } from './accounts.js';
 
 /** Markdown-Darstellung einer Mail für Doku und Arbeitspaket-Log (1:1, ohne KI). */
 export function mailToMarkdown(m: any, opts: { heading?: 1 | 2 | 3; withBody?: boolean } = {}): string {
@@ -30,8 +31,9 @@ export function mailToLogEntry(m: any): string {
   return `Aus Mail „${m.subject}“ von ${from}, ${date}:\n\n${cut}`;
 }
 
-export async function loadMailRow(db: Db, mailId: string) {
-  return db.maybeOne(`select m.*, a.type as account_type, a.owner_user_id from mails m join mail_accounts a on a.id = m.account_id where m.id = $1`, [mailId]);
+/** Mail mit der Bindung ihres Kontos im Kontext eines Projekts (use, use_user_id); ohne Projekt zählt die persönliche oder Org-Bindung. */
+export async function loadMailRow(db: Db, mailId: string, projectId: string | null = null) {
+  return db.maybeOne(`select m.*, ux.use, ux.use_user_id from mails m join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where m.id = $1`, [mailId, projectId]);
 }
 
 /**

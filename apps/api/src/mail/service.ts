@@ -12,6 +12,7 @@ import { enqueueForNewMail } from '../ai/mailAi.js';
 import { headerMatches, matches, plusAddress, snippetOf, taskCodeFromAddresses } from './filter.js';
 import { linkMailToTask } from './link.js';
 import type { AccountRow, IncomingMessage, MailProvider, OutgoingMessage, SyncContext } from './types.js';
+import { accountBoundToProject } from './accounts.js';
 
 export interface SyncResult {
   accountId: string;
@@ -147,7 +148,7 @@ export class MailService {
     let replyTo: string | undefined;
     if (input.taskId) {
       const t = await this.db.maybeOne(`select mail_code from tasks where id = $1`, [input.taskId]);
-      if (t && account.type === 'project') replyTo = plusAddress(account.address, t.mail_code);
+      if (t && input.projectId && (await accountBoundToProject(this.db, account.id, input.projectId))) replyTo = plusAddress(account.address, t.mail_code);
     }
     const msg: OutgoingMessage = {
       from: { address: account.address, name: account.name },

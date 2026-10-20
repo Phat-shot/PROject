@@ -259,34 +259,38 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
 
   // Mail: Projektkonto (dev) mit Ansicht für alle Mitglieder
   const projAcc = await db.one(
-    `insert into mail_accounts (org_id, type, project_id, name, address, provider) values ($1,'project',$2,'Projektpostfach WEB','projekt-web@demo.local','dev') returning id`,
+    `insert into mail_accounts (org_id, type, project_id, managed_project_id, name, address, provider) values ($1,'project',$2,$2,'Projektpostfach WEB','projekt-web@demo.local','dev') returning id`,
     [org.id, web.id]
   );
+  const projUse = await db.one(`insert into mail_account_uses (org_id, account_id, use, project_id, is_default) values ($1,$2,'project',$3,true) returning id`, [org.id, projAcc.id, web.id]);
+  await db.query(`update projects set mail_address = 'projekt-web@demo.local' where id = $1`, [web.id]);
   const projView = await db.one(
-    `insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,'Projektpostfach',$3,$4) returning id`,
-    [projAcc.id, web.id, JSON.stringify({}), pl]
+    `insert into mail_views (account_id, use_id, project_id, name, filter, created_by) values ($1,$2,$3,'Projektpostfach',$4,$5) returning id`,
+    [projAcc.id, projUse.id, web.id, JSON.stringify({}), pl]
   );
   await db.query(`insert into mail_view_rights (view_id, role, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,'pl',true,true,true,true,true), ($1,'member',true,true,false,true,true), ($1,'reader',true,false,false,false,false)`, [projView.id]);
   const agenturView = await db.one(
-    `insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,'Agentur Müller-Design',$3,$4) returning id`,
-    [projAcc.id, web.id, JSON.stringify({ from: ['@mueller-design.de'] }), pl]
+    `insert into mail_views (account_id, use_id, project_id, name, filter, created_by) values ($1,$2,$3,'Agentur Müller-Design',$4,$5) returning id`,
+    [projAcc.id, projUse.id, web.id, JSON.stringify({ from: ['@mueller-design.de'] }), pl]
   );
   await db.query(`insert into mail_view_rights (view_id, role, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,'pl',true,true,true,true,true), ($1,'member',true,true,false,false,true)`, [agenturView.id]);
 
   // Persönliches Konto der PL mit einer geteilten Ansicht (nur Hosting-Partner)
-  await db.query(`insert into mail_accounts (org_id, type, name, address, provider) values ($1,'org','Org-Postfach','noreply@demo.local','dev')`, [org.id]);
+  const orgAcc = await db.one(`insert into mail_accounts (org_id, type, name, address, provider) values ($1,'org','Org-Postfach','noreply@demo.local','dev') returning id`, [org.id]);
+  await db.query(`insert into mail_account_uses (org_id, account_id, use) values ($1,$2,'org')`, [org.id, orgAcc.id]);
   const lenk = await db.one(`insert into groups (org_id, name, description) values ($1,'Lenkungskreis','Entscheider und Budgetverantwortliche') returning id`, [org.id]);
   await db.query(`insert into group_members (group_id, user_id) values ($1,$2), ($1,$3)`, [lenk.id, pl, anna]);
   const vertrag = await db.one(`insert into subprojects (project_id, name, responsible_user_id, position, restricted) values ($1,'Vertrag und Budget',$2,99,true) returning id`, [web.id, anna]);
   await db.query(`insert into subproject_access (subproject_id, group_id) values ($1,$2)`, [vertrag.id, lenk.id]);
   await db.query(`insert into tasks (project_id, subproject_id, column_id, title, description, priority, due_date, created_by, mail_code, position) select $1, $2, id, 'Agenturvertrag verhandeln', 'Vertraulich: Konditionen, Haftung, Laufzeit', 'high', $3, $4, $5, 50 from board_columns where project_id = $1 and kind = 'active' order by position limit 1`, [web.id, vertrag.id, '2026-11-15', pl, 'c0ffee11']);
   const persAcc = await db.one(
-    `insert into mail_accounts (org_id, type, owner_user_id, name, address, provider) values ($1,'personal',$2,'Petra Lenz (persönlich)','pl@demo.local','dev') returning id`,
+    `insert into mail_accounts (org_id, type, owner_user_id, managed_user_id, name, address, provider) values ($1,'personal',$2,$2,'Petra Lenz (persönlich)','pl@demo.local','dev') returning id`,
     [org.id, pl]
   );
+  const persUse = await db.one(`insert into mail_account_uses (org_id, account_id, use, user_id) values ($1,$2,'personal',$3) returning id`, [org.id, persAcc.id, pl]);
   const hostingView = await db.one(
-    `insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,'Hosting-Partner (aus Postfach P. Lenz)',$3,$4) returning id`,
-    [persAcc.id, web.id, JSON.stringify({ from: ['@hosting-partner.de'] }), pl]
+    `insert into mail_views (account_id, use_id, project_id, name, filter, created_by) values ($1,$2,$3,'Hosting-Partner (aus Postfach P. Lenz)',$4,$5) returning id`,
+    [persAcc.id, persUse.id, web.id, JSON.stringify({ from: ['@hosting-partner.de'] }), pl]
   );
   await db.query(`insert into mail_view_rights (view_id, user_id, can_read, can_draft, can_send, can_ai, can_create_task) values ($1,$2,true,true,false,true,true)`, [hostingView.id, max]);
 

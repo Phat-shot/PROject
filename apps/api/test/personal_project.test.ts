@@ -132,7 +132,8 @@ test('Migration 045 entfernt Org-Postfach-Ansichten und fremde Mail-Verknüpfung
   const orgAcc = (await t.db.one(`select id from mail_accounts where type = 'org'`)).id;
   const adm = (await t.db.one(`select id from projects where key = 'ADM'`)).id;
   const normal = (await t.db.one(`select id from projects where key = 'ADN'`)).id;
-  const v = await t.db.one(`insert into mail_views (account_id, project_id, name, filter, created_by) values ($1,$2,'Alt','{}',$3) returning id`, [orgAcc, adm, t.ids.users.admin]);
+  const orgUse = (await t.db.one(`select id from mail_account_uses where account_id = $1 and use = 'org'`, [orgAcc])).id;
+  const v = await t.db.one(`insert into mail_views (account_id, use_id, project_id, name, filter, created_by) values ($1,$2,$3,'Alt','{}',$4) returning id`, [orgAcc, orgUse, adm, t.ids.users.admin]);
   const task = await t.db.one(`select id from tasks where title = 'Privat sortieren'`);
   const foreign = (await t.db.one(`select x.mail_id from mail_view_matches x where x.view_id = $1 limit 1`, [t.ids.views.agentur])).mail_id;
   await t.db.query(`insert into mail_task_links (mail_id, task_id, copied) values ($1,$2,true)`, [foreign, task.id]);

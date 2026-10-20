@@ -11,6 +11,7 @@ import { evaluateProject, LEVEL_LABEL } from '../tasks/escalation.js';
 import { htmlToMd, sanitizeHtml } from './html.js';
 import { htmlToPdf } from './pdfHtml.js';
 import { folderName, layoutFor, loadTemplate, templateHtml, uploadDir } from './layout.js';
+import { projectAccount } from '../mail/accounts.js';
 
 /**
  * Reporting (Regel vor KI): Im eingestellten Rhythmus erzeugt der Worker aus der Vorlage eine Doku-Seite,
@@ -122,7 +123,7 @@ export async function createReport(db: Db, mail: MailService, projectId: string,
     await notifyMany(db, pls, { projectId, type: 'report.review', title: `Bericht zur Prüfung: ${title}`, body: p.recipients.length ? `Nach Prüfung „Final setzen“ und an ${p.recipients.join(', ')} senden.` : 'Kein Empfängerkreis hinterlegt.', link, ref: { type: 'page', id: page.id }, dedupeKey: `report:${page.id}` });
     return { pageId: page.id, title, sent: false, to: p.recipients, status: 'draft' };
   }
-  const account = await db.maybeOne(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [projectId]);
+  const account = await projectAccount(db, projectId);
   if (!account || p.recipients.length === 0) {
     const error = !account ? 'Kein Projektkonto für den Versand' : 'Kein Empfängerkreis hinterlegt';
     await notifyMany(db, pls, { projectId, type: 'report.failed', title: `Bericht erzeugt, nicht versendet: ${title}`, body: error, link, ref: { type: 'page', id: page.id }, dedupeKey: `reportfail:${page.id}` });

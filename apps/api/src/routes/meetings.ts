@@ -14,6 +14,7 @@ import type { AccountRow } from '../mail/types.js';
 import { seal, unseal } from '../secrets.js';
 import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent } from '../calendar/push.js';
 import type { CalendarTarget } from '@projekttool/shared';
+import { projectAccount } from '../mail/accounts.js';
 
 const fmtDe = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}/, '');
@@ -201,7 +202,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     if (cur.tentative) throw badRequest('Termin ist vorläufig: erst bestätigen, dann einladen');
     const attendees = cur.attendees as MeetingAttendee[];
     if (!attendees.length) throw badRequest('Keine Teilnehmer');
-    const account = await db.maybeOne<AccountRow>(`select * from mail_accounts where project_id = $1 and type = 'project' order by created_at limit 1`, [cur.project_id]);
+    const account = await projectAccount(db, cur.project_id);
     if (!account) throw badRequest('Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekteinstellungen › Mail).');
     const project = await db.one(`select key, name from projects where id = $1`, [cur.project_id]);
     const seq = Number((cur.external ?? {}).sequence ?? 0);
@@ -228,7 +229,7 @@ export async function meetingRoutes(app: FastifyInstance) {
   // Kalenderziele der Person: persönliche OAuth-Konten (Microsoft im Graph-Modus, Google) und CalDAV
   const targetsOf = async (user: { id: string; orgId: string }): Promise<CalendarTarget[]> => {
     const out: CalendarTarget[] = [];
-    const accs = await db.query(`select id, oauth_provider, provider from mail_accounts where owner_user_id = $1 and type = 'personal' and oauth_refresh_token is not null`, [user.id]);
+    const accs = await db.query(`select id, oauth_provider, provider from mail_accounts where managed_user_id = $1 and oauth_refresh_token is not null`, [user.id]);
     for (const a of accs.rows as any[]) {
       if (a.oauth_provider === 'microsoft' && a.provider === 'graph') out.push({ key: 'microsoft', label: 'Microsoft 365 Kalender', accountId: a.id });
       if (a.oauth_provider === 'google') out.push({ key: 'google', label: 'Google Kalender', accountId: a.id });

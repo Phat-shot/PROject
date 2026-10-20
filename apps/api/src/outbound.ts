@@ -7,6 +7,7 @@ import { contactChain } from './tasks/service.js';
 import { mailBodyOk, projectHumans } from './mail/origin.js';
 import { complete, orgAiSettings, parseJson, type AiConfig } from './ai/client.js';
 import { agentChatMessage } from './ai/plan.js';
+import { USE_LATERAL } from './mail/accounts.js';
 
 /**
  * Informationsgrenze für Externe (Anforderung 8): alles, was an Nicht-Interne hinausgeht, läuft hierüber.
@@ -165,7 +166,7 @@ export async function externalContext(db: Db, taskId: string | null, aud: Audien
     const log = await db.query(`select body, created_at from task_comments where task_id = $1 and visibility = 'external' order by created_at desc limit 10`, [t.id]);
     if (log.rows.length) lines.push(`Mitteilungen für Externe (aus dem Log):\n${log.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')}: ${cut(x.body, 600)}`).join('\n')}`);
     // Mailtexte aus persönlichen Konten nur, wenn sie freigegeben sind (wie im Agenten-Prompt); sie zählen nicht zu trusted
-    const mails = (await db.query(`select m.subject, m.from_addr, m.to_json, m.cc_json, m.date, m.outgoing, coalesce(m.text_body, m.snippet) as body, l.copied, a.type as account_type, a.owner_user_id from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id where l.task_id = $1 order by m.date desc limit 12`, [t.id])).rows
+    const mails = (await db.query(`select m.subject, m.from_addr, m.to_json, m.cc_json, m.date, m.outgoing, coalesce(m.text_body, m.snippet) as body, l.copied, ux.use, ux.use_user_id from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id ${USE_LATERAL('a', '$2::uuid')} where l.task_id = $1 order by m.date desc limit 12`, [t.id, p.id])).rows
       .filter((m: any) => all((e) => [m.from_addr, ...(m.to_json ?? []), ...(m.cc_json ?? [])].map(normAddr).includes(e))).slice(0, 5);
     const humans = mails.length ? await projectHumans(db, p.id) : [];
     if (mails.length) lines.push(mailLine = `Mails mit den Empfängern zu dieser Aufgabe (neueste zuerst):\n${mails.map((m: any) => `- ${new Date(m.date).toLocaleDateString('de-DE')} ${m.outgoing ? 'an' : 'von'} ${m.outgoing ? (m.to_json ?? []).join(', ') : m.from_addr}: ${m.subject} – ${mailBodyOk(m, humans) ? cut(m.body, 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n')}`);

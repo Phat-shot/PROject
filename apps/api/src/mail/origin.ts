@@ -1,5 +1,6 @@
 import type { Db } from '../db.js';
 import { complete, type AiConfig } from '../ai/client.js';
+import { USE_LATERAL } from './accounts.js';
 
 /**
  * Ursprungsmail: Entsteht ein Arbeitspaket oder eine Aufgabe aus einer eingehenden Mail, ist die Verknüpfung als Ursprung
@@ -8,19 +9,19 @@ import { complete, type AiConfig } from '../ai/client.js';
  */
 export async function originMails(db: Db, taskId: string): Promise<any[]> {
   const r = await db.query(
-    `select m.*, a.type as account_type, a.owner_user_id, t.project_id,
+    `select m.*, ux.use, ux.use_user_id, t.project_id,
        exists (select 1 from mails x where x.account_id = m.account_id and x.outgoing and m.message_id is not null and x.in_reply_to = m.message_id) as answered,
        exists (select 1 from mail_drafts d where d.account_id = m.account_id and m.message_id is not null and d.in_reply_to = m.message_id and d.status in ('draft','pending_approval')) as draft_open
-     from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id join tasks t on t.id = l.task_id
+     from mail_task_links l join mails m on m.id = l.mail_id join mail_accounts a on a.id = m.account_id join tasks t on t.id = l.task_id ${USE_LATERAL('a', 't.project_id')}
      where l.task_id = $1 and l.origin and not m.outgoing order by m.date`, [taskId]);
   return r.rows;
 }
 
 /**
- * Inhalt einer Mail am Arbeitspaket für KI-Kontexte (Agenten-Prompt, Neuformulierung nach außen): aus persönlichen Konten nur,
- * wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt).
+ * Inhalt einer Mail am Arbeitspaket für KI-Kontexte (Agenten-Prompt, Neuformulierung nach außen): über eine persönliche Bindung
+ * nur, wenn ihn alle Menschen im Projekt ohnehin lesen dürften (Kopie) oder nur der Eigentümer Mitglied ist (persönliches Projekt).
  */
-export const mailBodyOk = (x: { account_type: string; copied?: boolean | null; owner_user_id: string | null }, humans: string[]) => x.account_type !== 'personal' || Boolean(x.copied) || humans.every((h) => h === x.owner_user_id);
+export const mailBodyOk = (x: { use: string | null; copied?: boolean | null; use_user_id: string | null }, humans: string[]) => x.use !== 'personal' || Boolean(x.copied) || humans.every((h) => h === x.use_user_id);
 
 /** Menschen (keine Agenten) im Projekt, für mailBodyOk. */
 export async function projectHumans(db: Db, projectId: string): Promise<string[]> {

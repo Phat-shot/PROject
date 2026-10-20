@@ -5,6 +5,7 @@ import { audit } from '../audit.js';
 import { badRequest, notFound, unauthorized } from '../errors.js';
 import { publicBase } from '../docs/share.js';
 import { verifyTotp } from '../totp.js';
+import { orgAccount } from '../mail/accounts.js';
 
 export async function authRoutes(app: FastifyInstance) {
   app.post<{ Body: { email: string; password: string } }>('/auth/login', async (req, reply) => {
@@ -54,7 +55,7 @@ export async function authRoutes(app: FastifyInstance) {
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw badRequest('Gültige E-Mail erforderlich');
     const row = await app.db.maybeOne(`select * from users where lower(email) = $1 and active`, [email]);
     if (!row) return { ok: true, sent: true };
-    const account = await app.db.maybeOne(`select * from mail_accounts where org_id = $1 and type = 'org' order by created_at limit 1`, [row.org_id]);
+    const account = await orgAccount(app.db, row.org_id);
     if (!account) return { ok: true, sent: false, error: 'Kein Org-Postfach angebunden. Bitte den Org-Admin um ein neues Passwort.' };
     // Ältere offene Tokens verfallen, höchstens einer gilt
     await app.db.query(`update password_resets set used_at = now() where user_id = $1 and used_at is null`, [row.id]);
