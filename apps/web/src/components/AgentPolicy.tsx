@@ -79,21 +79,6 @@ export function TaskPolicyInline({ task, onChanged }: { task: { id: string; agen
   </>;
 }
 
-const DEFAULT_CONFIRM = AGENT_ACTION_CLASSES.filter((c) => c.critical).map((c) => c.key);
-/** Wirksame Policy auf Mandantenebene (nur Code-Standard darunter), damit der Editor der Verwaltung geerbte Werte benennt. */
-export function orgEffectivePolicy(org: AgentPolicy | null | undefined): EffectiveAgentPolicy {
-  const o = org ?? {};
-  const mode = o.mode ?? 'confirm_critical';
-  const pick = <K extends keyof AgentPolicy>(k: K) => (o[k] !== undefined ? 'Mandant' : 'Standard');
-  const confirm = mode === 'confirm_all' ? AGENT_ACTION_CLASSES.map((c) => c.key) : mode === 'confirm_critical' ? [...(o.confirm ?? DEFAULT_CONFIRM)] : [];
-  for (const k of o.lockedConfirm ?? []) if (!confirm.includes(k)) confirm.push(k);
-  return {
-    mode, confirm, workflows: o.workflows ?? true, chatOrders: o.chatOrders ?? 'pl', scope: o.scope ?? 'task', synergies: o.synergies ?? 'ask', reviewAt: o.reviewAt ?? '06:45', depth: o.depth ?? 'standard',
-    origin: { mode: pick('mode'), confirm: Object.fromEntries(confirm.map((k) => [k, (o.lockedConfirm ?? []).includes(k) ? 'Mandant erzwungen' : pick('confirm')])), workflows: pick('workflows'), chatOrders: pick('chatOrders'), scope: pick('scope'), synergies: pick('synergies'), depth: pick('depth') },
-    denied: {}
-  };
-}
-
 /** Wirksame Policy als Text mit Herkunft. */
 export function EffectivePolicyText({ e }: { e: EffectiveAgentPolicy }) {
   return <span className="small">

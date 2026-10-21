@@ -165,7 +165,7 @@ export async function agentRoutes(app: FastifyInstance) {
       if (m) inProject.push({ ...base, role: m.role, deny: Array.isArray(m.agent_policy?.deny) ? m.agent_policy.deny : [] });
       else if (r.active) candidates.push(base);
     }
-    return { inProject, candidates };
+    return { inProject, candidates, budget: (await orgAiSettings(db, user.orgId)).agentDailyBudget };
   });
 
   // Läufe je Projekt (Mitglieder lesen), je Arbeitspaket; Läufe an Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf

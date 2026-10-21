@@ -8,6 +8,7 @@ import { useData } from '../../lib/useData';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
+import { useAssistAgent } from '../../components/AssistAgent';
 import { aiBlocked } from '../../lib/useAi';
 import { refreshMailUnread, useMailUnread } from '../../lib/useMailUnread';
 import { MailAiBox } from './MailAi';
@@ -200,6 +201,8 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
   const nav = useNavigate();
   const { error, run } = useAsync();
   const dlg = useDialog();
+  const sumAgent = useAssistAgent(ai, 'assist.summarize');
+  const essAgent = useAssistAgent(ai, 'assist.essence');
   if (d.error) return <div className="mail-detail"><div className="error">{d.error}</div><p className="muted mt">Verknüpfte Mail, keine Berechtigung: Du darfst die Ansicht nicht lesen, aus der diese Mail stammt.</p></div>;
   if (!d.data) return <div className="mail-detail muted">Lade …</div>;
   const m = d.data.mail;
@@ -210,7 +213,7 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
   const folderAction = (call: () => Promise<unknown>) => run(async () => { await call(); onGone(); });
   const enabled = (key: string) => actions.data?.rule.find((a) => a.key === key)?.enabled ?? false;
   const reason = (key: string) => actions.data?.rule.find((a) => a.key === key)?.reason ?? '';
-  // KI-Knöpfe bleiben sichtbar und nennen den Grund, wenn sie nicht gehen: Recht an der Ansicht, sonst die KI-Freigaben
+  // KI-Knöpfe bleiben sichtbar und nennen den Grund, wenn sie nicht gehen: Recht an der Ansicht, KI nutzen, Agent mit dem Recht
   const aiNo = (f: AiFeature) => (!r.canAi ? 'Kein KI-Recht in dieser Ansicht' : aiBlocked(ai, f));
   const aiReasons = [...new Set([aiNo('assist.summarize'), aiNo('assist.essence'), aiNo('mail.triage')].filter((x): x is string => Boolean(x)))];
 
@@ -270,9 +273,9 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
       <div className="row mb small">
         <span className="muted" title={suggestAgent ? `${suggestAgent.name} antwortet dir per Direktnachricht im Chat` : 'Kein Agent im Projekt (Projektagent unter Mitglieder oder Agent an der Mail-Ansicht): Ergebnisse erscheinen hier bzw. unter Vorschläge zur Freigabe'}>Agent schlägt vor{suggestAgent ? ` (Antwort im Chat von ${suggestAgent.name})` : ' (kein Agent im Projekt)'}:</span>
         <button className="btn sm" disabled={!suggestAgent || Boolean(aiNo('mail.triage')) || Boolean(m.outgoing)} title={!suggestAgent ? 'Kein Agent im Projekt' : aiNo('mail.triage') ?? `${suggestAgent.name} prüft die Mail und schlägt Arbeitspaket, Termin, Antwort oder Ablage vor; die Vorschläge kommen per Chat, angenommen wird an der Mail`} onClick={() => void run(async () => { const res = await api.post<{ existing: boolean; agent: { name: string } }>(`/mail/mails/${m.id}/ai-suggest`, { projectId: detail.project.id }); setAiMsg(res.existing ? `${res.agent.name} hat zu dieser Mail schon Vorschläge gemacht (unten).` : `${res.agent.name} prüft die Mail und meldet sich per Chat.`); await aiRuns.reload(); })}>Vorschläge zur Mail</button>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
+        {essAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
         <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite</button>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
+        {sumAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`, { agentId: sumAgent.agentId }); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
         <Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Offene Vorschläge</Link>
         {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
       </div>
@@ -306,8 +309,8 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
           async () => { setDialog(null); await refresh(); openTask(taskId); }
         )} />}
       {dialog === 'aiEssence' && <PickTaskDialog title="Essenz → Arbeitspaket (KI-Vorschlag)" hint="Die KI schlägt einen Log-Eintrag vor und erkennt, ob die Mail einen neuen Status oder Termin belegt. Angewendet wird erst nach Freigabe durch PL oder Personen mit Freigaberecht." onClose={() => setDialog(null)}
-        onPick={async (taskId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/essence`, { taskId }); setDialog(null); setAiMsg('Vorschlag angelegt.'); }); }} />}
-      {dialog === 'aiMerge' && <AppendPageDialog ai onClose={() => setDialog(null)} onSubmit={async (pageId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/merge-page`, { pageId }); setDialog(null); setAiMsg('Vorschlag für die Seite angelegt.'); }); }} />}
+        onPick={async (taskId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/essence`, { taskId, agentId: essAgent.agentId }); setDialog(null); setAiMsg('Vorschlag angelegt.'); }); }} />}
+      {dialog === 'aiMerge' && <AppendPageDialog ai onClose={() => setDialog(null)} onSubmit={async (pageId) => { await run(async () => { await api.post(`/mail/mails/${m.id}/ai/merge-page`, { pageId, agentId: essAgent.agentId }); setDialog(null); setAiMsg('Vorschlag für die Seite angelegt.'); }); }} />}
       {dialog === 'adjust' && <AdjustTaskDialog mailId={m.id} onClose={() => setDialog(null)} onDone={async (taskId) => { setDialog(null); await refresh(); openTask(taskId); }} />}
       {dialog === 'toPage' && <ToPageDialog onClose={() => setDialog(null)} onSubmit={(folderId, title) => withConfirm(
         (confirmed) => api.post(`/mail/mails/${m.id}/to-page`, { projectId: detail.project.id, folderId, title, confirmed }),
@@ -485,7 +488,7 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
   useEffect(() => setCheck(null), [f.to, f.cc, f.subject, f.body, f.taskId]);
   useEffect(() => {
     if (final && taskParam) {
-      api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean; outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? '?ai=1' : ''}`).then(async (r) => {
+      api.get<{ mailId: string; viewId: string | null; to: string[]; subject: string; inReplyTo: string | null; body: string; answered: boolean; draftOpen: boolean; outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/tasks/${taskParam}/final-reply${params.get('ai') === '1' ? `?ai=1${params.get('agent') ? `&agent=${encodeURIComponent(params.get('agent')!)}` : ''}` : ''}`).then(async (r) => {
         setHints(r.outbound?.findings.length ? r.outbound : null);
         const { mail } = await api.get<{ mail: MailDetail }>(`/mail/mails/${r.mailId}`);
         setF((x) => ({ ...x, viewId: r.viewId ?? x.viewId, to: r.to.join(', '), subject: r.subject, inReplyTo: r.inReplyTo, taskId: taskParam,

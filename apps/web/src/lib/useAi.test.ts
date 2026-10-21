@@ -9,7 +9,8 @@ describe('KI-Knöpfe mit Begründung', () => {
       'assist.ask': { allowed: true, reason: 'Erlaubt', stage: 'ok' },
       'assist.report': { allowed: false, reason: 'Gesperrt durch Org-Admin (A. Admin) für Projekt BAU: Datenschutz', stage: 'policy' }
     },
-    agents: []
+    agents: [],
+    assistAgentId: null
   };
   it('liefert die Begründung der Sperre, sonst nichts', () => {
     expect(aiBlocked(caps, 'assist.ask')).toBeUndefined();

@@ -849,3 +849,14 @@ body:has(.drawer) .chat-fab { display: none; }
 .open-for-me .ofm .k { flex: none; font-size: 12px; font-weight: 600; color: var(--muted); min-width: 108px; }
 .open-for-me .ofm .x { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 600px) { .open-for-me .ofm { flex-wrap: wrap; } .open-for-me .ofm .k { min-width: 0; } .open-for-me .ofm .x { flex-basis: 100%; white-space: normal; } }
+
+/* KI: Rechte eines Agenten je Bereich, LLM mit seinen Agenten, Ablauf in der Verwaltung */
+.rights-editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.rights-editor fieldset { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px 8px; margin: 0; min-width: 0; }
+.rights-editor legend { font-weight: 600; font-size: 13px; padding: 0 4px; }
+.rights-editor legend .muted { font-weight: 400; }
+.rights-editor .check { display: flex; gap: 6px; align-items: flex-start; margin: 3px 0; }
+.llm-block { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; background: var(--surface); }
+.llm-block .table { margin-top: 8px; }
+.ai-steps { margin: 0 0 12px; padding-left: 20px; color: var(--muted); font-size: 13px; }
+.ai-steps li { margin: 2px 0; }

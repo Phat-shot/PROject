@@ -261,3 +261,7 @@ Alle sechs Entscheidungen aus Abschnitt 8 sind umgesetzt. Abweichung vom Zielbil
 | 4 | Projekt unter `/projekte/:id/einstellungen/<tab>`, `pages/project/settings/*`; Kontakte zusammengeführt (Migration 061, Kennzeichen `external`) |
 | 5 | Wirksame Werte: Mail-Rückfrage, Policy je Agent (Modus, Workflow-Schritte) und am Arbeitspaket (Modus, Denktiefe), Org-Editor mit Standardwerten; „Standard“ mit Zurücksetzen für Eskalation, Reporting, Erinnerungen |
 | 6 | Redirects alter Routen, Handbuch Kapitel 13, KI-Handbuch, Kurzanleitung, Tour, e2e |
+
+## Nachtrag (Migration 063): KI neu geordnet
+
+Überholt sind in diesem Konzept „LLM der Assistenz“, „Eigene KI-Agenten“ der PL und die KI-Freigaben-Matrix. Stand jetzt: LLMs legt die KI-Verwaltung an; ob es in Projekten ein eigenes LLM geben darf, stellt sie ein (dann verwaltet es die PL). Agenten gehören zu genau einem LLM; wer das LLM verwaltet, legt sie an und berechtigt sie (Rechte, Obergrenze der Selbstständigkeit). Im Projekt gibt es nur Agenten: die PL lädt sie unter Einstellungen › KI ein und kann ihre Rechte nur abschalten. Assistenz führt ein Agent des Projekts aus (Projektagent, sonst der einzige geeignete, sonst Auswahl).

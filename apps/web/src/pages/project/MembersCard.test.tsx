@@ -24,7 +24,7 @@ const detail = () => ({
 });
 const candidates = [{ id: 'u9', name: 'Nora Neu', email: 'nora@demo.local', kind: 'person', globalRole: 'user', active: true }];
 vi.mock('../ProjectPage', () => ({ useProject: () => ({ detail: detail(), users: candidates, reload, tasks: [], reloadTasks: vi.fn(), ai }), useProjectOptional: () => null }));
-vi.mock('../../lib/useAi', () => ({ useAiStatus: () => null, invalidateAi: vi.fn(), aiBlocked: () => undefined }));
+vi.mock('../../lib/useAi', () => ({ useAiStatus: () => null, invalidateAi: vi.fn(), aiBlocked: () => undefined, assistChoice: () => ({ fit: [], def: null }) }));
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ timeTracking: false, user: { id: 'u1' } }) }));
 vi.mock('../../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('./MailAi', () => ({ MailAiBox: () => null, AiFolderDialog: () => null }));
@@ -112,7 +112,7 @@ describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', 
     ai = { killswitch: false, agents: [], features: { 'assist.ask': { allowed: true, reason: 'Leser mit „KI nutzen“', stage: 'project' }, 'assist.summarize': { allowed: false, reason: 'Leser stellen nur Fragen ans Projekt', stage: 'project' } } };
     renderRights();
     expect(screen.getByText('Frage ans Projekt')).toBeInTheDocument();
-    expect(screen.getByText('Chat mit Agenten')).toBeInTheDocument();
+    expect(screen.getByText('Chat')).toBeInTheDocument();
     expect(screen.queryByText('Mail zusammenfassen')).not.toBeInTheDocument();
   });
 

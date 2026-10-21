@@ -9,7 +9,7 @@ vi.mock('../../lib/api', () => ({ api: { get: vi.fn(), post: vi.fn(), put: (...a
 let role = 'pl';
 const profile = { name: 'Neubau Firmensitz', address: 'Hafenstraße 1', access: 'Tor 3', contacts: [{ name: 'Bauleitung Nord', email: 'bauleitung@firma.example', role: 'Bauleitung' }] };
 vi.mock('../ProjectPage', () => ({ useProject: () => ({ detail: { project: { id: 'p1', myMembership: { role }, externalProfile: profile } }, reload }), useProjectOptional: () => null }));
-vi.mock('../../lib/useAi', () => ({ useAiStatus: () => ({ externalGuard: 'strict' }), invalidateAi: vi.fn(), aiBlocked: () => undefined }));
+vi.mock('../../lib/useAi', () => ({ useAiStatus: () => ({ externalGuard: 'strict' }), invalidateAi: vi.fn(), aiBlocked: () => undefined, assistChoice: () => ({ fit: [], def: null }) }));
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ timeTracking: false, user: { id: 'u1' } }) }));
 vi.mock('../../components/RichEditor', () => ({ RichEditor: () => null }));
 vi.mock('./MailAi', () => ({ MailAiBox: () => null, AiFolderDialog: () => null }));

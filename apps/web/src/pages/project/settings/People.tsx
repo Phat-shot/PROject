@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../../components/ui';
 import { InviteCard } from '../InviteCard';
@@ -52,7 +53,7 @@ export function MembersCard() {
               <td className="small">{m.origin === 'group'
                 ? <span title="Mitglied über Gruppen des Projekts: höchste Rolle, Einzelrechte addiert">über {via.map((g) => g.name).join(', ') || 'Gruppe'}</span>
                 : <>direkt{via.length > 0 && <div className="muted">überschreibt {via.map(groupLabel).join(', ')}{isPl && !primaryRow && <> · <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/projects/${pid}/members/${m.userId}`); await reload(); })}>Gruppenrechte übernehmen</button></>}</div>}</>}</td>
-              <td className="nowrap">{isPl && <>{(isPrimary || !primaryRow) && <button className="btn sm link" title={m.origin === 'group' ? 'Als Direkteintrag festlegen (überschreibt die Gruppen)' : undefined} onClick={() => setEdit(m)}>Rolle</button>}{!primaryRow && m.origin !== 'group' && <button className="btn sm link" onClick={() => remove(m)}>Entfernen</button>}</>}</td>
+              <td className="nowrap">{isPl && m.kind === 'agent' ? <Link className="btn sm link" to={`/projekte/${pid}/einstellungen/ki`} title="Agenten verwaltest du unter Einstellungen › KI">KI</Link> : null}{isPl && m.kind !== 'agent' && <>{(isPrimary || !primaryRow) && <button className="btn sm link" title={m.origin === 'group' ? 'Als Direkteintrag festlegen (überschreibt die Gruppen)' : undefined} onClick={() => setEdit(m)}>Rolle</button>}{!primaryRow && m.origin !== 'group' && <button className="btn sm link" onClick={() => remove(m)}>Entfernen</button>}</>}</td>
             </tr>
           );
         })}
@@ -116,40 +117,34 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
   const me = detail.project.myMembership;
   const isPrimary = me.role === 'pl' && !me.isDeputy;
   const dialog = useDialog();
-  // Agenten anderer Projekte (von deren PL angelegt) sind nicht wählbar; nach Projektregel ggf. nur Agenten
-  // Agenten nur, wenn sie hier einsetzbar sind (Einsatz, LLM im Projekt freigegeben; Konzept LLM/Agenten 2.2); die anderen mit Grund darunter
-  const agentInfo = useData<{ orgAgents: { id: string; name: string; usable: boolean; reason: string | null; member: boolean }[] }>(member ? null : `/projects/${detail.project.id}/agents`);
-  const unusable = (agentInfo.data?.orgAgents ?? []).filter((a) => !a.member && !a.usable);
-  const candidates = users.filter((u) => !detail.members.some((m) => m.userId === u.id) && (!u.agentProjectId || u.agentProjectId === detail.project.id) && (!useProjectPolicy(detail.project).members.onlyOwnerAndAgents || u.kind === 'agent') && !(u.kind === 'agent' && unusable.some((a) => a.id === u.id)));
+  // Nur Personen: Agenten lädt die PL unter Einstellungen › KI ein (dort mit Rechten und Einschränkung)
+  const onlyAgents = useProjectPolicy(detail.project).members.onlyOwnerAndAgents;
+  const candidates = onlyAgents ? [] : users.filter((u) => u.kind !== 'agent' && !detail.members.some((m) => m.userId === u.id));
   const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
   const { busy, error, run } = useAsync();
-  const picked = users.find((u) => u.id === f.userId);
-  const isAgent = (member?.kind ?? picked?.kind) === 'agent';
-  const [agentCanMail, setAgentCanMail] = useState(member?.agentCanMail ?? true);
   return (
     <Modal title={member ? `${member.origin === 'group' ? 'Direkteintrag' : 'Rolle'}: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
       <div className="form">
         {member?.origin === 'group' && <div className="notice small">Mitglied über {(detail.groups ?? []).filter((g) => g.memberIds.includes(member.userId)).map((g) => g.name).join(', ') || 'eine Gruppe'}. Speichern legt einen Direkteintrag an; er überschreibt die Rechte aus den Gruppen, bis du „Gruppenrechte übernehmen“ wählst.</div>}
-        {!member && <label className="field"><span>Benutzer des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' · KI-Agent' : ` (${u.email})`}</option>)}</select></label>}
-        {!member && unusable.length > 0 && <div className="muted small">Nicht einsetzbar: {unusable.map((a) => `${a.name} (${a.reason})`).join('; ')}</div>}
-        {isAgent && <div className="notice small">KI-Agent: handelt bei Arbeitspaketen und Aufgaben, für die er zuständig ist (direkt oder geerbt, z. B. als Teilprojekt-Verantwortung), und schreibt Log-Einträge unter seinem Namen. Als stellvertretende PL plant er im ganzen Projekt (Teilprojekte, Arbeitspakete, Aufgaben, Zuweisungen, Termine), verwaltet aber keine Mitglieder, Rechte oder Einstellungen und legt keine Projekte an.<label className="field" style={{ marginTop: 6 }}><span>Rolle</span><select value={f.role === 'pl' ? 'pl' : 'member'} onChange={(e) => setF({ ...f, role: e.target.value as any })}><option value="member">Mitglied</option><option value="pl">Stellvertretende PL</option></select></label><label className="check" style={{ marginTop: 6 }}><input type="checkbox" checked={agentCanMail} onChange={(e) => setAgentCanMail(e.target.checked)} /> darf Mails über das Projektkonto senden (sonst nur Entwürfe zur Freigabe)</label><label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> darf Doku-Seiten final setzen und an den Verteiler senden</label></div>}
+        {!member && <label className="field"><span>Person des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select></label>}
+        {!member && <div className="muted small">KI-Agenten lädst du unter <Link to={`/projekte/${detail.project.id}/einstellungen/ki`} onClick={onClose}>Einstellungen › KI</Link> ein.{onlyAgents ? ' In diesem Projekt sind nur du und Agenten Mitglied.' : ''}</div>}
         {/* „KI nutzen“ je Rolle vorbelegt: Mitglied an, Leser aus */}
-        {!isAgent && <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any, canUseAi: e.target.value !== 'reader' })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>}
-        {!isAgent && f.role === 'pl' && (isPrimary
+        <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any, canUseAi: e.target.value !== 'reader' })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
+        {f.role === 'pl' && (isPrimary
           ? <label className="check"><input type="checkbox" checked={f.isDeputy} onChange={(e) => setF({ ...f, isDeputy: e.target.checked })} /> Stellvertretung (zweiter PL). Ohne Haken wird diese Person verantwortlicher PL, der bisherige wird Stellvertretung.</label>
           : <div className="muted small">Als Stellvertretung (zweiter PL). Die verantwortliche PL übergibt ihre Rolle nur selbst.</div>)}
-        {!isAgent && f.role === 'member' && <>
+        {f.role === 'member' && <>
           <strong className="small">Zusätzliche Rechte</strong>
           <label className="check"><input type="checkbox" checked={f.canEditPlan} onChange={(e) => setF({ ...f, canEditPlan: e.target.checked })} /> Projektplan, Meilensteine ändern</label>
           <label className="check"><input type="checkbox" checked={f.canApprove} onChange={(e) => setF({ ...f, canApprove: e.target.checked })} /> Freigeben (KI-Vorschläge, Workflow-Schritte, Bestätigungen)</label>
           <label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> Dokument final setzen, Versand auslösen</label>
           <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen</label>
         </>}
-        {!isAgent && f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
+        {f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
         {error && <div className="error">{error}</div>}
         <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
           const isDeputy = isPrimary ? f.isDeputy : true;
-          const body: Record<string, unknown> = isAgent ? { role: f.role === 'pl' ? 'pl' : 'member', isDeputy: true, agentCanMail, canFinalize: f.canFinalize } : { ...f, isDeputy };
+          const body: Record<string, unknown> = { ...f, isDeputy };
           const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
           if (f.role === 'pl' && !isDeputy && primary && primary.userId !== f.userId) {
             const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;

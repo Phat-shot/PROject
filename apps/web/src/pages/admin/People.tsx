@@ -137,7 +137,7 @@ export function GroupsCard({ users, canAdmin }: { users: User[]; canAdmin: boole
   return (
     <div className="card">
       <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2>{canAdmin && <button className="btn sm" onClick={() => open(null)}>+ Gruppe</button>}</div>
-      <p className="muted small">Gruppen bündeln Personen für Sichtbarkeit und Rechte: als Mitglied oder Leser eines Projekts (die PL nimmt sie unter Mitglieder auf), für eingeschränkte Teilprojekte, Mail-Ansichten und KI-Freigaben. Verwalter einer Gruppe pflegen deren Mitglieder.</p>
+      <p className="muted small">Gruppen bündeln Personen für Sichtbarkeit und Rechte: als Mitglied oder Leser eines Projekts (die PL nimmt sie unter Mitglieder auf), für eingeschränkte Teilprojekte und Mail-Ansichten. Verwalter einer Gruppe pflegen deren Mitglieder.</p>
       {data && groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
       {groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th>Verwalter</th><th /></tr></thead><tbody>
         {groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge" style={{ marginLeft: 6 }} title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{names(g.memberIds) || <span className="muted">–</span>}</td><td className="small">{names(g.managerIds) || <span className="muted">–</span>}</td>

@@ -8,6 +8,7 @@ import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
 import { useData } from '../../lib/useData';
+import { useAssistAgent } from '../../components/AssistAgent';
 import { aiBlocked } from '../../lib/useAi';
 import { LabelPicker } from './BoardView';
 import type { Recurrence, TimeEntry } from '@projekttool/shared';
@@ -52,6 +53,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const { contacts } = useContacts(detail.project.id);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
+  const finalAgent = useAssistAgent(ai, 'assist.final_reply');
   if (!d) return <Drawer title="Arbeitspaket" onClose={onClose}>{error ? <div className="error">{error}</div> : 'Lade …'}</Drawer>;
   const t = d.task;
   const kind = t.parentId ? 'Aufgabe' : 'Arbeitspaket';
@@ -66,7 +68,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
   // Zuständiger Agent direkt oder geerbt (vom Arbeitspaket bzw. Teilprojekt): auch dann läuft er
   const respAgent = users.find((u) => u.id === t.responsible.userId && u.kind === 'agent');
-  // KI-Freigaben des zuständigen Agenten im Projekt (Notaus, Regeln, eigene Agenten der PL, Profil, Budget)
+  // Darf der zuständige Agent hier laufen (Notaus, seine Rechte, Einschränkung der PL, LLM, Budget)
   const agentRun = respAgent ? ai?.agents.find((a) => a.id === respAgent.id)?.run : undefined;
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
@@ -90,12 +92,12 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         const o = d.mails.find((m) => m.origin && !m.outgoing);
         if (!o) return null;
         const prompt = t.done && !o.answered;
-        // Mit KI formulieren: Knopf bleibt sichtbar, gesperrt mit Begründung aus den KI-Freigaben
+        // Mit KI formulieren: Knopf bleibt sichtbar, gesperrt mit Begründung; mehrere geeignete Agenten ohne Projektagent: Auswahl
         const aiNo = aiBlocked(ai, 'assist.final_reply');
         return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
           Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
           {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
-          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiNo ? <button className="btn sm" disabled title={aiNo}>Mit KI formulieren</button> : <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}`}>Mit KI formulieren</Link>}</div>}
+          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiNo ? <button className="btn sm" disabled title={aiNo}>Mit KI formulieren</button> : <>{finalAgent.picker}<Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}${finalAgent.agentId ? `&agent=${finalAgent.agentId}` : ''}`}>Mit KI formulieren</Link></>}</div>}
           {canEdit && !o.answered && aiNo && ai && <div className="muted" style={{ marginTop: 4 }}>KI: {aiNo}</div>}
         </div>;
       })()}

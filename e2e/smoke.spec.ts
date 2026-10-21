@@ -125,3 +125,31 @@ test('Projekt: Bereiche als Reiter, keine Unterpunkte in der Leiste; altes Proje
   await page.locator('.mail-views .view.approve').click();
   await expect(page.locator('.mail-detail h2')).toHaveText('Zur Freigabe');
 });
+
+test('KI: Org-Admin legt LLM und Agent an, PL lädt ihn ein und schränkt ein', async ({ browser }) => {
+  const admin = await (await browser.newContext()).newPage();
+  await login(admin, 'admin@demo.local');
+  const j = (m: string, u: string, body?: unknown) => admin.evaluate(async ([m, u, body]) => (await fetch(`/api${u}`, { method: m as string, headers: { 'content-type': 'application/json' }, body: body ? JSON.stringify(body) : undefined })).json(), [m, u, body] as const);
+  const name = `Agent ${Date.now() % 100000}`;
+  const llm = await j('POST', '/ai/profiles', { name: `LLM ${name}`, provider: 'local', baseUrl: 'http://127.0.0.1:9/v1', model: 'qwen3', projectScope: 'all' });
+  await j('POST', '/agents', { name, aiProfileId: llm.profile.id, rights: ['assist.ask', 'assist.summarize', 'agent.chat', 'agent.run'] });
+  await admin.goto('/verwaltung/ki');
+  await expect(admin.locator('.llm-block', { hasText: `LLM ${name}` })).toContainText(name);
+  await admin.context().close();
+
+  const page = await (await browser.newContext()).newPage();
+  await login(page);
+  await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
+  const id = page.url().match(/projekte\/([0-9a-f-]{36})/)![1];
+  await page.goto(`/projekte/${id}/einstellungen/ki`);
+  await page.getByRole('button', { name: 'Agent einladen' }).click();
+  await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption({ label: `${name} · LLM ${name}` });
+  await page.getByRole('button', { name: 'Einladen', exact: true }).click();
+  const row = page.locator('tr', { hasText: name });
+  await expect(row).toContainText('4 von');
+  await row.getByRole('button', { name: 'Einschränken' }).click();
+  await expect(page.getByLabel('Online-Recherche (nicht erteilt)')).toBeDisabled();
+  await page.getByLabel('Mail zusammenfassen').uncheck();
+  await page.getByRole('button', { name: 'Speichern' }).click();
+  await expect(row).toContainText('hier aus: Mail zusammenfassen');
+});

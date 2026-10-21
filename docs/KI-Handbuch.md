@@ -5,7 +5,7 @@ Für Projektleitung, Mitglieder und Verwaltung. Dieses Handbuch beschreibt, was 
 ## 1. Was ein Agent ist
 
 - **Ein Kollege ohne Login.** Ein Agent ist ein Benutzer vom Typ KI. Er ist im Projekt **Mitglied** oder **stellvertretende Projektleitung** und arbeitet an Arbeitspaketen und Aufgaben, für die er zuständig ist (direkt zugewiesen oder geerbt über ein Teilprojekt). Er handelt innerhalb seiner Rechte, nie darüber hinaus, und hat dieselben Pflichten wie eine Person: Log schreiben, zurückmelden, Termine einhalten.
-- **Nichts ist von selbst frei.** Eine KI der Organisation wirkt in einem Projekt nur, wenn die Verwaltung sie nicht sperrt (KI-Freigaben) **und** die Projektleitung sie aufnimmt. Für eine Person gilt sie nur mit dem Recht „KI nutzen“. Der **Notaus** der Verwaltung schaltet jede KI sofort ab.
+- **Im Projekt gibt es nur Agenten.** Jeder Agent gehört zu genau einem LLM. Wer das LLM verwaltet, legt den Agenten an und legt fest, was er darf. Im Projekt wirkt er erst, wenn die Projektleitung ihn einlädt; dort kann sie seine Rechte nur abschalten, nie erweitern. Auch die Assistenz (Zusammenfassen, Frage ans Projekt, Statusbericht …) führt ein Agent des Projekts aus; Personen lösen sie mit dem Recht „KI nutzen“ aus. Der **Notaus** der Verwaltung schaltet jede KI sofort ab.
 - **Das System bestätigt, nie das Modell.** Was angelegt, gesendet oder eingetragen wurde, schreibt das System ins Log und als Karte in den Chat. Kennzahlen berechnet das System. Behauptet der Agent im Chat etwas, das nicht ausgeführt wurde, ersetzt das System den Satz durch „Das konnte ich nicht ausführen: …“.
 - **Im Thema bleiben.** Jeder Lauf und jede Antwort hat genau einen Bezug: ein Arbeitspaket, ein Projekt, eine Frage. Projekte werden nie vermischt.
 
@@ -31,9 +31,10 @@ Projekte, Mitglieder, Rechte oder Einstellungen ändern; Zusagen mit Geld- oder 
 
 ### Agent aufnehmen
 
-1. **Verwaltung › KI › KI-Agenten › Agent anlegen** (Org-Admin oder Recht „KI verwalten“): LLM, **Einsatz** (alle oder ausgewählte Projekte), **Persona** (eine Zeile Schreibstil, z. B. „freundlich, knapp, duzt das Team, siezt Externe“), Denkmodus, Unterschrift. Oder die Projektleitung legt unter **Einstellungen › KI › Eigene KI-Agenten** einen eigenen Agenten nur für ihr Projekt an, wenn die Freigabe „Eigene Agenten der PL“ es erlaubt. Ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist (Verwalter und Einsatz wie bei Mail-Konten; Konzept-LLM-Agenten-Einsatz.md).
-2. **Einstellungen › Personen › Mitglieder › Hinzufügen** (KI-Agenten stehen in der Auswahl): Rolle Mitglied (schlägt vor) oder stellvertretende PL (legt direkt an), „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe). Nicht einsetzbare Agenten nennt der Dialog mit Grund.
-3. **Zuweisen**: Arbeitspaket, Aufgabe oder Teilprojekt. Der erste Lauf startet sofort.
+1. **LLM anlegen** (Verwaltung › KI › LLMs und ihre Agenten; Org-Admin oder Recht „KI verwalten“): Anbieter, Modell, Einsatz (alle, ausgewählte oder keine Projekte). Ob es in Projekten zusätzlich ein **eigenes LLM** geben darf (aus, nur persönliche, alle Projekte), stellt die Verwaltung unter „Grenzen und Vorgaben“ ein; dann bindet die Projektleitung es unter Einstellungen › KI ein und verwaltet es samt Agenten.
+2. **Agent anlegen** am LLM („Agent anlegen“ in seinem Block): Name, **Persona** (eine Zeile Schreibstil, z. B. „freundlich, knapp, duzt das Team, siezt Externe“), Unterschrift, Denkmodus, Tagesbudget, Einsatz (alle oder ausgewählte Projekte), **was er darf** (Häkchen je Bereich: Assistenz, Mail, Arbeit, Aktionen; Online-Recherche ist zunächst aus) und die **Obergrenze der Selbstständigkeit** samt immer zu bestätigender Schritte. Ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM eingesetzt werden darf.
+3. **Einladen** (Projekt › Einstellungen › KI › Agent einladen, Projektleitung): Rolle Mitglied (schlägt vor) oder stellvertretende PL (legt direkt an), „darf Mails senden“ (sonst gehen Mails als Entwurf in die Freigabe). Nicht einladbare Agenten stehen mit Grund darunter. Unter **Einschränken** schaltet die Projektleitung einzelne Rechte ab (nicht erteilte sind ausgegraut), setzt die Selbstständigkeit strenger (nie lockerer als die Obergrenze) und Workflow-Schritte.
+4. **Zuweisen**: Arbeitspaket, Aufgabe oder Teilprojekt. Der erste Lauf startet sofort.
 
 ### Projektagent
 
@@ -59,31 +60,32 @@ Der Agent fragt per **offener Frage**: Direktnachricht an den Ansprechpartner od
 
 ## 3. Steuerung
 
-### Rechte, Freigaben, Policy
+### Rechte, Einschränkung, Policy
 
 Drei Dinge wirken zusammen, jedes an seinem Ort:
 
 | Was | Wo | Wer | Beispiele |
 |---|---|---|---|
-| **Rechte** | Mitgliedschaft im Projekt | Projektleitung | Rolle, „darf Mails senden“, „Final setzen“, „Projektplan ändern“; Zugriff je Doku-Ordner (voll, lesen, kein) |
-| **Freigaben** | Verwaltung › KI › KI-Freigaben | Org-Admin, „KI verwalten“ | je Funktion erlauben oder sperren für Mandant, Projekt, Gruppe, Person, Agent; Notaus; Online-Recherche ist standardmäßig gesperrt |
-| **Policy** (Verhalten) | Verwaltung › KI, Projekt › Einstellungen › KI, Arbeitspaket | Org-Admin, Projektleitung | Selbstständigkeit, Bestätigungen, Reichweite, Überschneidungen, Aufträge im Chat, Workflow-Schritte, Uhrzeit des Projektdurchlaufs |
+| **Rechte des Agenten** | am Agenten (Verwaltung › KI bzw. eigenes LLM im Projekt) | Verwalter seines LLM | Assistenz, Mails vorschlagen oder bearbeiten, Arbeitspakete, Chat, Aufträge, Online-Recherche, Aktionen (Final setzen, Mails nach außen …); Obergrenze der Selbstständigkeit |
+| **Einschränkung im Projekt** | Projekt › Einstellungen › KI › Einschränken | Projektleitung | Rechte abschalten, Selbstständigkeit strenger, Rolle, „darf Mails senden“; Zugriff je Doku-Ordner (voll, lesen, kein) |
+| **Policy** (Verhalten) | Projekt › Einstellungen › KI, Arbeitspaket | Projektleitung | Selbstständigkeit, Bestätigungen, Reichweite, Überschneidungen, Aufträge im Chat, Workflow-Schritte, Uhrzeit des Projektdurchlaufs |
+| **Personen** | Mitgliedschaft | Projektleitung | „KI nutzen“: Assistenz auslösen und mit Agenten chatten (Leser nur Frage ans Projekt) |
 
-Sperre gewinnt immer. Die Projektleitung kann nur einschränken, nie über eine Freigabe hinaus erlauben.
+Geprüft wird in dieser Reihenfolge: Notaus → Rechte des Agenten → Einschränkung im Projekt → LLM → Tagesbudget. Was der Verwalter nicht erteilt hat, kann im Projekt niemand freigeben.
 
 ### Selbstständigkeit und Bestätigungen
 
 | Stufe | Bedeutung |
 |---|---|
-| **Selbstständig** | führt alles aus, was Rechte und Freigaben erlauben |
+| **Selbstständig** | führt alles aus, was seine Rechte im Projekt erlauben |
 | **Rückfrage bei wichtigen Schritten** (Standard für neue Projekte) | hält die Klassen der Liste „Bestätigung vor“ an: Final setzen, PDF an Verteiler, Mails nach außen, Erledigt setzen, Umstrukturieren (anpassbar; dazu Planen, Zuweisen an Dritte, Termine ändern, fremde Arbeitspakete) |
 | **Rückfrage bei allem** | hält jede Aktion außerhalb der Grundmenge an |
 
-Die **Grundmenge** (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei. Angehaltene Aktionen legt der Agent der Projektleitung als **Karte „Freigabe“** vor (Chat, Arbeitspaket, Projekt › KI): einzeln bestätigen oder mit Grund ablehnen; Abgelehntes wird 14 Tage nicht erneut vorgeschlagen, nach 7 Tagen verfallen offene Vorschläge. Die Policy vererbt sich **Mandant → Projekt → Agent im Projekt → Arbeitspaket**; der Mandant setzt Grenzen (mindestens diese Stufe, immer zu bestätigende Klassen). Mails nach außen gehen bei Bestätigungspflicht als Entwurf in Mail › Freigaben.
+Die **Grundmenge** (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei. Angehaltene Aktionen legt der Agent der Projektleitung als **Karte „Freigabe“** vor (Chat, Arbeitspaket, Projekt › KI): einzeln bestätigen oder mit Grund ablehnen; Abgelehntes wird 14 Tage nicht erneut vorgeschlagen, nach 7 Tagen verfallen offene Vorschläge. Die Policy vererbt sich **Projekt → Agent im Projekt → Arbeitspaket**; der Verwalter des LLM setzt am Agenten Grenzen (höchstens diese Stufe, immer zu bestätigende Klassen, höchste Denktiefe), die keine Ebene lockern kann. Mails nach außen gehen bei Bestätigungspflicht als Entwurf in Mail › Freigaben.
 
 ### Weitere Felder
 
-- **Denktiefe:** schnell (eine Leserunde, knapper Kontext, Denkmodus lokaler Modelle aus), Standard, gründlich (bis zu vier Leserunden, voller Kontext, Denkmodus an; kostet zwei Läufe im Tagesbudget). Mandant und Projekt setzen eine höchste Denktiefe; je Arbeitspaket darf auch „Projektplan ändern“ sie setzen, auch per Chat („WEB-12 gründlich“).
+- **Denktiefe:** schnell (eine Leserunde, knapper Kontext, Denkmodus lokaler Modelle aus), Standard, gründlich (bis zu vier Leserunden, voller Kontext, Denkmodus an; kostet zwei Läufe im Tagesbudget). Agent (Verwalter) und Projekt setzen eine höchste Denktiefe; je Arbeitspaket darf auch „Projektplan ändern“ sie setzen, auch per Chat („WEB-12 gründlich“).
 - **Reichweite:** zugewiesene Arbeitspakete (Standard) oder ganzes Projekt (Projektdurchlauf des Projektagenten).
 - **Überschneidungen:** nachfragen (Standard), aus, oder nutzen (nur bei Selbstständig: Querverweise ohne Rückfrage).
 - **Aufträge im Chat:** Projektleitung und Stellvertretung (Standard), dazu Teilprojekt-Verantwortung, Zuständige unter dem eigenen Arbeitspaket oder alle Mitglieder.
@@ -117,7 +119,7 @@ Der Agent erkennt Anweisungen in natürlicher Sprache und führt sie als Befehle
 
 ## 5. Online-Recherche
 
-Standardmäßig gesperrt. Die Verwaltung gibt sie frei (KI-Freigabe „Online-Recherche“, Häkchen am KI-Profil, Suchdienst unter Verwaltung › KI). Dann recherchiert der Agent nur lesend: Anthropic-Profile über die Websuche des Anbieters, lokale Profile über SearXNG oder Brave. Suchbegriffe werden von Namen, Adressen und Interna befreit; Grenzen je Lauf und Tag; Domains erlaubt oder gesperrt. Quellen stehen am Arbeitspaket („Quellen aus der Online-Recherche“), Seiten bekommen den Abschnitt „Quellen (abgerufen am …)“. Kontaktaufnahme ist keine Recherche, sondern eine Mail nach außen.
+Standardmäßig aus. Der Verwalter des LLM gibt sie frei (Recht „Online-Recherche“ am Agenten, Häkchen am LLM, Suchdienst unter Verwaltung › KI). Dann recherchiert der Agent nur lesend: Anthropic-Profile über die Websuche des Anbieters, lokale Profile über SearXNG oder Brave. Suchbegriffe werden von Namen, Adressen und Interna befreit; Grenzen je Lauf und Tag; Domains erlaubt oder gesperrt. Quellen stehen am Arbeitspaket („Quellen aus der Online-Recherche“), Seiten bekommen den Abschnitt „Quellen (abgerufen am …)“. Kontaktaufnahme ist keine Recherche, sondern eine Mail nach außen.
 
 ## 6. Außengrenze
 
@@ -151,7 +153,7 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 **Woher weiß ich, was er getan hat?** Jede Aktion steht im Log des Arbeitspakets und im Lauf unter Projekt › KI; Chat-Befehle zeigt die Systemkarte unter der Antwort. Was er nur behauptet, aber nicht ausgeführt hat, ersetzt das System sichtbar.
 
-**Warum läuft er nicht?** Im Arbeitspaket steht „Läuft nicht: …“ mit dem Grund: KI-Freigabe oder Notaus, Pause, Tagesbudget, kein Profil, Profil im persönlichen Projekt nicht freigegeben. Gesperrte Läufe kosten kein Budget.
+**Warum läuft er nicht?** Im Arbeitspaket steht „Läuft nicht: …“ mit dem Grund: Notaus, Recht nicht erteilt oder im Projekt abgeschaltet, Pause, Tagesbudget, LLM in diesem Projekt nicht eingesetzt oder gesperrt. Gesperrte Läufe kosten kein Budget.
 
 **Warum sieht er eine Seite nicht?** Der Ordner hat für Agenten den Zugriff „kein“, oder die Seite liegt in einem Teilprojekt, das er nicht sieht. Die Projektleitung ändert den Zugriff am Ordner.
 
@@ -159,6 +161,6 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 **Was passiert bei Überschneidungen zwischen Arbeitspaketen?** Er meldet sie; das System fragt die Zuständigen bzw. die Projektleitung. Niemand muss raten, nichts wird von selbst zusammengelegt.
 
-**Wie bekommt er mehr Spielraum?** Selbstständigkeit auf „Selbstständig“ setzen (Projekt oder Agent), Bestätigungsliste kürzen, Rechte wie „darf Mails senden“ oder „Final setzen“ vergeben, Online-Recherche freigeben. Grenzen des Mandanten gelten weiter.
+**Wie bekommt er mehr Spielraum?** Selbstständigkeit auf „Selbstständig“ setzen (Projekt oder Agent im Projekt), Bestätigungsliste kürzen, „darf Mails senden“ setzen. Mehr Rechte (z. B. Final setzen, Online-Recherche) und eine lockerere Obergrenze vergibt nur der Verwalter seines LLM.
 
-**Wie bekommt er weniger?** „Rückfrage bei allem“, Klassen in die Bestätigungsliste, Ordnerzugriff „kein“ oder „lesen“, Pause je Arbeitspaket, KI-Freigabe je Funktion sperren, Notaus.
+**Wie bekommt er weniger?** „Rückfrage bei allem“, Klassen in die Bestätigungsliste, Ordnerzugriff „kein“ oder „lesen“, Pause je Arbeitspaket, Recht im Projekt abschalten (Einschränken) oder am Agenten entziehen, Notaus.

@@ -18,7 +18,7 @@ vi.mock('../ProjectPage', () => ({
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ timeTracking: false }) }));
 vi.mock('../../lib/useData', () => ({ useData: () => ({ data: null, error: null, loading: false, reload: async () => undefined }) }));
 vi.mock('../../lib/useContacts', () => ({ useContacts: () => ({ contacts: [] }), contactLabel: (c: { email: string }) => c.email }));
-vi.mock('../../lib/useAi', () => ({ aiBlocked: () => undefined }));
+vi.mock('../../lib/useAi', () => ({ aiBlocked: () => undefined, assistChoice: () => ({ fit: [], def: null }) }));
 vi.mock('./BoardView', () => ({ LabelPicker: () => null }));
 vi.mock('./CopyMove', () => ({ CopyMoveDialog: () => null }));
 vi.mock('./TimeView', () => ({ fmtH: (m: number) => String(m) }));

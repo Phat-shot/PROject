@@ -213,7 +213,7 @@ export async function aiCapabilities(db: Db, user: User, projectId: string): Pro
   for (const f of ASSIST) features[f] = await assistCapability(db, user, projectId, f, agents);
   features['agent.chat'] = cap(await aiAllowed(db, { userId: user.id, projectId, feature: 'agent.chat' }));
   const out: AiCapabilities['agents'] = [];
-  for (const a of agents) out.push({ id: a.id, name: a.name, assist: a.assist, run: cap(await aiAllowed(db, { userId: a.id, projectId, feature: 'agent.run' })), chat: cap(await aiAllowed(db, { userId: a.id, projectId, feature: 'agent.chat' })) });
+  for (const a of agents) out.push({ id: a.id, name: a.name, assist: a.assist, projectAgent: a.projectAgent, run: cap(await aiAllowed(db, { userId: a.id, projectId, feature: 'agent.run' })), chat: cap(await aiAllowed(db, { userId: a.id, projectId, feature: 'agent.chat' })) });
   return { killswitch: !(await orgAiSettings(db, user.orgId)).enabled, features, agents: out, assistAgentId: defaultAssist(agents) };
 }
 
