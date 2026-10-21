@@ -42,10 +42,10 @@ const SCHEMA = {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
         type: { type: 'string', enum: ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
-        ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); sonst leer' },
+        ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); für das in derselben Antwort per order angelegte: neu; sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
         title: { type: 'string', description: 'order: kurzer Titel des Arbeitspakets bzw. der Aufgabe; sonst leer' },
-        parent: { type: 'string', description: 'order: Kennung des Über-AP, wenn eine Aufgabe darunter entstehen soll; sonst leer' },
+        parent: { type: 'string', description: 'order: Kennung eines bestehenden Über-AP aus dem Kontext, wenn eine Aufgabe darunter entstehen soll; nie erfinden; sonst leer (neues Arbeitspaket)' },
         subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer' },
         dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD oder leer' },
         deliverables: { type: 'array', items: { type: 'string' }, description: 'order: Lieferergebnisse als Tasks; sonst leer' },
@@ -257,13 +257,15 @@ export function claimCheck(reply: string, noted: boolean, acted = false): { text
   ];
   const claims = (s: string) => patterns.some((p) => { const m = s.match(p); return Boolean(m) && !/\b(nicht|nichts|nie|kein\w*)\b/i.test(m![0]); });
   const replaced: string[] = [];
-  const text = reply.replace(/[^.!?\n]+[.!?]*/g, (s) => {
+  // Punkte in Zahlen und Daten („6.–8.11.“, „24.10.“) beenden keinen Satz
+  const DOT = '\u0000';
+  const text = reply.replace(/(\d)\./g, `$1${DOT}`).replace(/[^.!?\n]+[.!?]*/g, (s) => {
     const core = s.trim();
     if (!core || !claims(core)) return s;
     replaced.push(core);
     return `${s.match(/^\s*/)![0]}Das konnte ich nicht ausführen: „${core.replace(/[.!?]+$/, '')}“.`;
-  });
-  return { text, replaced };
+  }).split(DOT).join('.');
+  return { text, replaced: replaced.map((r) => r.split(DOT).join('.')) };
 }
 
 export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string; results?: { type: string; status: string; text: string }[] }

@@ -79,6 +79,22 @@ test('Auftrag der PL per Chat: AP mit Auftraggeber, Agent zuständig, Log, Beric
   assert.equal(chain[0].id, t.ids.users.pl); assert.equal(chain[0].role, 'requester');
 });
 
+test('Auftrag mit geratener Kennung: unbekanntes Über-AP wird eigenes AP, Folgebefehle mit „neu“ oder unbekannter Kennung treffen den neuen Auftrag; Behauptung mit Datum bleibt nur bei Erfolg stehen', async () => {
+  const pl = await t.login('pl@demo.local');
+  nextCommands = [C({ type: 'report', ref: 'WEB-999', every: 'daily' }), C({ type: 'order', title: 'Termin AirGPU 6.–8.11.', text: 'Hardwareauslagerung', parent: 'WEB-0' }), C({ type: 'priority', ref: 'neu', level: 'hoch' })];
+  nextReply = 'Philipp, ich habe den Auftrag für den Termin 6.–8.11. zur Hardwareauslagerung angelegt.';
+  await say(pl, dmPl, 'Termin mit AirGPU 6.–8.11. zur Hardwareauslagerung');
+  const task = await t.db.one(`select * from tasks where title = 'Termin AirGPU 6.–8.11.'`);
+  assert.equal(task.parent_id, null, 'kein Über-AP');
+  const card = await lastCard(dmPl);
+  assert.match(card.body, /✓ Angelegt: WEB-\d+ „Termin AirGPU 6\.–8\.11\.“.*\(Über-AP WEB-0 gibt es nicht: als eigenes Arbeitspaket\)/);
+  assert.doesNotMatch(card.body, /nicht gefunden/, 'report und priority treffen den neuen Auftrag');
+  assert.ok(await t.db.maybeOne(`select 1 from notification_rules where task_id = $1 and event = 'progress'`, [task.id]), 'report am neuen AP');
+  const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
+  assert.doesNotMatch(reply.body, /konnte ich nicht ausführen/, 'Auftrag ausgeführt: Satz bleibt');
+  await t.db.query(`update tasks set archived_at = now() where id = $1`, [task.id]);
+});
+
 test('Rückgängig innerhalb von 10 Minuten archiviert den Auftrag; danach nicht mehr', async () => {
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');

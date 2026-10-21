@@ -75,22 +75,41 @@ export const commandsText = (role: SenderRole, a: ReturnType<typeof allowedComma
 export async function runCommands(ctx: CommandCtx, cmds: ChatCommand[]): Promise<CommandResult[]> {
   const out: CommandResult[] = [];
   let orders = 0;
-  for (const c of cmds.slice(0, 5)) {
+  // Auftrag zuerst: Folgebefehle derselben Antwort (report, note, priority …) beziehen sich oft auf das neue AP, dessen Kennung das Modell nicht kennt
+  const list = cmds.slice(0, 5).map((c, i) => ({ c, i })).sort((a, b) => Number(b.c?.type === 'order') - Number(a.c?.type === 'order') || a.i - b.i).map((x) => x.c);
+  let ordered: Ordered = null;
+  for (const c of list) {
     if (!COMMAND_TYPES.includes(c?.type)) continue;
     if (c.type === 'order' && orders++ >= 1) { out.push({ type: c.type, status: 'denied', text: 'Höchstens ein Auftrag je Nachricht' }); continue; }
-    try { out.push(await runOne(ctx, c)); }
+    try {
+      const r = await runOne(ctx, c, ordered);
+      if (c.type === 'order' && r.status === 'ok' && r.taskId) ordered = { taskId: r.taskId, projectId: (await ctx.db.one(`select project_id from tasks where id = $1`, [r.taskId])).project_id };
+      out.push(r);
+    }
     catch (e: any) { out.push({ type: c.type, status: 'denied', text: `${c.type}: ${String(e?.message ?? e).slice(0, 200)}` }); }
   }
   return out;
 }
 
-async function targetTask(ctx: CommandCtx, c: ChatCommand): Promise<{ task: any; project: { id: string; key: string; name: string } } | { error: string }> {
+/** In dieser Antwort per order angelegtes AP: Ziel für „neu“ und für eine Kennung im selben Projekt, die es (noch) nicht gibt. */
+type Ordered = { taskId: string; projectId: string } | null;
+type ScopeProject = { id: string; key: string; name: string };
+/** Projekt einer Kennung (Kürzel vor dem Bindestrich) unter den gemeinsamen Projekten, sonst das Gesprächsprojekt. */
+const projectOf = (ctx: CommandCtx, ref: string): ScopeProject | null => { const key = ref.split('-')[0].toUpperCase(); return ctx.project && ctx.project.key === key ? ctx.project : ctx.projects.find((p) => p.key === key) ?? ctx.project; };
+
+async function targetTask(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null): Promise<{ task: any; project: ScopeProject } | { error: string }> {
   const ref = String(c.ref ?? '').trim();
+  const fromOrder = async () => {
+    const task = await ctx.db.one(`select * from tasks where id = $1`, [ordered!.taskId]);
+    const project: ScopeProject = [ctx.project, ...ctx.projects].find((p) => p?.id === task.project_id) ?? await ctx.db.one(`select id, key, name from projects where id = $1`, [task.project_id]);
+    return { task, project };
+  };
+  if ((!ref || /^(neu|new)$/i.test(ref)) && ordered) return fromOrder();
   if (!ref) return { error: 'Kennung fehlt' };
-  const key = ref.split('-')[0].toUpperCase();
-  const project = ctx.project && ctx.project.key === key ? ctx.project : ctx.projects.find((p) => p.key === key) ?? ctx.project;
+  const project = projectOf(ctx, ref);
   if (!project) return { error: `${ref}: kein gemeinsames Projekt` };
   const task = await findTaskByRef(ctx.db, project.id, ref);
+  if (!task && ordered?.projectId === project.id) return fromOrder();
   if (!task) return { error: `${ref} nicht gefunden` };
   if (!(await canSeeSubproject(ctx.db, ctx.sender.id, task.subproject_id)) || !(await canSeeSubproject(ctx.db, ctx.agent.id, task.subproject_id))) return { error: `${ref}: kein Zugriff` };
   return { task, project };
@@ -98,7 +117,7 @@ async function targetTask(ctx: CommandCtx, c: ChatCommand): Promise<{ task: any;
 
 const link = (projectId: string, taskId: string) => `/projekte/${projectId}/board?task=${taskId}`;
 
-async function runOne(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
+async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null): Promise<CommandResult> {
   const { db, agent, sender, now } = ctx;
   if (c.type === 'order') return createOrder(ctx, c);
   if (c.type === 'refer') {
@@ -108,7 +127,7 @@ async function runOne(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
     if (!text) return { type: c.type, status: 'denied', text: 'refer ohne Text' };
     return orderRequest(ctx, ctx.project, text, null);
   }
-  const t = await targetTask(ctx, c);
+  const t = await targetTask(ctx, c, ordered);
   if ('error' in t) return { type: c.type, status: 'denied', text: t.error };
   const { task, project } = t;
   const code = `${project.key}-${task.number}`;
@@ -217,11 +236,15 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   // Projekt: Kanalprojekt, Projekt des genannten Über-AP, sonst einziges gemeinsames
   let project = ctx.project;
   let parent: any = null;
+  let parentNote = '';
   if (c.parent) {
     const t = await targetTask(ctx, { type: 'order', ref: c.parent });
-    if ('error' in t) return { type: 'order', status: 'denied', text: `Über-AP ${c.parent}: ${t.error}` };
-    parent = t.task; project = t.project;
-    if (parent.parent_id) return { type: 'order', status: 'denied', text: `${c.parent} ist eine Aufgabe; Aufgaben haben keine eigenen Aufgaben` };
+    // Unbekanntes Über-AP in einem gemeinsamen Projekt (Modell hat eine Kennung geraten): eigenes AP in diesem Projekt statt nichts
+    const guessed = 'error' in t && /nicht gefunden$/.test(t.error) ? projectOf(ctx, String(c.parent).trim()) : null;
+    if ('error' in t && !guessed) return { type: 'order', status: 'denied', text: `Über-AP ${c.parent}: ${t.error}` };
+    if ('error' in t) { project = guessed; parentNote = ` (Über-AP ${c.parent} gibt es nicht: als eigenes Arbeitspaket)`; }
+    else { parent = t.task; project = t.project; }
+    if (parent?.parent_id) return { type: 'order', status: 'denied', text: `${c.parent} ist eine Aufgabe; Aufgaben haben keine eigenen Aufgaben` };
   }
   if (!project) return { type: 'order', status: 'denied', text: ctx.projects.length > 1 ? `Projekt nicht eindeutig (${ctx.projects.map((p) => p.key).join(', ')}); bitte das Projekt nennen` : 'kein gemeinsames Projekt' };
   const d = await aiAllowed(db, { userId: agent.id, projectId: project.id, feature: 'agent.order', budget: false });
@@ -259,7 +282,7 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   }
   queueAgentRun(t.id, 'order', agent.id);
   const code = `${project.key}-${t.number}`;
-  return { type: 'order', status: 'ok', text: `Angelegt: ${code} „${title}“${parent ? ` unter ${project.key}-${parent.number}` : subproject ? ` im Teilprojekt „${subproject.name}“` : ''} · zuständig ${agent.name} · Auftraggeber ${sender.name}`, link: link(project.id, t.id), taskId: t.id, undoUntil: new Date(now.getTime() + 10 * 60_000).toISOString() };
+  return { type: 'order', status: 'ok', text: `Angelegt: ${code} „${title}“${parent ? ` unter ${project.key}-${parent.number}` : subproject ? ` im Teilprojekt „${subproject.name}“` : ''} · zuständig ${agent.name} · Auftraggeber ${sender.name}${parentNote}`, link: link(project.id, t.id), taskId: t.id, undoUntil: new Date(now.getTime() + 10 * 60_000).toISOString() };
 }
 
 /** Systemkarte mit den Ergebnissen; Freigabekarten hängen an der Frage. */
