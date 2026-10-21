@@ -17,10 +17,11 @@ test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten',
   // Ein Klick auf das Projekt öffnet direkt die Arbeitspakete (oberster Bereich des Projekts)
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await expect(page.locator('.task-card').first()).toBeVisible();
-  await page.getByRole('button', { name: /Neues Arbeitspaket/ }).click();
+  // Anlegen in der Spalte: Titel eingeben, Enter, danach öffnet die Maske
+  await page.getByRole('button', { name: '+ Arbeitspaket' }).first().click();
   const title = `E2E ${Date.now()}`;
-  await page.getByLabel('Titel').fill(title);
-  await page.getByRole('button', { name: 'Anlegen' }).click();
+  await page.getByPlaceholder('Titel eingeben, Enter zum Anlegen').fill(title);
+  await page.getByPlaceholder('Titel eingeben, Enter zum Anlegen').press('Enter');
   await expect(page.locator('.drawer')).toContainText('Checkliste');
   await page.locator('.drawer input[placeholder^="Neuer Punkt"]').fill('Erster Schritt');
   await page.locator('.drawer input[placeholder^="Neuer Punkt"]').press('Enter');
@@ -60,7 +61,7 @@ test('Leser darf nichts anlegen', async ({ page }) => {
   await login(page, 'leser@demo.local');
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
-  await expect(page.getByRole('button', { name: /Neues Arbeitspaket/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '+ Arbeitspaket' })).toHaveCount(0);
 });
 
 test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket anlegen', async ({ page }) => {

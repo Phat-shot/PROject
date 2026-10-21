@@ -1,8 +1,10 @@
+import { useState } from 'react';
 import { api, fmtDate } from '../../lib/api';
 import { useAsync, useDialog } from '../../components/ui';
 import { useProject, type Milestone } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
 import { useCreate } from './create';
+import { InlineCreate } from './BoardView';
 
 /** Teilprojekte und Meilensteine als Listen; bearbeitet wird in der Maske des Teilprojekts. Plan und Einstellungen gleich. */
 
@@ -27,6 +29,7 @@ export function SubprojectList() {
   const me = detail.project.myMembership;
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const create = useCreate();
+  const [adding, setAdding] = useState(false);
   const openOf = (id: string) => tasks.filter((x) => x.subprojectId === id && !x.parentId && !x.done && !x.archivedAt && !x.deletedAt).length;
   return (
     <>
@@ -41,7 +44,7 @@ export function SubprojectList() {
         ))}
         {detail.subprojects.length === 0 && <p className="muted small">Noch keine Teilprojekte. Arbeitspakete stehen dann unter „Ohne Teilprojekt“.</p>}
       </div>
-      {canPlan && <button className="btn sm link mt" onClick={() => void create.subproject()}>+ Teilprojekt</button>}
+      {canPlan && <div className="mt"><InlineCreate open={adding} onOpen={() => setAdding(true)} onClose={() => setAdding(false)} label="+ Teilprojekt" placeholder="Name des Teilprojekts, Enter zum Anlegen" onCreate={(name) => create.subproject(name)} /></div>}
     </>
   );
 }

@@ -8,6 +8,7 @@ import { InlineText, TextArea } from './TaskDrawer';
 import { CopyMoveDialog } from './CopyMove';
 import { useMembers, useTransferQuestion } from './planForms';
 import { useCreate } from './create';
+import { InlineCreate } from './BoardView';
 
 /**
  * Maske eines Teilprojekts, aufgebaut wie die des Arbeitspakets: Kopf mit Name und Aktionen, Felder (Verantwortung, Zeitraum),
@@ -22,7 +23,7 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
   const create = useCreate();
   const { busy, error, run } = useAsync();
   const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
-  const [apTitle, setApTitle] = useState('');
+  const [adding, setAdding] = useState(false);
   const s = detail.subprojects.find((x) => x.id === subprojectId);
   const me = detail.project.myMembership;
   const isPl = me.role === 'pl';
@@ -96,10 +97,7 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
           </button>
         ))}
       </div>
-      {me.role !== 'reader' && <form className="row mt" style={{ gap: 4 }} onSubmit={(e) => { e.preventDefault(); const t = apTitle.trim(); if (t) void run(async () => { setApTitle(''); await create.task({ title: t, subprojectId: s.id }); }); }}>
-        <input type="text" placeholder="Neues Arbeitspaket … (Enter, danach öffnet die Maske)" value={apTitle} onChange={(e) => setApTitle(e.target.value)} style={{ flex: 1 }} />
-        <button className="btn sm" disabled={busy || !apTitle.trim()}>Anlegen</button>
-      </form>}
+      {me.role !== 'reader' && <div className="mt"><InlineCreate open={adding} onOpen={() => setAdding(true)} onClose={() => setAdding(false)} label="+ Arbeitspaket" placeholder="Titel eingeben, Enter zum Anlegen" onCreate={(title) => create.task({ title, subprojectId: s.id })} /></div>}
       {copyMove && <CopyMoveDialog kind="subproject" op={copyMove} detail={detail} subproject={s} tasks={aps} onClose={() => setCopyMove(null)} onDone={async () => { await reload(); await reloadTasks(); }} />}
     </Drawer>
   );

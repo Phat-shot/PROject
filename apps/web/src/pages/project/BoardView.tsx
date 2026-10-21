@@ -65,7 +65,7 @@ export function BoardView() {
       if (e.key === 'q') setF((x) => ({ ...x, mine: !x.mine }));
       if (e.key === 'x') setF(EMPTY);
       if (e.key === 'Escape') clearSelection();
-      if (e.key === 'n' && canEdit) void create.task();
+      if (e.key === 'n' && canEdit) { e.preventDefault(); setAdding(firstAdd.current); }
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -97,6 +97,11 @@ export function BoardView() {
 
   // Schnell anlegen nur in einer Spalte je Teilprojekt (erste aktive, sonst erste): weniger Knöpfe, gleicher Weg
   const addColumnId = (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0])?.id;
+  // Anlegen in jeder Spalte außer „Wartet“ (braucht Grund und Frist) und „Erledigt“; `n` öffnet das Feld der ersten aktiven Spalte
+  const [adding, setAdding] = useState<string | null>(null);
+  const firstAdd = useRef('');
+  firstAdd.current = `${groups[0]?.key ?? 'all'}|${addColumnId}`;
+  const [newSp, setNewSp] = useState(false);
   const columnCount = (colId: string) => tasks.filter((x) => x.columnId === colId && !x.parentId).length;
 
   const onDrop = async (laneKey: string, colId: string) => {
@@ -122,7 +127,6 @@ export function BoardView() {
         <div className="filterbar compact">
           <input ref={searchRef} type="text" placeholder="Filtern …" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
           <button className={`chip ${active ? 'on' : ''}`} onClick={() => setShowFilters(true)}>Filter{active ? ' ·' : ''}</button>
-          {canEdit && <button className="btn sm primary" onClick={() => void create.task()}>+ Neu</button>}
         </div>
       ) : (
       <div className="filterbar">
@@ -151,13 +155,12 @@ export function BoardView() {
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
         <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '']))}>CSV</button>
-        {canEdit && <button className="btn primary" onClick={() => void create.task()}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
       )}
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen im Arbeitspaket.</div>}
       {groups.map((g) => { const closed = g.tasks.length === 0 ? !laneClosed.has(g.key) : laneClosed.has(g.key); return (
         <div key={g.key} className={`swimlane ${closed ? 'collapsed' : ''}`}>
-          {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{closed ? '▸' : '▾'}</button>{g.key !== 'none' && g.key !== 'all' ? <button className="lane-name link" title="Teilprojekt öffnen (Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine)" onClick={() => openSubproject(g.key)}>{g.name}</button> : <span className="lane-name">{g.name}</span>}<span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
+          {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{closed ? '▸' : '▾'}</button>{g.key !== 'none' && g.key !== 'all' ? <button className="lane-name link" title="Teilprojekt öffnen (Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine)" onClick={() => openSubproject(g.key)}>{g.name}</button> : <span className="lane-name">{g.name}</span>}<span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}{g.key !== 'none' && g.key !== 'all' && <button className="btn sm lane-config" title="Teilprojekt konfigurieren: Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine" onClick={() => openSubproject(g.key)}>⚙ Teilprojekt</button>}</h2>}
           {g.name && closed ? null : <div className="board">
             {detail.columns.map((c) => {
               const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
@@ -190,14 +193,15 @@ export function BoardView() {
                       onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
                   {!isCollapsed && inCol.length === 0 && drag && <div className="col-empty">Hier ablegen</div>}
-                  {!isCollapsed && canEdit && !f.archived && c.id === addColumnId && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} />}
+                  {!isCollapsed && canEdit && !f.archived && !c.isDone && c.kind !== 'waiting' && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} workflow={c.id === addColumnId}
+                    open={adding === `${laneKey}|${c.id}`} onOpen={() => setAdding(`${laneKey}|${c.id}`)} onClose={() => setAdding(null)} />}
                 </div>
               );
             })}
           </div>}
         </div>
       ); })}
-      {lanes && canPlanSp && !f.archived && <button className="btn sm link mt" onClick={() => void create.subproject()}>+ Teilprojekt</button>}
+      {lanes && canPlanSp && !f.archived && <InlineCreate open={newSp} onOpen={() => setNewSp(true)} onClose={() => setNewSp(false)} label="+ Teilprojekt" placeholder="Name des Teilprojekts, Enter zum Anlegen" className="add-lane" onCreate={(name) => create.subproject(name)} />}
       {selectMode && canEdit && (
         <div className="bulkbar">
           <strong>{selected.size} ausgewählt</strong>
@@ -288,24 +292,35 @@ function StatusMenu({ task }: { task: Task }) {
   );
 }
 
-function QuickAdd({ columnId, subprojectId }: { columnId: string; subprojectId: string | null }) {
+function QuickAdd({ columnId, subprojectId, workflow, open, onOpen, onClose }: { columnId: string; subprojectId: string | null; workflow: boolean; open: boolean; onOpen: () => void; onClose: () => void }) {
   const { reloadTasks } = useProject();
   const create = useCreate();
-  const [open, setOpen] = useState(false);
   const [wf, setWf] = useState<'pick' | WorkflowDef | null>(null);
-  const [title, setTitle] = useState('');
-  const { busy, run } = useAsync();
-  const submit = () => {
-    if (!title.trim()) return;
-    // Titel genügt, danach öffnet die Maske mit allen Feldern
-    void run(async () => { const t = title.trim(); setTitle(''); setOpen(false); await create.task({ title: t, columnId, subprojectId }); });
-  };
-  if (!open) return <span className="row" style={{ gap: 2 }}><button className="btn sm link" onClick={() => setOpen(true)}>+ Arbeitspaket</button><button className="btn sm link" title="Workflow statt eines einzelnen Arbeitspakets starten: die Arbeitspakete des Ablaufs landen in dieser Spalte" onClick={() => setWf('pick')}>+ Workflow</button>{wf === 'pick' && <WorkflowPicker onPick={(d) => setWf(d)} onClose={() => setWf(null)} />}{wf && wf !== 'pick' && <StartRunDialog def={wf} columnId={columnId} subprojectId={subprojectId} onClose={() => setWf(null)} onStarted={async () => { setWf(null); await reloadTasks(); }} />}</span>;
   return (
-    <div className="quick-add">
-      <textarea autoFocus placeholder="Titel eingeben, Enter zum Anlegen" value={title} onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } if (e.key === 'Escape') { setOpen(false); setTitle(''); } }} />
-      <div className="row"><button className="btn sm primary" disabled={busy} onClick={submit}>Anlegen</button><button className="btn sm" onClick={() => { setOpen(false); setTitle(''); }}>✕</button><span className="muted small right">danach öffnet die Maske</span></div>
+    <div className="col-add">
+      {/* Titel genügt, danach öffnet die Maske mit allen Feldern; ohne Titel entsteht nichts */}
+      <InlineCreate open={open} onOpen={onOpen} onClose={onClose} label="+ Arbeitspaket" placeholder="Titel eingeben, Enter zum Anlegen" onCreate={(title) => create.task({ title, columnId, subprojectId })} />
+      {workflow && !open && <button className="btn sm link" title="Workflow statt eines einzelnen Arbeitspakets starten: die Arbeitspakete des Ablaufs landen in dieser Spalte" onClick={() => setWf('pick')}>+ Workflow</button>}
+      {wf === 'pick' && <WorkflowPicker onPick={(d) => setWf(d)} onClose={() => setWf(null)} />}
+      {wf && wf !== 'pick' && <StartRunDialog def={wf} columnId={columnId} subprojectId={subprojectId} onClose={() => setWf(null)} onStarted={async () => { setWf(null); await reloadTasks(); }} />}
+    </div>
+  );
+}
+
+/** Deutlicher Anlegen-Knopf, der zum Eingabefeld wird: Titel bzw. Name, Enter legt an und öffnet die Maske; leer oder Esc legt nichts an. */
+export function InlineCreate({ open, onOpen, onClose, label, placeholder, onCreate, className = '' }: { open: boolean; onOpen: () => void; onClose: () => void; label: string; placeholder: string; onCreate: (title: string) => Promise<unknown>; className?: string }) {
+  const [title, setTitle] = useState('');
+  const { busy, error, run } = useAsync();
+  const close = () => { setTitle(''); onClose(); };
+  const submit = () => { const t = title.trim(); if (!t) { close(); return; } void run(async () => { await onCreate(t); close(); }); };
+  if (!open) return <button className={`add-btn ${className}`} onClick={onOpen}>{label}</button>;
+  return (
+    <div className={`quick-add ${className}`}>
+      <textarea autoFocus placeholder={placeholder} value={title} disabled={busy} onChange={(e) => setTitle(e.target.value)}
+        onBlur={() => { if (!title.trim()) close(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } if (e.key === 'Escape') close(); }} />
+      <div className="row"><button className="btn sm primary" disabled={busy || !title.trim()} onMouseDown={(e) => e.preventDefault()} onClick={submit}>Anlegen</button><button className="btn sm" onClick={close}>✕</button><span className="muted small right">danach öffnet die Maske</span></div>
+      {error && <div className="error small">{error}</div>}
     </div>
   );
 }
