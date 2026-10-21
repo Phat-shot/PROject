@@ -20,7 +20,7 @@ import { SQL } from '../projectPolicy.js';
  */
 export type ChatCommandType = 'order' | 'note' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer';
 export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'];
-export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
+export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
 export type SenderRole = 'pl' | 'tp' | 'responsible' | 'member' | 'reader' | 'none';
@@ -236,6 +236,13 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   if (!title) return { type: 'order', status: 'denied', text: 'Auftrag ohne Titel' };
   // Projekt: Kanalprojekt, Projekt des genannten Über-AP, sonst einziges gemeinsames
   let project = ctx.project;
+  // Zielprojekt per Kürzel oder Name (nur gemeinsame Projekte); sonst Thema bzw. persönliches Projekt
+  const named = String(c.project ?? '').trim().toLowerCase();
+  if (named) {
+    const hit = [ctx.project, ...ctx.projects].find((p) => p && (p.key.toLowerCase() === named || p.name.toLowerCase() === named));
+    if (!hit) return { type: 'order', status: 'denied', text: `Projekt „${c.project}“: dort bin ich nicht Mitglied oder du hast dort keinen Zugriff auf KI` };
+    project = hit;
+  }
   let parent: any = null;
   let parentNote = '';
   if (c.parent) {

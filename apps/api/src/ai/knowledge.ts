@@ -33,7 +33,7 @@ export async function agentVisibility(db: Db, q: { agentId: string; projectId: s
   return { folderAccess, subprojectIds: sps, key: createHash('sha1').update(JSON.stringify({ sps, none })).digest('hex').slice(0, 16) };
 }
 
-export interface SearchHit { kind: 'page' | 'task'; id: string; title: string; ref?: string; excerpt?: string | null; status?: string; folder?: string | null }
+export interface SearchHit { kind: 'page' | 'task'; id: string; title: string; ref?: string; excerpt?: string | null; status?: string; folder?: string | null; /** Zahl der getroffenen Suchbegriffe */ score?: number }
 /** Suche im Projekt (Titel und Inhalt, Stichwörter): bis 10 Seitentitel mit 3 Ausschnitten à 800 Zeichen und 5 Arbeitspakete; nur, was Agent (und ggf. Absender) sehen dürfen. */
 export async function search(db: Db, q: { projectId: string; agentId: string; query: string; viewerId?: string | null; maxTitles?: number; maxExcerpts?: number }): Promise<{ pages: SearchHit[]; tasks: SearchHit[] }> {
   const terms = tokens(q.query).slice(0, 8);
@@ -46,14 +46,14 @@ export async function search(db: Db, q: { projectId: string; agentId: string; qu
      order by score desc, p.updated_at desc limit $3`, [q.projectId, like, (q.maxTitles ?? 10) * 2]);
   const okPages = pages.rows.filter((p: any) => !p.folder_id || vis.folderAccess.get(p.folder_id) !== 'none').slice(0, q.maxTitles ?? 10);
   const excerpt = (md: string) => { const low = md.toLowerCase(); const idx = terms.map((t) => low.indexOf(t)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0; const start = Math.max(0, idx - 200); return `${start ? '… ' : ''}${md.slice(start, start + 800).replace(/\s+/g, ' ').trim()}${start + 800 < md.length ? ' …' : ''}`; };
-  const outPages: SearchHit[] = okPages.map((p: any, i: number) => ({ kind: 'page', id: p.id, title: p.title, status: p.status, folder: p.folder, excerpt: i < (q.maxExcerpts ?? 3) ? excerpt(String(p.content_md ?? '')) : null }));
+  const outPages: SearchHit[] = okPages.map((p: any, i: number) => ({ kind: 'page', id: p.id, title: p.title, status: p.status, folder: p.folder, excerpt: i < (q.maxExcerpts ?? 3) ? excerpt(String(p.content_md ?? '')) : null, score: Number(p.score) }));
   const params: any[] = [q.projectId, like, q.agentId];
   if (q.viewerId) params.push(q.viewerId);
   const tasks = await db.query(
-    `select t.id, t.number, t.title, c.name as column_name, p.key from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id
+    `select t.id, t.number, t.title, c.name as column_name, p.key, (select count(*) from unnest($2::text[]) x where t.title ilike x or t.description ilike x) as score from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id
      where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and exists (select 1 from unnest($2::text[]) x where t.title ilike x or t.description ilike x)
-       and ${visibleSubprojectSql(3)}${q.viewerId ? ` and ${visibleSubprojectSql(4)}` : ''} order by t.updated_at desc nulls last limit 5`, params);
-  return { pages: outPages, tasks: tasks.rows.map((t: any) => ({ kind: 'task', id: t.id, ref: `${t.key}-${t.number}`, title: t.title, status: t.column_name })) };
+       and ${visibleSubprojectSql(3)}${q.viewerId ? ` and ${visibleSubprojectSql(4)}` : ''} order by score desc, t.updated_at desc nulls last limit 5`, params);
+  return { pages: outPages, tasks: tasks.rows.map((t: any) => ({ kind: 'task', id: t.id, ref: `${t.key}-${t.number}`, title: t.title, status: t.column_name, score: Number(t.score) })) };
 }
 export const searchText = (r: { pages: SearchHit[]; tasks: SearchHit[] }) => `${r.pages.length ? `Seiten:\n${r.pages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${p.excerpt}` : ''}`).join('\n')}` : 'Seiten: keine Treffer'}\n${r.tasks.length ? `Arbeitspakete:\n${r.tasks.map((t) => `- ${t.ref} „${t.title}“ · ${t.status}`).join('\n')}` : 'Arbeitspakete: keine Treffer'}`;
 

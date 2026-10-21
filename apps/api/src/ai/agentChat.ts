@@ -10,7 +10,7 @@ import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
 import { isInternal } from '../outbound.js';
 import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
-import { search as knowledgeSearch } from './knowledge.js';
+import { search as knowledgeSearch, searchText, tokens, type SearchHit } from './knowledge.js';
 import { SQL } from '../projectPolicy.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
@@ -41,12 +41,13 @@ const SCHEMA = {
     onTopic: { type: 'boolean', description: 'true, wenn die Antwort das Thema (Projekt oder Arbeitspaket) betrifft; false bei Gruß, Smalltalk, allgemeinen Fragen oder Bitten ohne Projektbezug' },
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
-      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
+      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
         type: { type: 'string', enum: ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
         ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); für das in derselben Antwort per order angelegte: neu; sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
         title: { type: 'string', description: 'order: kurzer Titel des Arbeitspakets bzw. der Aufgabe; sonst leer' },
         parent: { type: 'string', description: 'order: Kennung eines bestehenden Über-AP aus dem Kontext, wenn eine Aufgabe darunter entstehen soll; nie erfinden; sonst leer (neues Arbeitspaket)' },
+        project: { type: 'string', description: 'order: Kürzel des Projekts, in das der Auftrag gehört (aus Thema, Treffern oder Übersicht der gemeinsamen Projekte); leer = Thema bzw. persönliches Projekt' },
         subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer' },
         dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD oder leer' },
         deliverables: { type: 'array', items: { type: 'string' }, description: 'order: Lieferergebnisse als Tasks; sonst leer' },
@@ -73,8 +74,11 @@ const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').t
 const hhmm = (d: string | Date) => new Date(d).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' });
 const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
 
-/** personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (Gruß ohne persönliches Projekt) */
-export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask' | 'personal' | 'general';
+/**
+ * personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (Gruß ohne persönliches Projekt),
+ * matched = über Inhalte genau einem Projekt zugeordnet, open = Treffer in mehreren Projekten (das Modell ordnet zu oder fragt)
+ */
+export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask' | 'personal' | 'general' | 'matched' | 'open';
 export interface ScopeProject { id: string; key: string; name: string }
 /** Thema einer Chat-Nachricht: Projekte und Arbeitspakete, aus denen der Kontext kommt, und wie es bestimmt wurde. */
 export interface ChatScope {
@@ -89,6 +93,10 @@ export interface ChatScope {
   hidden: string[];
   /** Gemeinsame, beidseitig freie Projekte (Direktnachricht) bzw. das Kanalprojekt */
   projects: ScopeProject[];
+  /** Direktnachricht: alle gemeinsamen Projekte (Übersicht zur Zuordnung, Ziele für order.project) */
+  common?: ScopeProject[];
+  /** Treffer der Inhaltssuche je Projekt (Doku und Arbeitspakete, die beide sehen) */
+  hits?: Map<string, { pages: SearchHit[]; tasks: SearchHit[] }>;
 }
 
 /** „über alle Projekte“, „insgesamt“: Thema sind alle gemeinsamen Projekte. */
@@ -184,32 +192,34 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   const mine = await resolve(q.message.body);
   if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)) };
   if (ALL_RE.test(q.message.body)) return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
-  // Ohne Kontext nur das persönliche Projekt des Absenders (er ist dort PL, der Agent Mitglied): Infos und Doku von dort, nichts aus anderen Projekten
+  // Persönliches Projekt des Absenders (er ist dort PL, der Agent Mitglied)
   const personal = common.length ? (await db.query(`select p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1 and m.role = 'pl' where ${SQL.isPersonal('p')} and p.id = any($2::uuid[])`, [q.senderId, common.map((p) => p.id)])).rows.map((r: any) => r.id as string) : [];
-  const personalScope = (): ChatScope => ({ how: 'personal', projectIds: personal, taskIds: [], refs: [], hidden: [], projects: common.filter((p) => personal.includes(p.id)) });
-  // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug, auch nicht aus dem Verlauf
-  if (isSmallTalk(q.message.body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope() : { how: 'general', projectIds: [], taskIds: [], refs: [], hidden: [], projects: common };
-  // Mit persönlichem Projekt gilt ohne Nennung dieses, außer das laufende Gespräch dreht sich um ein anderes gemeinsames Projekt:
-  // die vorige Nachricht der Person und die Antworten danach (höchstens 8 Stunden alt), z. B. „Leg das bitte an“ nach einer Frage zu AirGPU
-  if (personal.length) {
-    for (const h of q.history.slice(0, 8)) {
-      if (h.id === q.message.id) continue;
-      if (h.created_at && new Date(h.created_at).getTime() < now.getTime() - 8 * 3600_000) break;
-      const r = await resolve(String(h.body ?? ''));
-      const other = r.projectIds.filter((id) => !personal.includes(id));
-      if (other.length) return { how: 'history', projectIds: other, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => other.includes(p.id)) };
-      if (r.projectIds.length || r.hidden.length || h.uid === q.senderId) break;
-    }
-    return personalScope();
-  }
-  // Verlauf (neueste zuerst): das zuletzt genannte Arbeitspaket bzw. Projekt, ohne Zeitfenster
+  const none = { taskIds: [] as string[], refs: [] as string[], hidden: [] as string[], common };
+  const personalScope = (): ChatScope => ({ how: 'personal', projectIds: personal, ...none, projects: common.filter((p) => personal.includes(p.id)) });
+  // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug
+  if (isSmallTalk(q.message.body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope() : { how: 'general', projectIds: [], ...none, projects: common };
+  // Dialog im Thread: das zuletzt im Thread genannte Arbeitspaket bzw. Projekt (der Verlauf enthält nur den Thread und noch
+  // unbeantwortete Nachrichten; ein Gedächtnis über Gespräche hinweg gibt es nicht)
   for (const h of q.history) {
     if (h.id === q.message.id) continue;
     const r = await resolve(String(h.body ?? ''));
-    if (r.projectIds.length) return { how: 'history', projectIds: r.projectIds, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => r.projectIds.includes(p.id)) };
+    if (r.projectIds.length) return { how: 'history', projectIds: r.projectIds, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => r.projectIds.includes(p.id)), common };
   }
-  if (common.length > 1) return { how: 'ask', projectIds: [], taskIds: [], refs: [], hidden: [], projects: common };
-  return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
+  // Zuordnung über Inhalte: Treffer in Doku und Arbeitspaketen der gemeinsamen Projekte, nur was Agent und Absender sehen
+  // Ein Projekt zählt erst, wenn ein Treffer mindestens zwei Suchbegriffe enthält (bei nur einem Begriff diesen): ein einzelnes
+  // häufiges Wort oder ein Vorname ordnet nichts zu
+  const hits = new Map<string, { pages: SearchHit[]; tasks: SearchHit[] }>();
+  const need = Math.min(2, tokens(q.message.body).slice(0, 8).length);
+  if (need) for (const p of common.slice(0, 12)) {
+    const r = await knowledgeSearch(db, { projectId: p.id, agentId: q.agent.id, query: q.message.body, viewerId: q.senderId, maxTitles: 5, maxExcerpts: 2 });
+    if ([...r.pages, ...r.tasks].some((h) => (h.score ?? 0) >= need)) hits.set(p.id, r);
+  }
+  const hitProjects = common.filter((p) => hits.has(p.id));
+  if (hitProjects.length === 1) return { how: 'matched', projectIds: [hitProjects[0].id], ...none, projects: hitProjects, hits };
+  if (hitProjects.length > 1) return { how: 'open', projectIds: hitProjects.map((p) => p.id), ...none, projects: hitProjects, hits };
+  if (personal.length) return personalScope();
+  if (common.length > 1) return { how: 'ask', projectIds: [], ...none, projects: common };
+  return { how: 'all', projectIds: common.map((p) => p.id), ...none, projects: common };
 }
 
 /** Heutiges Datum in Europe/Berlin (YYYY-MM-DD) und der Sonntag dieser Woche, für „fällig diese Woche“. */
@@ -296,15 +306,15 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     project = await db.maybeOne(`select p.id, p.key, p.name from projects p join project_members m on m.project_id = p.id and m.user_id = $2 where p.id = $1`, [channel.project_id, agent.id]);
     if (!project) return { status: 'skipped', error: 'Agent ist kein Mitglied des Projekts' };
   } else if (!(await db.maybeOne(`select 1 from chat_channel_members where channel_id = $1 and user_id = $2`, [channel.id, agent.id]))) return { status: 'skipped' };
-  // Im Projektkanal antwortet der Agent im Thread der Nachricht, in Direktnachrichten direkt
-  const threadId: string | null = channel.kind === 'project' ? msg.thread_id ?? msg.id : null;
+  // Im Projektkanal antwortet der Agent im Thread der Nachricht; in Direktnachrichten direkt, im Thread, wenn die Person dort schreibt
+  const threadId: string | null = msg.thread_id ?? (channel.kind === 'project' ? msg.id : null);
 
   /** Antwort im Chat; die Meldung an den Absender trägt note statt des Texts (volle Begründung, die der Kanal nicht zeigt). */
   // meta.projectId: Thema der Antwort (eindeutiges Projekt), damit Bewertungen in Direktnachrichten einem Projekt zugeordnet sind
   const post = async (body: string, note = body, meta: { projectId: string } | null = null) => {
     await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body, meta) values ($1,$2,$3,$4,$5)`, [channel.id, agent.id, threadId, body.slice(0, 8000), meta ? JSON.stringify(meta) : null]);
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channel.id, agent.id]);
-    const link = channel.kind === 'project' ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
+    const link = threadId ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
     await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(note, note === body ? 160 : 400), link, ref: threadId ? { type: 'chat_thread', id: threadId } : { type: 'chat_channel', id: channel.id }, actorId: agent.id, chatted: true, dedupeKey: null });
   };
 
@@ -329,10 +339,21 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Sperre des Agenten (auch „Eigene Agenten der PL“ für die PL, die ihn angelegt hat): nie mit Namen und Notiz persönlicher Regeln
   if (!cfg) return blocked(`Ich bin hier gesperrt: ${decision.publicReason}`, `Ich bin hier gesperrt: ${decision.publicReason}`, decision.publicReason);
 
-  // Verlauf: Thread (Ursprung und Antworten) bzw. die letzten Nachrichten des Gesprächs
+  // Kein Gedächtnis über Gespräche hinweg: Dialog nur im Thread (Ursprung und Antworten; ist der Ursprung eine Antwort des
+  // Agenten, auch die Nachricht der Person davor). Außerhalb eines Threads nur die Nachrichten seit seiner letzten Antwort.
+  const COLS = `m.id, m.body, m.created_at, m.kind, u.name, u.id as uid`;
   const history = threadId
-    ? await db.query(`select m.id, m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
-    : await db.query(`select m.id, m.body, m.created_at, m.kind, u.name, u.id as uid from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null order by m.created_at desc limit 16`, [channel.id]);
+    ? await db.query(`select ${COLS} from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
+    : await db.query(`select ${COLS} from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null and m.kind = 'user'
+        and m.created_at > coalesce((select max(x.created_at) from chat_messages x where x.channel_id = $1 and x.thread_id is null and x.user_id = $2 and x.created_at <= $3::timestamptz), '-infinity'::timestamptz)
+        and m.created_at <= $3::timestamptz order by m.created_at desc limit 8`, [channel.id, agent.id, msg.created_at]);
+  if (threadId && history.rows.length) {
+    const root = history.rows[history.rows.length - 1];
+    if (root.uid === agent.id) {
+      const before = await db.maybeOne(`select ${COLS} from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null and m.kind = 'user' and m.user_id <> $2 and m.created_at < $3 order by m.created_at desc limit 1`, [channel.id, agent.id, root.created_at]);
+      if (before) history.rows.push(before);
+    }
+  }
   // Thema der Nachricht (Abschnitt 6 des Agenten-Konzepts): bestimmt das System, nicht das Modell
   const scope = await resolveChatScope(db, { channel, message: msg, history: history.rows, senderId: msg.user_id, agent }, now);
   // Gruß oder Kurzmeldung ohne Inhalt: keine Rückmeldung auf offene Fragen, keine Notizen, keine Bezugszeile
@@ -389,7 +410,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const figures: string[] = [];
   if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
   else if (scope.how !== 'general') for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
-  const HOW: Record<ChatScopeHow, string> = { channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Verlauf genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
+  const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
   const theme = scope.how === 'general'
     ? `kein Projektbezug in der Nachricht: antworte allgemein, ohne Inhalte, Stände oder Kennzahlen aus Projekten; frag bei Bedarf, worum es geht`
     : scope.projects.length
@@ -401,6 +422,13 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     const found = await knowledgeSearch(db, { projectId: scope.projectIds[0], agentId: agent.id, query: msg.body, viewerId: msg.user_id, maxTitles: 8, maxExcerpts: 3 });
     const pages = found.pages.length ? found.pages : (await db.query(`select p.id, p.title, p.status, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 8`, [scope.projectIds[0]])).rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null as string | null }));
     personalDocs = pages.length ? `Doku im persönlichen Projekt (${found.pages.length ? 'passend zur Nachricht' : 'neueste Seiten'}; Auskunft nur daraus und aus den Arbeitspaketen unten):\n${pages.map((p) => `- „${p.title}“ (${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 600)}` : ''}`).join('\n')}\n` : '';
+  }
+  // Wissen zur Zuordnung (Direktnachricht): Treffer der Inhaltssuche je Projekt und eine Übersicht aller gemeinsamen Projekte
+  let knowledge = '';
+  if (scope.hits?.size) knowledge += `Treffer zur Nachricht in Doku und Arbeitspaketen (nur, was du und ${msg.user_name} sehen dürft):\n${scope.projects.filter((p) => scope.hits!.has(p.id)).map((p) => `## ${p.key} „${p.name}“\n${searchText(scope.hits!.get(p.id)!)}`).join('\n')}\n`;
+  if (!project && (scope.common?.length ?? 0) > 1 && scope.how !== 'general') {
+    const ov = await db.query(`select p.id, p.key, p.name, p.description, ${SQL.isPersonal('p')} as own, (select string_agg(x.name, ', ' order by x.position) from (select s2.id as subproject_id, s2.name, s2.position from subprojects s2 where s2.project_id = p.id) x where ${visibleSubprojectSql(2, 'x')} and ${visibleSubprojectSql(3, 'x')}) as sps from projects p where p.id = any($1::uuid[]) order by p.key`, [scope.common!.map((p) => p.id), msg.user_id, agent.id]);
+    if (ov.rows.length) knowledge += `Gemeinsame Projekte (nur zur Zuordnung; Inhalte nur aus dem Thema und den Treffern):\n${ov.rows.map((p: any) => `- ${p.key} „${p.name}“${p.own ? ' (persönliches Projekt des Absenders)' : ''}${p.description ? `: ${cut(String(p.description).replace(/\s+/g, ' '), 160)}` : ''}${p.sps ? ` · Teilprojekte: ${cut(p.sps, 160)}` : ''}`).join('\n')}\n`;
   }
   const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   // Steht die Nachricht schon als Rückmeldung im Log eines Arbeitspakets (Antwort auf eine Frage des Agenten), keine zweite Notiz dazu
@@ -416,7 +444,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     `select q.id, q.body, q.created_at, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id
      where q.asked_by = $1 and q.status = 'open' and (q.channel_id = $2) and (q.addressee_id = $3 or q.addressee_id is null) order by q.created_at desc limit 8`, [agent.id, channel.id, msg.user_id]);
   // Steuerung (Konzept 7): Projekt für Befehle, Rolle und Rechte des Absenders, Policy, offene Bestätigungen, weitere APs, Fähigkeiten
-  const cmdProject = project ?? (scope.how !== 'general' && scope.projects.length === 1 ? scope.projects[0] : null);
+  const personalOf = async () => (scope.common?.length ? await db.maybeOne<ScopeProject>(`select p.id, p.key, p.name from projects p join project_members m on m.project_id = p.id and m.user_id = $1 and m.role = 'pl' where ${SQL.isPersonal('p')} and p.id = any($2::uuid[]) limit 1`, [msg.user_id, scope.common.map((p) => p.id)]) : null);
+  const cmdProject = project ?? (scope.how !== 'general' && scope.projects.length === 1 ? scope.projects[0] : scope.how === 'open' ? await personalOf() : null);
   const scopeTask = scope.taskIds.length === 1 ? await db.maybeOne(`select * from tasks where id = $1`, [scope.taskIds[0]]) : null;
   const role = cmdProject ? await senderRole(db, msg.user_id, cmdProject.id, scopeTask) : 'none';
   const policy = cmdProject ? await effectiveAgentPolicy(db, { agentId: agent.id, projectId: cmdProject.id, taskId: scopeTask?.id ?? null }) : null;
@@ -430,15 +459,15 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const agentMember = cmdProject ? await db.maybeOne(`select agent_can_mail from project_members where project_id = $1 and user_id = $2`, [cmdProject.id, agent.id]) : null;
   const canMail = Boolean(agentMember?.agent_can_mail) && Boolean(cmdProject && (await projectAccount(db, cmdProject.id)));
   const web = cmdProject ? await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: cmdProject.id, cfg, now }) : null;
-  const ctxCmd: CommandCtx = { db, agent, sender: { id: msg.user_id, name: msg.user_name, orgId: agent.org_id }, project: cmdProject, projects: scope.projects, channelId: channel.id, threadId, messageId: msg.id, now, policy };
+  const ctxCmd: CommandCtx = { db, agent, sender: { id: msg.user_id, name: msg.user_name, orgId: agent.org_id }, project: cmdProject, projects: scope.common?.length ? scope.common : scope.projects, channelId: channel.id, threadId, messageId: msg.id, now, policy };
   const prompt = `Jetzt: ${hhmm(now)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Thema: ${theme}
-Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: bei order das Über-AP (parent) nennen oder nachfragen' : ''}
+Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
-${personalDocs}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
+${personalDocs}${knowledge}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}

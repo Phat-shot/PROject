@@ -65,17 +65,40 @@ test('Unspezifischer Auftrag: im persönlichen Projekt angelegt und sofort ausge
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Auftrag erledigt und archiviert%'`, [task.id]));
 });
 
-test('Gespräch über ein anderes Projekt: Folgeauftrag ohne Nennung landet dort, nicht im persönlichen Projekt', async () => {
+test('Kein Gedächtnis außerhalb des Threads; Dialog im Thread bleibt beim Projekt; Zuordnung über Inhalte; order.project', async () => {
   const pl = await t.login('pl@demo.local');
   await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${agent.id}`, { role: 'member' });
   chatReply = { reply: 'WEB läuft.', commands: [] };
-  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Wie steht es bei Website-Relaunch?' });
+  const q = (await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Wie steht es bei Website-Relaunch?' })).json().message;
   await flushAgentRuns();
-  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Rack-Plan erstellen', text: 'Rack-Plan' })] };
-  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg dafür bitte einen Auftrag an: Rack-Plan' });
+  // oben ohne Nennung: kein Verlauf → persönliches Projekt
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Rack-Plan oben', text: 'Rack-Plan' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg dafür bitte einen Auftrag an' });
   await flushAgentRuns();
-  const task = await t.db.one(`select project_id from tasks where title = 'Rack-Plan erstellen'`);
-  assert.equal(task.project_id, t.ids.projects.web, 'Projekt aus dem laufenden Gespräch');
+  assert.equal((await t.db.one(`select project_id from tasks where title = 'Rack-Plan oben'`)).project_id, pid, 'ohne Thread kein Bezug zur vorigen Nachricht');
+  // im Thread: das dort genannte Projekt
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Rack-Plan im Thread', text: 'Rack-Plan' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg dafür bitte einen Auftrag an', threadId: q.id });
+  await flushAgentRuns();
+  assert.equal((await t.db.one(`select project_id from tasks where title = 'Rack-Plan im Thread'`)).project_id, t.ids.projects.web);
+  const inThread = (await t.api(pl).get(`/chat/channels/${dm}/messages?thread=${q.id}`)).json().messages;
+  assert.ok(inThread.some((m: any) => m.userId === agent.id), 'Antwort im Thread');
+  // Zuordnung über Inhalte: ein Arbeitspaket aus WEB mit zwei Begriffen der Nachricht → Thema WEB
+  const t2 = await t.db.one(`select number, title from tasks where id = $1`, [t.ids.tasks.t2]);
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Zuordnung über Inhalte', text: 'x' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: `Was ist mit ${t2.title.split(' ').slice(0, 2).join(' ')}?` });
+  await flushAgentRuns();
+  assert.equal((await t.db.one(`select project_id from tasks where title = 'Zuordnung über Inhalte'`)).project_id, t.ids.projects.web, 'über Inhalte WEB');
+  // order.project setzt das Ziel ausdrücklich (nur gemeinsame Projekte)
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Ziel per Kürzel', text: 'x', project: 'WEB' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Erinnere mich bitte daran' });
+  await flushAgentRuns();
+  assert.equal((await t.db.one(`select project_id from tasks where title = 'Ziel per Kürzel'`)).project_id, t.ids.projects.web);
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Ziel fremd', text: 'x', project: 'ERP' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Erinnere mich bitte nochmal' });
+  await flushAgentRuns();
+  assert.equal(await t.db.maybeOne(`select 1 from tasks where title = 'Ziel fremd'`), null, 'kein gemeinsames Projekt');
+  await t.db.query(`update tasks set archived_at = now() where title in ('Rack-Plan oben', 'Rack-Plan im Thread', 'Zuordnung über Inhalte', 'Ziel per Kürzel')`);
 });
 
 test('Projekt genannt, in dem der Agent nicht Mitglied ist: Hinweis mit Weg statt Anlegen woanders', async () => {

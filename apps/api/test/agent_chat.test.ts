@@ -197,7 +197,7 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   const lastReply = async (channel: string) => (await t.api(max).get(`/chat/channels/${channel}/messages`)).json().messages.filter((m: any) => m.userId === agent.id).at(-1).body as string;
 
   // Kennung: nur dieses Projekt und dieses Arbeitspaket im Prompt, das andere Projekt fehlt vollständig
-  await say(max, cid, `Wie steht es mit WEB-${t4.number}?`);
+  const first = await say(max, cid, `Wie steht es mit WEB-${t4.number}?`);
   let p = prompts.at(-1)!;
   assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(in der Nachricht genannt\\)`));
   assert.ok(p.includes('Angebot Agentur'));
@@ -211,12 +211,19 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.equal(run.status, 'ok');
   assert.match(run.reasoning, new RegExp(`Thema: WEB-${t4.number} \\(mentioned\\)`));
 
-  // Verlauf: ohne neue Nennung bleibt das zuletzt genannte Arbeitspaket das Thema, die Antwort beginnt mit „Zu WEB-n:“
+  // Kein Gedächtnis außerhalb eines Threads: dieselbe Folgefrage oben fragt nach dem Projekt (ohne LLM-Aufruf)
+  let n1 = prompts.length;
   await say(max, cid, 'Und bis wann?');
+  assert.equal(prompts.length, n1, 'kein Verlauf, keine Zuordnung: Rückfrage');
+  assert.match(await lastReply(cid), /^Zu welchem Projekt\?/);
+  // Dialog im Thread: das im Thread genannte Arbeitspaket bleibt das Thema, die Antwort beginnt mit „Zu WEB-n:“ und steht im Thread
+  await say(max, cid, 'Und bis wann?', first.id);
   p = prompts.at(-1)!;
-  assert.match(p, /\(zuletzt im Verlauf genannt\)/);
+  assert.equal(prompts.length, n1 + 1);
+  assert.match(p, /\(zuletzt im Thread genannt\)/);
   assert.ok(p.includes(`Das Thema stammt aus dem Verlauf (WEB-${t4.number})`));
-  assert.ok((await lastReply(cid)).startsWith(`Zu WEB-${t4.number}:`), 'Bezugszeile setzt das System');
+  const inThread = (await t.api(max).get(`/chat/channels/${cid}/messages?thread=${first.id}`)).json().messages.filter((m: any) => m.userId === agent.id).at(-1);
+  assert.ok(inThread?.body.startsWith(`Zu WEB-${t4.number}:`), 'Antwort im Thread mit Bezugszeile');
   assert.ok(p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste'));
 
   // Projektname: nur ERP, ohne die eigenen Arbeitspakete aus WEB
@@ -281,7 +288,7 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   await t.db.query(`update tasks set agent_wait = $2 where id = $1`, [c.id, JSON.stringify({ kind: 'reply', reason: 'Antwort der PL', since: new Date().toISOString() })]);
   assert.equal((await t.api(pl).patch(`/tasks/${a.id}`, { responsibleUserId: agent.id })).statusCode, 200);
   await flushAgentRuns();
-  await say(pl, plDm, 'Status GEH?');
+  const statusMsg = await say(pl, plDm, 'Status GEH?');
   p = prompts.at(-1)!;
   assert.ok(p.includes('Kennzahlen zu GEH: offen 5 · in Arbeit 2 · fällig diese Woche 1 · überfällig 1 · blockiert 1 · wartet 1'), p);
   assert.ok(p.includes(`- GEH-${a.number} „Angebot anfordern“`), 'eigene Arbeitspakete des Themas');
@@ -295,8 +302,9 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.deepEqual(run.actions.find((x: any) => x.type === 'claim_check'), { type: 'claim_check', replaced: 1, text: 'Ich habe die Mail an Müller gesendet.' });
   nextReply = 'Ich habe das im Log vermerkt.';
   nextNotes = [{ taskId: a.id, text: 'PL: Angebot kommt Freitag.' }];
-  await say(pl, plDm, 'Das Angebot kommt Freitag.');
-  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1).body, 'Ich habe das im Log vermerkt.');
+  // Information zum Thema im Thread (ohne Thread kennt der Agent das Projekt nicht mehr)
+  await say(pl, plDm, 'Das Angebot kommt Freitag.', statusMsg.id);
+  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages?thread=${statusMsg.id}`)).json().messages.at(-1).body, 'Ich habe das im Log vermerkt.');
   assert.equal((await t.db.one(`select count(*)::int as n from task_comments where task_id = $1 and body like 'Aus dem Chat%'`, [a.id])).n, 1);
   run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
   assert.ok(!run.actions.some((x: any) => x.type === 'claim_check'));
