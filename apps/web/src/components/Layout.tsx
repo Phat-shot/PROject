@@ -23,8 +23,8 @@ function writeFlag(key: string, v: boolean) { try { localStorage.setItem(key, v 
 /**
  * Seitenleiste: „PROject“ öffnet das Dashboard. Darunter bis zu fünf angeheftete Projekte (Benutzereinstellung,
  * ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen untereinander aus. Ein Klick aufs Projekt öffnet
- * das Board; die Bereiche des Projekts stehen als Reiter in dessen Kopfzeile. Danach die globalen Bereiche Postfach,
- * Kalender, Workflows und Chat, dann Einstellungen und Verwaltung.
+ * das Board; die Bereiche des Projekts stehen als Reiter in dessen Kopfzeile. Danach die globalen Bereiche Chat (zuerst: dort
+ * wartet auch der persönliche Assistent), Postfach, Kalender und Workflows, dann Einstellungen und Verwaltung.
  * Chat am Desktop: Knopf unten rechts und Leisteneintrag öffnen den Messenger als Overlay; mobil die Seite /chat.
  * Unter 900 px liegt die Leiste als Overlay über der Seite und öffnet sich über das Menü-Symbol in der Kopfzeile.
  */
@@ -108,10 +108,10 @@ export function Layout({ children }: { children: ReactNode }) {
           </>}
         </div>
         <div className="nav-sep" />
+        <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count">{unread.total}</span>}</NavLink>
         <NavLink to="/postfach" data-tour="postfach"><span>Postfach</span>{mailUnread.total > 0 && <span className="badge danger" style={{ marginLeft: 6 }} title="ungelesene Mails">{mailUnread.total}</span>}</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <NavLink to="/workflows" data-tour="workflows">Workflows</NavLink>
-        <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count">{unread.total}</span>}</NavLink>
         <div className="section">Einstellungen</div>
         <NavLink to="/einstellungen" data-tour="benutzer">Meine Einstellungen</NavLink>
         {/* Verwaltung: Org-Admin; mit Org-Recht (KI, Gruppen) oder als Verwalter einer Gruppe nur die passenden Karten */}

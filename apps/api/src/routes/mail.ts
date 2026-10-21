@@ -1145,6 +1145,16 @@ export async function mailRoutes(app: FastifyInstance) {
     return { draft: mapDraft(row) };
   });
 
+  // Einzelner Entwurf (Karte im Chat des persönlichen Assistenten): wer ihn entscheiden darf
+  app.get<{ Params: { did: string } }>('/mail/drafts/:did', async (req) => {
+    const user = requireUser(req);
+    const d = await db.maybeOne(`select * from mail_drafts where id = $1`, [req.params.did]);
+    if (!d) throw notFound('Entwurf nicht gefunden (verworfen?)');
+    const m = await requireProject(db, user, d.project_id, 'member');
+    if (!(await mayDecideDraft(d, user, m))) throw forbidden();
+    return { draft: mapDraft(await db.one(`${DRAFT_SELECT} where d.id = $1`, [d.id])) };
+  });
+
   app.post<{ Params: { did: string } }>('/mail/drafts/:did/send', async (req) => {
     const user = requireUser(req);
     const d = await db.maybeOne(`select * from mail_drafts where id = $1`, [req.params.did]);

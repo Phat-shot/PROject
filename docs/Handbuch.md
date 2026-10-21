@@ -194,6 +194,8 @@ Grundsatz: Regel vor KI. Regeln (Eskalation, Reporting, Erinnerungen) laufen ohn
 
 Kurzfassung; die vollständige Anleitung mit Beispielen, Steuerung und häufigen Fragen steht im **KI-Handbuch** (`docs/KI-Handbuch.md`, in der App unter Hilfe › KI-Agenten).
 
+**Persönlicher Assistent:** Der Agent im persönlichen Projekt ist im Chat angepinnt (oben, Kennzeichen „Assistent“; am Desktop öffnet der Chat ihn von selbst). Unspezifische Bitten beantwortet er direkt oder legt sie als Auftrag im persönlichen Projekt an und erledigt sie sofort (Zwischenstände im Chat). Mails ohne Projektkonto legt er als Entwurf vor, mit Karte im Chat (Senden, Ändern, Verwerfen); erledigte Aufträge schließt das System ab und archiviert sie, ohne Bestätigung für „Erledigt“.
+
 **Was ein Agent ist:** ein Benutzer ohne Login, nie verantwortliche PL oder Org-Admin, im Projekt **Mitglied** oder **stellvertretende PL**. Er arbeitet an APs und Aufgaben, für die er zuständig ist: direkt zugewiesen oder geerbt (z. B. als Verantwortung eines Teilprojekts: dann alle APs darin ohne eigene Zuständigkeit, und Aufgaben eines seiner APs). Projekte legt er nie an.
 
 **Einrichten**

@@ -2,7 +2,7 @@ import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
-import { dispatch, notify, usersWithRight } from '../notify.js';
+import { dispatch, dmChannel, notify, systemMessage, usersWithRight } from '../notify.js';
 import { contactChain, dateStr, touchTask } from '../tasks/service.js';
 import { aiConfigFor, complete, parseJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
@@ -25,6 +25,7 @@ import type { ExternalWindow } from '@projekttool/shared';
 import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
 import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
 import { recordFeedback } from './feedback.js';
+import { SQL } from '../projectPolicy.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -158,6 +159,11 @@ export interface RunCtx {
   webSources: WebSource[]; webSourceIds: string[]; webSearches: number;
   /** Arbeitszeitfenster für Mails nach außen */
   window: ExternalWindow;
+  /**
+   * Erledigung als persönlicher Assistent: Auftrag des Eigentümers per Chat im persönlichen Projekt. Erledigt setzen braucht keine
+   * Bestätigung (der Auftrag ist sie) und archiviert; Mails ohne Projektkonto werden Entwürfe mit Karte im Chat statt Rückfrage.
+   */
+  errand: { ownerId: string } | null;
 }
 export interface HeldAction { action: AgentAction; classes: AgentActionClass[]; label: string; base: Record<string, unknown> }
 export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean }
@@ -190,9 +196,12 @@ export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetc
   const isPl = m.role === 'pl';
   const canPlan = isPl || Boolean(m.can_edit_plan);
   const myTps: string[] = (await db.query(`select id from subprojects where project_id = $1 and responsible_user_id = $2`, [task.project_id, agent.id])).rows.map((r: any) => r.id);
-  const policy = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: task.project_id, taskId: task.id });
+  const policy0 = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: task.project_id, taskId: task.id });
   const window = await externalWindow(db, agent.org_id);
-  return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [], webSources: [], webSourceIds: [], webSearches: 0, window };
+  const owner = task.requested_by && task.origin_message_id ? await db.maybeOne(`select p.created_by from projects p where p.id = $1 and ${SQL.isPersonal('p')} and p.created_by = $2`, [task.project_id, task.requested_by]) : null;
+  const errand = owner ? { ownerId: owner.created_by as string } : null;
+  const policy = errand ? { ...policy0, confirm: policy0.confirm.filter((k) => k !== 'close' && (account || k !== 'send_external')) } : policy0;
+  return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [], webSources: [], webSourceIds: [], webSearches: 0, window, errand };
 }
 
 /** Gate (Konzept 6.4): Klasse bestimmen, Rechte des Agenten, Ablehnungssperre (14 Tage), dann run oder hold nach der Policy. */
@@ -334,6 +343,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
       const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, account ? null : viewAccount!.view_id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null]);
       await record('mail', aud, g, d.id);
       await notifyDraft(acc, g.subject, g);
+      await errandDraftCard(ctx, d.id, to, g.subject);
       await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${g.subject}“${outNote(aud, g, true)}${policyNote}`);
       return 'draft';
     };
@@ -575,6 +585,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
             const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, view?.id ?? null, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null]);
             if (g) await record('reply_origin', aud, g, d.id);
             await notifyDraft(acc, subject, g);
+            await errandDraftCard(ctx, d.id, [o.from_addr], subject);
             await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“${outNote(aud, g, true)}${policyNote}`);
             applied.push({ type: 'reply_origin', text: `[Entwurf zur Freigabe] ${body}` } as any);
           }
@@ -790,7 +801,7 @@ Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis ei
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
 Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
 Agenten-Policy: ${policyText(policy)}
-${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, task)}
+${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
 
 Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.` }
   ].filter((s) => s.text);
@@ -875,6 +886,11 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const checkIds = ctx.checkIds;
     if (!applied.some((x) => x.type === 'comment') && String(j.note ?? '').trim()) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `${cut(String(j.note), 600)}${applied.length && !applied.every((x) => x.type === 'none') ? '' : ' (keine Aktion)'}`]);
     if (applied.some((x) => x.type !== 'none')) await touchTask(db, task.id);
+    // Persönlicher Auftrag erledigt: abschließen heißt archivieren (vom Board, Log bleibt)
+    if (ctx.errand && applied.some((x: any) => x.type === 'set_status' && ctx.doneColumns.has(String(x.column ?? '').toLowerCase()))) {
+      await db.query(`update tasks set archived_at = now(), agent_wait = null, agent_next_check_at = null where id = $1 and archived_at is null`, [task.id]);
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, 'Auftrag erledigt und archiviert (persönlicher Assistent)']);
+    }
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
@@ -1105,6 +1121,13 @@ function waitText(task: any, now: Date): string {
   const hours = Math.round((now.getTime() - new Date(w.since).getTime()) / H);
   return `Du wartest seit ${fmt(w.since)} (${hours} h) auf ${KIND_DE[w.kind] ?? w.kind}: ${w.reason}${w.remindAt ? ` · Nachfassen geplant ${fmt(w.remindAt)}${w.reminded ? ' (erledigt)' : ''}` : ''}${w.escalateAt ? ` · Eskalation geplant ${fmt(w.escalateAt)}${w.escalated ? ' (erledigt)' : ''}` : ''}\n`;
 }
+/** Entwurf eines persönlichen Auftrags: Karte im Chat des Eigentümers mit Senden, Ändern, Verwerfen. */
+async function errandDraftCard(ctx: RunCtx, draftId: string, to: string[], subject: string) {
+  if (!ctx.errand) return;
+  const channelId = await dmChannel(ctx.db, ctx.agent.org_id, ctx.agent.id, ctx.errand.ownerId);
+  await systemMessage(ctx.db, { channelId, authorId: ctx.agent.id, body: `Mail-Entwurf zu ${ctx.code} an ${to.join(', ')}: „${subject}“`, meta: { card: 'draft', draftId, taskId: ctx.task.id } });
+}
+
 function triggerText(trigger: string, task: any): string {
   const w: AgentWait | null = task.agent_wait ?? null;
   switch (trigger) {
@@ -1121,7 +1144,9 @@ function triggerText(trigger: string, task: any): string {
     case 'overdue': return 'Das Arbeitspaket ist überfällig.';
     case 'changed': return 'Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert (Log, Mail, Status, Termin oder Tasks). Lies die Änderung und handle entsprechend.';
     case 'periodic': return 'Regelmäßige Durchsicht: seit drei Tagen kein Lauf. Prüfe den Stand; ist nichts zu tun und nichts zu erwarten, tu nichts.';
-    case 'order': return 'Neuer Auftrag per Chat (Beschreibung und Log „Auftrag von …“). Verschaffe dir den Stand und beginne; Rückfragen, Zwischenstände und Entscheidungen gehen an den Auftraggeber (Stufe 0 der Kette).';
+    case 'order': return task.personal_errand
+      ? 'Auftrag deines Eigentümers per Chat (persönliches Projekt, du bist sein Assistent). Erledige ihn jetzt direkt mit deinen Aktionen (Mail, Termin, Doku, Recherche, Tasks); Mails ohne Projektkonto werden Entwürfe, die er im Chat mit einem Klick sendet. Ist alles getan, setze den Status auf erledigt: das System schließt ab und archiviert. Fehlt etwas Wesentliches, frag ihn per Chat (ask).'
+      : 'Neuer Auftrag per Chat (Beschreibung und Log „Auftrag von …“). Verschaffe dir den Stand und beginne; Rückfragen, Zwischenstände und Entscheidungen gehen an den Auftraggeber (Stufe 0 der Kette).';
     case 'approved': return 'Eine Person hat deine angehaltenen Aktionen bestätigt; sie wurden ausgeführt (siehe Log). Mach weiter.';
     case 'rejected': return 'Eine Person hat einen Vorschlag von dir abgelehnt (z. B. einen Mail-Entwurf; Details im Log). Wiederhole ihn nicht unverändert; kläre bei Bedarf per Chat, was anders sein soll.';
     case 'manual': return 'Die Projektleitung hat den Lauf manuell gestartet.';

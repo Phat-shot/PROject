@@ -3,12 +3,13 @@ import { undoOrder } from '../ai/chatCommands.js';
 import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
-import { notify, notifyMany } from '../notify.js';
+import { dmChannel, notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
 import { answerQuestion, canAnswer, FREE_TEXT_KINDS, isSmallTalk, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
 import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
+import { SQL } from '../projectPolicy.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -340,8 +341,25 @@ export async function chatRoutes(app: FastifyInstance) {
   });
 
   // Messenger: alle Gespräche (Projektkanäle der aktiven Projekte, in denen ich Mitglied bin, und Direktnachrichten) nach letzter Aktivität
+  /**
+   * Persönlicher Assistent: der aktive Agent im persönlichen Projekt der Person (der Projektagent zuerst). Sein Gespräch steht
+   * angepinnt oben, auch bevor es eine Nachricht gibt.
+   */
+  async function personalAssistant(user: { id: string; orgId: string }): Promise<{ id: string; name: string } | null> {
+    return db.maybeOne(`select u.id, u.name from projects p join project_members pm on pm.project_id = p.id and pm.user_id = $1 and pm.role = 'pl'
+        join project_members am on am.project_id = p.id join users u on u.id = am.user_id and u.kind = 'agent' and u.active
+      where p.org_id = $2 and ${SQL.isPersonal('p')} and p.status = 'active' order by (p.agent_user_id = u.id) desc nulls last, u.name limit 1`, [user.id, user.orgId]);
+  }
+  app.get('/chat/assistant', async (req) => {
+    const user = requireUser(req);
+    const a = await personalAssistant(user);
+    return { assistant: a ? { ...a, channelId: await dmChannel(db, user.orgId, a.id, user.id) } : null };
+  });
+
   app.get('/chat/conversations', async (req) => {
     const user = requireUser(req);
+    const assistant = await personalAssistant(user);
+    if (assistant) await dmChannel(db, user.orgId, assistant.id, user.id);
     await db.query(
       `insert into chat_channels (org_id, kind, project_id)
        select p.org_id, 'project', p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1
@@ -376,7 +394,8 @@ export async function chatRoutes(app: FastifyInstance) {
       out.push({ channelId: r.id, kind: 'dm', title: r.partner_name, subtitle: r.partner_kind === 'agent' ? 'KI-Agent' : r.partner_email, projectId: null, projectKey: null, partner: { id: r.partner_id, name: r.partner_name, email: r.partner_email, kind: r.partner_kind, active: r.partner_active }, lastBody: l ? String(l.body).slice(0, 120) : null, lastUser: l?.user ?? null, lastAt: l?.at ?? null, unread: await unreadCount(r.id, user.id) });
     }
     const ts = (x: any) => (x.lastAt ? new Date(x.lastAt).getTime() : 0);
-    out.sort((a, b) => ts(b) - ts(a) || a.title.localeCompare(b.title, 'de'));
+    for (const c of out) if (assistant && c.partner?.id === assistant.id) { c.pinned = true; c.subtitle = 'Dein Assistent (persönliches Projekt)'; }
+    out.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || ts(b) - ts(a) || a.title.localeCompare(b.title, 'de'));
     return { conversations: out };
   });
 

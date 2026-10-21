@@ -2,12 +2,15 @@ import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { Membership } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { useData } from '../lib/useData';
+import { useIsMobile } from '../lib/useMedia';
 import { ChatPane } from './ChatPane';
 
 export interface Conversation {
   channelId: string; kind: 'project' | 'dm'; title: string; subtitle: string | null; projectId: string | null; projectKey: string | null;
   partner: { id: string; name: string; email: string; kind: 'person' | 'agent'; active: boolean } | null;
   lastBody: string | null; lastUser: string | null; lastAt: string | null; unread: number;
+  /** persönlicher Assistent (Agent im persönlichen Projekt): angepinnt oben */
+  pinned?: boolean;
 }
 interface Hit { id: string; channelId: string; threadId: string | null; body: string; createdAt: string; userName: string; kind: 'project' | 'dm'; title: string | null; projectKey: string | null }
 interface Person { id: string; name: string; email: string; kind: 'person' | 'agent' }
@@ -44,6 +47,15 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
     const h = setTimeout(() => api.get<{ messages: Hit[] }>(`/chat/search?q=${encodeURIComponent(q.trim())}`).then((r) => setHits(r.messages)).catch(() => setHits([])), 250);
     return () => clearTimeout(h);
   }, [q]);
+  // Desktop ohne gewähltes Gespräch: der angepinnte Assistent öffnet sich (einmal je Öffnen des Messengers)
+  const mobile = useIsMobile();
+  const [autoOpened, setAutoOpened] = useState(false);
+  useEffect(() => {
+    if (autoOpened || !convs) return;
+    setAutoOpened(true);
+    const pin = convs.find((c) => c.pinned);
+    if (!channelId && !mobile && pin) onSelect(pin.channelId);
+  }, [convs]);
   const needle = q.trim().toLowerCase();
   const list = (convs ?? []).filter((c) => !needle || c.title.toLowerCase().includes(needle) || (c.subtitle ?? '').toLowerCase().includes(needle));
   const current = convs?.find((c) => c.channelId === channelId) ?? null;
@@ -68,9 +80,9 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
           {!convs && !error && <div className="muted small" style={{ padding: 10 }}>Lade …</div>}
           {list.map((c) => (
             <button key={c.channelId} className={`msg-item ${c.channelId === channelId ? 'sel' : ''} ${c.unread ? 'unread' : ''}`} onClick={() => onSelect(c.channelId)}>
-              <span className={`msg-avatar ${c.kind === 'project' ? 'proj' : c.partner?.kind === 'agent' ? 'agent' : ''}`}>{c.kind === 'project' ? (c.projectKey ?? '#').slice(0, 3) : c.partner?.kind === 'agent' ? 'KI' : initials(c.title)}</span>
+              <span className={`msg-avatar ${c.kind === 'project' ? 'proj' : c.partner?.kind === 'agent' ? 'agent' : ''} ${c.pinned ? 'pinned' : ''}`} title={c.pinned ? 'Dein Assistent, angepinnt' : undefined}>{c.kind === 'project' ? (c.projectKey ?? '#').slice(0, 3) : c.partner?.kind === 'agent' ? 'KI' : initials(c.title)}</span>
               <span className="msg-main">
-                <span className="row between"><span className="msg-title ell">{c.title}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
+                <span className="row between"><span className="msg-title ell">{c.title}{c.pinned && <span className="badge" style={{ marginLeft: 6 }}>Assistent</span>}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
                 <span className="row between"><span className="muted small ell">{c.lastBody ? `${c.kind === 'project' && c.lastUser ? `${c.lastUser}: ` : ''}${c.lastBody}` : c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.subtitle}</span>{c.unread > 0 && <span className="badge danger">{c.unread}</span>}</span>
               </span>
             </button>

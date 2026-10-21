@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Question } from '@projekttool/shared';
+import type { MailDraft, Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
@@ -111,6 +111,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   });
   const system = (m: ChatMessage) => m.kind === 'system';
   const isQuestion = (m: ChatMessage) => Boolean((m.meta as any)?.questionId);
+  // Als Funktion aufgerufen (nicht als Komponente): sonst baut jedes Neuladen die Karten neu auf und verwirft Eingaben
   const Msg = ({ m, inThread }: { m: ChatMessage; inThread: boolean }) => (
     <div id={`msg-${m.id}`} className={`chat-msg ${!system(m) && m.userId === user?.id ? 'mine' : ''} ${system(m) ? 'system' : ''} ${m.deleted ? 'deleted' : ''} ${highlight === m.id ? 'highlight' : ''}`}>
       <div className="chat-head">{system(m) && <span className="badge" title="Systembeitrag nach den Benachrichtigungsregeln">System</span>}{isQuestion(m) && <span className="badge" title="Offene Frage: Antwort hier im Thread oder im Arbeitspaket">{(m.meta as any).kind === 'confirm' ? 'Bestätigung' : (m.meta as any).kind === 'decision' ? 'Entscheidung' : 'Frage'}</span>}{(!system(m) || m.userId) && <strong>{m.userName}</strong>}<span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
@@ -122,6 +123,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
       {m.fromAgent && !m.deleted && <Thumbs value={m.myRating} onRate={(v) => rating.rate(m.id, m.myRating, v)} />}
       {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
+      {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
         <button className="btn sm link chat-thread-btn" onClick={() => setThread(m.id)}>{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
@@ -138,7 +140,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         <div className="chat-list" ref={listRef} onScroll={onScroll}>
           {hasMore && <div className="center"><button className="btn sm" onClick={() => void older()}>Ältere laden</button></div>}
           {msgs.length === 0 && <div className="muted small center" style={{ padding: 24 }}>{emptyText ?? 'Noch keine Nachrichten.'}</div>}
-          {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}<Msg m={m} inThread={false} /></div>; })}
+          {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}</div>; })}
         </div>
         {canWrite ? <div className="chat-compose">
           <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (Enter sendet, Umschalt+Enter neue Zeile, @Name erwähnt)'} onSubmit={() => void send(text, null)} enterSends />
@@ -149,8 +151,8 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         <div className="chat-thread">
           <div className="row between mb"><strong>Thread</strong><button className="btn sm" onClick={() => setThread(null)}>✕</button></div>
           {question && <QuestionHead q={question} onChanged={() => { void loadThread(thread); void load(); }} />}
-          {root ? <Msg m={root} inThread /> : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
-          <div className="chat-replies">{replies.map((m) => <Msg key={m.id} m={m} inThread />)}</div>
+          {root ? Msg({ m: root, inThread: true }) : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
+          <div className="chat-replies">{replies.map((m) => <div key={m.id}>{Msg({ m, inThread: true })}</div>)}</div>
           {canWrite && <div className="chat-compose" ref={replyBox}>
             <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten … (Enter sendet)" onSubmit={() => void send(reply, thread)} enterSends />
             <button className="btn primary" disabled={!reply.trim()} onClick={() => void send(reply, thread)}>Antworten</button>
@@ -178,6 +180,42 @@ function ResultsCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }
     {q && <ApprovalCard q={q} onChanged={() => { void api.get<{ question: Question }>(`/questions/${q.id}`).then((r) => setQ(r.question)); onChanged(); }} />}
     {error && <div className="error small">{error}</div>}
   </div>;
+}
+
+/**
+ * Mail-Entwurf des persönlichen Assistenten als Karte: Empfänger, Betreff, Text; Senden, Ändern (direkt in der Karte), Verwerfen.
+ * Gesendet oder verworfen zeigt die Karte nur noch den Stand.
+ */
+function DraftCard({ draftId }: { draftId: string }) {
+  const [d, setD] = useState<MailDraft | null>(null);
+  const [gone, setGone] = useState<string | null>(null);
+  const [edit, setEdit] = useState<{ subject: string; body: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const load = () => api.get<{ draft: MailDraft }>(`/mail/drafts/${draftId}`).then((r) => setD(r.draft)).catch((e) => setGone((e as Error).message));
+  useEffect(() => { void load(); }, [draftId]);
+  const act = async (fn: () => Promise<unknown>, after?: string) => { setBusy(true); try { await fn(); setError(null); if (after) setGone(after); else await load(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); } };
+  if (gone) return <div className="draft-card small muted">{gone}</div>;
+  if (!d) return null;
+  const sent = d.status === 'sent';
+  return (
+    <div className="draft-card small">
+      <div><span className="muted">An:</span> {d.toAddrs.join(', ')}</div>
+      {edit ? <div className="form mt">
+        <input type="text" aria-label="Betreff" value={edit.subject} onChange={(e) => setEdit({ ...edit, subject: e.target.value })} />
+        <textarea aria-label="Text" rows={8} value={edit.body} onChange={(e) => setEdit({ ...edit, body: e.target.value })} />
+      </div> : <>
+        <div><span className="muted">Betreff:</span> <strong>{d.subject}</strong></div>
+        <div className="draft-body">{d.body}</div>
+      </>}
+      {error && <div className="error">{error}</div>}
+      {sent ? <div className="mt"><span className="badge ok">gesendet</span></div> : <div className="row mt" style={{ flexWrap: 'wrap', gap: 6 }}>
+        {edit
+          ? <><button className="btn sm primary" disabled={busy} onClick={() => void act(async () => { await api.patch(`/mail/drafts/${d.id}`, edit); await api.post(`/mail/drafts/${d.id}/send`); setEdit(null); })}>Speichern und senden</button><button className="btn sm" disabled={busy} onClick={() => void act(async () => { await api.patch(`/mail/drafts/${d.id}`, edit); setEdit(null); })}>Nur speichern</button><button className="btn sm link" onClick={() => setEdit(null)}>Abbrechen</button></>
+          : <><button className="btn sm primary" disabled={busy} onClick={() => void act(() => api.post(`/mail/drafts/${d.id}/send`))}>Senden</button><button className="btn sm" disabled={busy} onClick={() => setEdit({ subject: d.subject, body: d.body })}>Ändern</button><button className="btn sm danger" disabled={busy} onClick={() => void act(() => api.del(`/mail/drafts/${d.id}`), 'Entwurf verworfen.')}>Verwerfen</button></>}
+      </div>}
+    </div>
+  );
 }
 
 function QuestionHead({ q, onChanged }: { q: Question; onChanged: () => void }) {

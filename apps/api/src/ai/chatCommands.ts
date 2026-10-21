@@ -10,6 +10,7 @@ import { createPlannedTask, findTaskByRef, ymd, type PlanActor } from './plan.js
 import { queueAgentRun } from './agentEvents.js';
 import { CHAT_ORDERS, MODE_ORDER, effectiveAgentPolicy, parseAgentPolicy } from './agentPolicy.js';
 import { aiAllowed } from './policy.js';
+import { SQL } from '../projectPolicy.js';
 
 /**
  * Steuerung der Agenten im Chat (Konzept 7). Das Modell liefert Befehle, das System prüft sie (Rechte des Absenders nach 7.1,
@@ -279,8 +280,10 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [t.id, sender.id, `Auftrag von ${sender.name} per Chat: ${cut(text || title, 1500)}`]);
   await audit(db, { orgId: sender.orgId, projectId: project.id, userId: sender.id, action: 'task.order', objectType: 'task', objectId: t.id, details: { title, parent: parent ? `${project.key}-${parent.number}` : null, agentId: agent.id, messageId: ctx.messageId } });
   // Berichtswunsch und Lieferung per Mail: Regel auf Benutzer-AP-Ebene (Ereignis progress)
-  if (c.every || c.mail) {
-    const every = ['each', 'milestones', 'daily', 'done'].includes(String(c.every ?? '').toLowerCase()) ? String(c.every).toLowerCase() : 'milestones';
+  // Persönlicher Assistent: Auftrag des Eigentümers im persönlichen Projekt meldet jeden Schritt im Chat
+  const ownErrand = Boolean(await db.maybeOne(`select 1 from projects p where p.id = $1 and ${SQL.isPersonal('p')} and p.created_by = $2`, [project.id, sender.id]));
+  if (c.every || c.mail || ownErrand) {
+    const every = ['each', 'milestones', 'daily', 'done'].includes(String(c.every ?? '').toLowerCase()) ? String(c.every).toLowerCase() : ownErrand ? 'each' : 'milestones';
     await setRules(db, { id: sender.id, orgId: sender.orgId, name: sender.name, kind: 'person' } as any, 'user_task', { orgId: sender.orgId, projectId: project.id, taskId: t.id, userId: sender.id }, [{ event: 'progress', channels: { chat: 'thread', ...(c.mail ? { mail: 'now' } : {}) }, timing: { every } }]).catch(() => undefined);
   }
   queueAgentRun(t.id, 'order', agent.id);

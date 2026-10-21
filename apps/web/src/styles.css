@@ -867,3 +867,6 @@ body:has(.drawer) .chat-fab { display: none; }
 .thumbs .btn:hover { opacity: 0.9; }
 .thumbs .btn.on { opacity: 1; filter: none; }
 .chat-msg .thumbs { margin-left: 0; }
+.msg-avatar.pinned { box-shadow: 0 0 0 2px var(--primary); }
+.draft-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--surface); }
+.draft-card .draft-body { white-space: pre-wrap; margin-top: 6px; max-height: 240px; overflow: auto; }
