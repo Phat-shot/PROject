@@ -41,7 +41,7 @@ function LabelsCard() {
 export function ColumnsForm({ onClose }: { onClose: () => void }) {
   const { detail, reload, reloadTasks } = useProject();
   const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone, kind: c.kind, wipLimit: c.wipLimit })));
-  const KIND: Record<string, string> = { backlog: 'Geplant (noch nicht aktiv)', active: 'In Bearbeitung', parked: 'Zurückgestellt (ruht)', done: 'Erledigt' };
+  const KIND: Record<string, string> = { backlog: 'Geplant (noch nicht aktiv)', active: 'In Bearbeitung', waiting: 'Wartet (mit Frist, danach Zurückgestellt)', parked: 'Zurückgestellt (ruht)', done: 'Erledigt' };
   const { busy, error, run } = useAsync();
   return (
     <Modal title="Board-Spalten" onClose={onClose}>

@@ -80,13 +80,24 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // Sortieren / Verschieben per Drag & Drop
-  app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null } }>('/tasks/:id/move', async (req) => {
+  app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null; wait?: { reason?: string; until?: string | null } } }>('/tasks/:id/move', async (req) => {
     const user = requireUser(req);
     const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     const col = await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2`, [req.body?.columnId, existing.project_id]);
     if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
     const prevCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
     await moveTask(db, existing.id, col.id, req.body?.index ?? null);
+    // „Wartet“ von Hand: worauf und bis wann (Frist ohne Lösung → Zurückgestellt); heraus von Hand: Wartezustand endet
+    if (col.kind === 'waiting') {
+      const until = req.body?.wait?.until ? new Date(String(req.body.wait.until).length === 10 ? `${req.body.wait.until}T18:00:00` : String(req.body.wait.until)) : null;
+      if (until && isNaN(until.getTime())) throw badRequest('Frist: Datum als YYYY-MM-DD');
+      const reason = String(req.body?.wait?.reason ?? '').trim() || (prevCol.kind === 'waiting' ? existing.wait_reason ?? 'ohne Angabe' : 'ohne Angabe');
+      await db.query(`update tasks set wait_reason = $2, wait_until = $3, wait_by = $4, wait_expired_at = null, wait_return_column_id = case when $5 then wait_return_column_id else $6::uuid end where id = $1`,
+        [existing.id, reason.slice(0, 300), until ?? (prevCol.kind === 'waiting' ? existing.wait_until : null), user.id, prevCol.kind === 'waiting' || prevCol.kind === 'parked', existing.column_id]);
+      if (prevCol.kind !== 'waiting') await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [existing.id, user.id, `Wartet auf: ${reason}${until ? ` (Frist ${until.toLocaleDateString('de-DE', { timeZone: 'Europe/Berlin' })})` : ''}`]);
+    } else if (prevCol.kind === 'waiting' || existing.wait_reason) {
+      await db.query(`update tasks set wait_reason = null, wait_until = null, wait_by = null, wait_return_column_id = null, wait_expired_at = null where id = $1`, [existing.id]);
+    }
     await touchTask(db, existing.id);
     if (col.id !== existing.column_id) {
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: existing.id, details: { from: prevCol.name, to: col.name } });
@@ -341,9 +352,12 @@ export async function taskRoutes(app: FastifyInstance) {
       await dispatch(db, { event: 'assigned', projectId: existing.project_id, taskId: existing.id, type: 'task.assigned', title: `Dir zugewiesen: ${existing.title}`, body: `von ${user.name}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}`, ref: { type: 'task', id: existing.id }, actorId: user.id });
     }
     if (b.columnId && b.columnId !== existing.column_id) {
-      const newCol = await db.one(`select is_done from board_columns where id = $1`, [b.columnId]);
-      const oldCol = await db.one(`select is_done from board_columns where id = $1`, [existing.column_id]);
+      const newCol = await db.one(`select is_done, kind from board_columns where id = $1`, [b.columnId]);
+      const oldCol = await db.one(`select is_done, kind from board_columns where id = $1`, [existing.column_id]);
       if (newCol.is_done && !oldCol.is_done) await onTaskDone(existing, user);
+      // Wartezustand: hinein ohne Angaben (Grund und Frist setzt „Verschieben“), heraus endet er
+      if (newCol.kind === 'waiting') await db.query(`update tasks set wait_reason = coalesce(wait_reason, 'ohne Angabe'), wait_by = $2, wait_return_column_id = coalesce(wait_return_column_id, $3) where id = $1`, [existing.id, user.id, oldCol.kind === 'parked' ? null : existing.column_id]);
+      else if (existing.wait_reason) await db.query(`update tasks set wait_reason = null, wait_until = null, wait_by = null, wait_return_column_id = null, wait_expired_at = null where id = $1`, [existing.id]);
     }
     const changed: Record<string, unknown> = {};
     for (const k of Object.keys(b)) if (k !== 'sourceMailId' && k !== 'note') changed[k] = (b as any)[k];

@@ -22,7 +22,7 @@ import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentP
 import type { AgentMode, AgentPolicy } from '@projekttool/shared';
 import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
 
-export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
+export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
 export function mapProject(r: any): Project {
   return {
@@ -452,7 +452,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (cols.length < 2) throw badRequest('Mindestens zwei Spalten');
     const existing = await db.query(`select id from board_columns where project_id = $1`, [req.params.id]);
     const keep = new Set<string>();
-    const kinds = ['backlog', 'active', 'parked', 'done'];
+    const kinds = ['backlog', 'active', 'waiting', 'parked', 'done'];
     if (!cols.some((c) => c.kind === 'done' || (!c.kind && c.isDone))) throw badRequest('Eine Spalte muss „Erledigt“ sein');
     for (const [i, c] of cols.entries()) {
       const kind = c.kind && kinds.includes(c.kind) ? c.kind : c.isDone ? 'done' : 'active';

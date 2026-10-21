@@ -15,6 +15,7 @@ import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
+import { moveTaskTo } from '../../lib/moveTask';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 import { ReportWish } from '../../components/NotifyRules';
@@ -133,7 +134,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       <div className="form cols-2 task-fields">
         <label className="field"><span>Status</span>
-          <select value={t.columnId} disabled={!canEdit} onChange={(e) => void patch({ columnId: e.target.value })}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) await load(); }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small">⏳ {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}</label>
         <label className="field"><span>Teilprojekt</span>
           <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
         <label className="field"><span>Zuständig</span>

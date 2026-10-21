@@ -881,3 +881,5 @@ body:has(.drawer) .chat-fab { display: none; }
 .status-pop .btn { justify-content: flex-start; text-align: left; }
 .task-card .title, .task-card .labels { padding-right: 18px; }
 .chat-busy { padding: 6px 12px; font-style: italic; }
+.task-card .wait-line { color: var(--muted); margin: 2px 0 4px; }
+.task-card .wait-line.expired { color: var(--warn); }

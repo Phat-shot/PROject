@@ -515,7 +515,7 @@ test('Meine Arbeit: Projekte mit Teilprojekten, Arbeitspaketen und Tasks, einges
   assert.ok(plWeb.subprojects.some((s: any) => s.name === 'Vertrag und Budget'));
 });
 
-test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalten, neue Projekte mit sechs Spalten', async () => {
+test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalten, neue Projekte mit sieben Spalten (mit Wartet)', async () => {
   const pl = await t.login('pl@demo.local');
   const d = (await t.api(pl).get(`/projects/${t.ids.projects.web}`)).json();
   const kinds = d.columns.map((c: any) => c.kind);
@@ -524,7 +524,7 @@ test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalt
   assert.equal(d.columns.at(-1).kind, 'done');
   const p = (await t.api(pl).post('/projects', { key: 'SPA', name: 'Spalten' })).json().project;
   const cols = (await t.api(pl).get(`/projects/${p.id}`)).json().columns;
-  assert.deepEqual(cols.map((c: any) => c.name), ['Geplant', 'Offen', 'In Arbeit', 'In Prüfung', 'Zurückgestellt', 'Erledigt']);
+  assert.deepEqual(cols.map((c: any) => c.name), ['Geplant', 'Offen', 'In Arbeit', 'In Prüfung', 'Wartet', 'Zurückgestellt', 'Erledigt']);
   // ohne Erledigt-Spalte abgelehnt
   assert.equal((await t.api(pl).put(`/projects/${p.id}/columns`, { columns: [{ name: 'A', kind: 'active' }, { name: 'B', kind: 'parked' }] })).statusCode, 400);
   // Zurückgestellt zählt nicht als Stillstand

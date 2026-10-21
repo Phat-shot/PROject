@@ -4,6 +4,7 @@ import { LABEL_COLORS, type Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
+import { moveTaskTo } from '../../lib/moveTask';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { useData } from '../../lib/useData';
 import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
@@ -108,8 +109,8 @@ export function BoardView() {
     const idxInLane = drop && drop.col === colId && drop.lane === laneKey ? drop.index : laneTasks.length;
     const anchor = laneTasks[idxInLane];
     const index = anchor ? colTasks.indexOf(anchor) : colTasks.length;
-    const body: Record<string, unknown> = { columnId: colId, index };
-    await api.post(`/tasks/${task.id}/move`, body);
+    const col = detail.columns.find((c) => c.id === colId);
+    if (!col || !(await moveTaskTo(dialog.form, task.id, col, index))) return;
     if (laneKey !== 'all' && (task.subprojectId ?? 'none') !== laneKey) await api.patch(`/tasks/${task.id}`, { subprojectId: laneKey === 'none' ? null : laneKey });
     await reloadTasks();
   };
@@ -169,7 +170,7 @@ export function BoardView() {
                   onDragLeave={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDrop(null); }}
                   onDrop={(e) => { e.preventDefault(); void onDrop(laneKey, c.id); }}>
                   <h3>
-                    <span>{c.name}{!isCollapsed && c.kind === 'backlog' && <span className="kind" title="Geplant: zählt nicht als Stillstand">geplant</span>}{!isCollapsed && c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
+                    <span>{c.name}{!isCollapsed && c.kind === 'backlog' && <span className="kind" title="Geplant: zählt nicht als Stillstand">geplant</span>}{!isCollapsed && c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{!isCollapsed && c.kind === 'waiting' && <span className="kind" title="Wartet auf Rückmeldung mit Frist; ohne Lösung bis zur Frist → Zurückgestellt">Frist</span>}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
                     {!isCollapsed && <span className="tools">
                       <span>{inCol.length}</span>
                       {canEdit && c.isDone && inCol.length > 0 && <button className="btn sm link" title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => void dialog.confirm({ title: 'Erledigte archivieren', text: `${total} erledigte Arbeitspakete archivieren? Sie bleiben über den Filter „Archiv“ erreichbar.`, confirmLabel: 'Archivieren' }).then((ok) => { if (ok) void api.post(`/projects/${detail.project.id}/columns/${c.id}/archive-done`).then(reloadTasks); })}>Archivieren</button>}
@@ -242,6 +243,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
       {(selectable || selected) && <input type="checkbox" className="select-box" checked={selected} readOnly aria-label="Auswählen" />}
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
+      {x.wait && <div className={`wait-line small ${x.wait.expiredAt ? 'expired' : ''}`} title={x.wait.expiredAt ? 'Frist ohne Lösung abgelaufen: zurückgestellt' : 'Wartet; ohne Lösung bis zur Frist → Zurückgestellt'}>⏳ {x.wait.reason}{x.wait.until ? ` · bis ${fmtDate(x.wait.until.slice(0, 10))}` : ''}{x.wait.expiredAt ? ' · Frist abgelaufen' : ''}</div>}
       <div className="badges">
         <span className="tkey" title="Kennung">{detail.project.key}-{x.number}</span>
         {x.blocked && <span className="badge blocked" title={x.blockedReason ?? 'blockiert'}>Blockiert</span>}
@@ -271,7 +273,8 @@ function StatusMenu({ task }: { task: Task }) {
   const [open, setOpen] = useState(false);
   const { busy, error, run } = useAsync();
   const done = detail.columns.find((c) => c.isDone);
-  const move = (columnId: string) => void run(async () => { await api.post(`/tasks/${task.id}/move`, { columnId, index: 0 }); setOpen(false); await reloadTasks(); });
+  const dialog = useDialog();
+  const move = (columnId: string) => void run(async () => { setOpen(false); if (await moveTaskTo(dialog.form, task.id, detail.columns.find((c) => c.id === columnId)!, 0)) await reloadTasks(); });
   return (
     <div className="status-menu" onClick={(e) => e.stopPropagation()}>
       <button className="btn sm link status-btn" aria-label="Status ändern" title="Status ändern" onClick={() => setOpen((o) => !o)}>→</button>

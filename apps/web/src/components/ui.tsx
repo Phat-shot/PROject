@@ -87,6 +87,8 @@ export const prioLabel: Record<string, string> = { low: 'niedrig', normal: 'norm
 /* ---- Eigene Bestätigungsdialoge statt window.confirm / window.alert ---- */
 
 export interface ConfirmOptions { title: ReactNode; text?: ReactNode; confirmLabel?: string; cancelLabel?: string; danger?: boolean }
+export interface FormField { key: string; label: string; type?: 'text' | 'date'; value?: string; placeholder?: string; required?: boolean }
+export interface FormOptions { title: ReactNode; text?: ReactNode; fields: FormField[]; submitLabel?: string }
 export interface ChooseOptions<T> { title: ReactNode; text?: ReactNode; options: { label: string; value: T; primary?: boolean; danger?: boolean }[]; cancelLabel?: string }
 interface DialogApi {
   /** Ja/Nein-Frage; löst mit true auf, wenn bestätigt. */
@@ -95,11 +97,13 @@ interface DialogApi {
   choose: <T,>(o: ChooseOptions<T>) => Promise<T | null>;
   /** Hinweis mit nur einem Button. */
   notify: (o: { title: ReactNode; text?: ReactNode }) => Promise<void>;
+  /** Kleines Formular (z. B. Grund und Frist); null bei Abbruch. */
+  form: (o: FormOptions) => Promise<Record<string, string> | null>;
 }
-const DialogCtx = createContext<DialogApi>({ confirm: async () => window.confirm('?'), choose: async () => null, notify: async () => undefined });
+const DialogCtx = createContext<DialogApi>({ confirm: async () => window.confirm('?'), choose: async () => null, notify: async () => undefined, form: async () => null });
 export const useDialog = () => useContext(DialogCtx);
 
-type Pending = { kind: 'confirm'; o: ConfirmOptions; resolve: (v: boolean) => void } | { kind: 'choose'; o: ChooseOptions<any>; resolve: (v: any) => void } | { kind: 'notify'; o: { title: ReactNode; text?: ReactNode }; resolve: () => void };
+type Pending = { kind: 'form'; o: FormOptions; resolve: (v: Record<string, string> | null) => void } | { kind: 'confirm'; o: ConfirmOptions; resolve: (v: boolean) => void } | { kind: 'choose'; o: ChooseOptions<any>; resolve: (v: any) => void } | { kind: 'notify'; o: { title: ReactNode; text?: ReactNode }; resolve: () => void };
 
 export function DialogProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<Pending[]>([]);
@@ -107,15 +111,17 @@ export function DialogProvider({ children }: { children: ReactNode }) {
   const api: DialogApi = {
     confirm: (o) => new Promise((resolve) => push({ kind: 'confirm', o, resolve })),
     choose: (o) => new Promise((resolve) => push({ kind: 'choose', o, resolve })),
-    notify: (o) => new Promise((resolve) => push({ kind: 'notify', o, resolve }))
+    notify: (o) => new Promise((resolve) => push({ kind: 'notify', o, resolve })),
+    form: (o) => new Promise((resolve) => push({ kind: 'form', o, resolve }))
   };
   const cur = queue[0];
   const done = (fn: () => void) => { fn(); setQueue((q) => q.slice(1)); };
   return (
     <DialogCtx.Provider value={api}>
       {children}
-      {cur && (
-        <Modal title={cur.o.title} onClose={() => done(() => (cur.kind === 'confirm' ? cur.resolve(false) : cur.kind === 'choose' ? cur.resolve(null) : cur.resolve()))}>
+      {cur?.kind === 'form' && <FormDialog o={cur.o} onDone={(v) => done(() => cur.resolve(v))} />}
+      {cur && cur.kind !== 'form' && (
+        <Modal title={cur.o.title} onClose={() => done(() => (cur.kind === 'confirm' ? cur.resolve(false) : cur.kind === 'choose' ? cur.resolve(null) : (cur as any).resolve()))}>
           {cur.o.text && <div className="mb" style={{ whiteSpace: 'pre-wrap' }}>{cur.o.text}</div>}
           <div className="row">
             {cur.kind === 'confirm' && <>
@@ -131,5 +137,19 @@ export function DialogProvider({ children }: { children: ReactNode }) {
         </Modal>
       )}
     </DialogCtx.Provider>
+  );
+}
+
+function FormDialog({ o, onDone }: { o: FormOptions; onDone: (v: Record<string, string> | null) => void }) {
+  const [v, setV] = useState<Record<string, string>>(Object.fromEntries(o.fields.map((f) => [f.key, f.value ?? ''])));
+  const ok = o.fields.every((f) => !f.required || v[f.key]?.trim());
+  return (
+    <Modal title={o.title} onClose={() => onDone(null)}>
+      {o.text && <div className="mb muted small">{o.text}</div>}
+      <form className="form" onSubmit={(e) => { e.preventDefault(); if (ok) onDone(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x.trim()]))); }}>
+        {o.fields.map((f, i) => <label key={f.key} className="field"><span>{f.label}</span><input type={f.type ?? 'text'} autoFocus={i === 0} value={v[f.key]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} /></label>)}
+        <div className="row"><button className="btn primary" disabled={!ok}>{o.submitLabel ?? 'Übernehmen'}</button><button type="button" className="btn link" onClick={() => onDone(null)}>Abbrechen</button></div>
+      </form>
+    </Modal>
   );
 }

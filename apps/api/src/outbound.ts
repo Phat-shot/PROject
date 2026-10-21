@@ -130,7 +130,7 @@ async function scopeOf(db: Db, projectId: string, taskId: string | null, aud: Au
 
 const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
 const cut = (s: string | null | undefined, n: number) => { const t = (s ?? '').trim(); return t.length > n ? t.slice(0, n) + ' …' : t; };
-const statusWords = (x: { is_done: boolean; kind: string }) => (x.is_done ? 'erledigt' : x.kind === 'backlog' ? 'geplant' : x.kind === 'parked' ? 'zurückgestellt' : 'in Bearbeitung');
+const statusWords = (x: { is_done: boolean; kind: string }) => (x.is_done ? 'erledigt' : x.kind === 'backlog' ? 'geplant' : x.kind === 'waiting' ? 'wartet auf Rückmeldung' : x.kind === 'parked' ? 'zurückgestellt' : 'in Bearbeitung');
 
 /**
  * text geht an die Neuformulierung; trusted ist der Teil, den Menschen im Projekt für Externe bestimmt haben (alles außer

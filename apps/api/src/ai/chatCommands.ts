@@ -1,4 +1,5 @@
 import type { ChatOrdersLevel, EffectiveAgentPolicy } from '@projekttool/shared';
+import { syncAgentWaiting } from '../tasks/waiting.js';
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { notify, systemMessage } from '../notify.js';
@@ -169,6 +170,7 @@ async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null):
         await cancelQuestions(db, { taskId: task.id, askedBy: agent.id }, `gestoppt: ${reason}`, sender.id);
         await db.query(`update ai_proposals set status = 'withdrawn', result = $2 where task_id = $1 and status = 'pending' and kind = 'agent_action'`, [task.id, `gestoppt: ${reason}`]);
         await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+        await syncAgentWaiting(db, task.id);
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [task.id, sender.id, `Agent gestoppt: ${reason}`]);
         return { type: c.type, status: 'ok', text: `${code}: Agent gestoppt (${reason}); offene Fragen und Vorschläge zurückgezogen`, link: lnk, taskId: task.id };
       }

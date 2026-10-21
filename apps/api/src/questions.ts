@@ -1,4 +1,5 @@
 import type { NotifyEvent, QuestionKind, QuestionStatus } from '@projekttool/shared';
+import { syncAgentWaiting } from './tasks/waiting.js';
 import type { Db } from './db.js';
 import { audit } from './audit.js';
 import { dispatch, dmChannel, notify, projectChannelId, systemMessage } from './notify.js';
@@ -198,7 +199,7 @@ export async function answerQuestion(db: Db, q: QuestionRow, a: AnswerInput): Pr
   }
   if (task) {
     const w = task.agent_wait ?? null;
-    if (w && w.questionId === r.id) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+    if (w && w.questionId === r.id) { await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]); await syncAgentWaiting(db, task.id); }
     // Folgeschritt zum Thema der Frage (Mail-Rückfrage: im Projekt fragen, beim Absender nachfragen) ersetzt den Lauf „answer“
     const handled = await onQuestionAnswered(db, r, a);
     if (asker.kind === 'agent' && !handled) queueAgentRun(task.id, a.trigger ?? 'answer');
@@ -219,7 +220,7 @@ export async function cancelQuestions(db: Db, where: { taskId?: string; meetingI
   for (const q of rows.rows) {
     await resolveNotifications(db, q, 'hat sich erledigt');
     if (q.channel_id && q.message_id) await systemMessage(db, { channelId: q.channel_id, threadId: q.message_id, body: `Hat sich erledigt: ${reason}`, meta: { questionId: q.id, status: 'cancelled' } });
-    if (q.task_id) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1 and agent_wait->>'questionId' = $2`, [q.task_id, q.id]);
+    if (q.task_id) { await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1 and agent_wait->>'questionId' = $2`, [q.task_id, q.id]); await syncAgentWaiting(db, q.task_id); }
     await audit(db, { orgId: q.org_id, projectId: q.project_id, userId, action: 'question.cancel', objectType: 'question', objectId: q.id, details: { reason } });
   }
   return rows.rows.length;

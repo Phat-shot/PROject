@@ -13,6 +13,7 @@ import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
+import { syncAgentWaiting } from '../tasks/waiting.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, calendarText, cleanTitle, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { audienceOf, audienceText, externalContacts, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 import { USE_LATERAL, accountUseIn, projectAccount } from '../mail/accounts.js';
@@ -185,7 +186,7 @@ export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
  * Spalten, Tasks, Mitglieder, wirksame Agenten-Policy. Ordner mit Zugriff „kein“ sind für den Agenten unsichtbar.
  */
 export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, task: any, m: any, cfg: AiConfig, trigger: string, now: Date): Promise<RunCtx> {
-  const columns = await db.query(`select name, is_done from board_columns where project_id = $1 order by position`, [task.project_id]);
+  const columns = await db.query(`select name, is_done from board_columns where project_id = $1 and kind <> 'waiting' order by position`, [task.project_id]);
   const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
   const members = await db.query(`select m.user_id, u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
   const folderAccess = await folderAccessMap(db, task.project_id);
@@ -387,7 +388,8 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         const doneWord = /^(erledigt|done|fertig|abgeschlossen)$/i.test(String(a.column).trim());
         const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and (lower(name) = lower($2) or ($3 and is_done)) order by (lower(name) = lower($2)) desc, position limit 1`, [task.project_id, a.column, doneWord]);
         if (!col) errors.push(`Status „${a.column}“ gibt es nicht (Spalten: ${ctx.columns.rows.map((c: any) => c.name).join(', ')})`);
-        if (col && col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
+        else if ((await db.one(`select kind from board_columns where id = $1`, [col.id])).kind === 'waiting') errors.push(`Status „${col.name}“ setzt das System: gib wait (worauf, Frist) bzw. ask an`);
+        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
       } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
         if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);
@@ -733,6 +735,8 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     }
     // Warten endet nur, wenn keine eigene Frage am AP mehr offen ist (die Frage hält den Wartezustand bis zur Antwort)
     if (!waited && !(await db.maybeOne(`select 1 from questions where task_id = $1 and asked_by = $2 and status = 'open'`, [task.id, agent.id]))) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
+    // Spalte „Wartet“ folgt dem Wartezustand (wartet → Wartet, fertig gewartet → zurück)
+    await syncAgentWaiting(db, task.id, { enter: waited });
   return { applied, errors, held, waited };
 }
 

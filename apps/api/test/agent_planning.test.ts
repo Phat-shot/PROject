@@ -338,3 +338,36 @@ test('resolve mit erfundener questionId: genau eine offene Frage wird erledigt, 
   assert.equal((await t.db.one(`select title from tasks where id = $1`, [ap.id])).title, 'Termin Hardwareauslagerung');
   assert.equal((await t.db.one(`select title from tasks where id = $1`, [other.id])).title, 'AGP-3: fremd');
 });
+
+test('Spalte „Wartet“: Agent wartet → Wartet, Antwort → zurück; Frist ohne Lösung → Zurückgestellt mit Meldung; von Hand mit Grund und Frist', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id, project_id from tasks where title = 'Termin Hardwareauslagerung' or title = 'Teilprojekt durchplanen' order by title desc limit 1`);
+  const col = async () => (await t.db.one(`select c.kind, c.name from tasks t join board_columns c on c.id = t.column_id where t.id = $1`, [ap.id]));
+  const kinds = (await t.db.query(`select kind from board_columns where project_id = $1 order by position`, [ap.project_id])).rows.map((r: any) => r.kind);
+  assert.deepEqual(kinds.slice(-3), ['waiting', 'parked', 'done'], 'Migration: Wartet vor Zurückgestellt');
+  await t.db.query(`update questions set status = 'answered' where task_id = $1 and status = 'open'`, [ap.id]);
+  const before = (await col()).name;
+  // Agent fragt und wartet auf die Antwort: Wartet; Antwort: zurück in die Spalte davor
+  next = [A({ type: 'ask', text: 'Bestätigt Sven den 6.11.?', kind: 'question' }), A({ type: 'wait', kind: 'reply', reason: 'Antwort von Sven' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
+  assert.equal((await col()).kind, 'waiting');
+  const task = (await t.api(pl).get(`/tasks/${ap.id}`)).json().task;
+  assert.ok(task.wait?.reason, 'Grund sichtbar');
+  const q = await t.db.one(`select id from questions where task_id = $1 and status = 'open'`, [ap.id]);
+  next = [A({ type: 'none', reason: 'Antwort da' })];
+  assert.equal((await t.api(pl).post(`/questions/${q.id}/answer`, { text: 'Ja, passt.' })).statusCode, 200);
+  await flushAgentRuns();
+  assert.equal((await col()).name, before, 'zurück in die Spalte davor');
+  // Von Hand: Wartet mit Grund und Frist; Frist abgelaufen → Zurückgestellt, Log, Meldung
+  const waiting = await t.db.one(`select id from board_columns where project_id = $1 and kind = 'waiting'`, [ap.project_id]);
+  assert.equal((await t.api(pl).post(`/tasks/${ap.id}/move`, { columnId: waiting.id, wait: { reason: 'Angebot vom Elektriker', until: '2026-10-23' } })).statusCode, 200);
+  const { expireWaits } = await import('../src/tasks/waiting.js');
+  assert.equal(await expireWaits(t.db, new Date('2026-10-24T08:00:00Z')), 1);
+  assert.equal((await col()).kind, 'parked');
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Frist abgelaufen ohne Lösung (wartete auf: Angebot vom Elektriker)%'`, [ap.id]));
+  assert.ok(await t.db.maybeOne(`select 1 from notifications where type = 'task.wait_expired' and ref_id = $1`, [ap.id]), 'Meldung an die Verantwortlichen');
+  // Agent darf „Wartet“ nicht als Status setzen
+  next = [A({ type: 'set_status', column: 'Wartet' })];
+  const run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`)).json();
+  assert.match(run.error ?? '', /setzt das System/);
+});

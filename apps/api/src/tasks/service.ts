@@ -164,6 +164,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     agentPaused: Boolean(r.agent_paused),
     agentRunning: agentRunActive(r.id),
     agentWait: r.agent_wait ?? null,
+    wait: r.wait_reason ? { reason: r.wait_reason, until: r.wait_until ? new Date(r.wait_until).toISOString() : null, expiredAt: r.wait_expired_at ? new Date(r.wait_expired_at).toISOString() : null } : null,
     agentNextCheckAt: r.agent_next_check_at ? new Date(r.agent_next_check_at).toISOString() : null,
     agentPolicy: r.agent_policy ?? null,
     requestedBy: r.requested_by ? { userId: r.requested_by, name: r.requested_by_name ?? null } : null,

@@ -114,7 +114,7 @@ test('Isolierte Instanz: eigenes Mini-Projekt (kind workflow, unsichtbar in List
   assert.equal(run.projectName, 'Isoliert 1');
   const mini = (await t.api(pl).get(`/projects/${run.projectId}`)).json();
   assert.equal(mini.project.myMembership.role, 'pl', 'Starter ist PL des Mini-Projekts');
-  assert.equal(mini.columns.length, 6);
+  assert.equal(mini.columns.length, 7);
   assert.ok(!(await t.api(pl).get('/projects')).json().projects.some((p: any) => p.id === run.projectId), 'Mini-Projekt nicht in der Projektliste');
   assert.ok(!(await t.api(pl).get('/portfolio')).json().projects?.some((p: any) => p.id === run.projectId), 'nicht im Portfolio');
   assert.equal((await t.api(max).get(`/workflow-runs/${run.id}`)).statusCode, 403, 'kein Mitglied des Mini-Projekts');

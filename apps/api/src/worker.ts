@@ -12,6 +12,7 @@ import { runAgents } from './ai/agent.js';
 import { runQueuedMailAi } from './ai/mailAi.js';
 import { runWorkflows } from './workflows/engine.js';
 import { runQuestions } from './questions.js';
+import { expireWaits } from './tasks/waiting.js';
 import { expireProposals } from './ai/agentApproval.js';
 import { runScheduledMails } from './ai/scheduledMail.js';
 import { runProjectReviews } from './ai/knowledge.js';
@@ -76,7 +77,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
-      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
+      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireWaits(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await runCleanup(db);

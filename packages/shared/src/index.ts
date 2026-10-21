@@ -299,7 +299,7 @@ export interface BoardColumn {
   position: number;
   isDone: boolean;
   /** backlog = Geplant, active = in Bearbeitung, parked = Zurückgestellt, done = Erledigt */
-  kind: 'backlog' | 'active' | 'parked' | 'done';
+  kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done';
   wipLimit: number | null;
 }
 
@@ -424,6 +424,8 @@ export interface Task {
   /** Lauf des Agenten steht an oder läuft gerade */
   agentRunning?: boolean;
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
+  /** Spalte „Wartet“: worauf, bis wann (Frist ohne Lösung → Zurückgestellt), abgelaufen am */
+  wait?: { reason: string; until: string | null; expiredAt: string | null } | null;
   agentWait?: { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean } | null;
   agentNextCheckAt?: string | null;
   /** Selbstständigkeit für dieses AP und seine Aufgaben (null = erben) */
@@ -1018,7 +1020,7 @@ export interface ProjectHealth {
 
 /** Projektvorlage: Struktur, die ein neues Projekt vorbelegt; Termine relativ zum Projektstart */
 export interface ProjectTemplateSpec {
-  columns?: { name: string; kind: 'backlog' | 'active' | 'parked' | 'done'; wipLimit: number | null }[];
+  columns?: { name: string; kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done'; wipLimit: number | null }[];
   labels?: { name: string; color: string }[];
   subprojects?: { name: string; startOffsetDays: number | null; endOffsetDays: number | null }[];
   folders?: string[];

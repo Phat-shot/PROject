@@ -45,7 +45,7 @@ export async function seed(db: Db) {
   await member(web.id, leser, 'reader');
 
   const cols: Record<string, string> = {};
-  for (const [i, [name, kind]] of ([['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']] as const).entries()) {
+  for (const [i, [name, kind]] of ([['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']] as const).entries()) {
     const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [web.id, name, i, kind === 'done', name === 'In Arbeit' ? 3 : null, kind]);
     cols[name] = c.id;
   }
