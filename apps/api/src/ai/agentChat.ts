@@ -124,7 +124,7 @@ function findMentions(text: string, projects: ScopeProject[]): { refs: { project
  * Recht agent.chat frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
  * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
  */
-export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string }[]; senderId: string; agent: { id: string; org_id: string; name?: string } }, now = new Date()): Promise<ChatScope> {
+export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string; created_at?: string | Date; uid?: string | null }[]; senderId: string; agent: { id: string; org_id: string; name?: string } }, now = new Date()): Promise<ChatScope> {
   const all: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1 order by key`, [q.agent.org_id])).rows;
   const channelProject = q.channel.kind === 'project' ? all.find((p) => p.id === q.channel.project_id) ?? null : null;
   /** Arbeitspaket zu einer Kennung; null, wenn es fehlt oder einer von beiden es nicht sieht (eingeschränktes Teilprojekt). */
@@ -189,8 +189,19 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   const personalScope = (): ChatScope => ({ how: 'personal', projectIds: personal, taskIds: [], refs: [], hidden: [], projects: common.filter((p) => personal.includes(p.id)) });
   // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug, auch nicht aus dem Verlauf
   if (isSmallTalk(q.message.body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope() : { how: 'general', projectIds: [], taskIds: [], refs: [], hidden: [], projects: common };
-  // Mit persönlichem Projekt gilt ohne Nennung immer dieses; ein anderes Projekt nennt man mit Kennung, Kürzel oder Name
-  if (personal.length) return personalScope();
+  // Mit persönlichem Projekt gilt ohne Nennung dieses, außer das laufende Gespräch dreht sich um ein anderes gemeinsames Projekt:
+  // die vorige Nachricht der Person und die Antworten danach (höchstens 8 Stunden alt), z. B. „Leg das bitte an“ nach einer Frage zu AirGPU
+  if (personal.length) {
+    for (const h of q.history.slice(0, 8)) {
+      if (h.id === q.message.id) continue;
+      if (h.created_at && new Date(h.created_at).getTime() < now.getTime() - 8 * 3600_000) break;
+      const r = await resolve(String(h.body ?? ''));
+      const other = r.projectIds.filter((id) => !personal.includes(id));
+      if (other.length) return { how: 'history', projectIds: other, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => other.includes(p.id)) };
+      if (r.projectIds.length || r.hidden.length || h.uid === q.senderId) break;
+    }
+    return personalScope();
+  }
   // Verlauf (neueste zuerst): das zuletzt genannte Arbeitspaket bzw. Projekt, ohne Zeitfenster
   for (const h of q.history) {
     if (h.id === q.message.id) continue;
@@ -335,7 +346,11 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     return { status: 'skipped', reply, scope, error: logged };
   };
   // Kennungen oder Projekte, die der Absender nicht sieht oder in denen einer gesperrt ist: nichts dazu, auch kein Titel
-  if (scope.how === 'mentioned' && !scope.projectIds.length) return direct('Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
+  // Genanntes Projekt, in dem die Person Mitglied ist, der Agent aber nicht: sagen, wie er dazukommt (statt nur „nichts sagen“)
+  const notIn = scope.hidden.length ? (await db.query(`select p.key, p.name from projects p join project_members m on m.project_id = p.id and m.user_id = $1 where p.org_id = $2 and p.key = any($3::text[]) and not exists (select 1 from project_members a where a.project_id = p.id and a.user_id = $4)`, [msg.user_id, agent.org_id, scope.hidden.map((h) => h.split('-')[0]), agent.id])).rows : [];
+  const notInText = notIn.length ? `In ${notIn.map((p: any) => `${p.key} „${p.name}“`).join(', ')} bin ich nicht Mitglied, dort kann ich nichts nachsehen oder anlegen; die PL lädt mich unter Projekt › Einstellungen › KI ein.` : '';
+  const hiddenRest = scope.hidden.filter((h) => !notIn.some((p: any) => p.key === h.split('-')[0]));
+  if (scope.how === 'mentioned' && !scope.projectIds.length) return direct(notInText ? `${notInText}${hiddenRest.length ? ' Zu weiterem kann ich dir hier nichts sagen.' : ''}` : 'Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
   // Kein gemeinsames, beidseitig freies Projekt: Hilfe und Hinweis statt Schweigen (ohne LLM-Aufruf)
   if (!project && (scope.how === 'all' || scope.how === 'general') && !scope.projects.length) {
     return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');
@@ -455,7 +470,7 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
     // Bezugszeile setzt das System: nur bei einem Thema aus dem Verlauf und nur, wenn die Antwort es betrifft (onTopic; fehlt das Feld, gilt ja)
     const onTopic = (j as any).onTopic !== false && !small;
     const refLine = scope.how === 'history' && onTopic && scope.refs[0] && !/^Zu\s/.test(checked.text) ? `Zu ${scope.refs[0]}: ` : '';
-    const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}`;
+    const reply = `${notInText ? `${notInText} ` : ''}${hiddenRest.length ? `Zu ${hiddenRest.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}`;
     await post(reply, reply, scope.projectIds.length === 1 ? { projectId: scope.projectIds[0] } : null);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);

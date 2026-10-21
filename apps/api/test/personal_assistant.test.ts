@@ -64,3 +64,40 @@ test('Unspezifischer Auftrag: im persönlichen Projekt angelegt und sofort ausge
   assert.equal((await t.db.one(`select count(*)::int as c from ai_proposals where task_id = $1 and kind = 'agent_action'`, [task.id])).c, 0, 'keine Rückfrage für Erledigt oder die Mail');
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Auftrag erledigt und archiviert%'`, [task.id]));
 });
+
+test('Gespräch über ein anderes Projekt: Folgeauftrag ohne Nennung landet dort, nicht im persönlichen Projekt', async () => {
+  const pl = await t.login('pl@demo.local');
+  await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${agent.id}`, { role: 'member' });
+  chatReply = { reply: 'WEB läuft.', commands: [] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Wie steht es bei Website-Relaunch?' });
+  await flushAgentRuns();
+  chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Rack-Plan erstellen', text: 'Rack-Plan' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg dafür bitte einen Auftrag an: Rack-Plan' });
+  await flushAgentRuns();
+  const task = await t.db.one(`select project_id from tasks where title = 'Rack-Plan erstellen'`);
+  assert.equal(task.project_id, t.ids.projects.web, 'Projekt aus dem laufenden Gespräch');
+});
+
+test('Projekt genannt, in dem der Agent nicht Mitglied ist: Hinweis mit Weg statt Anlegen woanders', async () => {
+  const pl = await t.login('pl@demo.local');
+  await t.db.query(`insert into project_members (project_id, user_id, role, can_use_ai) values ($1,$2,'member',true) on conflict do nothing`, [t.ids.projects.erp, t.ids.users.pl]);
+  chatReply = { reply: 'Mache ich.', commands: [C({ title: 'ERP-Termin', text: 'Termin' })] };
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Bitte für ERP-Einführung einen Termin anlegen' });
+  await flushAgentRuns();
+  const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dm, agent.id]);
+  assert.match(reply.body, /^In ERP „ERP-Einführung“ bin ich nicht Mitglied/);
+  assert.equal(await t.db.maybeOne(`select 1 from tasks where title = 'ERP-Termin'`), null, 'nirgends angelegt');
+});
+
+test('Persönlicher Auftrag: keine Struktur daneben; „erledigt“ trifft die Erledigt-Spalte', async () => {
+  const pl = await t.login('pl@demo.local');
+  chatReply = { reply: 'Ich kümmere mich.', commands: [C({ title: 'Geschenk besorgen', text: 'Geschenk für Anna' })] };
+  runActions = [{ type: 'create_subproject', name: 'Geschenke' }, { type: 'create_ap', title: 'Geschenk besorgen 2' }, { type: 'set_status', column: 'erledigt' }];
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Erinnere mich: Geschenk für Anna besorgen' });
+  await flushAgentRuns(); await flushAgentRuns();
+  const task = await t.db.one(`select * from tasks where title = 'Geschenk besorgen'`);
+  assert.equal(task.project_id, pid);
+  assert.equal(await t.db.maybeOne(`select 1 from subprojects where project_id = $1 and name = 'Geschenke'`, [pid]), null);
+  assert.equal(await t.db.maybeOne(`select 1 from tasks where title = 'Geschenk besorgen 2'`), null);
+  assert.ok(task.archived_at, '„erledigt“ → Erledigt-Spalte → archiviert');
+});

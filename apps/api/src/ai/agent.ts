@@ -363,8 +363,10 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         applied.push(a);
       } else if (a.type === 'comment') errors.push('Log-Eintrag ohne Text verworfen');
       else if (a.type === 'set_status' && a.column) {
-        const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and lower(name) = lower($2)`, [task.project_id, a.column]);
-        if (!col) errors.push(`Status „${a.column}“ gibt es nicht`);
+        // „erledigt“/„done“ meint die erste Erledigt-Spalte; sonst exakt, mit den gültigen Spalten in der Fehlermeldung
+        const doneWord = /^(erledigt|done|fertig|abgeschlossen)$/i.test(String(a.column).trim());
+        const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and (lower(name) = lower($2) or ($3 and is_done)) order by (lower(name) = lower($2)) desc, position limit 1`, [task.project_id, a.column, doneWord]);
+        if (!col) errors.push(`Status „${a.column}“ gibt es nicht (Spalten: ${ctx.columns.rows.map((c: any) => c.name).join(', ')})`);
         if (col && col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
       } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
@@ -683,6 +685,9 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         await db.query(`update tasks set agent_wait = $2, agent_next_check_at = $3 where id = $1`, [task.id, JSON.stringify(w), nextCheck]);
         applied.push({ ...a, reason: w.reason });
         waited = true;
+      } else if (ctx.errand && ['create_ap', 'create_subproject', 'create_milestone'].includes(a.type)) {
+        // Persönlicher Auftrag: an diesem Arbeitspaket arbeiten, keine Struktur daneben (sonst spiegelt der Agent andere Projekte nach)
+        errors.push(`${a.type} verworfen: persönlicher Auftrag; arbeite an ${ctx.code} (Aufgaben darunter gehen), gehört er in ein anderes Projekt, frag per Chat`);
       } else if (PLAN_TYPES.includes(a.type)) {
         const r = await plan(a);
         if ('error' in r) errors.push(r.error);
@@ -1145,7 +1150,7 @@ function triggerText(trigger: string, task: any): string {
     case 'changed': return 'Seit deinem letzten Lauf hat sich am Arbeitspaket etwas geändert (Log, Mail, Status, Termin oder Tasks). Lies die Änderung und handle entsprechend.';
     case 'periodic': return 'Regelmäßige Durchsicht: seit drei Tagen kein Lauf. Prüfe den Stand; ist nichts zu tun und nichts zu erwarten, tu nichts.';
     case 'order': return task.personal_errand
-      ? 'Auftrag deines Eigentümers per Chat (persönliches Projekt, du bist sein Assistent). Erledige ihn jetzt direkt mit deinen Aktionen (Mail, Termin, Doku, Recherche, Tasks); Mails ohne Projektkonto werden Entwürfe, die er im Chat mit einem Klick sendet. Ist alles getan, setze den Status auf erledigt: das System schließt ab und archiviert. Fehlt etwas Wesentliches, frag ihn per Chat (ask).'
+      ? 'Auftrag deines Eigentümers per Chat (persönliches Projekt, du bist sein Assistent). Erledige ihn jetzt direkt mit deinen Aktionen (Mail, Termin, Doku, Recherche, Tasks); Mails ohne Projektkonto werden Entwürfe, die er im Chat mit einem Klick sendet. Ist alles getan, setze den Status auf erledigt: das System schließt ab und archiviert. Arbeite nur an diesem Arbeitspaket: keine weiteren Arbeitspakete, Teilprojekte oder Meilensteine für denselben Auftrag; gehört er in ein anderes Projekt, frag ihn per Chat (ask). Fehlt etwas Wesentliches, frag ihn ebenso.'
       : 'Neuer Auftrag per Chat (Beschreibung und Log „Auftrag von …“). Verschaffe dir den Stand und beginne; Rückfragen, Zwischenstände und Entscheidungen gehen an den Auftraggeber (Stufe 0 der Kette).';
     case 'approved': return 'Eine Person hat deine angehaltenen Aktionen bestätigt; sie wurden ausgeführt (siehe Log). Mach weiter.';
     case 'rejected': return 'Eine Person hat einen Vorschlag von dir abgelehnt (z. B. einen Mail-Entwurf; Details im Log). Wiederhole ihn nicht unverändert; kläre bei Bedarf per Chat, was anders sein soll.';
