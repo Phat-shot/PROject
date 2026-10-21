@@ -3,6 +3,7 @@ import type { AdminProject, ExternalProfile, Membership, Project, ProjectGroup, 
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, conflict, forbidden, notFound } from '../errors.js';
+import { cancelQuestions } from '../questions.js';
 import { canSeeSubproject, getMembership, mapMembership, requireProject, syncProjectGroups, visibleSubprojectSql } from '../rights.js';
 import { notify } from '../notify.js';
 import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
@@ -549,12 +550,22 @@ export async function projectRoutes(app: FastifyInstance) {
     return { subproject: mapSubproject(await loadSub(r.id), await resolveProjectLead(db, req.params.id)), transferred };
   });
 
-  app.delete<{ Params: { id: string; sid: string } }>('/projects/:id/subprojects/:sid', async (req) => {
+  // Löschen: Arbeitspakete bleiben (dann „Ohne Teilprojekt“) oder gehen mit tasks=delete samt Aufgaben in den Papierkorb
+  app.delete<{ Params: { id: string; sid: string }; Querystring: { tasks?: string } }>('/projects/:id/subprojects/:sid', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    await db.query(`delete from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.delete', objectType: 'subproject', objectId: req.params.sid });
-    return { ok: true };
+    const sp = await db.maybeOne(`select id, name from subprojects where id = $1 and project_id = $2`, [req.params.sid, req.params.id]);
+    if (!sp) throw notFound('Teilprojekt nicht gefunden');
+    let trashed = 0;
+    if (req.query.tasks === 'delete') {
+      const aps = (await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), updated_at = now()
+        where deleted_at is null and (subproject_id = $1 or parent_id in (select id from tasks where subproject_id = $1)) returning id, title, parent_id`, [sp.id])).rows;
+      for (const t of aps) await cancelQuestions(db, { taskId: t.id }, `${t.title} wurde mit dem Teilprojekt „${sp.name}“ gelöscht`, user.id);
+      trashed = aps.filter((t: any) => !t.parent_id).length;
+    }
+    await db.query(`delete from subprojects where id = $1`, [sp.id]);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.delete', objectType: 'subproject', objectId: sp.id, details: { name: sp.name, trashedTasks: trashed } });
+    return { ok: true, trashed };
   });
 
   // Meilensteine

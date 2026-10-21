@@ -675,3 +675,20 @@ test('Meldungen nur an aktive Personen: KI-Agenten und deaktivierte Benutzer bek
   assert.equal(await count(t.ids.users.anna), n0 + 1);
   await t.db.query(`update users set active = true where id = $1`, [t.ids.users.anna]);
 });
+
+test('Teilprojekt löschen: ohne Haken bleiben Arbeitspakete (Ohne Teilprojekt), mit tasks=delete gehen sie samt Aufgaben in den Papierkorb', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const mk = async (name: string) => (await t.api(pl).post(`/projects/${web}/subprojects`, { name })).json().subproject.id as string;
+  const ap = async (sp: string, title: string) => (await t.api(pl).post(`/projects/${web}/tasks`, { title, subprojectId: sp })).json().task.id as string;
+  const keep = await mk('Löschtest A'); const a1 = await ap(keep, 'Bleibt');
+  assert.equal((await t.api(pl).del(`/projects/${web}/subprojects/${keep}`)).statusCode, 200);
+  const r1 = await t.db.one(`select subproject_id, deleted_at from tasks where id = $1`, [a1]);
+  assert.equal(r1.subproject_id, null); assert.equal(r1.deleted_at, null);
+  const gone = await mk('Löschtest B'); const b1 = await ap(gone, 'Geht mit');
+  const child = (await t.api(pl).post(`/projects/${web}/tasks`, { title: 'Aufgabe darunter', parentId: b1 })).json().task.id;
+  const res = await t.api(pl).del(`/projects/${web}/subprojects/${gone}?tasks=delete`);
+  assert.equal(res.json().trashed, 1);
+  for (const id of [b1, child]) assert.ok((await t.db.one(`select deleted_at from tasks where id = $1`, [id])).deleted_at, 'im Papierkorb');
+  assert.equal((await t.api(pl).post(`/tasks/${b1}/restore`)).statusCode, 200, 'wiederherstellbar');
+});

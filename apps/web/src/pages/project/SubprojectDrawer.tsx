@@ -45,8 +45,10 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
   const overdue = open.filter((x) => x.dueDate && x.dueDate < today()).length;
   const milestones = detail.milestones.filter((m) => m.subprojectId === s.id).sort((a, b) => a.date.localeCompare(b.date));
   const colName = (id: string) => detail.columns.find((c) => c.id === id)?.name ?? '';
-  const remove = () => void dialog.confirm({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Die Arbeitspakete bleiben erhalten und stehen danach unter „Ohne Teilprojekt“.`, confirmLabel: 'Löschen', danger: true })
-    .then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/subprojects/${s.id}`); await reload(); await reloadTasks(); onClose(); }); });
+  // Mit Haken gehen die Arbeitspakete samt Aufgaben in den Papierkorb (wiederherstellbar), sonst stehen sie unter „Ohne Teilprojekt“
+  const remove = () => void dialog.form({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Ohne Haken bleiben die Arbeitspakete erhalten und stehen danach unter „Ohne Teilprojekt“.`, submitLabel: 'Löschen', danger: true,
+    fields: aps.length ? [{ key: 'tasks', type: 'checkbox', label: `Auch die ${aps.length} zugeordneten Arbeitspakete löschen (mit Aufgaben, in den Papierkorb)` }] : [] })
+    .then((v) => { if (v) void run(async () => { await api.del(`/projects/${pid}/subprojects/${s.id}${v.tasks === '1' ? '?tasks=delete' : ''}`); await reload(); await reloadTasks(); onClose(); }); });
 
   return (
     <Drawer onClose={onClose}
