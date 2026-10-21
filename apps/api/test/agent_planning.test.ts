@@ -55,7 +55,7 @@ test('Teilprojekt-Verantwortung: Agent läuft bei geerbter Zuständigkeit; Agent
   assert.equal(unions(prompt.response_format.json_schema.schema), 0);
   assert.match(prompt.messages[1].content, /Arbeitspakete legst|create_ap\) in deinen Teilprojekten/);
   // Manueller Lauf über die Route findet den geerbten Agenten
-  assert.equal((await t.api(pl).post(`/tasks/${ap.id}/agent-run`)).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`)).statusCode, 200);
 });
 
 test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termine, Kalender; Grenzen werden gemeldet', async () => {
@@ -75,7 +75,7 @@ test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termin
     A({ type: 'create_subproject', title: 'Maler' }),
     A({ type: 'create_aufgabe', title: 'Kaputt', dueDate: 'irgendwann' })
   ];
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   const kids = await t.db.query(`select t.title, t.start_date, t.due_date, u.email, (select count(*)::int from checklist_items i where i.task_id = t.id) as items from tasks t left join users u on u.id = t.responsible_user_id where t.parent_id = $1 order by t.title`, [ap.id]);
   assert.deepEqual(kids.rows.map((x: any) => x.title), ['Leitungen planen', 'Material bestellen'], 'Dublette und ungültiges Datum verworfen');
@@ -124,7 +124,7 @@ test('Stellvertretende PL: Agent plant im ganzen Projekt, weist Agenten zu, änd
     A({ type: 'create_ap', title: 'Wände streichen', subproject: 'Maler', responsible: 'max@demo.local' })
   ];
   const before = calls.length;
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   assert.match(calls[before].messages[0].content, /stellvertretende Projektleitung im Projekt WEB/);
   assert.ok(await t.db.maybeOne(`select 1 from subprojects s join users u on u.id = s.responsible_user_id where s.name = 'Maler' and u.email = 'max@demo.local'`));
@@ -160,7 +160,7 @@ test('Fragen per Chat: Eskalation und chat-Aktion kommen als Direktnachricht an,
     A({ type: 'chat', to: ['anna@demo.local', 'projekt'], text: 'Wer kennt einen Elektriker?' }),
     A({ type: 'chat', to: ['niemand@extern.de'], text: 'x' })
   ];
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   const dmOf = async (userId: string) => (await t.db.query(`select m.body from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members a on a.channel_id = c.id and a.user_id = $1 join chat_channel_members b on b.channel_id = c.id and b.user_id = $2 where m.user_id = $1 order by m.created_at`, [morton.id, userId])).rows.map((x: any) => x.body);
   assert.ok((await dmOf(t.ids.users.pl)).some((b: string) => /Welches Budget gilt\?/.test(b)), 'Eskalation per Chat an die PL');
@@ -181,7 +181,7 @@ test('Fragen per Chat: Eskalation und chat-Aktion kommen als Direktnachricht an,
   const chatPrompt = calls.filter((c) => c.response_format && String(c.messages[0].content).includes('Man erreicht dich im Chat')).pop();
   assert.match(chatPrompt.messages[1].content, new RegExp(`steht bereits als Rückmeldung im Log von WEB-${ap.number}`));
   const before = calls.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const prompt = calls.slice(before).find((c) => c.response_format && !String(c.messages[0].content).includes('Man erreicht dich im Chat'));
   assert.match(prompt.messages[1].content, /Chat \(deine Direktnachrichten[\s\S]*Petra Lenz: Budget sind 4\.000 €/);
   // Erste Antwort älter als zwei Stunden: neue Nachricht ist wieder normaler Chat, nicht Rückmeldung zum AP
@@ -219,7 +219,7 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   await t.db.query(`update project_members set agent_can_mail = false where project_id = $1 and user_id = $2`, [web(), morton.id]);
   next = [A({ type: 'mail', to: ['elektro@extern.de'], subject: 'Angebot Elektrik', text: 'Bitte um Angebot.' })];
   const before = calls.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const prompt = String(calls.slice(before).find((x) => x.response_format).messages[1].content);
   assert.match(prompt, /Ansprechpartner für Rückfragen und Terminzusagen: Petra Lenz <pl@demo.local> \(Projektleitung\)/);
   assert.match(prompt, /Belegt \(Petra Lenz: Termine, Belegungen, Abwesenheiten, ohne Details\): /);
@@ -229,7 +229,7 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   const first = await t.db.one(`select id from mail_drafts where task_id = $1 and subject = 'Angebot Elektrik'`, [ap.id]);
   assert.equal((await t.api(pl).post(`/mail/drafts/${first.id}/send`)).statusCode, 200);
   next = [A({ type: 'mail', to: ['elektro@extern.de'], subject: 'Angebot Elektrik 2', text: 'Bitte um Angebot.' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
   assert.match(log, /Mail-Entwurf an elektro@extern\.de wartet auf Freigabe \(nicht gesendet\): „Angebot Elektrik“/);
   assert.match(log, /Mail gesendet an elektro@extern\.de: „Angebot Elektrik 2“/);
@@ -240,16 +240,16 @@ test('Termine verschieben, absagen und einladen; Frage mit Frist an ein Mitglied
   const ap = await t.db.one(`select id, number from tasks where title = 'Teilprojekt durchplanen'`);
   // vorläufigen Termin ohne Uhrzeit anlegen (deutsche Spanne), dann verschieben und absagen
   next = [A({ type: 'create_event', title: 'Vor-Ort-Termin AirGPU', startsAt: '6.–8.11.', location: 'Rechenzentrum' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   let ev = await t.db.one(`select * from meetings where title = 'Vor-Ort-Termin AirGPU'`);
   assert.equal(ev.tentative, true);
   assert.equal(new Date(ev.ends_at).getTime() > new Date(ev.starts_at).getTime() + 2 * 86400_000, true, 'über drei Tage');
   next = [A({ type: 'update_event', meetingId: ev.id, startsAt: '2026-11-09T10:00', endsAt: '2026-11-09T12:00' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   ev = await t.db.one(`select * from meetings where id = $1`, [ev.id]);
   assert.equal(new Date(ev.starts_at).toISOString(), '2026-11-09T09:00:00.000Z');
   next = [A({ type: 'cancel_event', meetingId: ev.id, reason: 'Kunde sagt ab' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(await t.db.maybeOne(`select 1 from meetings where id = $1`, [ev.id]), null);
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
   assert.match(log, /Termin geändert: „Vor-Ort-Termin AirGPU“/);
@@ -257,11 +257,11 @@ test('Termine verschieben, absagen und einladen; Frage mit Frist an ein Mitglied
   // Einladung zu einem bestätigten Termin
   const confirmed = await t.db.one(`select id from meetings where title = 'Besichtigung Elektriker'`);
   next = [A({ type: 'send_invite', meetingId: confirmed.id, text: 'Bitte vormerken.' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.ok((await t.db.one(`select invite_sent_at from meetings where id = $1`, [confirmed.id])).invite_sent_at, 'Einladung gesendet');
   // Frage mit Frist an ein Projektmitglied, das nicht in der Kette steht
   next = [A({ type: 'ask', text: 'Max, bestätigt der Kunde den Termin bis Freitag?', kind: 'question', to: 'max@demo.local' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const q = await t.db.one(`select addressee_id, remind_at from questions where task_id = $1 and body like 'Max, bestätigt%'`, [ap.id]);
   assert.equal(q.addressee_id, t.ids.users.max); assert.ok(q.remind_at, 'mit Frist und Nachfassen');
 });
@@ -306,7 +306,7 @@ test('Kleine Modelle: Beschreibung pflegen, Frage an Externe geht an die Kette, 
     A({ type: 'create_event', startsAt: '2024-10-28T10:00' }),
     A({ type: 'create_subproject', title: sp.name })
   ];
-  const run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run`)).json();
+  const run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`)).json();
   assert.equal(run.error, undefined, run.error);
   assert.equal((await t.db.one(`select description from tasks where id = $1`, [ap.id])).description, 'Ziel: Plan für das Teilprojekt. Stand: Termine offen.');
   const q = await t.db.one(`select addressee_id, body from questions where task_id = $1 and body like 'Passt der 24.10.?%'`, [ap.id]);

@@ -11,6 +11,7 @@ import { hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '
 import { agentUsableIn, orgAiSettings } from '../ai/client.js';
 import { aiAllowed, aiError, ownLlmAllowed, rightsOf } from '../ai/policy.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
+import { agentRunActive, queueAgentRun } from '../ai/agentEvents.js';
 import { projectLabelSql, SQL } from '../projectPolicy.js';
 import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
 
@@ -244,7 +245,8 @@ export async function agentRoutes(app: FastifyInstance) {
     await audit(db, { orgId: user.orgId, projectId: t.project_id, userId: user.id, action: 'agent.policy', objectType: 'task', objectId: t.id, details: (v ?? { inherit: true }) as Record<string, unknown> });
     return { policy: v, effective: await effectiveAgentPolicy(db, { agentId: (await agentForTask(db, t.id))?.id ?? null, projectId: t.project_id, taskId: t.id }) };
   });
-  app.post<{ Params: { id: string } }>('/tasks/:id/agent-run', async (req) => {
+  // Lauf von Hand: entkoppelt (202, Ergebnis unter Läufe, im Log und im zentralen KI-Log); ?wait=1 wartet auf das Ergebnis
+  app.post<{ Params: { id: string }; Querystring: { wait?: string } }>('/tasks/:id/agent-run', async (req, reply) => {
     const user = requireUser(req);
     const t = await db.maybeOne(`select * from tasks where id = $1 and deleted_at is null`, [req.params.id]);
     if (!t) throw notFound('Arbeitspaket nicht gefunden');
@@ -255,6 +257,11 @@ export async function agentRoutes(app: FastifyInstance) {
     if (t.agent_paused) throw badRequest('Der Agent ist an diesem Arbeitspaket pausiert. Erst fortsetzen.');
     const d = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id });
     if (!d.allowed) throw aiError(d, true);
+    if (req.query.wait !== '1') {
+      if (agentRunActive(t.id)) return reply.code(202).send({ queued: true, already: true });
+      queueAgentRun(t.id, 'manual', agent.id);
+      return reply.code(202).send({ queued: true });
+    }
     const r = await runAgentOnTask(db, app.mail, app.fetchFn, agent, t.id, 'manual');
     if (r.status === 'skipped') throw badRequest(r.error ?? 'Lauf übersprungen');
     if (r.status === 'error' && !r.actions.length) throw badRequest(r.error ?? 'Lauf fehlgeschlagen');

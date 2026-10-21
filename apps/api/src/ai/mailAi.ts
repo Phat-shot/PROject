@@ -207,7 +207,7 @@ ${tasks.rows.map((x: any) => `- ${project.key}-${x.number} „${x.title}“${x.p
 Kalender: ${events.rows.map((x: any) => `${x.title} ${fmtWhen(new Date(x.starts_at))}`).join(', ') || '–'}
 Mitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ` (KI-Agent${x.persona ? `: ${cut(x.persona, 80)}` : ''})` : ''}`).join(', ')}
 Ordner des Kontos: ${['Archiv', 'In Arbeit', ...folders.filter((f: any) => !f.specialUse || f.specialUse === 'inbox').map((f: any) => f.path)].filter((x, i, a) => a.indexOf(x) === i).join(', ')}`;
-    const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 6000 : 2000, schema: SCHEMA });
+    const r = await complete(cfg, fetchFn, { meta: { feature: 'mail.ai', projectId: project.id }, system, prompt, maxTokens: 2000, schema: SCHEMA });
     const j = parseJson<{ summary?: string; openPoints?: string[]; actions?: MailAiAction[] }>(r.text);
     const proposed = (Array.isArray(j.actions) ? j.actions : []).filter((a) => a && TYPES.includes(a.type)).slice(0, 8);
     const summary = cut(String(j.summary ?? ''), 600);

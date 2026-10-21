@@ -107,7 +107,7 @@ test('Notaus: sperrt Personen, Agenten und Verbindungstests; Läufe übersprunge
     const skipped = await t.db.one(`select * from agent_runs where task_id = $1 order by created_at desc limit 1`, [task]);
     assert.deepEqual([skipped.status, skipped.error], ['skipped', 'KI im Mandanten abgeschaltet (Notaus)']);
     assert.equal(calls.length, before, 'kein LLM-Aufruf');
-    assert.equal((await t.api(pl).post(`/tasks/${task}/agent-run`)).statusCode, 403);
+    assert.equal((await t.api(pl).post(`/tasks/${task}/agent-run?wait=1`)).statusCode, 403);
   } finally {
     await t.api(admin).put('/ai/settings', { enabled: true });
   }

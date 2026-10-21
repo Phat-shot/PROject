@@ -56,7 +56,7 @@ test('ask: Frage an die Kette als Chat-Thread, Meldung mit Bezug, Log, Warten; D
   const task = (await t.api(pl).get(`/tasks/${ap.id}`)).json().task;
   assert.equal(task.agentWait.kind, 'reply'); assert.equal(task.agentWait.questionId, q.id);
   // Dedupe: dieselbe Frage an denselben Adressaten wird abgewiesen, der Agent erfährt es
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.match(String(r.json().error ?? ''), /ist seit .* offen; nicht erneut fragen/);
   assert.equal((await openOf(ap.id)).length, 1);
   // Liste „Offen für mich“ und Deep-Link-Daten der Nachricht
@@ -96,7 +96,7 @@ test('Antwort in der Aufgabe (questionId am Kommentar, Route mit Auswahl): Threa
   const pl = await t.login('pl@demo.local');
   const anna = await t.login('anna@demo.local');
   next = [A({ type: 'ask', text: 'Welches Logo-Format liegt vor?', to: ['anna@demo.local'] })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const [q] = await openOf(ap.id);
   assert.equal(q.addressee_id, t.ids.users.anna, 'gewählte Stufe: Stellvertretung aus der Kette');
   assert.equal((await t.api(pl).post(`/tasks/${ap.id}/questions`, {})).statusCode, 404);

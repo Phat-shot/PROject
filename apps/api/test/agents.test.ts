@@ -111,7 +111,7 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
     { type: 'mail', to: ['k.mueller@mueller-design.de'], subject: 'Rückfrage Lizenzen', text: 'Guten Tag Frau Müller, bitte um Klärung der Lizenzfrage. Nachfasser (KI-Agent, Projekt WEB)' },
     { type: 'escalate', text: 'Budgetfreigabe für Lizenzen nötig.' }
   ];
-  const r = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   assert.deepEqual(r.json().actions.map((x: any) => x.type), ['comment', 'set_status', 'check_item', 'mail', 'escalate']);
   const prompt: string = calls[calls.length - 1].body.messages[1].content;
@@ -143,9 +143,10 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   assert.equal((await t.api(pl).patch(`/tasks/${taskId}/checklist/${itemId}`, { responsibleEmail: 'k.mueller@mueller-design.de' })).statusCode, 200);
   const before = t.mail.dev.sent.length;
   nextActions = [{ type: 'mail', to: ['k.mueller@mueller-design.de'], subject: 'Erinnerung', text: 'Kurze Erinnerung. Nachfasser (KI-Agent, Projekt WEB)' }];
-  await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before + 1);
   assert.equal(t.mail.dev.sent[before].msg.subject, 'Erinnerung');
+
 
   // Worker: nur bei Anlass; Pause stoppt; Budget deckelt
   nextActions = [{ type: 'none', reason: 'nichts Neues' }];
@@ -167,6 +168,22 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 3 });
   const r4 = await runAgents(t.db, t.mail, fakeFetch, new Date(T0 + 4 * 3600_000));
   assert.equal(r4.length, 0, 'Tagesbudget (3) durch die bisherigen Läufe aufgebraucht');
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
+  await flushAgentRuns();
+  // Lauf von Hand ohne wait: sofort 202, läuft entkoppelt (Anzeige „läuft“ im AP), Ergebnis danach unter Läufe
+  nextActions = [{ type: 'comment', text: 'Async geprüft.' }];
+  const q = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  assert.equal(q.statusCode, 202); assert.equal(q.json().queued, true);
+  assert.equal((await t.api(pl).get(`/tasks/${taskId}`)).json().task.agentRunning, true);
+  await flushAgentRuns();
+  assert.equal((await t.api(pl).get(`/tasks/${taskId}`)).json().task.agentRunning, false);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Async geprüft.'`, [taskId]));
+  // Zentrales KI-Log: jede Anfrage mit Funktion, Agent, Projekt, Dauer und Token; nur die KI-Verwaltung
+  const log = (await t.api(admin).get('/ai/calls?feature=agent.run')).json();
+  const last = log.calls[0];
+  assert.equal(last.status, 'ok'); assert.equal(last.feature, 'agent.run'); assert.match(last.task, /^WEB-\d+$/); assert.ok(last.durationMs >= 0);
+  assert.ok(log.summary.some((x: any) => x.calls > 0));
+  assert.equal((await t.api(pl).get('/ai/calls')).statusCode, 403);
   // Deaktivieren nimmt die Zuweisung weg
   await t.api(admin).patch(`/agents/${a.id}`, { active: false });
   const after = await t.db.one(`select responsible_user_id from tasks where id = $1`, [taskId]);
@@ -324,7 +341,7 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   // Final gesetzt (von einer Person mit Recht): PDF an ein Projektmitglied mit Anhang (Verteiler-Adressen erst mit „Final setzen / Versand“)
   await t.db.query(`update doc_pages set status = 'final' where id = $1`, [page.id]);
   nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to: ['max@demo.local'], subject: 'Protokoll JF', text: 'Anbei das Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
-  assert.equal((await t.api(pl).post(`/tasks/${taskId}/agent-run`)).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`)).statusCode, 200);
   assert.equal(t.mail.dev.sent.length, before + 1);
   const sent = t.mail.dev.sent[before].msg;
   assert.equal(sent.subject, 'Protokoll JF');
@@ -338,7 +355,7 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   // Finale Seite wird nicht ergänzt; unbekannter Ordner fällt auf Protokolle zurück
   await t.db.query(`update doc_pages set status = 'final' where id = $1`, [page.id]);
   nextActions = [{ type: 'doc_append', pageId: page.id, text: 'Nachtrag' }, { type: 'doc_create', title: 'Notiz', folder: 'Gibtsnicht', text: 'Text' }];
-  const rr = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const rr = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(rr.statusCode, 200, rr.body);
   assert.deepEqual(rr.json().actions.map((x: any) => x.type), ['doc_create']);
   assert.match(String(rr.json().error), /final/);
@@ -363,7 +380,7 @@ test('Doku wie ein Mitglied: Seite lesen (Leserunde), Inhalt ersetzen, Status mi
     [{ type: 'doc_update', pageId: page.id, title: 'JF 17.10.2026', text: '# Jour fixe 17.10.\n\n- Thema A\n- Thema B\n\n## Beschlüsse\n\nAlles klar.' }, { type: 'doc_status', pageId: page.id, status: 'review' }, { type: 'doc_status', pageId: page.id, status: 'final' }]
   ];
   const n0 = calls.length;
-  const r = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   assert.equal(calls.length - n0, 2, 'zwei Modellaufrufe');
   assert.match(calls[calls.length - 1].body.messages[1].content, /Gelesene Seiten \(Markdown\) und Recherche-Ergebnisse:\n### „JF 2026-10-17“ \(pageId/);
@@ -389,7 +406,7 @@ test('Doku wie ein Mitglied: Seite lesen (Leserunde), Inhalt ersetzen, Status mi
   queue = [];
   nextActions = [{ type: 'doc_status', pageId: page.id, status: 'final' }, { type: 'doc_send_pdf', pageId: page.id, to: null, subject: 'Protokoll JF 17.10.', text: 'Anbei das finale Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
   const before = t.mail.dev.sent.length;
-  const r2 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const r2 = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(r2.statusCode, 200, r2.body);
   assert.deepEqual(r2.json().actions.map((x: any) => x.type), ['doc_status', 'doc_send_pdf']);
   assert.deepEqual(r2.json().actions[1].to, ['gf@demo.local', 'k.mueller@mueller-design.de'], 'Verteiler des Ordners');
@@ -401,14 +418,14 @@ test('Doku wie ein Mitglied: Seite lesen (Leserunde), Inhalt ersetzen, Status mi
 
   // Ordner anlegen und Seite verschieben; finale Seite bleibt strukturell änderbar; Verteiler-Versand an nicht-finale Seite wird abgelehnt
   nextActions = [{ type: 'folder_create', folder: 'JF-Protokolle' }, { type: 'doc_move', pageId: page.id, folder: 'jf-protokolle' }, { type: 'folder_create', folder: 'Protokolle' }];
-  const r3 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const r3 = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.deepEqual(r3.json().actions.map((x: any) => x.type), ['folder_create', 'doc_move']);
   assert.match(String(r3.json().error), /gibt es schon/);
   const moved = await t.db.one(`select f.name from doc_pages p join doc_folders f on f.id = p.folder_id where p.id = $1`, [page.id]);
   assert.equal(moved.name, 'JF-Protokolle');
   await t.db.query(`update doc_pages set status = 'draft' where id = $1`, [page.id]);
   nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to: null, subject: 'x', text: 'y' }];
-  const r4 = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const r4 = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.match(String(r4.json().error), /nur für finale Seiten/);
   assert.equal(t.mail.dev.sent.length, before + 1);
 });
@@ -425,7 +442,7 @@ test('PDF-Versand an genannte Empfänger: Projektmitglieder, Verteiler oder Adre
     nextActions = [{ type: 'doc_send_pdf', pageId: page.id, to, subject: 'Protokoll', text: 'Anbei das Protokoll. Schreiber (KI-Agent, Projekt WEB)' }];
     const before = t.mail.dev.sent.length;
     // Lauf ohne ausgeführte Aktion: die Route meldet den Fehler mit 400
-    const r = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+    const r = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
     return { error: String(r.json().error ?? ''), sent: t.mail.dev.sent.slice(before).map((x: any) => x.msg.to) };
   };
   // Fremde Adresse (weder Mitglied noch Verteiler noch Freigabe): nichts geht hinaus, auch nicht an die übrigen Empfänger
@@ -478,11 +495,11 @@ test('Lauf von Hand beachtet Pause und Tagesbudget; Budget 0 sperrt; übersprung
   const taskId = (await t.db.one(`select id from tasks where project_id = $1 and responsible_user_id = $2 order by created_at desc limit 1`, [pid, agent.id])).id;
   nextActions = [{ type: 'none', reason: 'nichts zu tun' }];
   await t.api(pl).post(`/tasks/${taskId}/agent-pause`, { paused: true });
-  const paused = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const paused = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(paused.statusCode, 400);
   assert.match(paused.json().error, /pausiert/);
   await t.api(pl).post(`/tasks/${taskId}/agent-pause`, { paused: false });
-  assert.equal((await t.api(pl).post(`/tasks/${taskId}/agent-run`)).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`)).statusCode, 200);
   // Übersprungene Läufe (ohne LLM-Aufruf) verbrauchen kein Budget
   const who = await t.db.one(`select id, org_id from users where id = $1`, [agent.id]);
   const left = await agentBudgetLeft(t.db, who);
@@ -490,7 +507,7 @@ test('Lauf von Hand beachtet Pause und Tagesbudget; Budget 0 sperrt; übersprung
   assert.equal(await agentBudgetLeft(t.db, who), left);
   // Budget 0 gilt (früher fiel 0 auf 50 zurück): kein Lauf von Hand, keiner im Worker
   assert.equal((await t.api(admin).put('/ai/settings', { agentDailyBudget: 0 })).json().agentDailyBudget, 0);
-  const none = await t.api(pl).post(`/tasks/${taskId}/agent-run`);
+  const none = await t.api(pl).post(`/tasks/${taskId}/agent-run?wait=1`);
   assert.equal(none.statusCode, 400);
   assert.match(none.json().error, /Tagesbudget von Schreiber ist aufgebraucht/);
   await t.api(pl).post(`/tasks/${taskId}/comments`, { body: 'Neuer Stand.' });

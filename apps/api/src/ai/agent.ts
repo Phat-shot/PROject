@@ -867,7 +867,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let accesses = 0;
     for (let round = 0; round <= dl.rounds; round++) {
       // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum; gründlich bekommt mehr Platz
-      const r = await complete(cRun, fetchFn, { system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: (cRun.enableThinking === true ? 6500 : 2500) + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
+      const r = await complete(cRun, fetchFn, { meta: { feature: 'agent.run', projectId: task.project_id, taskId: task.id }, system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: 2500 + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
       j = parseJson(r.text);
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];

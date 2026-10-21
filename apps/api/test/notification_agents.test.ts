@@ -36,7 +36,7 @@ test('Zwischenstände: Berichtswunsch am AP (für mich und für das AP), every j
   await t.api(pl).put(`/projects/${web()}/members/${morton.id}`, { role: 'member' });
   ap = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Elektriker recherchieren', responsibleUserId: morton.id })).json().task;
   await flushAgentRuns();
-  const run = async (...actions: any[]) => { next = actions; const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`); assert.equal(r.statusCode, 200, r.body); };
+  const run = async (...actions: any[]) => { next = actions; const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`); assert.equal(r.statusCode, 200, r.body); };
 
   // Ohne Wunsch (Standard: Auftraggeber, den es noch nicht gibt) bekommt niemand Zwischenstände
   await run(A({ type: 'comment', text: 'Drei Betriebe angefragt' }));
@@ -95,7 +95,7 @@ test('Entscheidung des Agenten: Empfänger nach Regel N, Direktnachricht genau a
   const dmFrom = async (userId: string) => (await t.db.query(
     `select m.body, m.kind from chat_messages m join chat_channels c on c.id = m.channel_id and c.kind = 'dm' join chat_channel_members x on x.channel_id = c.id and x.user_id = $2 where m.user_id = $1 order by m.created_at`, [morton.id, userId])).rows;
   next = [A({ type: 'escalate', text: 'Budget für Elektro Süd freigeben?' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const n1 = (await t.db.query(`select n.* from notifications n join questions q on q.id = n.ref_id where n.type = 'escalation' and n.ref_type = 'question' and q.task_id = $1 and n.body like 'Budget%'`, [ap.id])).rows;
   assert.deepEqual(n1.map((n: any) => [n.user_id, n.event, n.mail]), [[U().pl, 'decision', 'digest']], 'Standard: verantwortliche PL');
   const budget = (await dmFrom(U().pl)).filter((m: any) => m.body.includes('Budget für Elektro Süd'));
@@ -103,7 +103,7 @@ test('Entscheidung des Agenten: Empfänger nach Regel N, Direktnachricht genau a
   // Projekt: Entscheidungen an PL und Stellvertretung
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'decision', recipients: ['pl', 'deputy_pl'] }] });
   next = [A({ type: 'escalate', text: 'Termin mit Elektro Süd zusagen?' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const n2 = (await t.db.query(`select n.user_id, n.link from notifications n join questions q on q.id = n.ref_id where n.type = 'escalation' and n.ref_type = 'question' and q.task_id = $1 and n.body like 'Termin%'`, [ap.id])).rows;
   assert.deepEqual(n2.map((r: any) => r.user_id).sort(), [U().pl, U().anna].sort());
   // Die Frage geht als Thread an die PL (Adressat); die Stellvertretung bekommt die Meldung mit Link zum Arbeitspaket, keine eigene Direktnachricht
@@ -122,13 +122,13 @@ test('Chat „thread“ ohne eigenen Thread: Systembeitrag in der Direktnachrich
   const ap2 = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Verteiler planen', responsibleUserId: morton.id })).json().task;
   await flushAgentRuns();
   next = [A({ type: 'create_aufgabe', title: 'Steckdosen zählen', responsible: 'max@demo.local', dueDate: '2026-11-20' })];
-  assert.equal((await t.api(pl).post(`/tasks/${ap2.id}/agent-run`)).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/tasks/${ap2.id}/agent-run?wait=1`)).statusCode, 200);
   assert.equal((await sysDm()).length, 0);
   assert.equal((await t.db.query(`select 1 from notifications where user_id = $1 and type = 'task.assigned' and title like '%Steckdosen zählen'`, [U().max])).rows.length, 1);
   // Max möchte Meldungen als Chat-Beitrag: die Zuweisung durch den Agenten kommt in dessen Direktnachricht
   assert.equal((await t.api(max).put('/me/notification-rules', { rules: [{ event: '*', channels: { chat: 'thread' } }] })).statusCode, 200);
   next = [A({ type: 'create_aufgabe', title: 'Zähler ablesen', responsible: 'max@demo.local', dueDate: '2026-11-21' })];
-  await t.api(pl).post(`/tasks/${ap2.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap2.id}/agent-run?wait=1`);
   const sys = await sysDm();
   assert.equal(sys.length, 1);
   assert.match(sys[0].body, /Dir zugewiesen: Zähler ablesen/);
@@ -138,7 +138,7 @@ test('Chat „thread“ ohne eigenen Thread: Systembeitrag in der Direktnachrich
   // Systembeitrag des Agenten im Projektkanal: eine Antwort im Thread holt den Agenten nicht ins Gespräch
   await t.api(pl).put(`/projects/${web()}/notification-rules`, { rules: [{ event: 'assigned', channels: { chat: 'project' } }] });
   next = [A({ type: 'create_aufgabe', title: 'Kabel bestellen', responsible: 'max@demo.local', dueDate: '2026-11-22' })];
-  await t.api(pl).post(`/tasks/${ap2.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap2.id}/agent-run?wait=1`);
   const channel = (await t.api(max).get(`/projects/${web()}/chat`)).json();
   const root = channel.messages.find((m: any) => m.kind === 'system' && m.body.includes('Kabel bestellen'));
   assert.ok(root, 'Systembeitrag im Projektkanal');
@@ -164,7 +164,7 @@ test('Seite „In Prüfung“ aus einem AP im eingeschränkten Teilprojekt: Frei
   await flushAgentRuns();
   const page = await t.db.one(`select id, title from doc_pages where project_id = $1 and status = 'draft' and deleted_at is null order by created_at limit 1`, [web()]);
   next = [A({ type: 'doc_status', pageId: page.id, status: 'review' })];
-  assert.equal((await t.api(pl).post(`/tasks/${secret.id}/agent-run`)).statusCode, 200);
+  assert.equal((await t.api(pl).post(`/tasks/${secret.id}/agent-run?wait=1`)).statusCode, 200);
   assert.equal((await t.db.one(`select status from doc_pages where id = $1`, [page.id])).status, 'review');
   const review = (userId: string) => t.db.query(`select * from notifications where user_id = $1 and type = 'page.review' and ref_id = $2`, [userId, page.id]).then((r) => r.rows);
   assert.equal((await review(U().max)).length, 1, 'Max darf final setzen, sieht das TP aber nicht');

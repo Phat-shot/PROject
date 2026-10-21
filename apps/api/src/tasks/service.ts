@@ -3,6 +3,7 @@ import type { ResponsibleInfo, Subproject, Task } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { badRequest, forbidden } from '../errors.js';
 import { canSeeSubproject } from '../rights.js';
+import { agentRunActive } from '../ai/agentEvents.js';
 
 /** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
 export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
@@ -161,6 +162,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     deletedAt: r.deleted_at ?? null,
     externalBrief: r.external_brief ?? null,
     agentPaused: Boolean(r.agent_paused),
+    agentRunning: agentRunActive(r.id),
     agentWait: r.agent_wait ?? null,
     agentNextCheckAt: r.agent_next_check_at ? new Date(r.agent_next_check_at).toISOString() : null,
     agentPolicy: r.agent_policy ?? null,

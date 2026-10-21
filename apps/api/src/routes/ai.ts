@@ -53,6 +53,33 @@ export async function aiRoutes(app: FastifyInstance) {
   };
 
   // KI-Feedback (nur KI-Verwaltung): Liste mit Filtern und Export als JSONL oder CSV, um Prompt, KI-Sheet und Agenten zu verbessern
+  // Zentrales KI-Log: jede Anfrage an ein LLM, projektübergreifend (Metadaten und technische Fehler, keine Inhalte)
+  app.get<{ Querystring: { status?: string; profileId?: string; agentId?: string; feature?: string; limit?: string } }>('/ai/calls', async (req) => {
+    const user = requireUser(req);
+    requireAiAdmin(user);
+    const q = req.query;
+    if (q.status && !['running', 'ok', 'error', 'timeout'].includes(q.status)) throw badRequest('Status: running, ok, error oder timeout');
+    for (const id of [q.profileId, q.agentId]) if (id && !/^[0-9a-f-]{36}$/i.test(id)) throw badRequest('Ungültige ID');
+    const rows = await db.query(
+      `select c.*, u.name as agent_name, p.key as project_key, t.number as task_number from ai_calls c
+         left join users u on u.id = c.agent_user_id left join projects p on p.id = c.project_id left join tasks t on t.id = c.task_id
+       where c.org_id = $1 and ($2::text is null or c.status = $2) and ($3::uuid is null or c.profile_id = $3) and ($4::uuid is null or c.agent_user_id = $4) and ($5::text is null or c.feature = $5)
+       order by c.started_at desc limit $6`,
+      [user.orgId, q.status || null, q.profileId || null, q.agentId || null, q.feature || null, Math.min(Number(q.limit) || 200, 1000)]);
+    const sum = await db.query(
+      `select profile_id, max(profile_name) as profile_name, count(*)::int as calls, count(*) filter (where status = 'running')::int as running,
+         count(*) filter (where status = 'error')::int as errors, count(*) filter (where status = 'timeout')::int as timeouts, count(*) filter (where retried)::int as retried,
+         (avg(duration_ms) filter (where status = 'ok'))::int as avg_ms, max(duration_ms) filter (where status = 'ok') as max_ms
+       from ai_calls where org_id = $1 and started_at > now() - interval '24 hours' group by profile_id order by 2`, [user.orgId]);
+    return {
+      calls: rows.rows.map((r: any) => ({
+        id: r.id, startedAt: r.started_at, durationMs: r.status === 'running' ? Date.now() - new Date(r.started_at).getTime() : r.duration_ms, status: r.status, feature: r.feature,
+        profile: r.profile_name, model: r.model, thinking: r.thinking, agent: r.agent_name ?? null, project: r.project_key ?? null, task: r.project_key && r.task_number ? `${r.project_key}-${r.task_number}` : null,
+        inputTokens: r.input_tokens, outputTokens: r.output_tokens, reasoningChars: r.reasoning_chars, retried: r.retried, error: r.error
+      })),
+      summary: sum.rows.map((r: any) => ({ profileId: r.profile_id, profile: r.profile_name, calls: r.calls, running: r.running, errors: r.errors, timeouts: r.timeouts, retried: r.retried, avgMs: r.avg_ms, maxMs: r.max_ms }))
+    };
+  });
   app.get<{ Querystring: FeedbackQuery }>('/ai/feedback', async (req) => {
     const user = requireUser(req);
     requireAiAdmin(user);
@@ -152,8 +179,10 @@ export async function aiRoutes(app: FastifyInstance) {
   // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden und verwalten (PL), wenn der Mandant es für diese Projektart erlaubt
   const ownAllowed = (orgId: string, projectId: string) => ownLlmAllowed(db, orgId, projectId);
   /** Kontextfenster des Modells in Token (leer = Standard 32k); die Eingabe belegt höchstens 45 % (Konzept 6.8) */
+  const validTimeout = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); if (!Number.isInteger(n) || n < 30 || n > 3600) throw badRequest('Zeitlimit: ganze Sekunden von 30 bis 3600'); return n; };
+  const setTimeoutS = async (id: string, b: any) => { if (b.timeoutS !== undefined) await db.query(`update ai_profiles set timeout_s = $2 where id = $1`, [id, validTimeout(b.timeoutS)]); };
   const validContext = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); if (!Number.isInteger(n) || n < 4000 || n > 2_000_000) throw badRequest('Kontextgröße: ganze Zahl ab 4000 Token'); return n; };
-  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), webSearch: Boolean(r.web_search), contextTokens: r.context_tokens ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
+  const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), webSearch: Boolean(r.web_search), contextTokens: r.context_tokens ?? null, timeoutS: r.timeout_s ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
   const ownReason = async (_user: User, projectId: string) => ((await ownAllowed(_user.orgId, projectId)) ? null : 'Eigene LLMs sind für dieses Projekt nicht erlaubt (Verwaltung › KI)');
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
@@ -172,6 +201,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const v = validProfile(b);
     const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_id, project_scope, created_by, web_search) values ($1,$2,$3,$4,$5,$6,$7,$8,'none',$9,$10) returning *`,
       [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, req.params.id, user.id, b.webSearch === true]);
+    await setTimeoutS(r.id, b);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'ai.project_llm.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl } });
     return { llm: mapOwn(r) };
   });
@@ -187,6 +217,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (changes) { const reason = await ownReason(user, req.params.id); if (reason) throw forbidden(reason); }
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off), typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search)]);
+    await setTimeoutS(cur.id, b);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'ai.project_llm.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, keyChanged: b.apiKey !== undefined } });
     return { llm: mapOwn(await db.one(`select * from ai_profiles where id = $1`, [cur.id])) };
   });
@@ -209,7 +240,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const own = await ownOf(req.params.id, req.params.lid);
     const { cfg, decision } = await aiConfigFor(db, { userId: user.id, feature: 'profile.test', profileId: own.id });
     if (!cfg) throw aiError(decision);
-    const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
+    const c = await complete(cfg, app.fetchFn, { meta: { feature: 'test' }, system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
   });
   app.post<{ Body: any }>('/ai/profiles', async (req) => {
@@ -222,6 +253,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const contextTokens = validContext(b.contextTokens);
     const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search, context_tokens) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true, contextTokens]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
+    await setTimeoutS(r.id, b);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, thinkingOff: b.thinkingOff === true } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === r.id) };
   });
@@ -249,6 +281,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
     const contextTokens = b.contextTokens === undefined ? cur.context_tokens ?? null : validContext(b.contextTokens);
     await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9, context_tokens = $10 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, thinkingOff, typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search), contextTokens]);
+    await setTimeoutS(cur.id, b);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.update', objectType: 'ai_profile', objectId: cur.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, active: b.active, thinkingOff, keyChanged: b.apiKey !== undefined } });
     // Warnungen: Agenten mit diesem LLM, die in Projekten nicht mehr laufen (Einsatz enger, deaktiviert)
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === cur.id), warnings: await profileWarnings(db, user.orgId, cur.id) };
@@ -269,7 +302,7 @@ export async function aiRoutes(app: FastifyInstance) {
     // Verbindungstest: auch er ruft das LLM, der Notaus gilt
     const { cfg, decision } = await aiConfigFor(db, { userId: user.id, feature: 'profile.test', profileId: req.params.id });
     if (!cfg) throw aiError(decision);
-    const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
+    const c = await complete(cfg, app.fetchFn, { meta: { feature: 'test' }, system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
   });
 

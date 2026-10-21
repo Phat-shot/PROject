@@ -109,7 +109,7 @@ test('Agent: Antwort auf die Ursprungsmail aus deren Konto (Projektkonto direkt,
   assert.equal(reply.subject, 'Re: Frage zum Zeitplan');
   assert.deepEqual(reply.to_json, ['kunde@extern.de']);
   // Zweite Antwort wird verworfen
-  await t.api(pl).post(`/tasks/${t1.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${t1.id}/agent-run?wait=1`);
   assert.match((await t.db.one(`select error from agent_runs where task_id = $1 order by created_at desc limit 1`, [t1.id])).error, /schon beantwortet/);
 
   // Persönliches Konto der PL (Hosting-Ansicht): Entwurf über die Ansicht, nur die Eigentümerin gibt frei; Inhalt nicht im Prompt

@@ -120,6 +120,7 @@ Der Agent erkennt Anweisungen in natürlicher Sprache und führt sie als Befehle
 - **Überschneidungen:** Das System findet ohne KI Kandidaten (gleicher Externer, gemeinsame Stichwörter, Zeitraum und Ort, dieselbe Seite, Abhängigkeit mit Terminkonflikt, Fragen an dieselbe Person). Meldet der Agent einen Zusammenhang, fragt das System die Zuständigen bzw. die Projektleitung: synchron bearbeiten, Abhängigkeit, zusammenführen, unabhängig. Entschieden wird mit den Rechten der Person; die Beziehung steht im Arbeitspaket unter „Verwandte Arbeitspakete“.
 - **Projektdurchlauf:** Mit Reichweite „ganzes Projekt“ prüft der Projektagent werktags das Projekt: Doppelarbeit und Synergien, Hinweise ins Log, Fragen an die Projektleitung, Steckbrief. Unverändertes Projekt: kein KI-Aufruf. „Projektdurchlauf jetzt“ stößt ihn von Hand an.
 - **Kontextgröße:** Die Eingabe belegt höchstens 45 % des Kontextfensters des KI-Profils (Verwaltung › KI › LLMs, Standard 32.000 Token). Überschüssiges wird in fester Reihenfolge gekürzt, das eigene Arbeitspaket bleibt vollständig. Projekt › KI zeigt je Lauf „Kontext n/Grenze“ und ✂, wenn gekürzt wurde.
+- **Lokale Modelle mit Denkmodus:** Das Tool streamt die Antwort und wartet bis zum **Zeitlimit** des LLM (Standard 600 s). Fürs Denken gibt es bis zu 8.000 Token zusätzlich; bleibt die Antwort leer, folgt ein Versuch ohne Denkmodus. Dauer, Zeitlimits und Wiederholungen stehen im **KI-Log** (Verwaltung › KI). „Jetzt laufen lassen“ läuft im Hintergrund.
 
 ## 5. Online-Recherche
 

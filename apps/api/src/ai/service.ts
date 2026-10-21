@@ -24,7 +24,7 @@ async function logCall(db: Db, cfg: AiConfig, user: User, projectId: string | nu
 /** Zusammenfassung einer Mail (wird an der Mail gespeichert, zweiter Aufruf kostet nichts). */
 export async function summarizeMail(db: Db, cfg: AiConfig, fetchFn: typeof fetch, user: User, mail: any, projectId: string | null): Promise<string> {
   if (mail.ai_summary) return mail.ai_summary;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM, maxTokens: 500, prompt: `Fasse diese Mail in höchstens fünf Sätzen zusammen. Nenne zuerst, was gefordert oder entschieden wird, dann offene Punkte und Termine.\n\n${mailText(mail)}` });
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.summary', projectId: projectId }, system: BASE_SYSTEM, maxTokens: 500, prompt: `Fasse diese Mail in höchstens fünf Sätzen zusammen. Nenne zuerst, was gefordert oder entschieden wird, dann offene Punkte und Termine.\n\n${mailText(mail)}` });
   await db.query(`update mails set ai_summary = $2 where id = $1`, [mail.id, c.text]);
   await logCall(db, cfg, user, projectId, 'summarize', c, 'mail', mail.id);
   return c.text;
@@ -37,7 +37,7 @@ export interface TaskEssence { summary: string; logEntry: string; columnName: st
 /** Essenz einer Mail für ein Arbeitspaket: Log-Eintrag, ggf. neuer Status oder Termin, offene Fragen. Nur Vorschlag. */
 export async function essenceForTask(db: Db, cfg: AiConfig, fetchFn: typeof fetch, user: User, mail: any, task: { id: string; title: string; description: string | null; dueDate: string | null; columnName: string; projectId: string }, columns: string[]): Promise<TaskEssence> {
   const prompt = `Arbeitspaket: „${task.title}“ (Status: ${task.columnName}${task.dueDate ? `, Termin ${task.dueDate}` : ''})\nBeschreibung: ${cut(task.description, 1500) || '–'}\nMögliche Status: ${columns.join(', ')}\n\nMail:\n${mailText(mail)}\n\nLiefere JSON mit den Feldern:\n- summary: ein Satz, was die Mail für das Arbeitspaket bedeutet\n- logEntry: 2–6 Sätze als Log-Eintrag (Fakten, Zusagen, Termine, Verantwortliche)\n- columnName: einer der möglichen Status, wenn die Mail eine Statusänderung klar belegt, sonst null\n- dueDate: neues Datum als YYYY-MM-DD, wenn die Mail einen neuen Termin klar nennt, sonst null\n- questions: Liste offener Fragen (leer, wenn keine)`;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM + ' Antworte ausschließlich mit einem JSON-Objekt.', maxTokens: 900, prompt, schema: ESSENCE_SCHEMA });
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.task', projectId: task.projectId }, system: BASE_SYSTEM + ' Antworte ausschließlich mit einem JSON-Objekt.', maxTokens: 900, prompt, schema: ESSENCE_SCHEMA });
   const j = parseJson(c.text);
   await logCall(db, cfg, user, task.projectId, 'task_essence', c, 'task', task.id);
   const col = typeof j.columnName === 'string' ? columns.find((x) => x.toLowerCase() === j.columnName.toLowerCase()) ?? null : null;
@@ -48,7 +48,7 @@ export async function essenceForTask(db: Db, cfg: AiConfig, fetchFn: typeof fetc
 /** Essenz einer Mail als Abschnitt für ein Protokoll oder einen Bericht (Markdown, ohne Überschrift erster Ebene). */
 export async function essenceForPage(db: Db, cfg: AiConfig, fetchFn: typeof fetch, user: User, mail: any, page: { id: string; title: string; content_md: string; project_id: string }): Promise<string> {
   const prompt = `Seite „${page.title}“ (Auszug):\n${cut(page.content_md, 3000) || '–'}\n\nMail:\n${mailText(mail)}\n\nSchreibe einen Abschnitt in Markdown, der die Essenz der Mail in den Stil der Seite einfügt: Überschrift zweiter Ebene mit Thema und Datum, dann Stichpunkte (Entscheidungen, Zusagen, Termine, offene Punkte). Keine Einleitung, kein Zitat der Mail.`;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM, maxTokens: 800, prompt });
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.page', projectId: page.project_id }, system: BASE_SYSTEM, maxTokens: 800, prompt });
   await logCall(db, cfg, user, page.project_id, 'page_essence', c, 'doc_page', page.id);
   return c.text;
 }
@@ -62,7 +62,7 @@ export async function statusReportDraft(db: Db, cfg: AiConfig, fetchFn: typeof f
   const recent = await db.query(`select c.body, t.title from task_comments c join tasks t on t.id = c.task_id where t.project_id = $1 and c.created_at >= $2::date order by c.created_at desc limit 20`, [projectId, since]);
   const health = pr.health ?? null;
   const prompt = `Projekt ${pr.key} „${pr.name}“${pr.description ? `: ${cut(pr.description, 400)}` : ''}\nStand ${today}${health?.color ? `, Ampel laut Projektleitung: ${health.color}${health.note ? ` (${health.note})` : ''}` : ''}\n\nKennzahlen und Listen (automatisch):\n${cut(facts, 6000)}\n\nRisiken, Annahmen, Issues, Entscheidungen (offen):\n${raid.rows.map((r: any) => `- [${r.kind}] ${r.title} (${r.status}${r.probability ? `, W×A ${r.probability}×${r.impact}` : ''})`).join('\n') || '–'}\n\nLog-Einträge der letzten zwei Wochen:\n${recent.rows.map((r: any) => `- ${r.title}: ${cut(r.body, 200)}`).join('\n') || '–'}\n\nSchreibe den Entwurf eines Statusberichts in Markdown mit den Abschnitten: Management-Summary (3–5 Sätze), Fortschritt, Risiken und Probleme, Entscheidungsbedarf, Nächste Schritte. Nutze nur die Daten oben; Zahlen exakt übernehmen. Überschriften zweiter Ebene.`;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM, maxTokens: 1600, prompt });
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.status', projectId: projectId }, system: BASE_SYSTEM, maxTokens: 1600, prompt });
   await logCall(db, cfg, user, projectId, 'status_report', c, 'project', projectId);
   return c.text;
 }
@@ -94,7 +94,7 @@ export async function askProject(db: Db, cfg: AiConfig, fetchFn: typeof fetch, u
     ...mails.rows.map((x: any, i: number) => `[Q${tasks.rows.length + pages.rows.length + i + 1}] Mail „${x.subject}“ von ${x.from_addr}, ${new Date(x.date).toLocaleDateString('de-DE')}\n${cut(x.text_body ?? x.snippet, 800)}`)
   ];
   const prompt = `Frage: ${question}\n\nQuellen aus dem Projekt:\n${ctx.join('\n\n') || '(keine Treffer)'}\n\nBeantworte die Frage nur aus den Quellen und verweise mit [Q1], [Q2] … auf die genutzten. Wenn die Quellen nicht reichen, sage das.`;
-  const c = await complete(cfg, fetchFn, { system: BASE_SYSTEM, maxTokens: 800, prompt });
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.ask', projectId: projectId }, system: BASE_SYSTEM, maxTokens: 800, prompt });
   await logCall(db, cfg, user, projectId, 'ask', c, 'project', projectId);
   const used = new Set([...c.text.matchAll(/\[Q(\d+)\]/g)].map((x) => Number(x[1]) - 1));
   return { answer: c.text, sources: sources.filter((_, i) => used.size === 0 || used.has(i)) };

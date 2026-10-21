@@ -21,7 +21,7 @@ export interface AiProfileRow { id: string; org_id: string; name: string; provid
  * enableThinking (nur lokal): false = Denkmodus aus, true = ausdrücklich an, undefined = Standard von Modell/Server;
  * gesendet als chat_template_kwargs.enable_thinking (ausgewertet von vLLM und llama.cpp).
  */
-export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number; /** Agent, der mit diesem LLM arbeitet */ agentUserId?: string }
+export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number; /** Agent, der mit diesem LLM arbeitet */ agentUserId?: string; /** Zeitlimit je Anfrage in Sekunden (lokal, Standard 600) */ timeoutS?: number }
 export type OwnLlmMode = 'off' | 'personal' | 'all';
 export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; agentDailyBudget: number; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
 
@@ -30,7 +30,7 @@ export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | nu
   if (!r || !r.active || r.admin_blocked) return null;
   const apiKey = unseal(r.api_key) || (r.provider === 'anthropic' && !r.project_id ? process.env.ANTHROPIC_API_KEY ?? null : null);
   if (r.provider === 'local' ? !(r.base_url && r.model) : !apiKey) return null;
-  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined, contextTokens: Number((r as any).context_tokens) >= 4000 ? Number((r as any).context_tokens) : undefined };
+  return { profileId: r.id, name: r.name, provider: r.provider, apiKey, model: r.model || DEFAULT_MODEL, baseUrl: r.provider === 'local' ? String(r.base_url).replace(/\/$/, '') : null, enableThinking: r.provider === 'local' && r.thinking_off ? false : undefined, contextTokens: Number((r as any).context_tokens) >= 4000 ? Number((r as any).context_tokens) : undefined, timeoutS: Number((r as any).timeout_s) >= 30 ? Number((r as any).timeout_s) : undefined };
 }
 
 /**
@@ -67,6 +67,12 @@ export async function profileAvailableInProject(db: Db, projectId: string, profi
 let usageSink: ((profileId: string, inputTokens: number, outputTokens: number) => Promise<unknown>) | null = null;
 export function registerAiUsage(fn: typeof usageSink) { usageSink = fn; }
 
+/** Zentrales KI-Log: Beginn und Ende jeder Anfrage (Metadaten, keine Inhalte). */
+export interface AiCallEnd { status: 'ok' | 'error' | 'timeout'; inputTokens?: number; outputTokens?: number; reasoningChars?: number; retried?: boolean; error?: string; model?: string }
+export interface AiCallLog { start(cfg: AiConfig, meta: AiCallMeta): Promise<string | null>; finish(id: string, end: AiCallEnd): Promise<unknown> }
+let callLog: AiCallLog | null = null;
+export function registerAiCallLog(l: AiCallLog | null) { callLog = l; }
+
 /** Online-Recherche für die Verwaltung: Einstellungen ohne Schlüssel. */
 async function webStatus(db: Db, orgId: string): Promise<WebSearchSettings> {
   const w = await webSettings(db, orgId);
@@ -78,7 +84,7 @@ export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const rows = await db.query(`select a.*, coalesce((select json_agg(x.project_id) from ai_profile_projects x where x.profile_id = a.id), '[]'::json) as project_ids from ai_profiles a where a.org_id = $1 and a.project_id is null order by a.created_at`, [orgId]);
   const own = await db.maybeOne(`select 1 from ai_profiles where org_id = $1 and project_id is not null and active and not admin_blocked limit 1`, [orgId]);
   const s = await orgAiSettings(db, orgId);
-  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
+  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, timeoutS: r.timeout_s ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
   return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, agentDailyBudget: s.agentDailyBudget, ownLlm: s.ownLlm, externalGuard: s.externalGuard, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
 }
 
@@ -150,13 +156,23 @@ export async function aiConfigForProfile(db: Db, orgId: string, profileId: strin
 }
 
 export interface Completion { text: string; inputTokens: number; outputTokens: number; model: string }
-export interface CompleteOpts { system: string; prompt: string; maxTokens?: number; /** JSON-Schema für strukturierte Antwort */ schema?: Record<string, unknown>; /** Systemanweisung in Blöcken (stabil zuerst); Anthropic setzt cache_control auf die ersten cacheBlocks Blöcke, lokale Server bekommen den zusammengefügten Text */ systemBlocks?: string[]; cacheBlocks?: number }
+/** Wofür die Anfrage ist (zentrales KI-Log): Funktion, Projekt, Arbeitspaket */
+export interface AiCallMeta { feature: string; projectId?: string | null; taskId?: string | null }
+export interface CompleteOpts { /** fürs zentrale KI-Log */ meta?: AiCallMeta; system: string; prompt: string; maxTokens?: number; /** JSON-Schema für strukturierte Antwort */ schema?: Record<string, unknown>; /** Systemanweisung in Blöcken (stabil zuerst); Anthropic setzt cache_control auf die ersten cacheBlocks Blöcke, lokale Server bekommen den zusammengefügten Text */ systemBlocks?: string[]; cacheBlocks?: number }
 
 /** Eine Anfrage: Systemanweisung und Nutzertext; mit schema kommt JSON zurück (Anthropic: Structured Outputs, lokal: json_object). */
 export async function complete(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion> {
-  const r = await (cfg.provider === 'local' ? completeLocal(cfg, fetchFn, opts) : completeAnthropic(cfg, fetchFn, opts));
+  const logId = callLog ? await callLog.start(cfg, opts.meta ?? { feature: 'ki' }).catch(() => null) : null;
+  let r: Completion & { reasoningChars?: number; retried?: boolean };
+  try {
+    r = await (cfg.provider === 'local' ? completeLocal(cfg, fetchFn, opts) : completeAnthropic(cfg, fetchFn, opts));
+  } catch (e: any) {
+    if (logId) await callLog!.finish(logId, { status: e?.timeout ? 'timeout' : 'error', error: String(e?.message ?? e).slice(0, 500), retried: e?.retried }).catch(() => undefined);
+    throw e;
+  }
+  if (logId) await callLog!.finish(logId, { status: 'ok', inputTokens: r.inputTokens, outputTokens: r.outputTokens, reasoningChars: r.reasoningChars, retried: r.retried, model: r.model }).catch(() => undefined);
   if (usageSink) await usageSink(cfg.profileId, r.inputTokens, r.outputTokens).catch(() => undefined);
-  return r;
+  return { text: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, model: r.model };
 }
 
 async function completeAnthropic(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion> {
@@ -179,23 +195,80 @@ async function completeAnthropic(cfg: AiConfig, fetchFn: typeof fetch, opts: Com
   }
 }
 
-/** OpenAI-kompatibel (/v1/chat/completions): Ollama, vLLM, LM Studio, llama.cpp. */
-async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion> {
+/** Platz fürs Denken über dem angefragten Antwortlimit (Denkmodus an oder Standard des Modells); begrenzt durch das Kontextfenster. */
+const THINK_RESERVE = 8000;
+
+/**
+ * OpenAI-kompatibel (/v1/chat/completions): Ollama, vLLM, LM Studio, llama.cpp. Gestreamt, damit lange Denkphasen nicht an
+ * Header-Timeouts scheitern; Zeitlimit je LLM. Denkt das Modell, bekommt es zusätzlich THINK_RESERVE Token; bleibt die Antwort
+ * trotzdem leer (Denken hat das Limit aufgebraucht), folgt ein Versuch ohne Denkmodus.
+ */
+async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion & { reasoningChars: number; retried: boolean }> {
   const url = `${cfg.baseUrl}/chat/completions`;
-  let r: Response;
-  try {
-    r = await fetchFn(url, {
-      method: 'POST', headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
-      body: JSON.stringify({ model: cfg.model, max_tokens: opts.maxTokens ?? 4000, temperature: 0.2, messages: [{ role: 'system', content: opts.systemBlocks?.length ? opts.systemBlocks.join('\n\n') : opts.system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(cfg.enableThinking !== undefined ? { chat_template_kwargs: { enable_thinking: cfg.enableThinking } } : {}) })
-    });
-  } catch (e: any) {
-    throw new HttpError(400, `Lokales LLM nicht erreichbar (${cfg.baseUrl}): ${String(e?.message ?? e).slice(0, 150)}`);
+  const timeoutS = cfg.timeoutS ?? 600;
+  const system = opts.systemBlocks?.length ? opts.systemBlocks.join('\n\n') : opts.system;
+  const room = Math.max(256, (cfg.contextTokens ?? 32000) - Math.ceil((system.length + opts.prompt.length) / 3.5) - 512);
+  const asked = opts.maxTokens ?? 4000;
+  const once = async (thinking: boolean | undefined, maxTokens: number) => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutS * 1000);
+    let res: Response;
+    try {
+      res = await fetchFn(url, {
+        method: 'POST', signal: ac.signal, headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
+        body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, temperature: 0.2, stream: true, stream_options: { include_usage: true }, messages: [{ role: 'system', content: system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(thinking !== undefined ? { chat_template_kwargs: { enable_thinking: thinking } } : {}) })
+      });
+      if (!res.ok) { const j: any = await res.json().catch(() => ({})); throw new HttpError(400, `Lokales LLM: ${j?.error?.message ?? j?.error ?? `HTTP ${res.status}`}`); }
+      let text = ''; let reasoning = ''; let finish: string | null = null; let usage: any = null; let model = cfg.model;
+      if (!(res.headers.get('content-type') ?? '').includes('event-stream') || !res.body) {
+        // Server ohne Streaming: eine JSON-Antwort
+        const j: any = await res.json().catch(() => ({}));
+        const msg = j.choices?.[0]?.message ?? {};
+        text = String(msg.content ?? ''); reasoning = String(msg.reasoning_content ?? msg.reasoning ?? ''); finish = j.choices?.[0]?.finish_reason ?? null; usage = j.usage; model = j.model ?? model;
+      } else {
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl: number;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim(); buf = buf.slice(nl + 1);
+            if (!line.startsWith('data:')) continue;
+            const data = line.slice(5).trim();
+            if (data === '[DONE]') continue;
+            let j: any; try { j = JSON.parse(data); } catch { continue; }
+            const ch = j.choices?.[0];
+            if (ch?.delta) { text += ch.delta.content ?? ''; reasoning += ch.delta.reasoning_content ?? ch.delta.reasoning ?? ''; }
+            if (ch?.finish_reason) finish = ch.finish_reason;
+            if (j.usage) usage = j.usage;
+            if (j.model) model = j.model;
+          }
+        }
+      }
+      // Denken im Inhalt (Server ohne Reasoning-Parser): <think>…</think> abtrennen; ohne Ende ist alles Denken
+      const think = text.match(/^\s*<think>([\s\S]*?)(?:<\/think>|$)/);
+      if (think) { reasoning += think[1]; text = text.slice(think[0].length); }
+      return { text: text.trim(), reasoning, finish, inputTokens: usage?.prompt_tokens ?? 0, outputTokens: usage?.completion_tokens ?? 0, model };
+    } catch (e: any) {
+      if (e instanceof HttpError) throw e;
+      if (ac.signal.aborted) throw Object.assign(new HttpError(400, `Lokales LLM: keine Antwort innerhalb von ${timeoutS} s (Zeitlimit des LLM in Verwaltung › KI)`), { timeout: true });
+      throw new HttpError(400, `Lokales LLM nicht erreichbar (${cfg.baseUrl}): ${String(e?.message ?? e).slice(0, 150)}`);
+    } finally { clearTimeout(timer); }
+  };
+  const mayThink = cfg.enableThinking !== false;
+  let r = await once(cfg.enableThinking, Math.min(mayThink ? asked + THINK_RESERVE : asked, room));
+  let retried = false;
+  if (!r.text && mayThink) {
+    retried = true;
+    const first = r;
+    r = await once(false, Math.min(asked, room)).catch((e) => { throw Object.assign(e, { retried: true }); });
+    r = { ...r, reasoning: first.reasoning, inputTokens: r.inputTokens + first.inputTokens, outputTokens: r.outputTokens + first.outputTokens };
   }
-  const j: any = await r.json().catch(() => ({}));
-  if (!r.ok) throw new HttpError(r.status === 401 ? 400 : 400, `Lokales LLM: ${j?.error?.message ?? j?.error ?? `HTTP ${r.status}`}`);
-  const text = String(j.choices?.[0]?.message?.content ?? '').trim();
-  if (!text) throw new HttpError(400, 'Lokales LLM lieferte keine Antwort');
-  return { text, inputTokens: j.usage?.prompt_tokens ?? 0, outputTokens: j.usage?.completion_tokens ?? 0, model: j.model ?? cfg.model };
+  if (!r.text) throw Object.assign(new HttpError(400, `Lokales LLM lieferte keine Antwort${r.finish === 'length' ? ' (Antwortlimit erreicht)' : ''}${retried ? '; auch ohne Denkmodus nicht' : ''}`), { retried });
+  return { text: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, model: r.model, reasoningChars: r.reasoning.length, retried };
 }
 
 /** JSON aus einer Antwort lesen; Codezäune und Text vor/nach dem Objekt werden ignoriert. */

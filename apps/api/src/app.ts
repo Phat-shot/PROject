@@ -34,7 +34,7 @@ import { registerAgentChatRunner, registerAgentRunner, registerMailAiRunner } fr
 import { runForTask } from './ai/agent.js';
 import { runAgentChat } from './ai/agentChat.js';
 import { runMailAi } from './ai/mailAi.js';
-import { registerAiUsage } from './ai/client.js';
+import { registerAiCallLog, registerAiUsage } from './ai/client.js';
 import { MailService } from './mail/service.js';
 import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
@@ -70,6 +70,19 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
   registerAgentRunner((taskId, trigger, agentId) => runForTask(opts.db, opts.mail, opts.fetchFn ?? fetch, taskId, trigger, agentId));
   registerAgentChatRunner((agentId, channelId, messageId) => runAgentChat(opts.db, opts.fetchFn ?? fetch, agentId, channelId, messageId));
   registerMailAiRunner((runId) => runMailAi(opts.db, opts.mail, opts.fetchFn ?? fetch, runId));
+  // Zentrales KI-Log (Verwaltung › KI › KI-Log); Einträge älter als 90 Tage fallen weg, offene von vor einem Neustart gelten als abgebrochen
+  void opts.db.query(`update ai_calls set status = 'error', error = 'abgebrochen (Neustart des Servers)', finished_at = now() where status = 'running' and started_at < now() - interval '1 hour'`).catch(() => undefined);
+  registerAiCallLog({
+    start: async (cfg, meta) => {
+      if (Math.random() < 0.02) await opts.db.query(`delete from ai_calls where started_at < now() - interval '90 days'`);
+      const r = await opts.db.maybeOne(`insert into ai_calls (org_id, profile_id, profile_name, model, agent_user_id, project_id, task_id, feature, thinking)
+        select a.org_id, a.id, a.name, $2, $3, $4, $5, $6, $7 from ai_profiles a where a.id = $1 returning id`,
+        [cfg.profileId, cfg.model, cfg.agentUserId ?? null, meta.projectId ?? null, meta.taskId ?? null, meta.feature, cfg.provider === 'local' ? cfg.enableThinking ?? null : null]);
+      return r?.id ?? null;
+    },
+    finish: (id, e) => opts.db.query(`update ai_calls set status = $2, finished_at = now(), duration_ms = (extract(epoch from now() - started_at) * 1000)::int, input_tokens = $3, output_tokens = $4, reasoning_chars = $5, retried = $6, error = $7, model = coalesce($8, model) where id = $1`,
+      [id, e.status, e.inputTokens ?? null, e.outputTokens ?? null, e.reasoningChars ?? null, Boolean(e.retried), e.error ?? null, e.model ?? null])
+  });
   registerAiUsage((profileId, i, o) => opts.db.query(`update ai_profiles set tokens_in = tokens_in + $2, tokens_out = tokens_out + $3, last_used_at = now() where id = $1`, [profileId, i, o]));
   app.decorateRequest('user', null);
 

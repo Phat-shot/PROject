@@ -219,7 +219,7 @@ test('Agenten-Mail an Externe (strict): Neuformulierung kennt nur den Außenkont
   compose = () => JSON.stringify({ subject: 'Lieferung Fliesen', text: 'Guten Tag,\n\npasst Ihnen die Lieferung am 12.11.?\n\nViele Grüße\nAußendienst', withheld: ['Verweis auf ein anderes Arbeitspaket', 'Budget', 'interne Adresse'] });
   next = [A({ type: 'mail', to: ['fliesen@extern.example'], subject: 'Lieferung', text: `Hallo, Lieferung am 12.11.? Intern: erst nach Elektroinstallation Küche planen (WEB-${other.number}), Budget 8.000 EUR, Rückfragen an max@demo.local.` })];
   const before = t.mail.dev.sent.length;
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   const prompt = composes.at(-1)!;
   const context = prompt.slice(0, prompt.lastIndexOf('Absicht des Agenten'));
@@ -245,7 +245,7 @@ test('Außenprüfung hält an: Entwurf mit Fundstellen in Mail › Freigaben, �
   compose = () => JSON.stringify({ subject: 'Lieferung Fliesen', text: `Guten Tag,\n\ndie Lieferung hängt an WEB-${other.number}.\n\nViele Grüße`, withheld: [] });
   next = [A({ type: 'mail', to: ['fliesen@extern.example'], subject: 'Lieferung', text: 'Lieferung?' })];
   const before = t.mail.dev.sent.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before, 'angehalten, nicht gesendet');
   const draft = await t.db.one(`select * from mail_drafts where task_id = $1 order by created_at desc limit 1`, [ap.id]);
   assert.equal(draft.status, 'pending_approval');
@@ -271,7 +271,7 @@ test('Außenprüfung hält an: Entwurf mit Fundstellen in Mail › Freigaben, �
   assert.equal((await t.api(pl).post(`/outbound-checks/${held[0].id}/decide`, { action: 'release' })).statusCode, 400, 'schon entschieden');
 
   // Ablehnen: nichts gesendet, Entwurf weg, Log, Audit, der Agent läuft erneut
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   const again = (await t.api(pl).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks[0];
   const runs0 = (await t.db.one(`select count(*)::int as c from agent_runs where task_id = $1 and trigger = 'rejected'`, [ap.id])).c;
   next = [A({ type: 'none', reason: 'abgelehnt zur Kenntnis' })];
@@ -333,7 +333,7 @@ test('Erster Kontakt immer als Entwurf, keine Mail an Interne, fehlgeschlagene N
   compose = (p) => { const i = p.slice(p.lastIndexOf('Absicht des Agenten')); return JSON.stringify({ subject: i.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: i.split(/^Text:\n/m)[1] ?? '', withheld: [] }); };
   let before = t.mail.dev.sent.length;
   next = [A({ type: 'mail', to: ['neu@firma.example'], subject: 'Anfrage Fliesen', text: 'Guten Tag, bitte um ein Angebot. Viele Grüße' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before, 'auch mit „darf Mails senden“ nicht direkt');
   assert.ok((await logOf(ap.id)).some((c) => /„Anfrage Fliesen“ · nach außen \(ohne Bezug zum AP, erster Kontakt\), erster Kontakt geht als Entwurf/.test(c.body)));
   const first = await t.db.one(`select * from outbound_checks where task_id = $1 order by created_at desc limit 1`, [ap.id]);
@@ -342,14 +342,14 @@ test('Erster Kontakt immer als Entwurf, keine Mail an Interne, fehlgeschlagene N
 
   next = [A({ type: 'mail', to: ['max@demo.local'], subject: 'Frage', text: 'Kurze Frage.' })];
   const n = (await t.db.one(`select count(*)::int as c from mail_drafts where task_id = $1`, [ap.id])).c;
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.match(String(r.json().error), /Projektmitglieder erreichst du per chat/);
   assert.equal((await t.db.one(`select count(*)::int as c from mail_drafts where task_id = $1`, [ap.id])).c, n);
 
   compose = () => 'kein JSON';
   next = [A({ type: 'mail', to: ['fliesen@extern.example'], subject: 'Termin', text: 'Termin am 13.11.?' })];
   before = t.mail.dev.sent.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before);
   const failed = await t.db.one(`select * from outbound_checks where task_id = $1 order by created_at desc limit 1`, [ap.id]);
   assert.deepEqual([failed.result, failed.findings[0].kind], ['held', 'compose']);
@@ -358,7 +358,7 @@ test('Erster Kontakt immer als Entwurf, keine Mail an Interne, fehlgeschlagene N
   assert.equal((await t.api(admin).put('/ai/settings', { externalGuard: 'check' })).json().externalGuard, 'check');
   const c0 = composes.length;
   next = [A({ type: 'mail', to: ['fliesen@extern.example'], subject: 'Termin 2', text: 'Guten Tag, passt der 14.11.? Viele Grüße' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(composes.length, c0);
   assert.equal(t.mail.dev.sent.length, before + 1);
   assert.equal(t.mail.dev.sent.at(-1)!.msg.text, 'Guten Tag, passt der 14.11.? Viele Grüße');
@@ -382,7 +382,7 @@ test('Prompt kennzeichnet Absenderklassen; refer: Log, Meldung und Chat an die e
 
   next = [A({ type: 'refer', text: 'Der Fliesenleger fragt nach dem Budget des ganzen Neubaus.', subject: 'Budget' })];
   const before = t.mail.dev.sent.length;
-  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);
   assert.deepEqual(r.json().actions.map((x: any) => x.type), ['refer']);
   const log = await logOf(ap.id);
@@ -425,7 +425,7 @@ test('Prompt kennzeichnet Absenderklassen; refer: Log, Meldung und Chat an die e
   await t.api(pl).put(`/projects/${web()}/external-profile`, { ...prof, contacts: [] });
   next = [A({ type: 'refer', text: 'Fragt nach den Kosten der Küche.', subject: 'Küche' })];
   const before2 = t.mail.dev.sent.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before2 + 1);
   const notice2 = t.mail.dev.sent.at(-1)!.msg;
   assert.match(notice2.text, /Ihre Frage zu „Küche“ gebe ich an die Projektleitung \(erreichbar über projekt-web@demo\.local\) weiter\./);
@@ -456,17 +456,17 @@ test('Kette (Regel C): Über-AP, Teilprojekt-Verantwortung mit Sicht, PL; Agente
   const max0 = await dmsTo(t.ids.users.max);
   const proj0 = await projectPosts();
   next = [A({ type: 'chat', to: ['max@demo.local'], text: 'Vertragsentwurf liegt bei 40.000 EUR.' })];
-  const r1 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  const r1 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run?wait=1`)).json();
   assert.match(String(r1.error), /Chat verworfen: Max Keller hat keinen Zugriff auf das Teilprojekt/);
   next = [A({ type: 'chat', to: ['projekt'], text: 'Vertragsentwurf liegt bei 40.000 EUR.' })];
-  const r2 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  const r2 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run?wait=1`)).json();
   assert.match(String(r2.error), /Projektkanal nicht bei eingeschränkten Teilprojekten/);
   assert.equal(await dmsTo(t.ids.users.max), max0);
   assert.equal(await projectPosts(), proj0);
   // Wer das Teilprojekt sieht, bekommt die Nachricht
   next = [A({ type: 'chat', to: ['anna@demo.local'], text: 'Bitte Haftungsklausel ansehen.' })];
   const anna0 = await dmsTo(t.ids.users.anna);
-  const r3 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run`)).json();
+  const r3 = (await t.api(pl).post(`/tasks/${vertrag.id}/agent-run?wait=1`)).json();
   assert.equal(r3.error, undefined);
   assert.equal(await dmsTo(t.ids.users.anna), anna0 + 1);
   await t.api(pl).patch(`/tasks/${vertrag.id}`, { responsibleUserId: null });
@@ -485,7 +485,7 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   compose = () => JSON.stringify({ subject: 'Anderer Betreff', text: 'Guten Tag,\n\nes gibt Weiß und Grau.\n\nViele Grüße', withheld: [] });
   next = [A({ type: 'reply_origin', text: 'Weiß und Grau, siehe Fliesenarbeiten Bad koordinieren.' })];
   const c0 = composes.length;
-  await t.api(pl).post(`/tasks/${t1.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${t1.id}/agent-run?wait=1`);
   assert.equal(composes.length, c0 + 1);
   const reply = t.mail.dev.sent.at(-1)!.msg;
   assert.equal(reply.subject, 'Re: Frage zu Fliesenfarben', 'Betreff der Antwort bleibt');
@@ -498,7 +498,7 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   const report = await t.db.one(`select id from doc_pages where title = 'Statusbericht KW 41'`);
   next = [A({ type: 'doc_send_pdf', pageId: page.id, to: ['gf@demo.local'], subject: 'Protokoll JF', text: 'Anbei das Protokoll, Zahlen im Statusbericht KW 41.' })];
   const before = t.mail.dev.sent.length;
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.length, before);
   const draft = await t.db.one(`select * from mail_drafts where task_id = $1 and page_id is not null order by created_at desc limit 1`, [ap.id]);
   assert.equal(draft.page_id, page.id);
@@ -522,7 +522,7 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   assert.ok(await t.db.maybeOne(`select 1 from doc_shares where page_id = $1 and email = 'gf@demo.local' and mode = 'read' and revoked_at is null`, [report.id]), 'Seite in der Außenprüfung freigegeben');
   // Seite ist jetzt freigegeben: derselbe Begleittext geht durch
   next = [A({ type: 'doc_send_pdf', pageId: page.id, to: ['gf@demo.local'], subject: 'Protokoll JF 2', text: 'Anbei das Protokoll, Zahlen im Statusbericht KW 41.' })];
-  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(t.mail.dev.sent.at(-1)!.msg.subject, 'Protokoll JF 2');
 
   // Senderecht ohne „Final setzen / Versand“: freigeben ja, Seiten freigeben nein
@@ -536,7 +536,7 @@ test('Antwort auf die Ursprungsmail und PDF-Versand laufen über die Außengrenz
   await flushAgentRuns();
   compose = (p) => { const i = p.slice(p.lastIndexOf('Absicht des Agenten')); return JSON.stringify({ subject: i.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: i.split(/^Text:\n/m)[1] ?? '', withheld: [] }); };
   next = [A({ type: 'reply_origin', text: 'Grau, wie im Statusbericht KW 41.' })];
-  await t.api(pl).post(`/tasks/${t2x.id}/agent-run`);
+  await t.api(pl).post(`/tasks/${t2x.id}/agent-run?wait=1`);
   const viaView = (await t.api(pl).get(`/projects/${web()}/outbound-checks?result=held`)).json().checks.find((c: any) => c.taskId === t2x.id);
   assert.equal(viaView.channel, 'reply_origin');
   assert.equal(viaView.findings[0].pageId, report.id);

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { AgentUser, AiFeedbackEntry, AiProfile } from '@projekttool/shared';
 import { AGENT_MODES, AI_FEEDBACK_KINDS } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
@@ -27,7 +27,52 @@ export function AiSection() {
       <LlmsCard />
       <ProjectLlmsCard />
       <LimitsCard />
+      <CallLogCard />
       <FeedbackCard />
+    </div>
+  );
+}
+
+type AiCallRow = { id: string; startedAt: string; durationMs: number | null; status: 'running' | 'ok' | 'error' | 'timeout'; feature: string; profile: string | null; model: string | null; thinking: boolean | null; agent: string | null; project: string | null; task: string | null; inputTokens: number | null; outputTokens: number | null; reasoningChars: number | null; retried: boolean; error: string | null };
+type AiCallSum = { profileId: string | null; profile: string | null; calls: number; running: number; errors: number; timeouts: number; retried: number; avgMs: number | null; maxMs: number | null };
+const FEATURE_LABEL: Record<string, string> = { 'agent.run': 'Lauf am AP', 'agent.chat': 'Chat', 'agent.project': 'Projektdurchlauf', 'mail.ai': 'Mail-KI', 'mail.origin': 'Antwort Ursprungsmail', 'mail.compose': 'Mail nach außen', 'assist.summary': 'Zusammenfassung', 'assist.task': 'Mail → AP', 'assist.page': 'Mail → Seite', 'assist.status': 'Statusbericht', 'assist.ask': 'Frage ans Projekt', test: 'Verbindungstest' };
+const STATUS_LABEL: Record<AiCallRow['status'], string> = { running: 'läuft', ok: 'ok', error: 'Fehler', timeout: 'Zeitlimit' };
+const secs = (ms: number | null) => (ms == null ? '–' : ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)} s`);
+
+/**
+ * Zentrales KI-Log: jede Anfrage an ein LLM über alle Projekte (Dauer, Status, Token, Denkmodus, Fehler). Nur Metadaten, keine
+ * Inhalte; Läufe mit Inhalt stehen im Projekt unter KI. Übersicht der letzten 24 Stunden je LLM; läuft etwas, lädt es alle 10 s nach.
+ */
+function CallLogCard() {
+  const [f, setF] = useState({ status: '', profileId: '', feature: '' });
+  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+  const d = useData<{ calls: AiCallRow[]; summary: AiCallSum[] }>(`/ai/calls${qs ? `?${qs}` : ''}`, [qs]);
+  const busy = Boolean(d.data?.calls.some((c) => c.status === 'running'));
+  useEffect(() => { if (!busy) return; const id = setTimeout(() => void d.reload(), 10_000); return () => clearTimeout(id); }, [busy, d.data]);
+  return (
+    <div className="card" id="ki-log">
+      <div className="row between mb"><h2 style={{ margin: 0 }}>KI-Log</h2><button className="btn sm" onClick={() => void d.reload()}>Aktualisieren</button></div>
+      <p className="muted small">Jede Anfrage an ein LLM, über alle Projekte: Dauer, Status, Token und Fehler (90 Tage). Keine Inhalte; was ein Agent getan hat, steht im Projekt unter KI › Agenten-Läufe.</p>
+      {d.data && d.data.summary.length > 0 && <div className="row small mb" style={{ flexWrap: 'wrap', gap: 6 }}>
+        {d.data.summary.map((x) => <span key={x.profileId ?? 'x'} className="badge" title="letzte 24 Stunden">{x.profile ?? '–'}: {x.calls} Anfragen · Ø {secs(x.avgMs)} · max {secs(x.maxMs)}{x.running ? ` · ${x.running} laufen` : ''}{x.errors ? ` · ${x.errors} Fehler` : ''}{x.timeouts ? ` · ${x.timeouts} Zeitlimit` : ''}{x.retried ? ` · ${x.retried} ohne Denkmodus wiederholt` : ''}</span>)}
+      </div>}
+      <div className="row small mb" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <select aria-label="Status" value={f.status} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, status: e.target.value })}><option value="">alle Status</option>{(Object.keys(STATUS_LABEL) as AiCallRow['status'][]).map((k) => <option key={k} value={k}>{STATUS_LABEL[k]}</option>)}</select>
+        <select aria-label="LLM" value={f.profileId} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, profileId: e.target.value })}><option value="">alle LLMs</option>{(d.data?.summary ?? []).filter((x) => x.profileId).map((x) => <option key={x.profileId!} value={x.profileId!}>{x.profile}</option>)}</select>
+        <select aria-label="Funktion" value={f.feature} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, feature: e.target.value })}><option value="">alle Funktionen</option>{Object.entries(FEATURE_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select>
+      </div>
+      {d.error && <div className="error">{d.error}</div>}
+      {d.data && (d.data.calls.length === 0 ? <div className="empty">Keine Anfragen{qs ? ' für diesen Filter' : ''}.</div> : <div style={{ overflowX: 'auto' }}><table className="table"><thead><tr><th>Beginn</th><th>Status</th><th>Dauer</th><th>Funktion</th><th>Agent · Projekt</th><th>LLM</th><th>Token</th></tr></thead><tbody>
+        {d.data.calls.map((c) => <tr key={c.id}>
+          <td className="small nowrap">{fmtDateTime(c.startedAt)}</td>
+          <td className="small"><span className={`badge ${c.status === 'ok' ? '' : c.status === 'running' ? 'info' : 'warn'}`}>{STATUS_LABEL[c.status]}</span>{c.retried && <div className="muted" title="Die Antwort blieb nach dem Denken leer; zweiter Versuch ohne Denkmodus">ohne Denkmodus wiederholt</div>}{c.error && <div className="muted">{c.error}</div>}</td>
+          <td className="small nowrap">{secs(c.durationMs)}</td>
+          <td className="small">{FEATURE_LABEL[c.feature] ?? c.feature}</td>
+          <td className="small">{c.agent ?? '–'}{c.task ? ` · ${c.task}` : c.project ? ` · ${c.project}` : ''}</td>
+          <td className="small">{c.profile ?? '–'}<div className="muted">{c.model}{c.thinking === true ? ' · Denkmodus an' : c.thinking === false ? ' · Denkmodus aus' : ''}</div></td>
+          <td className="small nowrap">{c.inputTokens ?? '–'} → {c.outputTokens ?? '–'}{c.reasoningChars ? <div className="muted" title="Länge der Denkphase in Zeichen">Denken {c.reasoningChars} Z.</div> : null}</td>
+        </tr>)}
+      </tbody></table></div>)}
     </div>
   );
 }
@@ -106,14 +151,14 @@ function LlmsCard() {
   const projects = useData<{ projects: { id: string; label: string }[] }>('/ai/release-projects');
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
   const [agentEdit, setAgentEdit] = useState<{ llmId: string; agent: AgentUser | null } | null>(null);
-  const empty = { name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '' };
+  const empty = { name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '', timeoutS: '' };
   const [f, setF] = useState(empty);
   const [msg, setMsg] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? empty : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: p.projectScope ?? 'all', projectIds: p.projectIds ?? [], personalScope: Boolean(p.personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '' }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? empty : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: p.projectScope ?? 'all', projectIds: p.projectIds ?? [], personalScope: Boolean(p.personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '', timeoutS: p.timeoutS ? String(p.timeoutS) : '' }); };
   const label = (id: string) => projects.data?.projects.find((x) => x.id === id)?.label ?? '?';
   const scopeText = (p: AiProfile) => p.projectScope === 'selected' ? <span title={(p.projectIds ?? []).map(label).join(', ')}>{(p.projectIds ?? []).length} ausgewählte Projekte</span> : p.projectScope === 'none' ? <span className="muted">kein Projekt (nur Verbindungstest)</span> : <>alle Projekte{p.personalScope ? ' und persönliche' : ''}</>;
   const after = async (w?: string[]) => { await invalidateAi(); await agents.reload(); setWarnings(w ?? []); };
@@ -156,6 +201,7 @@ function LlmsCard() {
             {f.provider === 'local' && <div className="full stack" style={{ gap: 4 }}>
               <label className="check"><input type="checkbox" checked={f.thinkingOff} onChange={(e) => setF({ ...f, thinkingOff: e.target.checked })} /> Denkmodus aus <span className="muted small">(Modelle mit Thinking wie Qwen: schneller, weniger Token; sendet chat_template_kwargs.enable_thinking = false)</span></label>
               <label className="field" title="Kontextfenster des Modells; die Eingabe eines Agentenlaufs belegt höchstens 45 % davon, Überschüssiges wird gekürzt"><span>Kontextgröße in Token (leer = 32.000)</span><input type="number" min={4000} step={1000} value={f.contextTokens} placeholder="32000" onChange={(e) => setF({ ...f, contextTokens: e.target.value })} /></label>
+              <label className="field" title="So lange wartet das Tool auf eine Antwort; mit Denkmodus brauchen kleine Modelle oft Minuten"><span>Zeitlimit in Sekunden (leer = 600)</span><input type="number" min={30} max={3600} step={30} value={f.timeoutS} placeholder="600" onChange={(e) => setF({ ...f, timeoutS: e.target.value })} /></label>
             </div>}
             <label className="check full" title="Dazu braucht der Agent das Recht „Online-Recherche“; lokale LLMs brauchen einen Suchdienst (Grenzen und Vorgaben), Anthropic-LLMs suchen über das Server-Tool web_search"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem LLM erlaubt</label>
             <ScopeEditor scope={f.projectScope} projectIds={f.projectIds} onChange={(projectScope, projectIds) => setF({ ...f, projectScope, projectIds, personalScope: projectScope === 'all' && f.personalScope })} />
@@ -163,7 +209,7 @@ function LlmsCard() {
             {f.projectScope === 'selected' && <span className="muted small full">Persönliche Projekte stehen als „persönlich (Name)“ in der Liste und werden einzeln ausgewählt. Agenten mit diesem LLM laufen nur in den gewählten Projekten.</span>}
             {error && <div className="error full">{error}</div>}
             <div className="full row">
-              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.personalScope, webSearch: f.webSearch, contextTokens: f.contextTokens ? Number(f.contextTokens) : null }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/ai/profiles', body) : await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, body); setEdit(null); await after(r.warnings); })}>Speichern</button>
+              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.personalScope, webSearch: f.webSearch, contextTokens: f.contextTokens ? Number(f.contextTokens) : null, timeoutS: f.timeoutS ? Number(f.timeoutS) : null }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/ai/profiles', body) : await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, body); setEdit(null); await after(r.warnings); })}>Speichern</button>
               {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await after(r.warnings); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
               <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
             </div>

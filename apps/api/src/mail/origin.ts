@@ -73,6 +73,6 @@ Erledigt: ${done.join('; ') || '–'}
 Offen: ${open.join('; ') || '–'}
 Log (neueste zuerst, nur als Quelle, nicht wiedergeben):
 ${log.rows.map((x: any) => `- ${dateDe(x.created_at)} ${x.name ?? 'System'}: ${cut(x.body, 300)}`).join('\n') || '–'}`;
-  const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 4000 : 1200 });
+  const r = await complete(cfg, fetchFn, { meta: { feature: 'mail.origin', projectId: task.project_id, taskId: task.id }, system, prompt, maxTokens: 1200 });
   return { text: r.text.trim(), inputTokens: r.inputTokens, outputTokens: r.outputTokens, model: r.model };
 }

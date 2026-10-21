@@ -59,7 +59,7 @@ test('Agent-Persona: eine Zeile, nur Org-Admin, steht als Schreibstil im Prompt 
 
   // Persona leeren: Standardstil
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { persona: '  ' })).json().agent.persona, null);
-  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run?wait=1`);
   assert.match(calls.at(-1).messages[0].content, /Du schreibst sachlich, kurz und auf Deutsch; im Team Du, nach außen Sie\./);
   assert.doesNotMatch(calls.at(-1).messages[0].content, /norddeutsch/);
 });
@@ -72,18 +72,19 @@ test('Denkmodus je Agent: überschreibt das Profil (an/aus), null = wie Profil',
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'vielleicht' })).statusCode, 400);
   // Profil: Denkmodus aus; Agent: an → ausdrücklich enable_thinking = true und mehr Ausgabe-Spielraum
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'on' })).json().agent.thinkingMode, 'on');
-  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run?wait=1`);
   assert.deepEqual(calls.at(-1).chat_template_kwargs, { enable_thinking: true });
-  assert.equal(calls.at(-1).max_tokens, 6500);
+  assert.equal(calls.at(-1).stream, true, 'gestreamt (lange Denkphasen ohne Header-Timeout)');
+  assert.ok(calls.at(-1).max_tokens > 2500 + 6000, `Platz fürs Denken: ${calls.at(-1).max_tokens}`);
   // Profil an (Modellstandard), Agent aus
   const prof = a.aiProfileId;
   await t.api(admin).patch(`/ai/profiles/${prof}`, { thinkingOff: false });
   await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'off' });
-  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run?wait=1`);
   assert.deepEqual(calls.at(-1).chat_template_kwargs, { enable_thinking: false });
   assert.equal(calls.at(-1).max_tokens, 2500);
   // wie Profil: Profil ohne Schalter → kein Feld, Modellstandard
   await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: null });
-  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);
+  await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run?wait=1`);
   assert.equal(calls.at(-1).chat_template_kwargs, undefined);
 });

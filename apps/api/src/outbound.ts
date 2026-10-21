@@ -206,7 +206,7 @@ Erfinde nichts. Behalte Sprache, Anrede, Ton und die Unterschrift bei. Antworte 
  */
 export async function composeExternal(cfg: AiConfig, fetchFn: typeof fetch, p: { context: string; to: string[]; subject: string; text: string }): Promise<{ subject: string; text: string; withheld: string[]; inputTokens: number; outputTokens: number }> {
   const prompt = `Außenkontext:\n${p.context}\n\nAbsicht des Agenten (an ${p.to.join(', ')}):\nBetreff: ${p.subject.replace(/\n/g, ' ')}\nText:\n${p.text}`;
-  const r = await complete(cfg, fetchFn, { system: COMPOSE_SYSTEM, prompt, maxTokens: cfg.enableThinking === true ? 4000 : 1500, schema: COMPOSE_SCHEMA });
+  const r = await complete(cfg, fetchFn, { meta: { feature: 'mail.compose' }, system: COMPOSE_SYSTEM, prompt, maxTokens: 1500, schema: COMPOSE_SCHEMA });
   const j = parseJson<{ subject?: string; text?: string; withheld?: string[] }>(r.text);
   const text = String(j.text ?? '').trim();
   if (!text) throw new Error('Neuformulierung lieferte keinen Text');

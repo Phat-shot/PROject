@@ -345,7 +345,7 @@ ${aps.rows.map((t: any) => `- ${project.key}-${t.number} · ${cut(t.title, 70)} 
 ${pairs.length ? `Mögliche Überschneidungen (prüfen, bei Bedarf relate):\n${pairs.map((p) => `- ${p.a} ↔ ${p.b.ref} „${cut(p.b.title, 60)}“ · ${p.b.signals.map((s) => s.detail).join('; ')}`).join('\n')}\n` : ''}${openQs.rows.length ? `Offene Fragen im Projekt:\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 160)}`).join('\n')}\n` : ''}${recent.rows.length ? `Änderungen der letzten 24 Stunden:\n${recent.rows.map((c: any) => `- ${project.key}-${c.number} „${cut(c.title, 50)}“: ${cut(c.body, 200)}`).join('\n')}\n` : ''}
 Finde Doppelarbeit, Synergien, Widersprüche und offene Punkte; schreibe den Steckbrief neu, wenn sich Wesentliches geändert hat.`;
   try {
-    const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 6000 : 2500, schema: REVIEW_SCHEMA });
+    const r = await complete(cfg, fetchFn, { meta: { feature: 'agent.project', projectId }, system, prompt, maxTokens: 2500, schema: REVIEW_SCHEMA });
     const j = parseJson<{ brief?: string; actions?: any[] }>(r.text);
     const actions = (Array.isArray(j.actions) ? j.actions : []).slice(0, 12);
     const applied: unknown[] = []; const errors: string[] = [];
