@@ -127,7 +127,7 @@ export function classifyAction(a: any, c: ClassifyCtx): AgentActionClass[] {
   switch (a?.type) {
     case 'doc_status': { const to = String(a.status ?? ''); const from = c.pageStatus?.(String(a.pageId ?? '')) ?? null; if (to === 'final' || from === 'final') out.add('finalize'); break; }
     case 'doc_send_pdf': out.add('distribute'); break;
-    case 'mail': case 'reply_origin': out.add('send_external'); break;
+    case 'mail': case 'reply_origin': case 'send_invite': out.add('send_external'); break;
     case 'set_status': { if (c.doneColumns.has(String(a.column ?? '').toLowerCase()) && (!c.task.parent_id || c.task.workflow_run_id)) out.add('close'); break; }
     case 'create_ap': case 'create_subproject': case 'create_milestone': out.add('plan'); if (a.type !== 'create_milestone' && third(a.responsible)) out.add('assign'); break;
     case 'create_aufgabe': if (third(a.responsible)) out.add('assign'); if (!own(a.ref)) out.add('foreign'); break;
@@ -154,13 +154,16 @@ export function actionLabel(a: any, c?: { pageTitle?: (id: string) => string | n
     case 'create_milestone': return `Meilenstein „${cut(a.title, 60)}“ am ${a.dueDate ?? '?'}`;
     case 'assign': return `${a.ref ?? 'AP'} zuweisen an ${a.responsible || 'niemanden (geerbt)'}`;
     case 'set_dates': return `${a.ref ? `${a.ref}: ` : ''}Termine ${a.startDate ?? '–'} bis ${a.dueDate ?? '–'}`;
+    case 'update_event': return `Termin verschieben${a.startsAt ? ` auf ${a.startsAt}` : ''}${a.location ? `, Ort ${cut(a.location, 40)}` : ''}`;
+    case 'cancel_event': return `Termin absagen${a.reason ? `: ${cut(a.reason, 60)}` : ''}`;
+    case 'send_invite': return 'Einladung mit Kalendereintrag an alle Teilnehmer';
     default: return `${a?.type ?? '?'}${a?.title ? ` „${cut(a.title, 60)}“` : a?.text ? `: ${cut(a.text, 60)}` : ''}`;
   }
 }
 
 /** Kennung einer Aktion für die Ablehnungssperre (14 Tage): Typ und Zielfelder, ohne Freitext. */
 export function actionFingerprint(a: any): string {
-  const keys = ['type', 'pageId', 'status', 'column', 'ref', 'responsible', 'startDate', 'dueDate', 'title', 'subproject'];
+  const keys = ['type', 'pageId', 'status', 'column', 'ref', 'responsible', 'startDate', 'dueDate', 'title', 'subproject', 'meetingId', 'startsAt'];
   const parts = keys.map((k) => `${k}=${String(a?.[k] ?? '').trim().toLowerCase()}`);
   if (Array.isArray(a?.to)) parts.push(`to=${[...a.to].map((x: unknown) => String(x).toLowerCase()).sort().join(',')}`);
   return parts.join('|');

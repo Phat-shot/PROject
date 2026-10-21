@@ -91,10 +91,18 @@ test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termin
   assert.equal(await t.db.maybeOne(`select 1 from subprojects where name = 'Maler'`), null);
   const run = await t.db.one(`select error from agent_runs where task_id = $1 order by created_at desc limit 1`, [ap.id]);
   assert.match(run.error, /gibt es schon/);
-  assert.match(run.error, /außerhalb deines Bereichs/);
   assert.match(run.error, /Agenten weist nur die Projektleitung zu/);
-  assert.match(run.error, /create_subproject „Maler“: nur als stellvertretende PL/);
   assert.match(run.error, /YYYY-MM-DD/);
+  assert.doesNotMatch(run.error, /außerhalb deines Bereichs|create_subproject/, 'Rollengrenzen sind keine Fehler mehr');
+  // Rollengrenzen (fremder Termin, Teilprojekt) liegen der PL als Freigabe vor; ihr Klick führt mit ihrem Planrecht aus
+  const held = (await t.db.query(`select id, action_class, payload from ai_proposals where task_id = $1 and kind = 'agent_action' and status = 'pending' order by seq`, [ap.id])).rows;
+  const heldDates = held.find((x: any) => x.payload.action.type === 'set_dates');
+  const heldSp = held.find((x: any) => x.payload.action.type === 'create_subproject');
+  assert.equal(heldDates?.action_class, 'foreign'); assert.equal(heldSp?.action_class, 'plan');
+  assert.equal((await t.api(pl).post(`/ai/proposals/${heldDates.id}/approve`, {})).statusCode, 200);
+  assert.equal(String((await t.db.one(`select due_date from tasks where id = $1`, [other.id])).due_date.toISOString().slice(0, 10)), '2026-12-24', 'nach Bestätigung der PL ausgeführt');
+  assert.equal((await t.api(pl).post(`/ai/proposals/${heldSp.id}/reject`, { note: 'Kein Malerteilprojekt' })).statusCode, 200);
+  assert.equal(await t.db.maybeOne(`select 1 from subprojects where name = 'Maler'`), null);
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
   assert.match(log, /Aufgabe angelegt: WEB-\d+ „Leitungen planen“, Termin 2026-11-06/);
   assert.match(log, /Termin vorläufig im Kalender: „Besichtigung Elektriker“ .*verbindlich erst nach Bestätigung/);
@@ -225,6 +233,37 @@ test('Termine: KI trägt nur vorläufig ein, eine Person bestätigt; Ansprechpar
   const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
   assert.match(log, /Mail-Entwurf an elektro@extern\.de wartet auf Freigabe \(nicht gesendet\): „Angebot Elektrik“/);
   assert.match(log, /Mail gesendet an elektro@extern\.de: „Angebot Elektrik 2“/);
+});
+
+test('Termine verschieben, absagen und einladen; Frage mit Frist an ein Mitglied außerhalb der Kette', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id, number from tasks where title = 'Teilprojekt durchplanen'`);
+  // vorläufigen Termin ohne Uhrzeit anlegen (deutsche Spanne), dann verschieben und absagen
+  next = [A({ type: 'create_event', title: 'Vor-Ort-Termin AirGPU', startsAt: '6.–8.11.', location: 'Rechenzentrum' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  let ev = await t.db.one(`select * from meetings where title = 'Vor-Ort-Termin AirGPU'`);
+  assert.equal(ev.tentative, true);
+  assert.equal(new Date(ev.ends_at).getTime() > new Date(ev.starts_at).getTime() + 2 * 86400_000, true, 'über drei Tage');
+  next = [A({ type: 'update_event', meetingId: ev.id, startsAt: '2026-11-09T10:00', endsAt: '2026-11-09T12:00' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  ev = await t.db.one(`select * from meetings where id = $1`, [ev.id]);
+  assert.equal(new Date(ev.starts_at).toISOString(), '2026-11-09T09:00:00.000Z');
+  next = [A({ type: 'cancel_event', meetingId: ev.id, reason: 'Kunde sagt ab' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  assert.equal(await t.db.maybeOne(`select 1 from meetings where id = $1`, [ev.id]), null);
+  const log = (await t.db.query(`select body from task_comments where task_id = $1 order by created_at`, [ap.id])).rows.map((x: any) => x.body).join('\n');
+  assert.match(log, /Termin geändert: „Vor-Ort-Termin AirGPU“/);
+  assert.match(log, /Termin abgesagt: „Vor-Ort-Termin AirGPU“ .* Kunde sagt ab/);
+  // Einladung zu einem bestätigten Termin
+  const confirmed = await t.db.one(`select id from meetings where title = 'Besichtigung Elektriker'`);
+  next = [A({ type: 'send_invite', meetingId: confirmed.id, text: 'Bitte vormerken.' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  assert.ok((await t.db.one(`select invite_sent_at from meetings where id = $1`, [confirmed.id])).invite_sent_at, 'Einladung gesendet');
+  // Frage mit Frist an ein Projektmitglied, das nicht in der Kette steht
+  next = [A({ type: 'ask', text: 'Max, bestätigt der Kunde den Termin bis Freitag?', kind: 'question', to: 'max@demo.local' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
+  const q = await t.db.one(`select addressee_id, remind_at from questions where task_id = $1 and body like 'Max, bestätigt%'`, [ap.id]);
+  assert.equal(q.addressee_id, t.ids.users.max); assert.ok(q.remind_at, 'mit Frist und Nachfassen');
 });
 
 test('Ereignisläufe halten das Tagesbudget ein', async () => {

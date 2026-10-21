@@ -22,6 +22,30 @@ const icsStamp = (d: Date) => d.toISOString().replace(/[-:]/g, '').replace(/\.\d
 const icsEsc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => `\\${c}`);
 
 /** ICS-Einladung (METHOD:REQUEST) zu einer Besprechung; Organisator = Projektkonto oder Ersteller. */
+/**
+ * Einladung per Mail mit ICS (METHOD:REQUEST) über das Projektkonto an alle Teilnehmer; nur bestätigte Termine. Für die Route
+ * und für Agenten (Aktion send_invite, Klasse „Mails nach außen“).
+ */
+export async function sendMeetingInvite(db: any, mail: any, meetingId: string, by: { id: string; orgId: string }, extraText?: string | null): Promise<{ sent: number; mailId: string | null } | { error: string }> {
+  const cur = await db.maybeOne(`select * from meetings where id = $1`, [meetingId]);
+  if (!cur) return { error: 'Besprechung nicht gefunden' };
+  if (cur.tentative) return { error: 'Termin ist vorläufig: erst bestätigen, dann einladen' };
+  const attendees = cur.attendees as MeetingAttendee[];
+  if (!attendees.length) return { error: 'Keine Teilnehmer' };
+  const account = await projectAccount(db, cur.project_id);
+  if (!account) return { error: 'Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekt › Einstellungen › Mail).' };
+  const project = await db.one(`select key, name from projects where id = $1`, [cur.project_id]);
+  const seq = Number((cur.external ?? {}).sequence ?? 0);
+  const rooms = await db.query(`select r.name, r.email, r.kind from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = $1 and r.kind <> 'person' order by r.name`, [cur.id]);
+  const ics = meetingIcs(cur, { email: account.address, name: `${project.key} ${project.name}` }, seq, rooms.rows);
+  const starts = new Date(cur.starts_at);
+  const text = `${extraText?.trim() ? extraText.trim() + '\n\n' : ''}Einladung: ${cur.title}\nTermin: ${fmtDe(starts)} – ${new Date(cur.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}${cur.location ? `\nOrt: ${cur.location}` : ''}${cur.description ? `\n\n${cur.description}` : ''}\n\nProjekt ${project.key} ${project.name}. Der Termin liegt als Kalendereintrag bei.`;
+  const r = await mail.sendFromAccount(account, { to: attendees.map((a) => a.email), subject: `Einladung: ${cur.title} · ${fmtDe(starts)}`, text, userId: by.id, projectId: cur.project_id, attachments: [{ filename: 'einladung.ics', content: Buffer.from(ics, 'utf8'), contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
+  await db.query(`update meetings set invite_sent_at = now(), external = external || $2::jsonb, updated_at = now() where id = $1`, [cur.id, JSON.stringify({ sequence: seq + 1 })]);
+  await audit(db, { orgId: by.orgId, projectId: cur.project_id, userId: by.id, action: 'meeting.invite', objectType: 'meeting', objectId: cur.id, details: { to: attendees.map((a) => a.email) } });
+  return { sent: attendees.length, mailId: (r as any)?.mailId ?? null };
+}
+
 export function meetingIcs(m: { id: string; title: string; starts_at: Date | string; ends_at: Date | string; location: string | null; description: string | null; attendees: MeetingAttendee[]; project_id: string; tentative?: boolean }, organizer: { email: string; name: string }, sequence = 0, rooms: { name: string; email: string | null; kind?: string }[] = []): string {
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//PROject//Besprechung//DE', 'CALSCALE:GREGORIAN', 'METHOD:REQUEST', 'BEGIN:VEVENT',
     `UID:meeting-${m.id}@project`, `DTSTAMP:${icsStamp(new Date())}`, `SEQUENCE:${sequence}`, `DTSTART:${icsStamp(new Date(m.starts_at))}`, `DTEND:${icsStamp(new Date(m.ends_at))}`,
@@ -208,21 +232,9 @@ export async function meetingRoutes(app: FastifyInstance) {
     const cur = await db.maybeOne(`select * from meetings where id = $1`, [req.params.id]);
     if (!cur) throw notFound('Besprechung nicht gefunden');
     await requireProject(db, user, cur.project_id, 'member');
-    if (cur.tentative) throw badRequest('Termin ist vorläufig: erst bestätigen, dann einladen');
-    const attendees = cur.attendees as MeetingAttendee[];
-    if (!attendees.length) throw badRequest('Keine Teilnehmer');
-    const account = await projectAccount(db, cur.project_id);
-    if (!account) throw badRequest('Kein Projektkonto: Einladungen gehen über das Projektkonto (Projekt › Einstellungen › Mail).');
-    const project = await db.one(`select key, name from projects where id = $1`, [cur.project_id]);
-    const seq = Number((cur.external ?? {}).sequence ?? 0);
-    const rooms = await db.query(`select r.name, r.email, r.kind from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = $1 and r.kind <> 'person' order by r.name`, [cur.id]);
-    const ics = meetingIcs(cur, { email: account.address, name: `${project.key} ${project.name}` }, seq, rooms.rows);
-    const starts = new Date(cur.starts_at);
-    const text = `${req.body?.text?.trim() ? req.body.text.trim() + '\n\n' : ''}Einladung: ${cur.title}\nTermin: ${fmtDe(starts)} – ${new Date(cur.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}${cur.location ? `\nOrt: ${cur.location}` : ''}${cur.description ? `\n\n${cur.description}` : ''}\n\nProjekt ${project.key} ${project.name}. Der Termin liegt als Kalendereintrag bei.`;
-    const r = await app.mail.sendFromAccount(account, { to: attendees.map((a) => a.email), subject: `Einladung: ${cur.title} · ${fmtDe(starts)}`, text, userId: user.id, projectId: cur.project_id, attachments: [{ filename: 'einladung.ics', content: Buffer.from(ics, 'utf8'), contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
-    await db.query(`update meetings set invite_sent_at = now(), external = external || $2::jsonb, updated_at = now() where id = $1`, [cur.id, JSON.stringify({ sequence: seq + 1 })]);
-    await audit(db, { orgId: user.orgId, projectId: cur.project_id, userId: user.id, action: 'meeting.invite', objectType: 'meeting', objectId: cur.id, details: { to: attendees.map((a) => a.email) } });
-    return { ok: true, sent: attendees.length, mailId: (r as any)?.mailId ?? null, meeting: mapMeeting(await load(cur.id, user)) };
+    const r = await sendMeetingInvite(db, app.mail, cur.id, { id: user.id, orgId: user.orgId }, req.body?.text);
+    if ('error' in r) throw badRequest(r.error);
+    return { ok: true, sent: r.sent, mailId: r.mailId, meeting: mapMeeting(await load(cur.id, user)) };
   });
 
   app.get<{ Params: { id: string } }>('/meetings/:id/ics', async (req, reply) => {

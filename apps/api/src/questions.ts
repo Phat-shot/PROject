@@ -55,7 +55,14 @@ export async function pickAddressee(db: Db, task: any, asker: Asker, opts: { to?
     if (c) return { userId: c.id, role: c.role === 'pl' || c.role === 'deputy_pl' ? c.role : 'pl', name: c.name };
   }
   if (to === 'tp') { const c = chain.find((x) => x.role === 'subproject_lead'); if (c) return { userId: c.id, role: c.role, name: c.name }; }
-  if (to.includes('@')) { const c = chain.find((x) => x.email.toLowerCase() === to); if (c) return { userId: c.id, role: c.role, name: c.name }; return { error: `${to} steht nicht in der Kette (Auftraggeber, Über-AP, Teilprojekt, PL, Eskalationskontakt)` }; }
+  if (to.includes('@')) {
+    const c = chain.find((x) => x.email.toLowerCase() === to);
+    if (c) return { userId: c.id, role: c.role, name: c.name };
+    // Jedes andere Projektmitglied (Person), das das Teilprojekt des AP sieht: Frage mit Frist und Nachfassen auch an Interne außerhalb der Kette
+    const mem = await db.maybeOne(`select u.id, u.name from project_members m join users u on u.id = m.user_id where m.project_id = $1 and lower(u.email) = $2 and u.kind <> 'agent' and u.active`, [task.project_id, to]);
+    if (mem && (await canSeeSubproject(db, mem.id, task.subproject_id))) return { userId: mem.id, role: 'member', name: mem.name };
+    return { error: `${to} ist kein Projektmitglied, das dieses Arbeitspaket sieht (Externe per mail)` };
+  }
   if (opts.kind === 'decision') { const c = chain.find((x) => ['pl', 'deputy_pl', 'escalation_contact'].includes(x.role)) ?? chain[0]; if (c) return { userId: c.id, role: c.role, name: c.name }; }
   const idx = Math.min(opts.level ?? 0, chain.length);
   const c = chain[idx];

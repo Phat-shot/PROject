@@ -92,8 +92,12 @@ export async function findTaskByRef(db: Db, projectId: string, ref: unknown): Pr
   const v = String(ref ?? '').trim();
   if (!v) return null;
   const sel = `select t.*, c.is_done, (${EFFECTIVE_RESPONSIBLE_SQL}) as eff_responsible from tasks t join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS} where t.project_id = $1 and t.deleted_at is null and t.archived_at is null`;
-  const m = v.match(/^(?:[\p{L}\d]+-)?(\d+)$/u);
-  if (m) return db.maybeOne(`${sel} and t.number = $2`, [projectId, Number(m[1])]);
+  // Mit Kürzel nur im eigenen Projekt: „ABC-12“ trifft nicht WEB-12
+  const m = v.match(/^(?:([\p{L}\d]+)-)?(\d+)$/u);
+  if (m) {
+    if (m[1] && !(await db.maybeOne(`select 1 from projects where id = $1 and upper(key) = upper($2)`, [projectId, m[1]]))) return null;
+    return db.maybeOne(`${sel} and t.number = $2`, [projectId, Number(m[2])]);
+  }
   const rows = await db.query(`${sel} and lower(t.title) = lower($2) limit 2`, [projectId, v.replace(/^„|“$/g, '')]);
   return rows.rows.length === 1 ? rows.rows[0] : null;
 }

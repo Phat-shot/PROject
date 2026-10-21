@@ -77,6 +77,10 @@ export async function decideProposals(db: Db, mail: MailService, fetchFn: typeof
       const gate = await aiConfigFor(db, { userId: agent.id, projectId: task.project_id, feature: 'agent.run', taskId: task.id, budget: false, now });
       if (!gate.cfg) { for (const p of list) { await set(p.id, 'failed', `Agent gesperrt: ${gate.decision.publicReason}`); await log(task.id, x.user.id, `Nicht ausgeführt (${p.payload?.label ?? 'Aktion'}): ${gate.decision.publicReason}`); } continue; }
       const ctx = await loadRunCtx(db, mail, fetchFn, agent, task, m, gate.cfg, 'approved', now);
+      // Bestätigt eine Person mit Planrecht (PL oder „Projektplan ändern“), gilt ihr Planrecht für diese Ausführung: so setzt ein
+      // Klick um, was der Agent als Mitglied nur vorschlagen konnte (Teilprojekt, Arbeitspaket, Termine anderer)
+      const approver = await db.maybeOne(`select role, can_edit_plan from project_members where project_id = $1 and user_id = $2`, [task.project_id, x.user.id]);
+      if (approver && (approver.role === 'pl' || approver.can_edit_plan)) { ctx.canPlan = true; ctx.m = { ...ctx.m, role: 'pl', can_edit_plan: true }; }
       const applied: unknown[] = []; const errors: string[] = []; const approvedNow = new Set<string>();
       for (const p of list) {
         const a = p.payload?.action;
