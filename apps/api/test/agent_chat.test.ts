@@ -173,6 +173,9 @@ test('Kennzahlen-Woche (Europe/Berlin) und claimCheck (deterministisch, nur erst
   assert.equal(claimCheck('Erledigt: WEB-4 ist abgeschlossen. Anna hat die Mail gesendet.', true).replaced.length, 0, 'nicht erste Person');
   assert.equal(claimCheck('Ich habe nichts gesendet, das macht die PL.', true).replaced.length, 0, 'Verneinung');
   assert.equal(claimCheck('Wir haben keine Aufgabe angelegt.', true).replaced.length, 0, 'Verneinung');
+  assert.equal(claimCheck('Philipp, der Termin 6.–8.11. ist bereits angelegt und wartet auf Sven.', false).replaced.length, 1, 'Vollzug ohne Person und ohne Kennung');
+  assert.equal(claimCheck('WEB-12 ist bereits angelegt.', false).replaced.length, 0, 'mit Kennung prüfbar');
+  assert.equal(claimCheck('Der Termin ist bereits angelegt.', false, true).replaced.length, 0, 'mit ausgeführtem Befehl');
   const c2 = claimCheck('Philipp, ich habe den Auftrag für den Termin 6.–8.11. zur Hardwareauslagerung angelegt. Frist bis 24.10. gesetzt.', false);
   assert.deepEqual(c2.replaced, ['Philipp, ich habe den Auftrag für den Termin 6.–8.11. zur Hardwareauslagerung angelegt.'], 'Punkte in Daten trennen keine Sätze');
   assert.equal(c2.text, 'Das konnte ich nicht ausführen: „Philipp, ich habe den Auftrag für den Termin 6.–8.11. zur Hardwareauslagerung angelegt“. Frist bis 24.10. gesetzt.');

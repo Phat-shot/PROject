@@ -93,6 +93,17 @@ test('Auftrag mit geratener Kennung: unbekanntes Über-AP wird eigenes AP, Folge
   const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
   assert.doesNotMatch(reply.body, /konnte ich nicht ausführen/, 'Auftrag ausgeführt: Satz bleibt');
   await t.db.query(`update tasks set archived_at = now() where id = $1`, [task.id]);
+  // Projektkürzel als Teilprojekt: ohne Teilprojekt, ohne Hinweis; unbekanntes Teilprojekt: angelegt mit Hinweis
+  nextCommands = [C({ type: 'order', title: 'Rack-Plan AirGPU', text: 'Racks planen', subproject: 'WEB' })];
+  await say(pl, dmPl, 'Bitte Rack-Plan');
+  const t2 = await t.db.one(`select * from tasks where title = 'Rack-Plan AirGPU'`);
+  assert.equal(t2.subproject_id, null);
+  assert.doesNotMatch((await lastCard(dmPl)).body, /Teilprojekt|Nicht ausgeführt/);
+  nextCommands = [C({ type: 'order', title: 'Kabel AirGPU', text: 'Kabel', subproject: 'Gibtsnicht' })];
+  await say(pl, dmPl, 'Bitte Kabel');
+  assert.ok(await t.db.maybeOne(`select 1 from tasks where title = 'Kabel AirGPU'`));
+  assert.match((await lastCard(dmPl)).body, /✓ Angelegt: .*\(Teilprojekt „Gibtsnicht“ gibt es nicht: ohne Teilprojekt\)/);
+  await t.db.query(`update tasks set archived_at = now() where title in ('Rack-Plan AirGPU', 'Kabel AirGPU')`);
 });
 
 test('Rückgängig innerhalb von 10 Minuten archiviert den Auftrag; danach nicht mehr', async () => {

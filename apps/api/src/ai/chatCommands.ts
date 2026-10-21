@@ -255,8 +255,11 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   if (!m || m.role === 'reader') return { type: 'order', status: 'denied', text: `${project.key}: nur Mitglieder geben Aufträge` };
   const role = await senderRole(db, sender.id, project.id, parent);
   const policy = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: project.id });
-  const subproject = c.subproject ? await db.maybeOne(`select id, name, responsible_user_id from subprojects where project_id = $1 and lower(name) = lower($2)`, [project.id, String(c.subproject).trim()]) : null;
-  if (c.subproject && !subproject) return { type: 'order', status: 'denied', text: `Teilprojekt „${c.subproject}“ gibt es nicht` };
+  // Teilprojekt: nur ein vorhandenes; Projektkürzel oder -name (vom Modell oft dort eingesetzt) heißt „kein Teilprojekt“, ein unbekanntes Name legt im Projekt an
+  const spName = String(c.subproject ?? '').trim();
+  const spIsProject = spName && [project.key, project.name].some((x) => x.toLowerCase() === spName.toLowerCase());
+  const subproject = spName && !spIsProject ? await db.maybeOne(`select id, name, responsible_user_id from subprojects where project_id = $1 and lower(name) = lower($2)`, [project.id, spName]) : null;
+  if (spName && !spIsProject && !subproject) parentNote += ` (Teilprojekt „${spName}“ gibt es nicht: ohne Teilprojekt)`;
   const effRole: SenderRole = role === 'member' && subproject?.responsible_user_id === sender.id ? 'tp' : role;
   const a = allowedCommands(effRole, policy);
   // Zuständige dürfen nur Aufgaben unter dem eigenen AP beauftragen

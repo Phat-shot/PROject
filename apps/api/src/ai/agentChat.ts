@@ -256,7 +256,10 @@ export function claimCheck(reply: string, noted: boolean, acted = false): { text
     new RegExp(`\\b(habe|hab|haben)\\s+(ich|wir)\\b${inner}\\b(${verbs})\\b`, 'i'),
     new RegExp(`\\b(ist|wurde|sind|wurden)\\b${inner}\\bvon (mir|uns)\\b${inner}\\b(${verbs})\\b`, 'i')
   ];
-  const claims = (s: string) => patterns.some((p) => { const m = s.match(p); return Boolean(m) && !/\b(nicht|nichts|nie|kein\w*)\b/i.test(m![0]); });
+  // Vollzug ohne Person („ist bereits angelegt“, „wurde schon gesendet“) ohne Kennung: Behauptung aus früheren Antworten statt aus dem Kontext
+  const passive = acted ? null : new RegExp(`\\b(ist|sind|wurde|wurden)\\b${inner}\\b(bereits|schon)\\b${inner}\\b(angelegt|erstellt|gesendet|geschickt|verschickt|versendet|eingetragen|gebucht)\\b`, 'i');
+  const claims = (s: string) => patterns.some((p) => { const m = s.match(p); return Boolean(m) && !/\b(nicht|nichts|nie|kein\w*)\b/i.test(m![0]); })
+    || Boolean(passive && passive.test(s) && !/\b[A-Z][A-Z0-9]{1,9}-\d+\b/.test(s) && !/\b(nicht|nichts|nie|kein\w*)\b/i.test(s));
   const replaced: string[] = [];
   // Punkte in Zahlen und Daten („6.–8.11.“, „24.10.“) beenden keinen Satz
   const DOT = '\u0000';
