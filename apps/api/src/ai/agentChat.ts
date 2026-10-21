@@ -2,7 +2,7 @@ import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
-import { aiConfigFor, complete, parseJson } from './client.js';
+import { aiConfigFor, completeJson } from './client.js';
 import { aiAllowed } from './policy.js';
 import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
@@ -476,8 +476,8 @@ ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind ==
 ${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
-    const r = await complete(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt, maxTokens: 1200, schema: SCHEMA });
-    const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(r.text);
+    const r = await completeJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt, maxTokens: 1200, schema: SCHEMA });
+    const j = r.json;
     // Befehle: prüfen und ausführen, bevor gepostet wird; die Karte zeigt das tatsächliche Ergebnis
     // Antwort auf eine Frage des Agenten (steht schon im Log eines AP): keinen neuen Auftrag anlegen, den Lauf dort setzt sie um
     const cmds = (Array.isArray(j.commands) ? j.commands : []).filter((c) => c && COMMAND_TYPES.includes(c.type) && !(loggedRefs.length && c.type === 'order')).slice(0, 5);

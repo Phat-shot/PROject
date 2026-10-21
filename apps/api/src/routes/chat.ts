@@ -5,7 +5,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
 import { dmChannel, notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
-import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
+import { chatBusyAgents, queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
 import { answerQuestion, canAnswer, FREE_TEXT_KINDS, isSmallTalk, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
 import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
@@ -129,7 +129,10 @@ export async function chatRoutes(app: FastifyInstance) {
     // Eigene Bewertungen der Agenten-Antworten (Zustand der Daumen)
     const rated = await myRatings(db, user.id, 'chat_message', page.messages.filter((m: any) => m.fromAgent).map((m: any) => m.id));
     for (const m of page.messages as any[]) if (m.fromAgent) m.myRating = rated.get(m.id) ?? null;
-    return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite };
+    // Agenten, deren Antwort noch aussteht (lokale Modelle bei belegter GPU brauchen länger): „denkt nach …“ im Chat
+    const busyIds = chatBusyAgents(channel.id);
+    const busy = busyIds.length ? (await db.query(`select id, name from users where id = any($1::uuid[])`, [busyIds])).rows : [];
+    return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite, busy };
   });
 
   /**

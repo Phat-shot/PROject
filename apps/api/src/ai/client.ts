@@ -271,6 +271,15 @@ async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: Complet
   return { text: r.text, inputTokens: r.inputTokens, outputTokens: r.outputTokens, model: r.model, reasoningChars: r.reasoning.length, retried };
 }
 
+/** Anfrage mit JSON-Antwort; ist die Antwort kein gültiges JSON (kleine Modelle), folgt ein zweiter Versuch mit dem Fehler im Prompt. */
+export async function completeJson<T = any>(cfg: AiConfig, fetchFn: typeof fetch, opts: CompleteOpts): Promise<Completion & { json: T }> {
+  const r = await complete(cfg, fetchFn, opts);
+  try { return { ...r, json: parseJson<T>(r.text) }; } catch (e: any) {
+    const r2 = await complete(cfg, fetchFn, { ...opts, prompt: `${opts.prompt}\n\nDeine vorige Antwort war kein gültiges JSON (${String(e?.message ?? e).slice(0, 120)}). Antworte jetzt ausschließlich mit gültigem JSON nach dem Schema, ohne Text davor oder danach.` });
+    return { ...r2, inputTokens: r.inputTokens + r2.inputTokens, outputTokens: r.outputTokens + r2.outputTokens, json: parseJson<T>(r2.text) };
+  }
+}
+
 /** JSON aus einer Antwort lesen; Codezäune und Text vor/nach dem Objekt werden ignoriert. */
 export function parseJson<T = any>(text: string): T {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);

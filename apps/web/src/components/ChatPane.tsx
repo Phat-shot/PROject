@@ -9,7 +9,7 @@ import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
 export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe */ card?: 'results'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null } | null }
-interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
+interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean; /** Agenten, deren Antwort noch aussteht */ busy?: { id: string; name: string }[] }
 interface Member { userId: string; name: string }
 
 const dayLabel = (iso: string) => new Date(iso).toLocaleDateString('de-DE', { weekday: 'short', day: '2-digit', month: '2-digit', year: 'numeric' });
@@ -31,6 +31,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   // Das Intervall läuft je Kanal einmal; den aktuell offenen Thread liest es über die Referenz statt aus dem Closure
   const threadRef = useRef<string | null>(thread);
   const [canWrite, setCanWrite] = useState(true);
+  const [busy, setBusy] = useState<{ id: string; name: string }[]>([]);
   const [replies, setReplies] = useState<ChatMessage[]>([]);
   const [text, setText] = useState('');
   const [reply, setReply] = useState('');
@@ -47,7 +48,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const load = async () => {
     try {
       const p = await api.get<Page>(base);
-      setMsgs(p.messages); setHasMore(p.hasMore); setCanWrite(p.canWrite !== false); setError(null);
+      setMsgs(p.messages); setHasMore(p.hasMore); setCanWrite(p.canWrite !== false); setBusy(p.busy ?? []); setError(null);
     } catch (e) { setError((e as Error).message); }
   };
   const loadThread = async (id: string) => {
@@ -141,6 +142,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           {hasMore && <div className="center"><button className="btn sm" onClick={() => void older()}>Ältere laden</button></div>}
           {msgs.length === 0 && <div className="muted small center" style={{ padding: 24 }}>{emptyText ?? 'Noch keine Nachrichten.'}</div>}
           {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}</div>; })}
+          {busy.length > 0 && <div className="muted small chat-busy" role="status">{busy.map((b) => b.name).join(', ')} {busy.length > 1 ? 'denken' : 'denkt'} nach … <span title="Lokale Modelle antworten bei belegter GPU später; die Antwort erscheint hier von selbst">(kann dauern)</span></div>}
         </div>
         {canWrite ? <div className="chat-compose">
           <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (Enter sendet, Umschalt+Enter neue Zeile, @Name erwähnt)'} onSubmit={() => void send(text, null)} enterSends />

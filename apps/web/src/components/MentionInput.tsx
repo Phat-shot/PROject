@@ -62,7 +62,7 @@ export function MentionText({ text, members }: { text: string; members: Member[]
   // @Namen hervorheben, Kennungen wie WEB-12 verlinken (öffnet das Arbeitspaket, wenn man es sehen darf)
   const names = [...members].sort((a, b) => b.name.length - a.name.length).map((m) => m.name);
   const nameRe = names.length ? `@(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}])` : null;
-  const re = new RegExp(`${nameRe ? `${nameRe}|` : ''}(?<![\\p{L}\\p{N}-])([A-Z][A-Z0-9]{1,9}-\\d{1,6})(?![\\p{L}\\p{N}])`, 'gu');
+  const re = new RegExp(`${nameRe ? `${nameRe}|` : ''}(?<![\\p{L}\\p{N}-])([A-Z][A-Z0-9]{1,9}-[1-9]\\d{0,5})(?![\\p{L}\\p{N}])`, 'gu');
   const parts: (string | JSX.Element)[] = [];
   let last = 0; let m: RegExpExecArray | null; let i = 0;
   while ((m = re.exec(text))) {

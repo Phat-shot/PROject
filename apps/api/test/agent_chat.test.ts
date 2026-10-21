@@ -123,6 +123,8 @@ test('Nachrichten während eines Chat-Laufs gehen nicht verloren: genau ein Folg
   // Der Lauf hat begonnen und wartet auf das Modell; jetzt kommen zwei weitere Nachrichten
   for (let i = 0; i < 400 && prompts.length === n0; i++) await new Promise((r) => setTimeout(r, 5));
   assert.equal(prompts.length, n0 + 1, 'erster Lauf läuft');
+  const busy = (await t.api(max).get(`/chat/channels/${cid}/messages`)).json().busy;
+  assert.deepEqual(busy.map((b: any) => b.name), ['Chatty'], '„denkt nach …“ solange die Antwort aussteht');
   await t.api(max).post(`/chat/channels/${cid}/messages`, { body: 'Zweite Frage: Wer prüft es?' });
   await t.api(max).post(`/chat/channels/${cid}/messages`, { body: 'Dritte Frage: Bis wann?' });
   gate = null;
@@ -132,6 +134,7 @@ test('Nachrichten während eines Chat-Laufs gehen nicht verloren: genau ein Folg
   assert.ok(!prompts[n0].includes('Zweite Frage'));
   assert.match(prompts[n0 + 1], /Erste Frage[\s\S]*Zweite Frage[\s\S]*Dritte Frage/, 'Folgelauf liest den Verlauf neu');
   assert.equal(await replies(), r0 + 2);
+  assert.deepEqual((await t.api(max).get(`/chat/channels/${cid}/messages`)).json().busy, []);
 });
 
 test('Projektkanal: Erwähnungen in verschiedenen Threads während eines Laufs bekommen je eine Antwort im eigenen Thread', async () => {

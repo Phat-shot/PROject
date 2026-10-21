@@ -70,5 +70,12 @@ export function queueAgentChat(agentId: string, channelId: string, messageId: st
 /** Lauf am Arbeitspaket steht an oder läuft (Anzeige „läuft …“ im Arbeitspaket). */
 export function agentRunActive(taskId: string): boolean { return pending.has(taskId) || waiting.has(taskId); }
 
+/** Agenten, deren Chat-Antwort in diesem Kanal ansteht oder läuft (Anzeige „denkt nach …“). */
+export function chatBusyAgents(channelId: string): string[] {
+  const ids = new Set<string>();
+  for (const k of [...pending.keys(), ...waiting.keys()]) { const p = k.split(':'); if (p[0] === 'chat' && p[2] === channelId) ids.add(p[1]); }
+  return [...ids];
+}
+
 /** Wartet, bis alle Läufe fertig sind, auch solche, die während des Wartens dazukommen (z. B. Agent nach Mail-KI). */
 export async function flushAgentRuns(): Promise<void> { while (pending.size) await Promise.all([...pending.values()]); }

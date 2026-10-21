@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { composeEcho, testApp } from './helpers.js';
 import { runAgents } from '../src/ai/agent.js';
 import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
@@ -314,4 +315,26 @@ test('Kleine Modelle: Beschreibung pflegen, Frage an Externe geht an die Kette, 
   assert.match(q.body, /Eigentlich an kunde@extern\.de gedacht/);
   const ev = await t.db.one(`select starts_at from meetings where title = $1`, [ap.title]);
   assert.equal(new Date(ev.starts_at).getUTCFullYear(), 2026);
+});
+
+test('resolve mit erfundener questionId: genau eine offene Frage wird erledigt, ohne offene Frage kein Fehler; Titel mit eigener Kennung bereinigt', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id from tasks where title = 'Teilprojekt durchplanen'`);
+  await t.db.query(`update questions set status = 'answered' where task_id = $1 and status = 'open'`, [ap.id]);
+  next = [A({ type: 'ask', text: 'Kommt der Kunde am Montag?', kind: 'question' })];
+  await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
+  next = [A({ type: 'resolve', questionId: 'frage-1', text: 'per Mail bestätigt' })];
+  let run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`)).json();
+  assert.equal(run.error, undefined, run.error);
+  assert.equal((await t.db.one(`select count(*)::int as c from questions where task_id = $1 and status = 'open'`, [ap.id])).c, 0);
+  next = [A({ type: 'resolve', questionId: 'frage-2', text: 'x' })];
+  run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`)).json();
+  assert.equal(run.error, undefined, 'nichts offen: kein Fehler');
+  // Migration 066: „WEB-0: …“ verliert die eigene Kennung, fremde Kürzel bleiben
+  await t.db.query(`update tasks set title = 'WEB-0: Termin Hardwareauslagerung' where id = $1`, [ap.id]);
+  const other = await t.db.one(`select id from tasks where id <> $1 and project_id = (select project_id from tasks where id = $1) limit 1`, [ap.id]);
+  await t.db.query(`update tasks set title = 'AGP-3: fremd' where id = $1`, [other.id]);
+  await t.db.query(readFileSync(new URL('../migrations/066_clean_titles.sql', import.meta.url), 'utf8'));
+  assert.equal((await t.db.one(`select title from tasks where id = $1`, [ap.id])).title, 'Termin Hardwareauslagerung');
+  assert.equal((await t.db.one(`select title from tasks where id = $1`, [other.id])).title, 'AGP-3: fremd');
 });

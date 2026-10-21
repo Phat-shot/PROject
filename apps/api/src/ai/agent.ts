@@ -4,7 +4,7 @@ import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
 import { dispatch, dmChannel, notify, systemMessage, usersWithRight } from '../notify.js';
 import { contactChain, dateStr, touchTask } from '../tasks/service.js';
-import { aiConfigFor, complete, parseJson } from './client.js';
+import { aiConfigFor, completeJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
@@ -638,8 +638,11 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         }
       } else if (a.type === 'resolve') {
         // Frage auf anderem Weg erledigt (z. B. Antwort kam per Mail): Status, Meldungen und Thread schließen
-        const q = a.questionId ? await db.maybeOne<QuestionRow>(`select * from questions where id = $1 and task_id = $2 and asked_by = $3 and status = 'open'`, [a.questionId, task.id, agent.id]) : null;
-        if (!q) errors.push('resolve: keine offene eigene Frage mit dieser questionId');
+        // Kleine Modelle erfinden die questionId oft: ohne offene eigene Frage nichts zu tun, bei genau einer gilt diese
+        const open = (await db.query<QuestionRow>(`select * from questions where task_id = $1 and asked_by = $2 and status = 'open' order by created_at`, [task.id, agent.id])).rows;
+        const q = open.find((x) => x.id === a.questionId) ?? (open.length === 1 ? open[0] : null);
+        if (!open.length) applied.push({ type: 'none', reason: 'resolve: keine offene eigene Frage' } as any);
+        else if (!q) errors.push(`resolve: mehrere offene Fragen; questionId aus „Offene Fragen“ angeben (${open.map((x) => x.id).join(', ')})`);
         else { await answerQuestion(db, q, { source: 'mail', userId: null, text: String(a.text ?? a.reason ?? '').trim() || 'auf anderem Weg erledigt', now }); applied.push({ type: 'resolve', questionId: q.id, text: a.text } as any); }
       } else if (a.type === 'refer') {
         // Frage eines Externen außerhalb seiner Aufgabe: an den nächsten Menschen der Kette; der Externe bekommt nur den Verweis
@@ -867,9 +870,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let accesses = 0;
     for (let round = 0; round <= dl.rounds; round++) {
       // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum; gründlich bekommt mehr Platz
-      const r = await complete(cRun, fetchFn, { meta: { feature: 'agent.run', projectId: task.project_id, taskId: task.id }, system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: 2500 + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
+      const r = await completeJson(cRun, fetchFn, { meta: { feature: 'agent.run', projectId: task.project_id, taskId: task.id }, system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: 2500 + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
       inputTokens += r.inputTokens; outputTokens += r.outputTokens; model = r.model;
-      j = parseJson(r.text);
+      j = r.json;
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
       const searches = actions.filter((a) => a.type === 'research');
