@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
 import { Modal, roleLabel, useAsync, useDialog } from '../../../components/ui';
 import { InviteCard } from '../InviteCard';
-import type { Group, ProjectGroup } from '@projekttool/shared';
+import type { AiFeature, Group, ProjectGroup } from '@projekttool/shared';
+import { rightsSummary } from '../../../components/AgentEditor';
 import { useProject, type MemberRow } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
 import { useProjectPolicy } from '../../../lib/useProjectPolicy';
@@ -30,6 +31,9 @@ export function MembersCard() {
   const pid = detail.project.id;
   const policy = useProjectPolicy(detail.project);
   const groups = detail.groups ?? [];
+  // Agenten: LLM und was sie hier dürfen (Rechte vom Verwalter des LLM ohne die Einschränkung der PL); verwaltet unter Einstellungen › KI
+  const agentInfo = useData<{ inProject: { id: string; profileName: string | null; profileProjectId: string | null; rights: AiFeature[]; deny: AiFeature[]; usable: boolean; reason: string | null }[] }>(detail.members.some((m) => m.kind === 'agent') ? `/projects/${pid}/agents` : null, [detail.members.length]);
+  const agentOf = (id: string) => agentInfo.data?.inProject.find((a) => a.id === id);
   const groupsOf = (userId: string) => groups.filter((g) => g.memberIds.includes(userId));
   const groupLabel = (g: ProjectGroup) => `${g.name} (${roleLabel[g.role]})`;
   const remove = (m: MemberRow) => {
@@ -47,13 +51,13 @@ export function MembersCard() {
           const via = groupsOf(m.userId);
           return (
             <tr key={m.userId}>
-              <td>{m.name}<div className="muted small">{m.email}</div></td>
+              <td>{m.name}<div className="muted small">{m.kind === 'agent' ? <>KI-Agent · {agentOf(m.userId)?.profileName ?? 'kein LLM'}{agentOf(m.userId)?.profileProjectId ? ' (eigenes LLM)' : ''}</> : m.email}</div></td>
               <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.userId === detail.project.agentUserId ? ' (Projektagent)' : m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
-              <td className="small muted">{m.role === 'pl' ? 'alle' : rightsText(m)}</td>
+              <td className="small muted">{m.kind === 'agent' ? <AgentRights a={agentOf(m.userId)} /> : m.role === 'pl' ? 'alle' : rightsText(m)}</td>
               <td className="small">{m.origin === 'group'
                 ? <span title="Mitglied über Gruppen des Projekts: höchste Rolle, Einzelrechte addiert">über {via.map((g) => g.name).join(', ') || 'Gruppe'}</span>
                 : <>direkt{via.length > 0 && <div className="muted">überschreibt {via.map(groupLabel).join(', ')}{isPl && !primaryRow && <> · <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/projects/${pid}/members/${m.userId}`); await reload(); })}>Gruppenrechte übernehmen</button></>}</div>}</>}</td>
-              <td className="nowrap">{isPl && m.kind === 'agent' ? <Link className="btn sm link" to={`/projekte/${pid}/einstellungen/ki`} title="Agenten verwaltest du unter Einstellungen › KI">KI</Link> : null}{isPl && m.kind !== 'agent' && <>{(isPrimary || !primaryRow) && <button className="btn sm link" title={m.origin === 'group' ? 'Als Direkteintrag festlegen (überschreibt die Gruppen)' : undefined} onClick={() => setEdit(m)}>Rolle</button>}{!primaryRow && m.origin !== 'group' && <button className="btn sm link" onClick={() => remove(m)}>Entfernen</button>}</>}</td>
+              <td className="nowrap">{isPl && m.kind === 'agent' ? <Link className="btn sm link" to={`/projekte/${pid}/einstellungen/ki`} title="Einladen, einschränken, entfernen: Einstellungen › KI">Verwalten</Link> : null}{isPl && m.kind !== 'agent' && <>{(isPrimary || !primaryRow) && <button className="btn sm link" title={m.origin === 'group' ? 'Als Direkteintrag festlegen (überschreibt die Gruppen)' : undefined} onClick={() => setEdit(m)}>Rolle</button>}{!primaryRow && m.origin !== 'group' && <button className="btn sm link" onClick={() => remove(m)}>Entfernen</button>}</>}</td>
             </tr>
           );
         })}
@@ -78,6 +82,12 @@ export function MembersCard() {
       {group && <GroupForm group={group === 'new' ? null : group} onClose={() => setGroup(null)} />}
     </div>
   );
+}
+
+/** Was ein Agent hier darf: Kurztext der Rechte, abgeschaltete und „läuft nicht“ mit Grund. */
+function AgentRights({ a }: { a?: { rights: AiFeature[]; deny: AiFeature[]; usable: boolean; reason: string | null } }) {
+  if (!a) return <>…</>;
+  return <>{rightsSummary(a.rights.filter((r) => !a.deny.includes(r)))}{a.deny.length > 0 && <div>{a.deny.length} im Projekt abgeschaltet</div>}{!a.usable && <div><span className="badge warn">läuft nicht</span> {a.reason}</div>}</>;
 }
 
 /** Gruppe ins Projekt aufnehmen oder ihre Rechte ändern (Rolle Leser oder Mitglied, Einzelrechte nur für Mitglieder). */

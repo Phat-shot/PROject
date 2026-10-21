@@ -19,6 +19,8 @@ describe('Rechte eines Agenten', () => {
   });
   it('Kurztext: Standard ohne Online-Recherche', () => {
     expect(rightsSummary(DEFAULT_AGENT_RIGHTS)).toBe('alle außer Online-Recherche');
+    expect(rightsSummary(['assist.ask', 'assist.summarize', 'agent.chat', 'agent.run'])).toBe('Assistenz (2 von 5), Arbeit (2 von 4)');
+    expect(rightsSummary([])).toBe('keine Rechte');
   });
 });
 

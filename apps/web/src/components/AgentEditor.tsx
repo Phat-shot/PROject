@@ -27,14 +27,15 @@ export function RightsEditor({ value, onChange, granted, disabled = false }: { v
   );
 }
 
-/** Kurztext der Rechte: „alle“, „alle außer …“ oder die Liste. */
+/** Kurztext der Rechte: „alle“, „alle außer …“ (bis vier), sonst je Bereich „Assistenz“ bzw. „Arbeit (2 von 4)“. */
 export function rightsSummary(r: AiFeature[] | undefined): string {
   const v = r ?? DEFAULT_AGENT_RIGHTS;
   const all = AI_FEATURES.map((f) => f.key);
   const missing = all.filter((k) => !v.includes(k));
   if (!missing.length) return 'alle Rechte';
   if (missing.length <= 4) return `alle außer ${missing.map((k) => AI_FEATURES.find((f) => f.key === k)?.label ?? k).join(', ')}`;
-  return `${v.length} von ${all.length} Rechten`;
+  const parts = AI_CATEGORIES.map((c) => { const keys = AI_FEATURES.filter((f) => f.category === c.key).map((f) => f.key); const n = keys.filter((k) => v.includes(k)).length; return n === 0 ? null : n === keys.length ? c.label : `${c.label} (${n} von ${keys.length})`; }).filter(Boolean);
+  return parts.length ? parts.join(', ') : 'keine Rechte';
 }
 
 /** Einsatz eines LLM (alle, ausgewählte, keins) bzw. eines Agenten (alle, ausgewählte) in Projekten. */

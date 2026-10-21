@@ -146,7 +146,7 @@ test('KI: Org-Admin legt LLM und Agent an, PL lädt ihn ein und schränkt ein', 
   await page.getByRole('combobox', { name: 'Agent', exact: true }).selectOption({ label: `${name} · LLM ${name}` });
   await page.getByRole('button', { name: 'Einladen', exact: true }).click();
   const row = page.locator('tr', { hasText: name });
-  await expect(row).toContainText('4 von');
+  await expect(row).toContainText('Assistenz (2 von 5), Arbeit (2 von 4)');
   await row.getByRole('button', { name: 'Einschränken' }).click();
   await expect(page.getByLabel('Online-Recherche (nicht erteilt)')).toBeDisabled();
   await page.getByLabel('Mail zusammenfassen').uncheck();
