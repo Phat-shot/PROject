@@ -230,6 +230,30 @@ export interface AiCapabilities {
   assistAgentId: string | null;
 }
 
+/**
+ * KI-Feedback: ausdrücklich (Daumen mit Kommentar) oder automatisch aus Entscheidungen und Prüfungen des Systems. Gesichert,
+ * damit Prompt, KI-Sheet und Agenten laufend besser werden; lesen und exportieren nur die KI-Verwaltung.
+ */
+export const AI_FEEDBACK_KINDS = [
+  { key: 'rating', label: 'Bewertung' },
+  { key: 'proposal_rejected', label: 'Vorschlag abgelehnt' },
+  { key: 'proposal_edited', label: 'Vorschlag bearbeitet übernommen' },
+  { key: 'action_rejected', label: 'Angehaltene Aktion abgelehnt' },
+  { key: 'mail_suggestion_rejected', label: 'Mail-Vorschlag verworfen' },
+  { key: 'draft_rejected', label: 'Mail-Entwurf abgelehnt' },
+  { key: 'draft_edited', label: 'Mail-Entwurf bearbeitet' },
+  { key: 'claim_replaced', label: 'Behauptung ersetzt' },
+  { key: 'command_failed', label: 'Befehl nicht ausgeführt' },
+  { key: 'run_error', label: 'Lauf mit Fehler' }
+] as const;
+export type AiFeedbackKind = (typeof AI_FEEDBACK_KINDS)[number]['key'];
+export interface AiFeedbackEntry {
+  id: string; kind: AiFeedbackKind; rating: 1 | -1 | null; comment: string | null; sourceType: string; sourceId: string;
+  agent: { id: string; name: string } | null; user: { id: string; name: string } | null; project: string | null;
+  /** Ausschnitt: input (worauf der Agent reagierte), output (was er lieferte), before/after (Bearbeitung), reason, detail */
+  context: Record<string, unknown>; createdAt: string; updatedAt: string;
+}
+
 export type AiProposalKind = 'task_update' | 'page_append' | 'agent_action';
 export interface AiProposal {
   id: string;
@@ -1110,4 +1134,4 @@ export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label:
 export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** bei „alle“: auch in persönlichen Projekten (sonst dort nur per Auswahl) */ personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
-export interface AgentRun { id: string; agentId: string; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
+export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }

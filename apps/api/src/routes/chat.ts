@@ -8,6 +8,7 @@ import { extractMentions } from '../tasks/mentions.js';
 import { queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
 import { answerQuestion, canAnswer, FREE_TEXT_KINDS, isSmallTalk, mapQuestion, matchQuestion, QUESTION_SELECT } from '../questions.js';
+import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
 
 /**
  * Chat: ein Kanal je Projekt (Nachrichten, Antworten als Thread, @Erwähnungen) und Direktnachrichten
@@ -24,9 +25,10 @@ export async function chatRoutes(app: FastifyInstance) {
   const mapMessage = (r: any): ChatMessage => ({
     id: r.id, channelId: r.channel_id, userId: r.user_id ?? null, userName: r.user_name ?? (r.kind === 'system' ? 'System' : '–'), threadId: r.thread_id, body: r.deleted_at ? '' : r.body,
     mentions: typeof r.mentions === 'string' ? JSON.parse(r.mentions) : r.mentions ?? [], replyCount: Number(r.reply_count ?? 0), lastReplyAt: r.last_reply_at ?? null,
-    createdAt: r.created_at, editedAt: r.edited_at ?? null, deleted: Boolean(r.deleted_at), kind: r.kind === 'system' ? 'system' : 'user', meta: (typeof r.meta === 'string' ? JSON.parse(r.meta) : r.meta) ?? null
+    createdAt: r.created_at, editedAt: r.edited_at ?? null, deleted: Boolean(r.deleted_at), kind: r.kind === 'system' ? 'system' : 'user', meta: (typeof r.meta === 'string' ? JSON.parse(r.meta) : r.meta) ?? null,
+    ...(r.user_kind === 'agent' && r.kind !== 'system' ? { fromAgent: true } : {})
   });
-  const MSG_SELECT = `select m.*, u.name as user_name,
+  const MSG_SELECT = `select m.*, u.name as user_name, u.kind as user_kind,
       (select count(*)::int from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as reply_count,
       (select max(r.created_at) from chat_messages r where r.thread_id = m.id and r.deleted_at is null) as last_reply_at
     from chat_messages m left join users u on u.id = m.user_id`;
@@ -123,7 +125,28 @@ export async function chatRoutes(app: FastifyInstance) {
     const page = await listMessages(channel.id, { threadId: req.query.thread ?? null, before: req.query.before ?? null });
     if (!req.query.before && !req.query.thread) await markRead(channel.id, user.id);
     if (req.query.thread) await markThreadRead(req.query.thread, user.id);
+    // Eigene Bewertungen der Agenten-Antworten (Zustand der Daumen)
+    const rated = await myRatings(db, user.id, 'chat_message', page.messages.filter((m: any) => m.fromAgent).map((m: any) => m.id));
+    for (const m of page.messages as any[]) if (m.fromAgent) m.myRating = rated.get(m.id) ?? null;
     return { channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, ...page, canWrite };
+  });
+
+  /**
+   * Antwort eines Agenten bewerten (👍 1, 👎 -1, 0 = zurücknehmen), optional mit Kommentar. Gesichert mit der Nachricht der Person
+   * davor, damit die KI-Verwaltung sieht, worauf der Agent geantwortet hat (KI-Feedback).
+   */
+  app.post<{ Params: { mid: string }; Body: { rating: 1 | -1 | 0; comment?: string | null } }>('/chat/messages/:mid/rating', async (req) => {
+    const user = requireUser(req);
+    const m = await db.maybeOne(`${MSG_SELECT} where m.id = $1 and m.deleted_at is null`, [req.params.mid]);
+    if (!m || m.user_kind !== 'agent' || m.kind === 'system') throw notFound('Antwort eines Agenten nicht gefunden');
+    const { channel } = await channelAccess(user, m.channel_id);
+    const rating = Number(req.body?.rating);
+    if (![1, -1, 0].includes(rating)) throw badRequest('rating: 1, -1 oder 0');
+    if (rating === 0) { await clearRating(db, user.id, 'chat_message', m.id); return { rating: null }; }
+    const prev = await db.maybeOne(`select body from chat_messages where channel_id = $1 and thread_id is not distinct from $2 and created_at < $3 and user_id <> $4 and kind = 'user' and deleted_at is null order by created_at desc limit 1`, [m.channel_id, m.thread_id, m.created_at, m.user_id]);
+    const meta = (typeof m.meta === 'string' ? JSON.parse(m.meta) : m.meta) ?? {};
+    await recordFeedback(db, { orgId: user.orgId, projectId: channel.project_id ?? (typeof meta.projectId === 'string' ? meta.projectId : null), agentId: m.user_id, userId: user.id, kind: 'rating', rating: rating as 1 | -1, comment: req.body?.comment ?? null, sourceType: 'chat_message', sourceId: m.id, context: { input: prev?.body, output: m.body } });
+    return { rating };
   });
 
   // Einzelne Nachricht mit Kanal, Thread-Wurzel und Fragestatus (Deep-Link aus einer Meldung)

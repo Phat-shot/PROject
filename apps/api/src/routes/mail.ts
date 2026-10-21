@@ -24,6 +24,7 @@ import { checkHint } from '../outbound.js';
 import { newShareToken } from '../docs/share.js';
 import { pagePdf, storePagePdf } from '../docs/layout.js';
 import { projectPolicy, SQL } from '../projectPolicy.js';
+import { recordFeedback } from '../ai/feedback.js';
 
 function mapAccount(r: any): MailAccount {
   return {
@@ -1131,6 +1132,11 @@ export async function mailRoutes(app: FastifyInstance) {
     const m = await requireProject(db, user, d.project_id, 'member');
     if (!(await mayDecideDraft(d, user, m))) throw forbidden();
     const b = req.body ?? {};
+    // Entwurf eines Agenten, von einer Person geändert: vorher (Agent) und nachher (Person) sichern
+    if (d.user_id !== user.id && ((b.body !== undefined && b.body !== d.body) || (b.subject !== undefined && b.subject !== d.subject) || b.to || b.cc)) {
+      const author = await db.maybeOne(`select 1 from users where id = $1 and kind = 'agent'`, [d.user_id]);
+      if (author) await recordFeedback(db, { orgId: user.orgId, projectId: d.project_id, agentId: d.user_id, userId: user.id, kind: 'draft_edited', sourceType: 'mail_draft', sourceId: d.id, context: { before: { to: d.to_addrs, subject: d.subject, body: d.body }, after: { to: b.to ?? d.to_addrs, subject: b.subject ?? d.subject, body: b.body ?? d.body } } });
+    }
     await db.query(
       `update mail_drafts set to_addrs = coalesce($2::jsonb, to_addrs), cc_addrs = coalesce($3::jsonb, cc_addrs), subject = coalesce($4, subject), body = coalesce($5, body), updated_at = now() where id = $1`,
       [d.id, b.to ? JSON.stringify(b.to) : null, b.cc ? JSON.stringify(b.cc) : null, b.subject ?? null, b.body ?? null]
@@ -1173,6 +1179,7 @@ export async function mailRoutes(app: FastifyInstance) {
     // Entwurf eines Agenten abgelehnt: steht im Log des Arbeitspakets, der Agent läuft daraufhin erneut
     const author = d.user_id !== user.id && d.status !== 'sent' && d.task_id ? await db.maybeOne(`select name from users where id = $1 and kind = 'agent'`, [d.user_id]) : null;
     if (author) {
+      await recordFeedback(db, { orgId: user.orgId, projectId: d.project_id, agentId: d.user_id, userId: user.id, kind: 'draft_rejected', sourceType: 'mail_draft', sourceId: d.id, context: { output: { to: d.to_addrs, subject: d.subject, body: d.body } } });
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [d.task_id, user.id, `Mail-Entwurf von ${author.name} an ${(d.to_addrs ?? []).join(', ')} abgelehnt (nicht gesendet): „${d.subject}“`]);
       queueAgentRun(d.task_id, 'rejected');
     }
@@ -1229,6 +1236,7 @@ export async function mailRoutes(app: FastifyInstance) {
       await db.query(`delete from mail_drafts where id = $1`, [d.id]);
       await audit(db, { orgId: user.orgId, projectId: c.project_id, userId: user.id, action: 'ai.outbound', objectType: 'mail_draft', objectId: d.id, details: { checkId: c.id, decision: 'block', subject: d.subject } });
       await log(`Außenprüfung: Mail${author?.kind === 'agent' ? ` von ${author.name}` : ''} an ${to} abgelehnt (nicht gesendet): „${d.subject}“`);
+      if (author?.kind === 'agent') await recordFeedback(db, { orgId: user.orgId, projectId: c.project_id, agentId: d.user_id, userId: user.id, kind: 'draft_rejected', sourceType: 'mail_draft', sourceId: d.id, context: { detail: 'Außenprüfung', output: { to: d.to_addrs, subject: d.subject, body: d.body }, findings: c.findings } });
       if (author?.kind === 'agent' && d.task_id) queueAgentRun(d.task_id, 'rejected');
       return { ok: true };
     }
@@ -1238,6 +1246,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (d.page_id && (await db.maybeOne(`select status from doc_pages where id = $1 and deleted_at is null`, [d.page_id]))?.status !== 'final') throw badRequest('Die Seite des PDF-Anhangs ist nicht mehr final: Seite final setzen oder Entwurf ablehnen');
     if (b.action === 'edit') {
       if (!String(b.subject ?? d.subject).trim()) throw badRequest('Betreff erforderlich');
+      if (author?.kind === 'agent' && ((b.body ?? d.body) !== d.body || (b.subject?.trim() || d.subject) !== d.subject)) await recordFeedback(db, { orgId: user.orgId, projectId: c.project_id, agentId: d.user_id, userId: user.id, kind: 'draft_edited', sourceType: 'mail_draft', sourceId: d.id, context: { detail: 'Außenprüfung', before: { subject: d.subject, body: d.body }, after: { subject: b.subject?.trim() || d.subject, body: b.body ?? d.body }, findings: c.findings } });
       await db.query(`update mail_drafts set subject = coalesce($2, subject), body = coalesce($3, body), updated_at = now() where id = $1`, [d.id, b.subject?.trim() || null, b.body ?? null]);
     }
     // Seite in der Außenprüfung freigeben: Lesefreigabe für die externen Empfänger, danach Teil ihres Außenkontexts

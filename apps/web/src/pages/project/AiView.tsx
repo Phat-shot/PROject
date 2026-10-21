@@ -6,6 +6,7 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { aiBlocked } from '../../lib/useAi';
 import { useAssistAgent } from '../../components/AssistAgent';
+import { Thumbs, useRating } from '../../components/Rating';
 import { PromptModal, useAsync } from '../../components/ui';
 import { classLabel } from '../../components/AgentPolicy';
 import { useProject } from '../ProjectPage';
@@ -36,6 +37,8 @@ export function AiView() {
   const mailAi = useData<{ runs: MailAiRun[] }>(`/projects/${pid}/mail-ai`);
   const { busy, error, run } = useAsync();
   const nav = useNavigate();
+  // KI-Feedback: Läufe bewerten
+  const rating = useRating(async (id, v, comment) => { await api.post(`/agent-runs/${id}/rating`, { rating: v, comment: comment || null }); await runs.reload(); });
   const noAgent = Boolean(caps && !caps.killswitch && caps.agents.length === 0);
   const decide = (p: AiProposal, ok: boolean) => run(async () => {
     if (ok) {
@@ -49,6 +52,7 @@ export function AiView() {
   return (
     <div className="content">
       {error && <div className="error mb">{error}</div>}
+      {rating.modal}
       {caps?.killswitch && <div className="notice danger mb"><strong>KI im Mandanten abgeschaltet (Notaus).</strong> Keine KI-Funktion und keine Agentenläufe, bis der Org-Admin sie unter Verwaltung › KI wieder einschaltet.</div>}
       {noAgent && <div className="notice mb">Kein Agent im Projekt: KI-Funktionen sind aus. {isPl ? <Link to={`${base}/einstellungen/ki`}>Einstellungen › KI: Agent einladen</Link> : 'Die PL lädt unter Einstellungen › KI einen Agenten ein.'}</div>}
       {(mailAi.data?.runs.length ?? 0) > 0 && <div className="card mb">
@@ -103,7 +107,7 @@ export function AiView() {
         {runs.data && runs.data.runs.length === 0 && <div className="empty">Noch keine Läufe. Einen Agenten unter Einstellungen › KI einladen und ihm ein Arbeitspaket zuweisen.</div>}
         {(runs.data?.runs ?? []).slice(0, 40).map((r) => (
           <div key={r.id} className={`ai-proposal ${r.status === 'error' ? 'rejected' : ''}`}>
-            <div className="row between"><div><span className="badge">{r.agentName}</span> <button className="btn sm link" onClick={() => r.taskId && openTask(r.taskId)}>{r.taskNumber ? `${detail.project.key}-${r.taskNumber} ` : ''}{r.taskTitle ?? (r.trigger === 'chat' ? 'Chat im Projektkanal' : r.scope === 'project' ? 'Projektdurchlauf' : '–')}</button> {r.scope === 'project' && <span className="badge" title="Lauf über das ganze Projekt ohne Arbeitspaket (Reichweite „ganzes Projekt“)">Projektdurchlauf</span>} <span className="muted small">· Anlass {r.trigger}</span></div><span className="muted small">{fmtDateTime(r.createdAt)} · {r.inputTokens + r.outputTokens} Token{(r.cost ?? 1) > 1 && <span title="Denktiefe gründlich: zählt doppelt im Tagesbudget"> · gründlich (×{r.cost})</span>}{r.depth === 'quick' && <span title="Denktiefe schnell: eine Leserunde, knapper Kontext"> · schnell</span>}{r.webSearches ? ` · ${r.webSearches} Suche${r.webSearches === 1 ? '' : 'n'}` : ''}{r.contextStats && <span title={`Kontext: ${r.contextStats.after} von höchstens ${r.contextStats.limit} Token (vorher ${r.contextStats.before})${Object.keys(r.contextStats.trimmed ?? {}).length ? `; gekürzt: ${Object.keys(r.contextStats.trimmed).join(', ')}` : ''}`}> · Kontext {r.contextStats.after}/{r.contextStats.limit}{Object.keys(r.contextStats.trimmed ?? {}).length ? ' ✂' : ''}</span>} {r.status === 'error' && <span className="badge danger">Fehler</span>}{r.status === 'skipped' && <span className="badge warn" title="Kein LLM-Aufruf, zählt nicht gegen das Tagesbudget">übersprungen</span>}</span></div>
+            <div className="row between"><div><span className="badge">{r.agentName}</span> <button className="btn sm link" onClick={() => r.taskId && openTask(r.taskId)}>{r.taskNumber ? `${detail.project.key}-${r.taskNumber} ` : ''}{r.taskTitle ?? (r.trigger === 'chat' ? 'Chat im Projektkanal' : r.scope === 'project' ? 'Projektdurchlauf' : '–')}</button> {r.scope === 'project' && <span className="badge" title="Lauf über das ganze Projekt ohne Arbeitspaket (Reichweite „ganzes Projekt“)">Projektdurchlauf</span>} <span className="muted small">· Anlass {r.trigger}</span></div><span className="muted small">{fmtDateTime(r.createdAt)} · {r.inputTokens + r.outputTokens} Token{(r.cost ?? 1) > 1 && <span title="Denktiefe gründlich: zählt doppelt im Tagesbudget"> · gründlich (×{r.cost})</span>}{r.depth === 'quick' && <span title="Denktiefe schnell: eine Leserunde, knapper Kontext"> · schnell</span>}{r.webSearches ? ` · ${r.webSearches} Suche${r.webSearches === 1 ? '' : 'n'}` : ''}{r.contextStats && <span title={`Kontext: ${r.contextStats.after} von höchstens ${r.contextStats.limit} Token (vorher ${r.contextStats.before})${Object.keys(r.contextStats.trimmed ?? {}).length ? `; gekürzt: ${Object.keys(r.contextStats.trimmed).join(', ')}` : ''}`}> · Kontext {r.contextStats.after}/{r.contextStats.limit}{Object.keys(r.contextStats.trimmed ?? {}).length ? ' ✂' : ''}</span>} {r.status === 'error' && <span className="badge danger">Fehler</span>}{r.status === 'skipped' && <span className="badge warn" title="Kein LLM-Aufruf, zählt nicht gegen das Tagesbudget">übersprungen</span>}{r.status !== 'skipped' && <Thumbs value={r.myRating} onRate={(v) => rating.rate(r.id, r.myRating, v)} />}</span></div>
             {r.reasoning && <div className="small mt" style={{ whiteSpace: 'pre-wrap' }}>{r.reasoning}</div>}
             {r.error && <div className={`${r.status === 'skipped' ? 'muted' : 'error'} small mt`}>{r.error}</div>}
             {r.proposed && r.status === 'error' && <details className="small mt"><summary className="muted">Rohantwort des Modells</summary><pre style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{JSON.stringify(r.proposed, null, 1)}</pre></details>}

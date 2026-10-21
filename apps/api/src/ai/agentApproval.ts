@@ -10,6 +10,7 @@ import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.
 import { aiConfigFor } from './client.js';
 import { applyAgentActions, baseOf, gateAction, loadRunCtx, loadTaskForAgent } from './agent.js';
 import { canDecideClass } from './agentPolicy.js';
+import { recordFeedback } from './feedback.js';
 
 /**
  * Bestätigung angehaltener Agentenaktionen (Konzept 6.5). Entscheiden darf die PL, wer „Freigeben“ und das Recht der Klasse hat
@@ -62,6 +63,7 @@ export async function decideProposals(db: Db, mail: MailService, fetchFn: typeof
       const deps = await db.query<ProposalRow>(`select * from ai_proposals where depends_on = $1 and status = 'pending'`, [p.id]);
       for (const d of deps.rows) { await set(d.id, 'rejected', 'Voraussetzung abgelehnt'); await log(d.task_id, x.user.id, `Entfällt mit der Ablehnung: ${d.payload?.label ?? 'Aktion'}`); }
       await audit(db, { orgId: p.org_id, projectId: p.project_id, userId: x.user.id, action: 'agent.action.rejected', objectType: 'ai_proposal', objectId: p.id, details: { reason, label: p.payload?.label } });
+      await recordFeedback(db, { orgId: p.org_id, projectId: p.project_id, agentId: p.created_by ?? null, userId: x.user.id, kind: 'action_rejected', comment: reason, sourceType: 'ai_proposal', sourceId: p.id, context: { detail: p.payload?.label, output: p.payload?.action, reason, runId: p.agent_run_id } });
     }
   } else {
     // Je Arbeitspaket ein Kontext (Rechte des Agenten jetzt)

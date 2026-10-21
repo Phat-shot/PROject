@@ -138,6 +138,7 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 - **Fehler im Lauf** (fehlendes Recht, Konflikt, KI-Dienst): Direktnachricht des Agenten an den Ansprechpartner mit Link zum Arbeitspaket; dieselbe Störung nur einmal.
 - **Bestätigungskarten im Chat** nur bei Bedarf (abgelehnt, angehalten, Auftrag mit Rückgängig, Bestätigung); „auch für Kleinigkeiten“ in den Benutzereinstellungen.
 - **Audit-Log** (Verwaltung): Läufe, Aktionen, Policy-Änderungen, Außenprüfungen, Buchungen.
+- **Feedback** (Verwaltung › KI › Feedback zu den Agenten, nur KI-Verwaltung): 👍/👎 an jeder Chat-Antwort eines Agenten und an jedem Lauf (Projekt › KI), bei 👎 mit optionalem Kommentar; erneuter Klick nimmt zurück. Automatisch gesichert werden Ablehnungen mit Grund (Vorschläge, angehaltene Aktionen, Mail-Vorschläge, Mail-Entwürfe), vor dem Übernehmen geänderte Vorschläge und Entwürfe (vorher/nachher), ersetzte Behauptungen, nicht ausgeführte Befehle und Fehler im Lauf, jeweils mit Anfrage und Antwort. Filter nach Art, Agent, Bewertung und Zeitraum; Export als JSONL oder CSV (steht im Audit). Das Feedback ändert den Agenten nicht von selbst: Es dient dazu, Prompt, KI-Sheet und Agenten gezielt zu verbessern.
 
 ## 9. Häufige Fragen
 

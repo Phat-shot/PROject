@@ -16,6 +16,7 @@ import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands,
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
 import { webAvailable } from './web.js';
+import { recordFeedback } from './feedback.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -285,8 +286,9 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const threadId: string | null = channel.kind === 'project' ? msg.thread_id ?? msg.id : null;
 
   /** Antwort im Chat; die Meldung an den Absender trägt note statt des Texts (volle Begründung, die der Kanal nicht zeigt). */
-  const post = async (body: string, note = body) => {
-    await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body) values ($1,$2,$3,$4)`, [channel.id, agent.id, threadId, body.slice(0, 8000)]);
+  // meta.projectId: Thema der Antwort (eindeutiges Projekt), damit Bewertungen in Direktnachrichten einem Projekt zugeordnet sind
+  const post = async (body: string, note = body, meta: { projectId: string } | null = null) => {
+    await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body, meta) values ($1,$2,$3,$4,$5)`, [channel.id, agent.id, threadId, body.slice(0, 8000), meta ? JSON.stringify(meta) : null]);
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channel.id, agent.id]);
     const link = channel.kind === 'project' ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
     await notify(db, { userId: msg.user_id, projectId: channel.project_id ?? null, type: channel.kind === 'project' ? 'chat.reply' : 'chat.dm', title: `${channel.kind === 'project' ? `Antwort im Chat ${project.key}` : 'Nachricht'} von ${agent.name}`, body: cut(note, note === body ? 160 : 400), link, ref: threadId ? { type: 'chat_thread', id: threadId } : { type: 'chat_channel', id: channel.id }, actorId: agent.id, chatted: true, dedupeKey: null });
@@ -443,11 +445,15 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
     }
     // claimCheck: Behauptungen ohne ausgeführte Aktion ersetzt das System; Kennungen ohne Freigabe bekommen die feste Absage voran
     const checked = claimCheck(String(j.reply ?? '').trim() || 'Dazu kann ich gerade nichts sagen.', notes.length > 0 || notedCmd, acted);
+    // Feedback sichern: ersetzte Behauptungen und nicht ausgeführte Befehle samt Nachricht der Person
+    const fbBase = { orgId: agent.org_id, projectId: scope.projectIds[0] ?? channel.project_id ?? null, agentId: agent.id, userId: msg.user_id, sourceType: 'chat_message', sourceId: msg.id };
+    if (checked.replaced.length) await recordFeedback(db, { ...fbBase, kind: 'claim_replaced', context: { input: msg.body, output: j.reply, replaced: checked.replaced, results } });
+    for (const [i, x] of results.entries()) if (x.status === 'denied') await recordFeedback(db, { ...fbBase, sourceId: `${msg.id}#${i}`, kind: 'command_failed', context: { input: msg.body, output: j.reply, command: cmds.find((c) => c.type === x.type), reason: x.text } });
     // Bezugszeile setzt das System: nur bei einem Thema aus dem Verlauf und nur, wenn die Antwort es betrifft (onTopic; fehlt das Feld, gilt ja)
     const onTopic = (j as any).onTopic !== false && !small;
     const refLine = scope.how === 'history' && onTopic && scope.refs[0] && !/^Zu\s/.test(checked.text) ? `Zu ${scope.refs[0]}: ` : '';
     const reply = `${scope.hidden.length ? `Zu ${scope.hidden.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}`;
-    await post(reply);
+    await post(reply, reply, scope.projectIds.length === 1 ? { projectId: scope.projectIds[0] } : null);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
       queueAgentRun(n.taskId, 'comment');
@@ -463,6 +469,7 @@ Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   } catch (e: any) {
     const err = String(e?.message ?? e).slice(0, 300);
     await db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, channel_id) values ($1,$2,$3,null,'chat','error',$4,$5)`, [agent.org_id, agent.id, channel.project_id ?? null, err, channel.id]);
+    await recordFeedback(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, agentId: agent.id, userId: msg.user_id, kind: 'run_error', sourceType: 'chat_message', sourceId: msg.id, context: { input: msg.body, reason: err } });
     await post('Ich konnte gerade nicht antworten (Fehler beim KI-Dienst). Bitte später noch einmal versuchen.');
     return { status: 'error', error: err };
   }

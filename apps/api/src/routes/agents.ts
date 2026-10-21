@@ -12,6 +12,7 @@ import { agentUsableIn, orgAiSettings } from '../ai/client.js';
 import { aiAllowed, aiError, ownLlmAllowed, rightsOf } from '../ai/policy.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 import { projectLabelSql, SQL } from '../projectPolicy.js';
+import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
@@ -168,13 +169,29 @@ export async function agentRoutes(app: FastifyInstance) {
     return { inProject, candidates, budget: (await orgAiSettings(db, user.orgId)).agentDailyBudget };
   });
 
+  /** Lauf eines Agenten bewerten (👍 1, 👎 -1, 0 = zurücknehmen), optional mit Kommentar (KI-Feedback); wer den Lauf sehen darf. */
+  app.post<{ Params: { id: string }; Body: { rating: 1 | -1 | 0; comment?: string | null } }>('/agent-runs/:id/rating', async (req) => {
+    const user = requireUser(req);
+    const r = await db.maybeOne(`select r.*, t.title as task_title from agent_runs r left join tasks t on t.id = r.task_id where r.id = $1 and r.org_id = $2`, [req.params.id, user.orgId]);
+    if (!r || !r.project_id) throw notFound('Lauf nicht gefunden');
+    await requireProject(db, user, r.project_id);
+    if (r.task_id) await requireTask(db, user, r.task_id);
+    const rating = Number(req.body?.rating);
+    if (![1, -1, 0].includes(rating)) throw badRequest('rating: 1, -1 oder 0');
+    if (rating === 0) { await clearRating(db, user.id, 'agent_run', r.id); return { rating: null }; }
+    await recordFeedback(db, { orgId: user.orgId, projectId: r.project_id, agentId: r.agent_user_id, userId: user.id, kind: 'rating', rating: rating as 1 | -1, comment: req.body?.comment ?? null, sourceType: 'agent_run', sourceId: r.id,
+      context: { detail: `${r.task_title ? `„${r.task_title}“ · ` : ''}Anlass ${r.trigger}`, output: { note: r.reasoning, actions: r.actions }, reason: r.error } });
+    return { rating };
+  });
+
   // Läufe je Projekt (Mitglieder lesen), je Arbeitspaket; Läufe an Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf
   app.get<{ Params: { id: string }; Querystring: { taskId?: string } }>('/projects/:id/agent-runs', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id);
     if (req.query.taskId) await requireTask(db, user, req.query.taskId);
     const rows = await db.query(`select r.*, u.name as agent_name, t.title as task_title, t.number as task_number from agent_runs r join users u on u.id = r.agent_user_id left join tasks t on t.id = r.task_id where r.project_id = $1 and ($2::uuid is null or r.task_id = $2) and ${visibleSubprojectSql(3)} order by r.created_at desc limit 100`, [req.params.id, req.query.taskId ?? null, user.id]);
-    return { runs: rows.rows.map((r: any) => ({ id: r.id, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], proposed: r.proposed ?? null, inputTokens: r.input_tokens, outputTokens: r.output_tokens, webSearches: r.web_searches ?? 0, scope: r.scope ?? 'task', contextStats: r.context_stats ?? null, cost: r.cost ?? 1, depth: r.context_stats?.depth ?? null, error: r.error, createdAt: r.created_at })) };
+    const rated = await myRatings(db, user.id, 'agent_run', rows.rows.map((r: any) => r.id));
+    return { runs: rows.rows.map((r: any) => ({ id: r.id, myRating: rated.get(r.id) ?? null, agentId: r.agent_user_id, agentName: r.agent_name, taskId: r.task_id, taskTitle: r.task_title, taskNumber: r.task_number, trigger: r.trigger, status: r.status, reasoning: r.reasoning, actions: r.actions ?? [], proposed: r.proposed ?? null, inputTokens: r.input_tokens, outputTokens: r.output_tokens, webSearches: r.web_searches ?? 0, scope: r.scope ?? 'task', contextStats: r.context_stats ?? null, cost: r.cost ?? 1, depth: r.context_stats?.depth ?? null, error: r.error, createdAt: r.created_at })) };
   });
 
   // PL: Agent an einem Arbeitspaket pausieren/fortsetzen oder sofort laufen lassen

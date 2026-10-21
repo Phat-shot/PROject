@@ -6,8 +6,9 @@ import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
 import { useDialog } from './ui';
 import { ApprovalCard } from './AgentPolicy';
+import { Thumbs, useRating } from './Rating';
 
-export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe */ card?: 'results'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null } | null }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe */ card?: 'results'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean }
 interface Member { userId: string; name: string }
 
@@ -102,6 +103,12 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     await api.patch(`/chat/messages/${editing.id}`, { body: editing.body });
     setEditing(null); await load(); if (thread) await loadThread(thread);
   };
+  // KI-Feedback: Antworten der Agenten bewerten (Zustand sofort in Liste und Thread)
+  const rating = useRating(async (id, v, comment) => {
+    const r = await api.post<{ rating: 1 | -1 | null }>(`/chat/messages/${id}/rating`, { rating: v, comment: comment || null });
+    const upd = (list: ChatMessage[]) => list.map((x) => (x.id === id ? { ...x, myRating: r.rating } : x));
+    setMsgs(upd); setReplies(upd);
+  });
   const system = (m: ChatMessage) => m.kind === 'system';
   const isQuestion = (m: ChatMessage) => Boolean((m.meta as any)?.questionId);
   const Msg = ({ m, inThread }: { m: ChatMessage; inThread: boolean }) => (
@@ -113,6 +120,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {editing?.id === m.id
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
         : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
+      {m.fromAgent && !m.deleted && <Thumbs value={m.myRating} onRate={(v) => rating.rate(m.id, m.myRating, v)} />}
       {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
@@ -124,6 +132,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   let lastDay = '';
   return (
     <div className={`chat ${thread ? 'with-thread' : ''}`}>
+      {rating.modal}
       <div className="chat-main">
         {error && <div className="error mb">{error}</div>}
         <div className="chat-list" ref={listRef} onScroll={onScroll}>

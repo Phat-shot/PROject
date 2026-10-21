@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import type { AgentUser, AiProfile } from '@projekttool/shared';
-import { AGENT_MODES } from '@projekttool/shared';
+import type { AgentUser, AiFeedbackEntry, AiProfile } from '@projekttool/shared';
+import { AGENT_MODES, AI_FEEDBACK_KINDS } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
@@ -27,6 +27,51 @@ export function AiSection() {
       <LlmsCard />
       <ProjectLlmsCard />
       <LimitsCard />
+      <FeedbackCard />
+    </div>
+  );
+}
+
+const ctxText = (v: unknown): string => (typeof v === 'string' ? v : JSON.stringify(v, null, 1));
+/**
+ * Feedback zu den Agenten: Daumen mit Kommentar und automatische Signale (Ablehnungen, Bearbeitungen, ersetzte Behauptungen,
+ * nicht ausgeführte Befehle, Fehler). Nur für die KI-Verwaltung; Export als JSONL oder CSV, um Prompt und KI-Sheet zu verbessern.
+ */
+function FeedbackCard() {
+  const [f, setF] = useState({ kind: '', agentId: '', rating: '', from: '', to: '' });
+  const qs = new URLSearchParams(Object.entries(f).filter(([, v]) => v)).toString();
+  const d = useData<{ items: AiFeedbackEntry[]; counts: { kind: string; n: number; up: number; down: number }[] }>(`/ai/feedback${qs ? `?${qs}` : ''}`, [qs]);
+  const agents = useData<{ agents: AgentUser[] }>('/agents');
+  const label = (k: string) => AI_FEEDBACK_KINDS.find((x) => x.key === k)?.label ?? k;
+  const count = (k: string) => d.data?.counts.find((c) => c.kind === k);
+  const rating = count('rating');
+  return (
+    <div className="card" id="feedback">
+      <div className="row between mb" style={{ flexWrap: 'wrap', gap: 6 }}><h2 style={{ margin: 0 }}>Feedback zu den Agenten</h2>
+        <span className="row" style={{ gap: 4 }}><a className="btn sm" href={`/api/ai/feedback/export?format=jsonl${qs ? `&${qs}` : ''}`} download>Export JSONL</a><a className="btn sm" href={`/api/ai/feedback/export?format=csv${qs ? `&${qs}` : ''}`} download>Export CSV</a></span></div>
+      <p className="muted small">Jede Rückmeldung wird gesichert: 👍/👎 an Chat-Antworten und Läufen sowie automatisch Ablehnungen mit Grund, bearbeitete Vorschläge und Entwürfe (vorher/nachher), ersetzte Behauptungen, nicht ausgeführte Befehle und Fehler. Sichtbar nur hier; der Export (gefiltert) dient dazu, Prompt, KI-Sheet und Agenten zu verbessern.</p>
+      {d.data && <div className="row small mb filterbar" style={{ flexWrap: 'wrap', gap: 4 }}>
+        {rating && <span className="badge">Bewertungen: 👍 {rating.up} · 👎 {rating.down}</span>}
+        {AI_FEEDBACK_KINDS.filter((k) => k.key !== 'rating' && count(k.key)).map((k) => <button key={k.key} className={`chip ${f.kind === k.key ? 'on' : ''}`} onClick={() => setF({ ...f, kind: f.kind === k.key ? '' : k.key })}>{k.label}: {count(k.key)!.n}</button>)}
+        {d.data.counts.length === 0 && <span className="muted">Noch kein Feedback.</span>}
+      </div>}
+      <div className="row small mb" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <select aria-label="Art" value={f.kind} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="">alle Arten</option>{AI_FEEDBACK_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
+        <select aria-label="Agent" value={f.agentId} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, agentId: e.target.value })}><option value="">alle Agenten</option>{(agents.data?.agents ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+        <select aria-label="Bewertung" value={f.rating} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, rating: e.target.value })}><option value="">alles</option><option value="down">nur Probleme (👎 und automatische)</option><option value="up">nur 👍</option></select>
+        <label className="row" style={{ gap: 4 }}>von <input type="date" value={f.from} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, from: e.target.value })} /></label>
+        <label className="row" style={{ gap: 4 }}>bis <input type="date" value={f.to} style={{ width: 'auto' }} onChange={(e) => setF({ ...f, to: e.target.value })} /></label>
+      </div>
+      {d.data && (d.data.items.length === 0 ? <div className="empty">Kein Feedback{qs ? ' für diesen Filter' : ''}.</div> : <table className="table"><thead><tr><th>Zeit</th><th>Art</th><th>Agent</th><th>Projekt</th><th>Kommentar und Kontext</th></tr></thead><tbody>
+        {d.data.items.map((x) => <tr key={x.id}>
+          <td className="small nowrap">{fmtDateTime(x.updatedAt)}</td>
+          <td className="small">{x.kind === 'rating' ? (x.rating === 1 ? '👍' : '👎') : label(x.kind)}{x.user && <div className="muted">{x.user.name}</div>}</td>
+          <td className="small">{x.agent?.name ?? '–'}</td>
+          <td className="small">{x.project ?? '–'}</td>
+          <td className="small">{x.comment && <div>„{x.comment}“</div>}{typeof x.context.reason === 'string' && x.context.reason !== x.comment && <div className="muted">{x.context.reason}</div>}{typeof x.context.detail === 'string' && <div className="muted">{x.context.detail}</div>}
+            <details><summary className="muted">Kontext</summary>{(['input', 'output', 'before', 'after', 'replaced', 'command', 'findings'] as const).filter((k) => x.context[k] !== undefined).map((k) => <div key={k}><strong>{({ input: 'Anfrage', output: 'Agent', before: 'Vorher (Agent)', after: 'Nachher (Person)', replaced: 'Ersetzt', command: 'Befehl', findings: 'Fundstellen' } as Record<string, string>)[k]}:</strong><pre className="small" style={{ whiteSpace: 'pre-wrap', margin: '2px 0 6px' }}>{ctxText(x.context[k])}</pre></div>)}</details></td>
+        </tr>)}
+      </tbody></table>)}
     </div>
   );
 }

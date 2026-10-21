@@ -24,6 +24,7 @@ import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, we
 import type { ExternalWindow } from '@projekttool/shared';
 import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
 import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
+import { recordFeedback } from './feedback.js';
 
 /**
  * KI-Agent als Benutzer: handelt nur bei Arbeitspaketen, die ihm eine PL direkt zugewiesen hat, im Rahmen seiner
@@ -877,7 +878,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
       [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
-    if (errors.length) await reportRunErrors(db, agent, task, errors, run.id);
+    if (errors.length) { await reportRunErrors(db, agent, task, errors, run.id); await recordFeedback(db, { orgId: agent.org_id, projectId: task.project_id, agentId: agent.id, kind: 'run_error', sourceType: 'agent_run', sourceId: run.id, context: { detail: `${code} „${task.title}“ · Anlass ${trigger}`, reason: errors.join(' | '), output: { note: j.note, actions } } }); }
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
     await db.query(`update agent_runs set context_stats = $2 where id = $1`, [run.id, JSON.stringify(contextStats)]);
     if (ctx.webSourceIds.length) await db.query(`update agent_web_sources set run_id = $1 where id = any($2::uuid[])`, [run.id, ctx.webSourceIds]);
@@ -898,6 +899,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     const er = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, fingerprint) values ($1,$2,$3,$4,$5,'error',$6,$7) returning id`, [agent.org_id, agent.id, task.project_id, task.id, trigger, msg, await fingerprintOf(db, task.id)]);
     await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'agent.run_failed', objectType: 'task', objectId: task.id, details: { runId: er.id, trigger, error: msg } });
     await reportRunErrors(db, agent, task, [msg], er.id).catch(() => undefined);
+    await recordFeedback(db, { orgId: agent.org_id, projectId: task.project_id, agentId: agent.id, kind: 'run_error', sourceType: 'agent_run', sourceId: er.id, context: { detail: `${task.title} · Anlass ${trigger}`, reason: msg } });
     return { runId: er.id, taskId: task.id, status: 'error', actions: [], error: msg };
   }
 }

@@ -20,6 +20,8 @@ import { notify } from '../notify.js';
 import { agentChatMessage } from '../ai/plan.js';
 import { seal } from '../secrets.js';
 import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
+import { recordFeedback } from '../ai/feedback.js';
+import { listFeedback, type FeedbackQuery } from '../ai/feedback.js';
 
 function mapProposal(r: any): AiProposal {
   return { id: r.id, projectId: r.project_id, kind: r.kind, mailId: r.mail_id, taskId: r.task_id, pageId: r.page_id, payload: r.payload ?? {}, status: r.status, createdBy: r.created_by, createdByName: r.created_by_name ?? null, decidedBy: r.decided_by, decidedAt: r.decided_at, note: r.note, createdAt: r.created_at, taskTitle: r.task_title ?? null, pageTitle: r.page_title ?? null, mailSubject: r.mail_subject ?? null,
@@ -49,6 +51,30 @@ export async function aiRoutes(app: FastifyInstance) {
     const t = p.task_id ? await db.maybeOne(`select subproject_id from tasks where id = $1`, [p.task_id]) : null;
     if (t && !(await canSeeSubproject(db, user.id, t.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
   };
+
+  // KI-Feedback (nur KI-Verwaltung): Liste mit Filtern und Export als JSONL oder CSV, um Prompt, KI-Sheet und Agenten zu verbessern
+  app.get<{ Querystring: FeedbackQuery }>('/ai/feedback', async (req) => {
+    const user = requireUser(req);
+    requireAiAdmin(user);
+    const items = await listFeedback(db, user.orgId, { ...req.query, limit: Math.min(Number(req.query.limit) || 200, 500) });
+    const counts = await db.query(`select kind, count(*)::int as n, count(*) filter (where rating = -1)::int as down, count(*) filter (where rating = 1)::int as up from ai_feedback where org_id = $1 group by kind`, [user.orgId]);
+    return { items, counts: counts.rows };
+  });
+  app.get<{ Querystring: FeedbackQuery & { format?: 'jsonl' | 'csv' } }>('/ai/feedback/export', async (req, reply) => {
+    const user = requireUser(req);
+    requireAiAdmin(user);
+    const items = await listFeedback(db, user.orgId, { ...req.query, limit: 10_000 });
+    await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.feedback_export', objectType: 'org', objectId: user.orgId, details: { format: req.query.format ?? 'jsonl', count: items.length, filter: { kind: req.query.kind, agentId: req.query.agentId, rating: req.query.rating, from: req.query.from, to: req.query.to } } });
+    const day = new Date().toISOString().slice(0, 10);
+    if (req.query.format === 'csv') {
+      const q = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+      const rows = items.map((f) => [f.createdAt, f.kind, f.rating ?? '', f.agent?.name ?? '', f.user?.name ?? '', f.project ?? '', f.comment ?? '', JSON.stringify(f.context)].map(q).join(';'));
+      reply.header('content-type', 'text/csv; charset=utf-8').header('content-disposition', `attachment; filename="ki-feedback-${day}.csv"`);
+      return `\ufeff${['Zeit', 'Art', 'Bewertung', 'Agent', 'Person', 'Projekt', 'Kommentar', 'Kontext'].map(q).join(';')}\n${rows.join('\n')}\n`;
+    }
+    reply.header('content-type', 'application/x-ndjson; charset=utf-8').header('content-disposition', `attachment; filename="ki-feedback-${day}.jsonl"`);
+    return items.map((f) => JSON.stringify(f)).join('\n') + (items.length ? '\n' : '');
+  });
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
@@ -277,7 +303,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const { cfg, agent } = await gate(user, task.project_id, 'assist.essence', req.body?.agentId);
     const cols = await db.query(`select name from board_columns where project_id = $1 order by position`, [task.project_id]);
     const e = await essenceForTask(db, cfg, app.fetchFn, user, mail, { id: task.id, title: task.title, description: task.description, dueDate: task.due_date ? String(task.due_date).slice(0, 10) : null, columnName: task.column_name, projectId: task.project_id }, cols.rows.map((c: any) => c.name));
-    const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
+    const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify({ ...e, agentId: agent.id }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'task_update', taskId: task.id, mailId: mail.id } });
     await notifyApprovers(task.project_id, user.id, `KI-Vorschlag: ${task.title}`, e.summary, `/projekte/${task.project_id}/ki`, task.subproject_id);
     await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag zu „${task.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${e.summary}\nFreigabe: /projekte/${task.project_id}/ki`, task.project_id);
@@ -296,7 +322,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
     const { cfg, agent } = await gate(user, page.project_id, 'assist.essence', req.body?.agentId);
     const section = await essenceForPage(db, cfg, app.fetchFn, user, mail, page);
-    const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section }), user.id]);
+    const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section, agentId: agent.id }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'page_append', pageId: page.id, mailId: mail.id } });
     await notifyApprovers(page.project_id, user.id, `KI-Vorschlag für Seite: ${page.title}`, `Aus Mail „${mail.subject}“`, `/projekte/${page.project_id}/ki`);
     await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag für die Seite „${page.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${section.slice(0, 200).replace(/\s+/g, ' ')} …\nFreigabe: /projekte/${page.project_id}/ki`, page.project_id);
@@ -340,6 +366,8 @@ export async function aiRoutes(app: FastifyInstance) {
         changes.push(`Termin → ${pay.dueDate}`);
       }
       const entry = (b.logEntry?.trim() || pay.logEntry || pay.summary || '').trim();
+      // Vor dem Übernehmen geändert: Fassung des Agenten und Fassung der Person sichern
+      if (b.logEntry?.trim() && b.logEntry.trim() !== String(pay.logEntry ?? '').trim()) await recordFeedback(db, { orgId: user.orgId, projectId: p.project_id, agentId: pay.agentId ?? null, userId: user.id, kind: 'proposal_edited', sourceType: 'ai_proposal', sourceId: p.id, context: { detail: 'Essenz → Arbeitspaket', before: pay.logEntry, after: b.logEntry.trim(), output: pay } });
       const mail = p.mail_id ? await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [p.mail_id]) : null;
       const suffix = mail ? `\n\nQuelle: Mail „${mail.subject}“ von ${mail.from_addr} (${new Date(mail.date).toLocaleDateString('de-DE')})` : '';
       await db.query(`insert into task_comments (task_id, user_id, body, source, mail_id) values ($1,$2,$3,'ai',$4)`, [task.id, user.id, `${entry}${changes.length ? `\n\n${changes.join(', ')}` : ''}${suffix}`, mail?.id ?? null]);
@@ -353,6 +381,7 @@ export async function aiRoutes(app: FastifyInstance) {
     if (!page) throw notFound('Seite nicht mehr vorhanden');
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
     const section = (b.section?.trim() || p.payload?.section || '').trim();
+    if (b.section?.trim() && b.section.trim() !== String(p.payload?.section ?? '').trim()) await recordFeedback(db, { orgId: user.orgId, projectId: p.project_id, agentId: p.payload?.agentId ?? null, userId: user.id, kind: 'proposal_edited', sourceType: 'ai_proposal', sourceId: p.id, context: { detail: 'Essenz → Seite', before: p.payload?.section, after: b.section.trim() } });
     const html = `${(page.content_html ?? mdToHtml(page.content_md)).replace(/\s+$/, '')}\n${mdToHtml(section)}`;
     const u = await db.one(`update doc_pages set content_html = $2, content_md = $3, version = version + 1, updated_by = $4, updated_at = now() where id = $1 returning *`, [page.id, html, htmlToMd(html), user.id]);
     await db.query(`insert into doc_page_versions (page_id, version, title, content_md, content_html, status, saved_by) values ($1,$2,$3,$4,$5,$6,$7)`, [u.id, u.version, u.title, u.content_md, u.content_html, u.status, user.id]);
@@ -372,6 +401,7 @@ export async function aiRoutes(app: FastifyInstance) {
     await canSeeProposal(user, p);
     await db.query(`update ai_proposals set status = 'rejected', decided_by = $2, decided_at = now(), note = $3 where id = $1`, [p.id, user.id, req.body?.note?.trim() || null]);
     await audit(db, { orgId: user.orgId, projectId: p.project_id, userId: user.id, action: 'ai.reject', objectType: 'ai_proposal', objectId: p.id, details: { note: req.body?.note } });
+    await recordFeedback(db, { orgId: user.orgId, projectId: p.project_id, agentId: p.payload?.agentId ?? null, userId: user.id, kind: 'proposal_rejected', comment: req.body?.note ?? null, sourceType: 'ai_proposal', sourceId: p.id, context: { detail: p.kind === 'page_append' ? 'Essenz → Seite' : 'Essenz → Arbeitspaket', output: p.payload, reason: req.body?.note } });
     return { ok: true };
   });
 

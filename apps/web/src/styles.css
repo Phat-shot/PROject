@@ -860,3 +860,10 @@ body:has(.drawer) .chat-fab { display: none; }
 .llm-block .table { margin-top: 8px; }
 .ai-steps { margin: 0 0 12px; padding-left: 20px; color: var(--muted); font-size: 13px; }
 .ai-steps li { margin: 2px 0; }
+
+/* KI-Feedback: Daumen an Antworten und Läufen der Agenten */
+.thumbs { display: inline-flex; gap: 0; margin-left: 4px; vertical-align: middle; }
+.thumbs .btn { padding: 0 4px; opacity: 0.45; filter: grayscale(1); text-decoration: none; }
+.thumbs .btn:hover { opacity: 0.9; }
+.thumbs .btn.on { opacity: 1; filter: none; }
+.chat-msg .thumbs { margin-left: 0; }

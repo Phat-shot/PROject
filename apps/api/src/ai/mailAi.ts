@@ -19,6 +19,7 @@ import { checkHint } from '../outbound.js';
 import { USE_LATERAL } from '../mail/accounts.js';
 import { handleOpenPoints } from './mailInquiry.js';
 import { askMeetingConfirm } from '../questions.js';
+import { recordFeedback } from './feedback.js';
 
 /**
  * Mail-KI an einer Ansicht.
@@ -444,7 +445,11 @@ export async function decideProposals(db: Db, svc: MailService, runId: string, u
   for (const [i, a] of actions.entries()) {
     // Offene und fehlgeschlagene Vorschläge (z. B. fehlendes Recht der ersten Person) lassen sich entscheiden
     if ((a.status !== 'pending' && a.status !== 'error') || (index !== 'all' && index !== i)) continue;
-    if (!approve) { actions[i] = { ...a, status: 'rejected', decidedBy: user.id }; continue; }
+    if (!approve) {
+      actions[i] = { ...a, status: 'rejected', decidedBy: user.id };
+      await recordFeedback(db, { orgId: project.org_id, projectId: project.id, agentId: run.agent_user_id ?? null, userId: user.id, kind: 'mail_suggestion_rejected', sourceType: 'mail_ai_run', sourceId: `${run.id}#${i}`, context: { input: `Mail „${mail.subject ?? ''}“ von ${mail.from_addr ?? ''}`, output: a } });
+      continue;
+    }
     try { actions[i] = { ...a, status: 'approved', decidedBy: user.id, result: await applyOne(db, svc, { run, project, mail, view, actor: user }, a, state) }; }
     catch (e: any) { actions[i] = { ...a, status: 'error', decidedBy: user.id, result: { error: String(e?.message ?? e).slice(0, 300) } }; }
   }
