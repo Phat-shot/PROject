@@ -49,7 +49,10 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 ## 5. Arbeitspakete, Aufgaben und Tasks
 
 **Board**
-- Spaltenarten: Geplant, aktive Spalten (z. B. Offen, In Arbeit, In Prüfung), Zurückgestellt, Erledigt. Nur aktive Spalten zählen als Stillstand für die Eskalation.
+- Spaltenarten: Geplant, aktive Spalten (z. B. Offen, In Arbeit, In Prüfung), **Wartet**, Zurückgestellt, Erledigt. Nur aktive Spalten zählen als Stillstand für die Eskalation.
+- **Wartet:** Wer ein AP nach „Wartet“ zieht (oder per „→“ bzw. Status setzt), gibt an, worauf und bis wann gewartet wird; die Karte zeigt „⏳ Grund · bis Datum“. Wartet ein KI-Agent (wait), stellt das System das AP selbst dorthin und nach der Antwort zurück in die Spalte davor. Läuft die Frist ohne Lösung ab, wandert das AP nach „Zurückgestellt“, mit Log-Eintrag und Meldung (Klasse Eskalation) an wartende Person, Zuständige, Auftraggeber und PL; kommt die Antwort später, geht es zurück. Bestehende Projekte haben die Spalte vor „Zurückgestellt“ bekommen.
+- **Anlegen, überall gleich:** Titel eingeben (Enter), danach öffnet die Maske mit allen Feldern. Gilt für Arbeitspakete („+ Arbeitspaket“ in der Spalte, „Neues Arbeitspaket“ bzw. `n`), Aufgaben (im AP) und Teilprojekte („+ Teilprojekt“ unter den Swimlanes, im Plan und in den Einstellungen). Meilensteine brauchen dazu ein Datum; Checklistenpunkte entstehen inline im AP.
+- **Teilprojekt-Maske:** Klick auf den Namen im Kopf der Swimlane, auf die Zeile im Plan oder in den Einstellungen. Wie beim AP: Kopf mit Name, Kopieren, Verschieben, Löschen (PL); Verantwortlich, Start, Ende; **Beschreibung** (Ziel, Abgrenzung; auch Kontext für die Agenten); Sichtbarkeit (PL); Meilensteine; Arbeitspakete mit Status, Termin und Zuständigen, neues AP direkt im Teilprojekt.
 - Swimlanes je Teilprojekt (abschaltbar), Spalten einklappen, WIP-Limit je Spalte.
 - Filter: Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, blockiert/eskaliert, Archiv. Personenfilter treffen ein AP auch über seine offenen Aufgaben.
 - Tastatur: `n` neues AP, `f` filtern, `q` nur meine, `x` Filter löschen, `Esc` Auswahl aufheben.
@@ -61,7 +64,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 **Arbeitspaket öffnen**
 - Alle Felder direkt editierbar: Status, Teilprojekt, Zuständig (Mitglied, Agent, externer Kontakt), Priorität, Labels, Start, Deadline, Schätzung, Beschreibung (Markdown).
 - **Außenbeschreibung (für Externe):** was Externe zu diesem AP erfahren dürfen; KI-Agenten schreiben Externen nur daraus, aus Log-Einträgen „für Externe sichtbar“ und aus freigegebenen Seiten. Pflegen PL und „Projektplan ändern“.
-- **Aufgaben:** neue Aufgabe mit Titel und optional Zuständigem; Häkchen setzt auf Erledigt bzw. zurück. Klick öffnet die Aufgabe mit allen Feldern und eigenem Log.
+- **Aufgaben:** neue Aufgabe mit Titel und optional Zuständigem (danach öffnet ihre Maske, zurück über den Link zum AP); Häkchen setzt auf Erledigt bzw. zurück. Klick öffnet die Aufgabe mit allen Feldern und eigenem Log.
 - **Checkliste** (Tasks): Punkte mit eigener Zuständigkeit, neuer Punkt mit Enter; bei externer Zuständigkeit „Nachfragen“ per Mail, die Antwort erscheint beim Task.
 - **Vorgänger** (Ende → Anfang) und **Wiederholung** (täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit).
 - **Blockiert melden** mit Grund; **eskalieren** eine Stufe höher (Zuständige, Teilprojekt-Verantwortliche, PL); die PL setzt Eskalationen zurück.

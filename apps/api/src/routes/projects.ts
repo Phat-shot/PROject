@@ -476,7 +476,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Teilprojekte
-  type SubprojectBody = { name?: string; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null; restricted?: boolean; accessUserIds?: string[]; accessGroupIds?: string[]; transferTasks?: boolean };
+  type SubprojectBody = { name?: string; description?: string | null; responsibleUserId?: string | null; startDate?: string | null; endDate?: string | null; restricted?: boolean; accessUserIds?: string[]; accessGroupIds?: string[]; transferTasks?: boolean };
   /** Zugriffsliste eines eingeschränkten Teilprojekts setzen (nur PL). */
   const setAccess = async (user: User, projectId: string, subprojectId: string, b: SubprojectBody, m: Membership) => {
     if (b.restricted === undefined && !b.accessUserIds && !b.accessGroupIds) return;
@@ -505,8 +505,8 @@ export async function projectRoutes(app: FastifyInstance) {
     await assertResponsible(db, req.params.id, m, b.responsibleUserId);
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from subprojects where project_id = $1`, [req.params.id]);
     const r = await db.one(
-      `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position) values ($1,$2,$3,$4,$5,$6) returning *`,
-      [req.params.id, b.name, b.responsibleUserId ?? null, b.startDate ?? null, b.endDate ?? null, pos.p]
+      `insert into subprojects (project_id, name, responsible_user_id, start_date, end_date, position, description) values ($1,$2,$3,$4,$5,$6,$7) returning *`,
+      [req.params.id, b.name, b.responsibleUserId ?? null, b.startDate ?? null, b.endDate ?? null, pos.p, b.description?.trim() ? b.description.trim().slice(0, 5000) : null]
     );
     await setAccess(user, req.params.id, r.id, b, m);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.create', objectType: 'subproject', objectId: r.id, details: { name: b.name } });
@@ -527,9 +527,10 @@ export async function projectRoutes(app: FastifyInstance) {
       `update subprojects set name = coalesce($3, name),
          responsible_user_id = case when $4 then $5::uuid else responsible_user_id end,
          start_date = case when $6 then $7::date else start_date end,
-         end_date = case when $8 then $9::date else end_date end
+         end_date = case when $8 then $9::date else end_date end,
+         description = case when $10 then $11 else description end
        where id = $1 and project_id = $2 returning *`,
-      [req.params.sid, req.params.id, b.name ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'startDate' in b, b.startDate ?? null, 'endDate' in b, b.endDate ?? null]
+      [req.params.sid, req.params.id, b.name ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'startDate' in b, b.startDate ?? null, 'endDate' in b, b.endDate ?? null, 'description' in b, b.description?.trim() ? b.description.trim().slice(0, 5000) : null]
     );
     if (!r) throw notFound('Teilprojekt nicht gefunden');
     // Direkt zugewiesene Arbeitspakete der bisherigen Verantwortung mit übertragen (geerbte folgen ohnehin)

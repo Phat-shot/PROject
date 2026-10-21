@@ -130,6 +130,7 @@ label.field > span { font-weight: 600; }
 label.check { display: inline-flex; align-items: center; gap: 6px; }
 .form { display: grid; gap: 10px; }
 .form.cols-2 { grid-template-columns: 1fr 1fr; }
+.form.cols-3 { grid-template-columns: 1.4fr 1fr 1fr; }
 .form .full { grid-column: 1 / -1; }
 
 .badge { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; background: var(--surface-2); border: 1px solid var(--border); color: var(--muted); }
@@ -362,7 +363,7 @@ table.table { width: 100%; border-collapse: collapse; }
   .topbar .tabs { order: 5; flex-basis: 100%; overflow-x: auto; }
   .search-box { width: 100%; order: 10; }
   .content { padding: 12px; }
-  .grid.cols-2, .grid.cols-3, .form.cols-2 { grid-template-columns: 1fr; }
+  .grid.cols-2, .grid.cols-3, .form.cols-2, .form.cols-3 { grid-template-columns: 1fr; }
   .kv { grid-template-columns: 1fr; }
   .drawer { width: 100vw; }
   .modal .card { width: 95vw; }
@@ -883,3 +884,15 @@ body:has(.drawer) .chat-fab { display: none; }
 .chat-busy { padding: 6px 12px; font-style: italic; }
 .task-card .wait-line { color: var(--muted); margin: 2px 0 4px; }
 .task-card .wait-line.expired { color: var(--warn); }
+/* Listenzeilen (Teilprojekte, Meilensteine, Arbeitspakete im Teilprojekt): ganze Zeile klickbar */
+.list-row { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: inherit; font: inherit; cursor: pointer; flex-wrap: wrap; }
+.list-row:hover { background: var(--surface-2); }
+.list-row.static { cursor: default; }
+.list-row.static:hover { background: var(--surface); }
+.list-row.is-done .grow { text-decoration: line-through; color: var(--muted); }
+.list-row .grow { flex: 1 1 200px; min-width: 0; }
+.list-row .overdue { color: var(--danger); }
+.list-row .inline-date { width: auto; }
+button.lane-name.link { background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px; }
+button.lane-name.link:hover { color: var(--primary, inherit); }
+@media (max-width: 700px) { .plan-lists { grid-template-columns: 1fr; } }

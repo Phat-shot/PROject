@@ -87,7 +87,7 @@ export const prioLabel: Record<string, string> = { low: 'niedrig', normal: 'norm
 /* ---- Eigene Bestätigungsdialoge statt window.confirm / window.alert ---- */
 
 export interface ConfirmOptions { title: ReactNode; text?: ReactNode; confirmLabel?: string; cancelLabel?: string; danger?: boolean }
-export interface FormField { key: string; label: string; type?: 'text' | 'date'; value?: string; placeholder?: string; required?: boolean }
+export interface FormField { key: string; label: string; type?: 'text' | 'date' | 'select'; value?: string; placeholder?: string; required?: boolean; options?: { value: string; label: string }[] }
 export interface FormOptions { title: ReactNode; text?: ReactNode; fields: FormField[]; submitLabel?: string }
 export interface ChooseOptions<T> { title: ReactNode; text?: ReactNode; options: { label: string; value: T; primary?: boolean; danger?: boolean }[]; cancelLabel?: string }
 interface DialogApi {
@@ -147,7 +147,9 @@ function FormDialog({ o, onDone }: { o: FormOptions; onDone: (v: Record<string, 
     <Modal title={o.title} onClose={() => onDone(null)}>
       {o.text && <div className="mb muted small">{o.text}</div>}
       <form className="form" onSubmit={(e) => { e.preventDefault(); if (ok) onDone(Object.fromEntries(Object.entries(v).map(([k, x]) => [k, x.trim()]))); }}>
-        {o.fields.map((f, i) => <label key={f.key} className="field"><span>{f.label}</span><input type={f.type ?? 'text'} autoFocus={i === 0} value={v[f.key]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} /></label>)}
+        {o.fields.map((f, i) => <label key={f.key} className="field"><span>{f.label}</span>{f.type === 'select'
+          ? <select value={v[f.key]} onChange={(e) => setV({ ...v, [f.key]: e.target.value })}>{(f.options ?? []).map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select>
+          : <input type={f.type ?? 'text'} autoFocus={i === 0} value={v[f.key]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />}</label>)}
         <div className="row"><button className="btn primary" disabled={!ok}>{o.submitLabel ?? 'Übernehmen'}</button><button type="button" className="btn link" onClick={() => onDone(null)}>Abbrechen</button></div>
       </form>
     </Modal>

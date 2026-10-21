@@ -23,7 +23,7 @@ PROject verbindet Arbeitspakete, Plan, Mail, Doku und Chat auf einem Datenmodell
 ## Täglich arbeiten
 
 1. **Dashboard › Meine Arbeit** zeigt alles, was dir zugewiesen oder vererbt ist, und was auf dich wartet.
-2. **Board:** Karte ziehen oder „→“ auf der Karte = Status ändern (auch am Handy). `n` neues AP, `f` filtern, `q` nur meine, `x` Filter löschen.
+2. **Board:** Karte ziehen oder „→“ auf der Karte = Status ändern (auch am Handy). `n` neues AP (Titel genügt, dann öffnet die Maske), Name einer Swimlane öffnet das Teilprojekt, „Wartet“ fragt nach Grund und Frist, `f` filtern, `q` nur meine, `x` Filter löschen.
 3. **Karte öffnen:** Felder direkt ändern, Aufgaben und Checkliste anlegen, „✓ Erledigt“ oben, Log schreiben (`@Name` erwähnt jemanden).
 4. **Blockiert?** „Als blockiert melden“ mit Grund; die Teilprojekt-Verantwortung wird informiert.
 5. **Stand festhalten:** jede Entscheidung und Rückmeldung ins Log des AP. Das Log ist die gemeinsame Quelle.

@@ -10,6 +10,7 @@ import { DocsView } from './project/DocsView';
 import { PROJECT_SETTINGS_TABS, ProjectSettingsPage } from './project/settings/ProjectSettings';
 import { CalendarView } from './project/CalendarView';
 import { TimeView } from './project/TimeView';
+import { SubprojectDrawer } from './project/SubprojectDrawer';
 import { TaskDrawer } from './project/TaskDrawer';
 import { RaidView } from './project/RaidView';
 import { AiView } from './project/AiView';
@@ -40,6 +41,8 @@ interface ProjectCtx {
   reload: () => Promise<void>;
   reloadTasks: () => Promise<void>;
   openTask: (id: string | null) => void;
+  /** Maske eines Teilprojekts öffnen (?sp=), null schließt */
+  openSubproject: (id: string | null) => void;
   /** KI-Fähigkeiten der angemeldeten Person im Projekt (Freigaben mit Begründung); null, solange sie laden */
   ai: AiCapabilities | null;
   reloadAi: () => Promise<void>;
@@ -51,7 +54,7 @@ export const useProject = () => useContext(Ctx)!;
 export const useProjectOptional = () => useContext(Ctx);
 
 /** Lädt Projekt, Arbeitspakete und Benutzer und stellt den Projektkontext bereit; auch außerhalb der Projektseite nutzbar. */
-export function ProjectScope({ projectId, openTask, children }: { projectId: string; openTask?: (id: string | null) => void; children: ReactNode }) {
+export function ProjectScope({ projectId, openTask, openSubproject, children }: { projectId: string; openTask?: (id: string | null) => void; openSubproject?: (id: string | null) => void; children: ReactNode }) {
   const nav = useNavigate();
   const detail = useData<ProjectDetail>(`/projects/${projectId}`, [projectId]);
   const tasks = useData<{ tasks: Task[] }>(`/projects/${projectId}/tasks`, [projectId]);
@@ -61,7 +64,8 @@ export function ProjectScope({ projectId, openTask, children }: { projectId: str
   if (!detail.data || !tasks.data || !users.data) return <div className="content muted">Lade …</div>;
   const ctx: ProjectCtx = {
     detail: detail.data, tasks: tasks.data.tasks, users: users.data.users, reload: async () => { await detail.reload(); await ai.reload(); }, reloadTasks: tasks.reload, ai: ai.data, reloadAi: ai.reload,
-    openTask: openTask ?? ((tid) => { if (tid) nav(`/projekte/${projectId}/board?task=${tid}`); })
+    openTask: openTask ?? ((tid) => { if (tid) nav(`/projekte/${projectId}/board?task=${tid}`); }),
+    openSubproject: openSubproject ?? ((sid) => { if (sid) nav(`/projekte/${projectId}/board?sp=${sid}`); })
   };
   return <Ctx.Provider value={ctx}>{children}</Ctx.Provider>;
 }
@@ -69,16 +73,18 @@ export function ProjectScope({ projectId, openTask, children }: { projectId: str
 export function ProjectPage() {
   const { id } = useParams<{ id: string }>();
   const [params, setParams] = useSearchParams();
-  const openTask = (tid: string | null) => {
+  // Eine Maske zur Zeit: Arbeitspaket (?task=) oder Teilprojekt (?sp=)
+  const open = (key: 'task' | 'sp', v: string | null) => {
     const next = new URLSearchParams(params);
-    if (tid) next.set('task', tid); else next.delete('task');
+    next.delete('task'); next.delete('sp');
+    if (v) next.set(key, v);
     setParams(next, { replace: true });
   };
-  return <ProjectScope projectId={id!} openTask={openTask}><ProjectBody /></ProjectScope>;
+  return <ProjectScope projectId={id!} openTask={(t) => open('task', t)} openSubproject={(s) => open('sp', s)}><ProjectBody /></ProjectScope>;
 }
 
 function ProjectBody() {
-  const { detail, openTask } = useProject();
+  const { detail, openTask, openSubproject } = useProject();
   const [params] = useSearchParams();
   const loc = useLocation();
   const { timeTracking } = useAuth();
@@ -103,6 +109,7 @@ function ProjectBody() {
     { to: `${base}/einstellungen`, label: 'Einstellungen' }
   ];
   const taskId = params.get('task');
+  const spId = params.get('sp');
   return (
     <>
       <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{badge && <span className="badge" style={{ marginLeft: 8 }} title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}</>} tabs={tabs} tabsBelow />
@@ -128,6 +135,7 @@ function ProjectBody() {
         <Route path="*" element={<Navigate to={`${base}/board`} replace />} />
       </Routes>
       {taskId && <TaskDrawer taskId={taskId} onClose={() => openTask(null)} />}
+      {!taskId && spId && <SubprojectDrawer subprojectId={spId} onClose={() => openSubproject(null)} />}
     </>
   );
 }

@@ -326,6 +326,8 @@ export interface Subproject {
   id: string;
   projectId: string;
   name: string;
+  /** Ziel und Abgrenzung (auch Kontext für Agenten) */
+  description?: string | null;
   responsibleUserId: string | null;
   responsible: ResponsibleInfo;
   startDate: string | null;

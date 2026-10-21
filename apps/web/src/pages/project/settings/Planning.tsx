@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { api } from '../../../lib/api';
 import { Modal, useAsync, useDialog } from '../../../components/ui';
-import { MilestonesTable, SubprojectsTable } from '../planForms';
+import { MilestoneList, SubprojectList } from '../planForms';
 import { ResourcesTable } from '../../../components/Resources';
 import { LABEL_COLORS } from '@projekttool/shared';
 import { InlineText } from '../TaskDrawer';
@@ -64,10 +64,11 @@ export function PlanningTab() {
   const [columns, setColumns] = useState(false);
   return (
     <>
-      <SettingsCard title="Teilprojekte und Meilensteine" hint="Verantwortung wird vom PL geerbt, solange keine Person gesetzt ist. Sichtbarkeit und Zugriff über „Sichtbarkeit“ je Teilprojekt. Anlegen auch im Reiter Plan.">
-        <SubprojectsTable />
-        <h3>Meilensteine</h3>
-        <MilestonesTable />
+      <SettingsCard title="Teilprojekte" hint="Klick öffnet die Maske: Verantwortung (sonst die PL), Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine und Arbeitspakete. Auch über den Kopf der Swimlane im Board und die Zeile im Plan.">
+        <SubprojectList />
+      </SettingsCard>
+      <SettingsCard title="Meilensteine" hint="Nach Datum; mit Teilprojekt auch in dessen Maske.">
+        <MilestoneList />
       </SettingsCard>
       <SettingsCard title="Board" action={isPl && <button className="btn sm" onClick={() => setColumns(true)}>Spalten bearbeiten</button>}>
         <div className="row mb" style={{ gap: 6 }}>{detail.columns.map((c) => <span key={c.id} className="badge" title={c.kind}>{c.name}{c.wipLimit != null ? ` · WIP ${c.wipLimit}` : ''}</span>)}</div>

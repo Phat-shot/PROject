@@ -75,9 +75,15 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   const title = `E2E Aufgabe ${Date.now()}`;
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').fill(title);
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').press('Enter');
-  await page.locator('.drawer .subtasks li', { hasText: title }).locator('.st-title').click();
+  // Titel genügt: danach öffnet die Maske der neuen Aufgabe
   await expect(page.locator('.drawer')).toContainText('Aufgabe im Arbeitspaket');
+  await expect(page.locator('.drawer')).toContainText(title);
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
+  // Teilprojekt: Kopf der Swimlane öffnet die Maske (Felder, Beschreibung, Meilensteine, Arbeitspakete)
+  await page.keyboard.press('Escape');
+  await page.locator('button.lane-name').first().click();
+  await expect(page.locator('.drawer')).toContainText('Meilensteine');
+  await expect(page.locator('.drawer')).toContainText('Arbeitspakete');
 });
 
 test('Messenger: Knopf unten rechts, Projektkanal öffnen, Nachricht senden, Suche', async ({ page }) => {

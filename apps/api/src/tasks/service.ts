@@ -37,6 +37,7 @@ export function mapSubproject(r: any, lead: LeadInfo): Subproject {
     id: r.id,
     projectId: r.project_id,
     name: r.name,
+    description: r.description ?? null,
     responsibleUserId: r.responsible_user_id,
     responsible,
     startDate: dateStr(r.start_date),

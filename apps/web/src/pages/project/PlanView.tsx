@@ -3,7 +3,8 @@ import type { Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
-import { MilestoneForm, MilestonesTable, SubprojectForm, SubprojectsTable } from './planForms';
+import { MilestoneList, SubprojectList } from './planForms';
+import { useCreate } from './create';
 
 const DAY = 86400_000;
 const ZOOM: [number, string][] = [[2, 'Quartal'], [4, 'Monat'], [10, 'Woche'], [24, 'Tag']];
@@ -13,15 +14,14 @@ const addDaysIso = (iso: string, n: number) => { const d = new Date(iso + 'T00:0
 interface Drag { id: string; kind: 'move' | 'resize' | 'ms'; x0: number; dx: number }
 
 export function PlanView() {
-  const { detail, tasks, openTask, reload, reloadTasks } = useProject();
+  const { detail, tasks, openTask, openSubproject, reload, reloadTasks } = useProject();
+  const create = useCreate();
   const me = detail.project.myMembership;
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const [drag, setDrag] = useState<Drag | null>(null);
   const save = useAsync();
   const [geom, setGeom] = useState({ labelW: 280, headH: 30 });
   const tableRef = useRef<HTMLTableElement>(null);
-  const [newSp, setNewSp] = useState(false);
-  const [newMs, setNewMs] = useState(false);
   const [PX_PER_DAY, setZoom] = useState(() => { try { return Number(localStorage.getItem('pt_gantt_zoom')) || 4; } catch { return 4; } });
   const zoomTo = (v: number) => { setZoom(v); try { localStorage.setItem('pt_gantt_zoom', String(v)); } catch { /* ignore */ } };
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -138,7 +138,7 @@ export function PlanView() {
         {save.error && <span className="error small">{save.error}</span>}
         <span className="row right" style={{ gap: 2 }}>{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
         <button className="btn" title="Plan als CSV (Excel)" onClick={() => downloadCsv(`plan_${detail.project.key}.csv`, ['Art', 'Bezeichnung', 'Start', 'Ende', 'Zuständig', 'Erledigt', 'Konflikt'], rows.map((r) => [r.kind === 'sub' ? 'Teilprojekt' : r.kind === 'ms' ? 'Meilenstein' : r.child ? 'Aufgabe' : 'Arbeitspaket', r.label, r.start, r.end, r.resp ?? '', r.done ? 'ja' : '', r.conflict ? 'ja' : '']))}>CSV</button>
-        {canPlan && <><button className="btn" onClick={() => setNewSp(true)}>Teilprojekt</button><button className="btn" onClick={() => setNewMs(true)}>Meilenstein</button></>}
+        {canPlan && <><button className="btn" onClick={() => void create.subproject()}>+ Teilprojekt</button><button className="btn" onClick={() => void create.milestone()}>+ Meilenstein</button></>}
       </div>
       <div className={`card gantt ${drag ? 'dragging' : ''}`} style={{ padding: 0 }} ref={scrollRef}>
         <div className="gantt-wrap" onPointerMove={moveDrag} onPointerUp={endDrag} onPointerCancel={() => setDrag(null)}>
@@ -154,7 +154,7 @@ export function PlanView() {
           <tbody>
             {rows.map((r) => (
               <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
-                <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' ? 'pointer' : undefined }} onClick={() => r.kind === 'task' && openTask(r.id)}>
+                <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' || r.kind === 'sub' ? 'pointer' : undefined }} title={r.kind === 'sub' ? 'Teilprojekt öffnen' : undefined} onClick={() => { if (r.kind === 'task') openTask(r.id); else if (r.kind === 'sub') openSubproject(r.id); }}>
                   {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && '◆ '}{r.label}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
                 </td>
@@ -180,12 +180,10 @@ export function PlanView() {
         </table>
         </div>
       </div>
-      <div className="grid cols-2 mt">
-        <div className="card"><h2>Teilprojekte</h2><SubprojectsTable /></div>
-        <div className="card"><h2>Meilensteine</h2><MilestonesTable /></div>
+      <div className="grid cols-2 mt plan-lists">
+        <div className="card"><h2>Teilprojekte</h2><SubprojectList /></div>
+        <div className="card"><h2>Meilensteine</h2><MilestoneList /></div>
       </div>
-      {newSp && <SubprojectForm onClose={() => setNewSp(false)} />}
-      {newMs && <MilestoneForm onClose={() => setNewMs(false)} />}
     </div>
   );
 }

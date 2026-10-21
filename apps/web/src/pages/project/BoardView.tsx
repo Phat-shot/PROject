@@ -5,7 +5,7 @@ import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Initials, Modal, prioLabel, useAsync, useDialog } from '../../components/ui';
 import { moveTaskTo } from '../../lib/moveTask';
-import { contactLabel, useContacts } from '../../lib/useContacts';
+import { useCreate } from './create';
 import { useData } from '../../lib/useData';
 import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
 import { useProject } from '../ProjectPage';
@@ -18,8 +18,10 @@ function readSet(key: string): Set<string> { try { return new Set(JSON.parse(loc
 function writeSet(key: string, s: Set<string>) { try { localStorage.setItem(key, JSON.stringify([...s])); } catch { /* ignore */ } }
 
 export function BoardView() {
-  const { detail, tasks, reloadTasks, openTask } = useProject();
+  const { detail, tasks, reloadTasks, openTask, openSubproject } = useProject();
   const { user } = useAuth();
+  const create = useCreate();
+  const canPlanSp = detail.project.myMembership.role === 'pl' || detail.project.myMembership.canEditPlan;
   const dialog = useDialog();
   const mobile = useIsMobile();
   const [showFilters, setShowFilters] = useState(false);
@@ -41,7 +43,6 @@ export function BoardView() {
   const setCollapsed = (s: Set<string>) => { setCollapsedState(s); writeSet(`pt_cols_${pid}`, s); };
   const [laneClosed, setLaneClosedState] = useState<Set<string>>(() => readSet(`pt_lanes_${pid}`));
   const toggleLane = (k: string) => { const n = new Set(laneClosed); if (n.has(k)) n.delete(k); else n.add(k); setLaneClosedState(n); writeSet(`pt_lanes_${pid}`, n); };
-  const [create, setCreate] = useState<{ columnId: string; subprojectId: string | null } | null>(null);
   const [drag, setDrag] = useState<string | null>(null);
   const [drop, setDrop] = useState<{ col: string; lane: string; index: number } | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -64,7 +65,7 @@ export function BoardView() {
       if (e.key === 'q') setF((x) => ({ ...x, mine: !x.mine }));
       if (e.key === 'x') setF(EMPTY);
       if (e.key === 'Escape') clearSelection();
-      if (e.key === 'n' && canEdit) setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null });
+      if (e.key === 'n' && canEdit) void create.task();
     };
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
@@ -121,7 +122,7 @@ export function BoardView() {
         <div className="filterbar compact">
           <input ref={searchRef} type="text" placeholder="Filtern …" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
           <button className={`chip ${active ? 'on' : ''}`} onClick={() => setShowFilters(true)}>Filter{active ? ' ·' : ''}</button>
-          {canEdit && <button className="btn sm primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>+ Neu</button>}
+          {canEdit && <button className="btn sm primary" onClick={() => void create.task()}>+ Neu</button>}
         </div>
       ) : (
       <div className="filterbar">
@@ -150,13 +151,13 @@ export function BoardView() {
         <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
         <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '']))}>CSV</button>
-        {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
+        {canEdit && <button className="btn primary" onClick={() => void create.task()}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
       )}
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen im Arbeitspaket.</div>}
       {groups.map((g) => { const closed = g.tasks.length === 0 ? !laneClosed.has(g.key) : laneClosed.has(g.key); return (
         <div key={g.key} className={`swimlane ${closed ? 'collapsed' : ''}`}>
-          {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{closed ? '▸' : '▾'}</button><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
+          {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{closed ? '▸' : '▾'}</button>{g.key !== 'none' && g.key !== 'all' ? <button className="lane-name link" title="Teilprojekt öffnen (Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine)" onClick={() => openSubproject(g.key)}>{g.name}</button> : <span className="lane-name">{g.name}</span>}<span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
           {g.name && closed ? null : <div className="board">
             {detail.columns.map((c) => {
               const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
@@ -189,14 +190,14 @@ export function BoardView() {
                       onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
                   {!isCollapsed && inCol.length === 0 && drag && <div className="col-empty">Hier ablegen</div>}
-                  {!isCollapsed && canEdit && !f.archived && c.id === addColumnId && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} onMore={() => setCreate({ columnId: c.id, subprojectId: laneKey === 'none' || laneKey === 'all' ? null : laneKey })} />}
+                  {!isCollapsed && canEdit && !f.archived && c.id === addColumnId && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} />}
                 </div>
               );
             })}
           </div>}
         </div>
       ); })}
-      {create && <CreateTask columnId={create.columnId} subprojectId={create.subprojectId} onClose={() => setCreate(null)} />}
+      {lanes && canPlanSp && !f.archived && <button className="btn sm link mt" onClick={() => void create.subproject()}>+ Teilprojekt</button>}
       {selectMode && canEdit && (
         <div className="bulkbar">
           <strong>{selected.size} ausgewählt</strong>
@@ -287,22 +288,24 @@ function StatusMenu({ task }: { task: Task }) {
   );
 }
 
-function QuickAdd({ columnId, subprojectId, onMore }: { columnId: string; subprojectId: string | null; onMore: () => void }) {
-  const { detail, reloadTasks } = useProject();
+function QuickAdd({ columnId, subprojectId }: { columnId: string; subprojectId: string | null }) {
+  const { reloadTasks } = useProject();
+  const create = useCreate();
   const [open, setOpen] = useState(false);
   const [wf, setWf] = useState<'pick' | WorkflowDef | null>(null);
   const [title, setTitle] = useState('');
   const { busy, run } = useAsync();
   const submit = () => {
     if (!title.trim()) return;
-    void run(async () => { await api.post(`/projects/${detail.project.id}/tasks`, { title: title.trim(), columnId, subprojectId }); setTitle(''); await reloadTasks(); });
+    // Titel genügt, danach öffnet die Maske mit allen Feldern
+    void run(async () => { const t = title.trim(); setTitle(''); setOpen(false); await create.task({ title: t, columnId, subprojectId }); });
   };
   if (!open) return <span className="row" style={{ gap: 2 }}><button className="btn sm link" onClick={() => setOpen(true)}>+ Arbeitspaket</button><button className="btn sm link" title="Workflow statt eines einzelnen Arbeitspakets starten: die Arbeitspakete des Ablaufs landen in dieser Spalte" onClick={() => setWf('pick')}>+ Workflow</button>{wf === 'pick' && <WorkflowPicker onPick={(d) => setWf(d)} onClose={() => setWf(null)} />}{wf && wf !== 'pick' && <StartRunDialog def={wf} columnId={columnId} subprojectId={subprojectId} onClose={() => setWf(null)} onStarted={async () => { setWf(null); await reloadTasks(); }} />}</span>;
   return (
     <div className="quick-add">
       <textarea autoFocus placeholder="Titel eingeben, Enter zum Anlegen" value={title} onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } if (e.key === 'Escape') { setOpen(false); setTitle(''); } }} />
-      <div className="row"><button className="btn sm primary" disabled={busy} onClick={submit}>Anlegen</button><button className="btn sm" onClick={() => { setOpen(false); setTitle(''); }}>✕</button><button className="btn sm link right" onClick={onMore}>mehr Felder …</button></div>
+      <div className="row"><button className="btn sm primary" disabled={busy} onClick={submit}>Anlegen</button><button className="btn sm" onClick={() => { setOpen(false); setTitle(''); }}>✕</button><span className="muted small right">danach öffnet die Maske</span></div>
     </div>
   );
 }
@@ -312,49 +315,6 @@ function SubprojectResp({ id }: { id: string }) {
   const s = detail.subprojects.find((x) => x.id === id);
   if (!s) return null;
   return <span className="muted small" style={{ fontWeight: 400 }}>{s.restricted && <span title="Eingeschränkt sichtbar">🔒 </span>}verantwortlich {s.responsible.name ?? '–'}{s.responsible.inherited ? ' (geerbt vom PL)' : ''}{s.startDate && ` · ${fmtDate(s.startDate)} – ${fmtDate(s.endDate)}`} · <Link to={`/projekte/${detail.project.id}/plan#sp-${s.id}`}>Plan</Link></span>;
-}
-
-function CreateTask({ columnId, subprojectId, onClose }: { columnId: string; subprojectId: string | null; onClose: () => void }) {
-  const { detail, reloadTasks, openTask, users } = useProject();
-  const [f, setF] = useState({ title: '', description: '', subprojectId: subprojectId ?? '', columnId, priority: 'normal', startDate: '', dueDate: '', responsibleUserId: '', responsibleEmail: '', labelIds: [] as string[] });
-  const { busy, error, run } = useAsync();
-  const set = (k: string, v: unknown) => setF((x) => ({ ...x, [k]: v }));
-  const members = users.filter((u) => detail.members.some((m) => m.userId === u.id));
-  const { contacts } = useContacts(detail.project.id);
-  return (
-    <Modal title="Neues Arbeitspaket" onClose={onClose}>
-      <div className="form cols-2">
-        <label className="field full"><span>Titel</span><input type="text" value={f.title} onChange={(e) => set('title', e.target.value)} autoFocus /></label>
-        <label className="field full"><span>Beschreibung</span><textarea value={f.description} onChange={(e) => set('description', e.target.value)} /></label>
-        <label className="field"><span>Teilprojekt</span>
-          <select value={f.subprojectId} onChange={(e) => set('subprojectId', e.target.value)}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-        <label className="field"><span>Spalte</span>
-          <select value={f.columnId} onChange={(e) => set('columnId', e.target.value)}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-        <label className="field"><span>Priorität</span>
-          <select value={f.priority} onChange={(e) => set('priority', e.target.value)}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        <div className="field"><span>Labels</span><LabelPicker value={f.labelIds} onChange={(v) => set('labelIds', v)} /></div>
-        <label className="field"><span>Start (optional)</span><input type="date" value={f.startDate} onChange={(e) => set('startDate', e.target.value)} /></label>
-        <label className="field"><span>Deadline</span><input type="date" value={f.dueDate} onChange={(e) => set('dueDate', e.target.value)} /></label>
-        <label className="field"><span>Zuständig (intern)</span>
-          <select value={f.responsibleUserId} onChange={(e) => set('responsibleUserId', e.target.value)}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
-        <label className="field"><span>oder extern (Kontakt / Mail-Adresse)</span>
-          <input type="email" list="create-task-contacts" value={f.responsibleEmail} onChange={(e) => set('responsibleEmail', e.target.value)} placeholder="Kontakt wählen oder extern@firma.de" />
-          <datalist id="create-task-contacts">{contacts.map((c) => <option key={c.email} value={c.email}>{contactLabel(c)}</option>)}</datalist></label>
-        {error && <div className="error full">{error}</div>}
-        <div className="row full">
-          <button className="btn primary" disabled={busy || !f.title.trim()} onClick={() => void run(async () => {
-            const r = await api.post<{ task: { id: string } }>(`/projects/${detail.project.id}/tasks`, {
-              title: f.title, description: f.description || null, subprojectId: f.subprojectId || null, columnId: f.columnId, priority: f.priority,
-              startDate: f.startDate || null, dueDate: f.dueDate || null, responsibleUserId: f.responsibleUserId || null, responsibleEmail: f.responsibleEmail || null, labelIds: f.labelIds
-            });
-            await reloadTasks();
-            onClose();
-            openTask(r.task.id);
-          })}>Anlegen</button>
-        </div>
-      </div>
-    </Modal>
-  );
 }
 
 export function LabelPicker({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {

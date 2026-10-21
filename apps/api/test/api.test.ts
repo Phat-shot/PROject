@@ -469,6 +469,10 @@ test('Gruppen und eingeschränkte Teilprojekte: nur PL, Verantwortliche und bena
   assert.equal(lv.json().view.myRights.canCreateTask, true);
   // Entfernen der Freigabe → wieder unsichtbar
   await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { accessGroupIds: vertrag.accessGroupIds });
+  // Beschreibung des Teilprojekts (Maske): setzen, leeren
+  const desc = await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { description: '  Ziel: Vertrag bis Q4  ' });
+  assert.equal(desc.json().subproject.description, 'Ziel: Vertrag bis Q4');
+  assert.equal((await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { description: '' })).json().subproject.description, null);
   assert.equal((await t.api(max).get(`/tasks/${secret.id}`)).statusCode, 403);
   // Nicht eingeschränkt → alle Mitglieder
   await t.api(pl).patch(`/projects/${web}/subprojects/${vertrag.id}`, { restricted: false });

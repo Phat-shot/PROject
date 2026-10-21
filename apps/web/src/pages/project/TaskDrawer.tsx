@@ -16,6 +16,7 @@ import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
 import { moveTaskTo } from '../../lib/moveTask';
+import { useCreate } from './create';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
 import { ReportWish } from '../../components/NotifyRules';
@@ -262,10 +263,13 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
   const openCol = detail.columns.find((c) => c.kind === 'active') ?? detail.columns.find((c) => !c.isDone);
   const t0 = today();
   const toggle = (x: Task) => run(async () => { const col = x.done ? openCol : doneCol; if (col) await api.patch(`/tasks/${x.id}`, { columnId: col.id }); await onChanged(); });
+  const create = useCreate();
+  // Titel genügt, danach öffnet die Maske der Aufgabe (zurück über „↑ Arbeitspaket“)
   const add = () => run(async () => {
-    if (!title.trim()) return;
-    await api.post(`/projects/${detail.project.id}/tasks`, { title, parentId: parent.id, responsibleUserId: resp || null });
-    setTitle(''); setResp(''); await onChanged();
+    const t = title.trim();
+    if (!t) return;
+    setTitle(''); setResp('');
+    await create.task({ title: t, parentId: parent.id, responsibleUserId: resp || null });
   });
   return (
     <>
@@ -384,7 +388,7 @@ function TextField({ label, value, canEdit, onSave, type = 'text', placeholder, 
   );
 }
 
-function TextArea({ label, value, canEdit, onSave, empty = 'Keine Beschreibung.' }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; empty?: string }) {
+export function TextArea({ label, value, canEdit, onSave, empty = 'Keine Beschreibung.' }: { label: string; value: string; canEdit: boolean; onSave: (v: string) => Promise<void>; empty?: string }) {
   const [v, setV] = useState(value);
   const [editing, setEditing] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);

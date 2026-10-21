@@ -1,7 +1,9 @@
 import type { BoardColumn } from '@projekttool/shared';
 import { api } from './api';
 
-type Form = (o: { title: string; text?: string; fields: { key: string; label: string; type?: 'text' | 'date'; value?: string; placeholder?: string; required?: boolean }[]; submitLabel?: string }) => Promise<Record<string, string> | null>;
+import type { FormOptions } from '../components/ui';
+
+type Form = (o: FormOptions) => Promise<Record<string, string> | null>;
 
 /**
  * Status ändern (Board, Status-Menü, Arbeitspaket). Nach „Wartet“ fragt es, worauf und bis wann gewartet wird: läuft die
