@@ -9,8 +9,8 @@ import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '.
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
 import { createDefaultFolders } from '../docs/service.js';
-import { profileAvailableInProject, agentUsableIn } from '../ai/client.js';
-import { ownLlmReason } from '../ai/policy.js';
+import { agentUsableIn } from '../ai/client.js';
+import { rightsOf } from '../ai/policy.js';
 import { mapLabel } from './tasks.js';
 import { evaluateProject, policyOf, type EscalationPolicy } from '../tasks/escalation.js';
 import { createReport, reportingOf } from '../docs/report.js';
@@ -18,8 +18,8 @@ import type { ReportingPolicy } from '@projekttool/shared';
 import { externalContacts, profileOf } from '../outbound.js';
 import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
-import { effectiveAgentPolicy, parseAgentPolicy } from '../ai/agentPolicy.js';
-import type { AgentPolicy } from '@projekttool/shared';
+import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
+import type { AgentMode, AgentPolicy } from '@projekttool/shared';
 import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
@@ -151,15 +151,6 @@ export async function projectRoutes(app: FastifyInstance) {
       await db.query(`update projects set mail_inquiry = $2::jsonb where id = $1`, [req.params.id, JSON.stringify(v ?? {})]);
       await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'project.mail_inquiry', objectType: 'project', objectId: req.params.id, details: (v ?? { inherit: true }) as Record<string, unknown> });
     }
-    if ('aiProfileId' in b) {
-      if (b.aiProfileId && !(await profileAvailableInProject(db, req.params.id, b.aiProfileId))) throw badRequest('Dieses LLM ist im Projekt nicht verfügbar (Freigabe durch den Org-Admin oder eigenes LLM des Projekts)');
-      // Ein eigenes LLM des Projekts neu als Projekt-KI wählen gilt wie Einbinden (Profilachse und Freigabe pl.own_llm)
-      if (b.aiProfileId && (await db.maybeOne(`select 1 from ai_profiles a join projects p on p.id = a.project_id where a.id = $1 and p.id = $2 and p.ai_profile_id is distinct from a.id`, [b.aiProfileId, req.params.id]))) {
-        const reason = await ownLlmReason(db, user, req.params.id);
-        if (reason) throw forbidden(reason);
-      }
-      await db.query(`update projects set ai_profile_id = $2 where id = $1`, [req.params.id, b.aiProfileId ?? null]);
-    }
     if (b.visibility !== undefined && !['members', 'org'].includes(b.visibility)) throw badRequest('Sichtbarkeit: members oder org');
     if (b.visibility === 'org' && !(await policyOfProject(req.params.id)).visibility.org) throw badRequest(TEXT.noOrgVisibility);
     if (b.reporting) {
@@ -245,9 +236,11 @@ export async function projectRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
     const effective = await effectiveAgentPolicy(db, { agentId: req.query.agentId || null, projectId: req.params.id, taskId: req.query.taskId || null });
-    const p = await db.one(`select p.agent_policy, o.settings->'ai'->'agentPolicy' as org_policy from projects p join orgs o on o.id = p.org_id where p.id = $1`, [req.params.id]);
-    const agents = await Promise.all((await db.query(`select m.user_id, u.name, m.agent_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id])).rows.map(async (r: any) => ({ userId: r.user_id, name: r.name, policy: r.agent_policy ?? null, effective: await effectiveAgentPolicy(db, { agentId: r.user_id, projectId: req.params.id }) })));
-    return { effective, project: (p.agent_policy ?? {}) as AgentPolicy, org: (p.org_policy ?? {}) as AgentPolicy, agents, canEdit: m.role === 'pl' };
+    const p = await db.one(`select agent_policy from projects where id = $1`, [req.params.id]);
+    // Je Agent: Rechte und Obergrenze vom Verwalter seines LLM, Einschränkung der PL im Projekt, wirksame Werte
+    const rows = (await db.query(`select m.user_id, u.name, m.agent_policy, u.agent_rights, u.agent_policy as limit_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id])).rows;
+    const agents = await Promise.all(rows.map(async (r: any) => ({ userId: r.user_id, name: r.name, policy: r.agent_policy ?? null, rights: rightsOf(r), limit: (r.limit_policy ?? {}) as AgentPolicy, effective: await effectiveAgentPolicy(db, { agentId: r.user_id, projectId: req.params.id }) })));
+    return { effective, project: (p.agent_policy ?? {}) as AgentPolicy, agents, canEdit: m.role === 'pl' };
   });
   app.put<{ Params: { id: string }; Body: AgentPolicy }>('/projects/:id/agent-policy', async (req) => {
     const user = requireUser(req);
@@ -258,14 +251,21 @@ export async function projectRoutes(app: FastifyInstance) {
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.policy', objectType: 'project', objectId: req.params.id, details: v as Record<string, unknown> });
     return { project: (await db.one(`select agent_policy from projects where id = $1`, [req.params.id])).agent_policy as AgentPolicy, effective: await effectiveAgentPolicy(db, { projectId: req.params.id }) };
   });
-  /** Policy eines Agenten im Projekt (nur mode, confirm, workflows; null = erben). */
+  /**
+   * Einschränkung eines Agenten im Projekt durch die PL (null = keine): Rechte abschalten (deny, nur solche, die der Verwalter
+   * gegeben hat), Selbstständigkeit und Bestätigungen; nie lockerer als die Obergrenze am Agenten.
+   */
   app.put<{ Params: { id: string; userId: string }; Body: AgentPolicy | null }>('/projects/:id/members/:userId/agent-policy', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    const m = await db.maybeOne(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.user_id = $2 and u.kind = 'agent'`, [req.params.id, req.params.userId]);
+    const m = await db.maybeOne(`select m.user_id, u.agent_rights, u.agent_policy as limit_policy from project_members m join users u on u.id = m.user_id where m.project_id = $1 and m.user_id = $2 and u.kind = 'agent'`, [req.params.id, req.params.userId]);
     if (!m) throw notFound('Agent ist kein Mitglied des Projekts');
     let v: AgentPolicy | null;
-    try { v = req.body === null || req.body === undefined || !Object.keys(req.body).length ? null : parseAgentPolicy(req.body, { limits: false, workflows: true }); } catch (e: any) { throw badRequest(e.message); }
+    try { v = req.body === null || req.body === undefined || !Object.keys(req.body).length ? null : parseAgentPolicy(req.body, { limits: false, workflows: true, deny: true }); } catch (e: any) { throw badRequest(e.message); }
+    if (v?.deny) { const rights = rightsOf(m); v.deny = v.deny.filter((f) => rights.includes(f)); if (!v.deny.length) delete v.deny; }
+    const cap = (m.limit_policy ?? {}).maxMode as AgentMode | undefined;
+    if (v?.mode && cap && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(cap)) throw badRequest('Lockerer als die Obergrenze am Agenten geht nicht (Verwalter des LLM)');
+    if (v && !Object.keys(v).length) v = null;
     await db.query(`update project_members set agent_policy = $3::jsonb where project_id = $1 and user_id = $2`, [req.params.id, req.params.userId, v ? JSON.stringify(v) : null]);
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.policy', objectType: 'membership', objectId: req.params.userId, details: (v ?? { inherit: true }) as Record<string, unknown> });
     return { policy: v, effective: await effectiveAgentPolicy(db, { agentId: req.params.userId, projectId: req.params.id }) };
@@ -317,7 +317,7 @@ export async function projectRoutes(app: FastifyInstance) {
       const proj = await db.one(`select personal, created_by from projects where id = $1`, [req.params.id]);
       if (projectPolicy(proj).members.onlyOwnerAndAgents && target.kind !== 'agent' && target.id !== proj.created_by) throw forbidden(TEXT.membersOnlyOwnerAndAgents);
       if (target.agent_project_id && target.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
-      // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar, keine KI-Freigabe
+      // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar
       const isAgent = target.kind === 'agent';
       // Aufnehmen nur, wenn der Agent hier einsetzbar ist (Einsatz, LLM im Projekt verfügbar; Konzept LLM/Agenten 2.2); Rollenwechsel eines Mitglieds bleibt möglich
       if (isAgent && !(await db.maybeOne(`select 1 from project_members where project_id = $1 and user_id = $2`, [req.params.id, target.id]))) {

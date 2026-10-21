@@ -87,7 +87,7 @@ test('Agent: Antwort auf die Ursprungsmail aus deren Konto (Projektkonto direkt,
   const pl = await t.login('pl@demo.local');
   const anna = await t.login('anna@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   const agent = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { signature: 'x\n'.repeat(9) })).statusCode, 400);
   const sig = (await t.api(admin).patch(`/agents/${agent.id}`, { signature: 'Viele Grüße\nMorton\nAssistenz Website-Projekt' })).json().agent.signature;

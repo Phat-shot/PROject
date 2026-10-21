@@ -33,7 +33,7 @@ test('Vorbereitung: Kandidaten ohne Token (Signale terms und contact), Suche nur
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   profile = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: profile.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   agent = (await t.api(admin).post('/agents', { name: 'Wissen' })).json().agent;
   assert.equal((await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member' })).statusCode, 200);
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'confirm_critical' });
@@ -215,9 +215,10 @@ test('Projektdurchlauf: nur mit Projektagent und Reichweite „ganzes Projekt“
   await t.db.query(`delete from agent_runs where scope = 'project'`);
   assert.equal(await runProjectReviews(t.db, t.mail, fakeFetch, new Date('2026-10-17T12:00:00Z')), 0, 'Samstag');
   assert.equal(await runProjectReviews(t.db, t.mail, fakeFetch, new Date('2026-10-16T04:00:00Z')), 0, 'vor 06:45');
-  // Uhrzeit vom Mandanten
-  assert.equal((await t.api(admin).put('/ai/settings', { agentPolicy: { reviewAt: '09:00' } })).statusCode, 200);
+  // Uhrzeit des Projektdurchlaufs setzt die PL am Projekt
+  const projPolicy = (await t.api(pl).get(`/projects/${web()}/agent-policy`)).json().project;
+  assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { ...projPolicy, reviewAt: '09:00' })).statusCode, 200);
   assert.equal((await t.api(pl).get(`/projects/${web()}/digest`)).json().digest.reviewAt, '09:00');
   assert.equal(await runProjectReviews(t.db, t.mail, fakeFetch, new Date('2026-10-16T06:00:00Z')), 0, '08:00 Berlin, vor 09:00');
-  await t.api(admin).put('/ai/settings', { agentPolicy: {} });
+  await t.api(pl).put(`/projects/${web()}/agent-policy`, projPolicy);
 });

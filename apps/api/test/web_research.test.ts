@@ -63,12 +63,12 @@ test('Hilfsfunktionen: Suchbegriffe ohne Adressen und Namen, nur öffentliche UR
   assert.equal(inWindow({ ...w, enabled: false }, new Date('2026-10-18T10:00:00Z')), true);
 });
 
-test('Gesperrt (agent.web Standard): Recherche nicht möglich, Begründung im Prompt und im Lauf; Freigabe über Regel, Profil und Suchdienst', async () => {
+test('Ohne Recht (agent.web beim Anlegen aus): Recherche nicht möglich, Begründung im Prompt und im Lauf; Freigabe über Recht, LLM und Suchdienst', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   profile = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: profile.id, agentDailyBudget: 50 });
-  agent = (await t.api(admin).post('/agents', { name: 'Rechercheur' })).json().agent;
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
+  agent = (await t.api(admin).post('/agents', { name: 'Rechercheur', aiProfileId: profile.id })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'pl', agentCanMail: true, canFinalize: true });
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' });
   const r = await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Elektriker recherchieren', columnId: (await t.db.one(`select id from board_columns where project_id = $1 and name = 'Offen'`, [web()])).id, responsibleUserId: agent.id });
@@ -76,11 +76,11 @@ test('Gesperrt (agent.web Standard): Recherche nicht möglich, Begründung im Pr
   await flushAgentRuns();
   rounds = [[{ type: 'research', text: 'Elektriker Edertal' }]];
   let run = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
-  assert.match(prompts.at(-2) ?? '', /Online-Recherche: nein \(Standard: gesperrt, bis die Verwaltung „Online-Recherche“ freigibt/);
-  assert.match(run.error ?? '', /research: Standard: gesperrt/);
+  assert.match(prompts.at(-2) ?? '', /Online-Recherche: nein \(Online-Recherche: für Rechercheur nicht freigegeben/);
+  assert.match(run.error ?? '', /research: Online-Recherche: für Rechercheur nicht freigegeben/);
   assert.match(prompts.at(-1) ?? '', /Recherche „Elektriker Edertal“: nicht möglich/);
-  // Regel erlaubt, Profil noch ohne Recherche
-  assert.equal((await t.api(admin).put('/ai/policies', { projectId: null, userId: agent.id, groupId: null, note: null, feature: 'agent.web', effect: 'allow' })).statusCode, 200);
+  // Recht erteilt (Verwalter des LLM), LLM noch ohne Recherche
+  assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { rights: [...agent.rights, 'agent.web'] })).statusCode, 200);
   rounds = [[{ type: 'research', text: 'Elektriker Edertal' }]];
   run = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
   assert.match(run.error ?? '', /Profil Qwen ohne Online-Recherche/);

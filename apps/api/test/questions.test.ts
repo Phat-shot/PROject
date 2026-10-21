@@ -32,7 +32,7 @@ test('ask: Frage an die Kette als Chat-Thread, Meldung mit Bezug, Log, Warten; D
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen3' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 100 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
   morton = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${morton.id}`, { role: 'member' });
   next = [A({ type: 'ask', text: 'Welche Farbe soll die Startseite bekommen?', remindAfterHours: 24 })];

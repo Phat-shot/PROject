@@ -13,7 +13,7 @@ import { aiAllowed } from './policy.js';
 
 /**
  * Steuerung der Agenten im Chat (Konzept 7). Das Modell liefert Befehle, das System prüft sie (Rechte des Absenders nach 7.1,
- * Agenten-Policy, KI-Freigaben) und führt sie aus; erst danach wird gepostet: die Antwort des Agenten und darunter eine Systemkarte
+ * Agenten-Policy, Rechte) und führt sie aus; erst danach wird gepostet: die Antwort des Agenten und darunter eine Systemkarte
  * mit dem tatsächlichen Ergebnis je Befehl. Aufträge legt createPlannedTask mit den Rechten des Auftraggebers an; der Agent wird
  * zuständig und läuft mit Anlass order. Freigaben führt der Agent nie selbst aus: approve zeigt die Karte mit den offenen Vorschlägen.
  */
@@ -178,8 +178,8 @@ async function runOne(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
       const curPol = (await db.maybeOne(`select agent_policy from tasks where id = $1`, [task.id]))?.agent_policy ?? {};
       v = { ...(curPol && typeof curPol === 'object' ? curPol : {}), ...v };
       const base = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: project.id, taskId: null });
-      const caps = await db.one(`select p.agent_policy->>'maxMode' as pmax, o.settings->'ai'->'agentPolicy'->>'maxMode' as omax from projects p join orgs o on o.id = p.org_id where p.id = $1`, [project.id]);
-      for (const cap of [caps.pmax, caps.omax]) if (cap && v.mode && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(cap)) return { type: c.type, status: 'denied', text: `${code}: ${v.mode} unterschreitet die Grenze ${cap} (Mandant/Projekt)` };
+      const caps = await db.one(`select p.agent_policy->>'maxMode' as pmax, (select u.agent_policy->>'maxMode' from users u where u.id = $2) as amax from projects p where p.id = $1`, [project.id, agent.id]);
+      for (const cap of [caps.pmax, caps.amax]) if (cap && v.mode && MODE_ORDER.indexOf(v.mode) < MODE_ORDER.indexOf(cap)) return { type: c.type, status: 'denied', text: `${code}: ${v.mode} unterschreitet die Grenze ${cap} (Agent/Projekt)` };
       await db.query(`update tasks set agent_policy = $2::jsonb where id = $1`, [task.id, JSON.stringify(v)]);
       await audit(db, { orgId: sender.orgId, projectId: project.id, userId: sender.id, action: 'agent.policy', objectType: 'task', objectId: task.id, details: { ...v, via: 'chat' } });
       const eff = await effectiveAgentPolicy(db, { agentId: agent.id, projectId: project.id, taskId: task.id });

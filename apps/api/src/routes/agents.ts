@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import type { AgentActionClass, AgentMode, AgentPolicy } from '@projekttool/shared';
+import type { AgentActionClass, AgentMode, AgentPolicy, AiFeature } from '@projekttool/shared';
+import { AI_FEATURES, DEFAULT_AGENT_RIGHTS } from '@projekttool/shared';
 import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
 import { randomBytes } from 'node:crypto';
 import type { User } from '@projekttool/shared';
@@ -7,8 +8,8 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
-import { agentUsableIn, orgAiSettings, projectProfiles } from '../ai/client.js';
-import { aiAllowed, aiError } from '../ai/policy.js';
+import { agentUsableIn, orgAiSettings } from '../ai/client.js';
+import { aiAllowed, aiError, ownLlmAllowed, rightsOf } from '../ai/policy.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 import { projectLabelSql, SQL } from '../projectPolicy.js';
 
@@ -32,15 +33,26 @@ function cleanSignature(v: unknown): string | null {
 }
 
 /**
- * KI-Agenten verwaltet der Org-Admin bzw. die KI-Verwaltung (Anlage, Name, Persona, Deaktivierung). Ein Agent ist ein
- * Benutzer ohne Login, nie Org-Admin, in Projekten nur Mitglied mit Stellvertretung; Arbeitspakete weist ihm nur die PL zu.
+ * KI-Agenten: Ein Agent ist ein Benutzer ohne Login und gehört zu genau einem LLM. Wer das LLM verwaltet, legt ihn an, gestaltet
+ * ihn und legt fest, was er darf (Rechte, Obergrenze der Selbstständigkeit, Budget, Einsatz): beim LLM des Mandanten die
+ * KI-Verwaltung (Org-Admin, ai_admin), beim eigenen LLM eines Projekts dessen PL. Ins Projekt kommt ein Agent per Einladung der
+ * PL; dort schränkt sie nur weiter ein (projects.ts). Deaktivieren darf zusätzlich immer die KI-Verwaltung.
  */
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
-  const mapAgent = (r: any) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, persona: r.persona ?? null, signature: r.signature ?? null, thinkingMode: r.thinking_mode ?? null,
+  const mapAgent = (r: any, canManage = false) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, profileProjectId: r.profile_project_id ?? null, persona: r.persona ?? null, signature: r.signature ?? null, thinkingMode: r.thinking_mode ?? null,
     projectBound: r.agent_project_id ? { id: r.agent_project_id, label: r.bound_label ?? '' } : null, scope: r.agent_project_id ? 'project' : r.agent_scope ?? 'all', projectIds: r.scope_project_ids ?? [],
-    dailyBudget: r.agent_daily_budget ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null });
-  /** Einsatz eines Org-Agenten: alle Projekte oder ausgewählte (nur Projekte des Mandanten). */
+    rights: rightsOf(r), policy: (r.agent_policy ?? {}) as AgentPolicy,
+    dailyBudget: r.agent_daily_budget ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null, canManage });
+  const AGENT_SELECT = `select u.*, a.name as profile_name, a.project_id as profile_project_id,
+        coalesce((select json_agg(x.project_id) from agent_projects x where x.agent_user_id = u.id), '[]'::json) as scope_project_ids,
+        -- Persönliche Projekte: nur „persönlich (Eigentümer)“, kein Kürzel und kein Name
+        coalesce((select json_agg(case when ${SQL.isPersonal('p')} then json_build_object('id', p.id, 'key', '–', 'name', ${projectLabelSql('p', 'o')}) else json_build_object('id', p.id, 'key', p.key, 'name', p.name) end)
+          from project_members m join projects p on p.id = m.project_id left join users o on o.id = p.created_by where m.user_id = u.id and p.status = 'active'), '[]'::json) as projects,
+        (select ${projectLabelSql('p', 'o')} from projects p left join users o on o.id = p.created_by where p.id = u.agent_project_id) as bound_label,
+        (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at
+       from users u left join ai_profiles a on a.id = u.ai_profile_id`;
+  /** Einsatz eines Agenten an einem LLM des Mandanten: alle Projekte oder ausgewählte (nur Projekte des Mandanten). */
   const validScope = (v: unknown) => { if (v !== 'all' && v !== 'selected') throw badRequest('Einsatz: all oder selected'); return v; };
   async function setAgentProjects(orgId: string, agentId: string, ids: unknown[]) {
     await db.query(`delete from agent_projects where agent_user_id = $1`, [agentId]);
@@ -51,129 +63,109 @@ export async function agentRoutes(app: FastifyInstance) {
     for (const a of agents) for (const p of a.projects) { const u = await agentUsableIn(db, a.id, p.id); p.usable = u.ok; p.reason = u.ok ? null : u.reason; }
     return agents;
   };
+  /** Verwaltet die Person dieses LLM? LLM des Mandanten: KI-Verwaltung; eigenes LLM eines Projekts: dessen PL (solange der Mandant eigene LLMs dort erlaubt). */
+  async function canManageProfile(user: User, profile: { project_id: string | null } | null): Promise<boolean> {
+    if (!profile) return false;
+    if (!profile.project_id) return hasOrgRight(user, 'ai_admin');
+    const m = await db.maybeOne(`select role from project_members where project_id = $1 and user_id = $2`, [profile.project_id, user.id]);
+    return m?.role === 'pl' && (await ownLlmAllowed(db, user.orgId, profile.project_id));
+  }
+  const profileOf = async (orgId: string, id: unknown) => (typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id) ? db.maybeOne(`select id, name, project_id from ai_profiles where id = $1 and org_id = $2`, [id, orgId]) : null);
+  /** Rechte: Liste bekannter Funktionen; Obergrenze: Policy mit Grenzen (maxMode, lockedConfirm, maxDepth). */
+  const validRights = (v: unknown): AiFeature[] => { if (!Array.isArray(v)) throw badRequest('Rechte: Liste'); const bad = v.find((f) => !AI_FEATURES.some((d) => d.key === f)); if (bad) throw badRequest(`Unbekanntes Recht ${String(bad)}`); return [...new Set(v as AiFeature[])]; };
+  const validPolicy = (v: unknown): AgentPolicy => { try { const p = parseAgentPolicy(v ?? {}, { limits: true, workflows: true }); delete p.chatOrders; delete p.reviewAt; delete p.scope; delete p.synergies; return p; } catch (e: any) { throw badRequest(e.message); } };
+  const validBudget = async (orgId: string, v: unknown): Promise<number | null> => {
+    if (v === null || v === undefined || v === '') return null;
+    const max = (await orgAiSettings(db, orgId)).agentDailyBudget;
+    if (!Number.isInteger(v) || Number(v) < 0 || Number(v) > max) throw badRequest(`Tagesbudget: 0 bis ${max} Läufe oder leer (= Mandant)`);
+    return Number(v);
+  };
+  const thinking = (v: unknown) => { if (v !== null && v !== undefined && v !== 'off' && v !== 'on') throw badRequest('Denkmodus: off, on oder null (wie LLM)'); return (v ?? null) as 'off' | 'on' | null; };
 
   app.get('/agents', async (req) => {
     const user = requireUser(req);
-    const rows = await db.query(
-      `select u.*,
-        (select a.name from ai_profiles a where a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id))) as profile_name,
-        coalesce((select json_agg(x.project_id) from agent_projects x where x.agent_user_id = u.id), '[]'::json) as scope_project_ids,
-        -- Persönliche Projekte: nur „persönlich (Eigentümer)“, kein Kürzel und kein Name
-        coalesce((select json_agg(case when ${SQL.isPersonal('p')} then json_build_object('id', p.id, 'key', '–', 'name', ${projectLabelSql('p', 'o')}) else json_build_object('id', p.id, 'key', p.key, 'name', p.name) end)
-          from project_members m join projects p on p.id = m.project_id left join users o on o.id = p.created_by where m.user_id = u.id and p.status = 'active'), '[]'::json) as projects,
-        (select ${projectLabelSql('p', 'o')} from projects p left join users o on o.id = p.created_by where p.id = u.agent_project_id) as bound_label,
-        (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at
-       from users u where u.org_id = $1 and u.kind = 'agent' order by u.name`, [user.orgId]);
-    return { agents: await withUsable(rows.rows.map(mapAgent)) };
+    const rows = await db.query(`${AGENT_SELECT} where u.org_id = $1 and u.kind = 'agent' order by u.name`, [user.orgId]);
+    const out = [];
+    for (const r of rows.rows) out.push(mapAgent(r, await canManageProfile(user, { project_id: r.profile_project_id ?? null })));
+    return { agents: await withUsable(out) };
   });
 
-  app.post<{ Body: { name: string; aiProfileId?: string | null; persona?: string | null; scope?: 'all' | 'selected'; projectIds?: string[] } }>('/agents', async (req) => {
+  app.post<{ Body: { name: string; aiProfileId: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents', async (req) => {
     const user = requireUser(req);
-    if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung legt Agenten an');
-    const name = req.body?.name?.trim();
+    const b = req.body ?? ({} as any);
+    const name = String(b.name ?? '').trim().slice(0, 80);
     if (!name) throw badRequest('Name erforderlich');
+    // Ohne Angabe nur, wenn eindeutig: das einzige LLM des Mandanten, das die Person verwaltet
+    const only = b.aiProfileId ? null : hasOrgRight(user, 'ai_admin') ? (await db.query(`select id from ai_profiles where org_id = $1 and project_id is null`, [user.orgId])).rows : [];
+    const profile = await profileOf(user.orgId, b.aiProfileId ?? (only?.length === 1 ? only[0].id : null));
+    if (!profile) throw badRequest('LLM wählen: ein Agent gehört zu genau einem LLM');
+    if (!(await canManageProfile(user, profile))) throw forbidden(profile.project_id ? 'Agenten an einem eigenen LLM legt die PL des Projekts an (wenn der Mandant eigene LLMs erlaubt)' : 'Agenten an LLMs des Mandanten legt die KI-Verwaltung an');
+    const rights = b.rights === undefined ? DEFAULT_AGENT_RIGHTS : validRights(b.rights);
+    const policy = validPolicy(b.policy);
+    const budget = await validBudget(user.orgId, b.dailyBudget);
+    const scope = profile.project_id ? 'all' : validScope(b.scope ?? 'all');
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
-    const profileId = req.body?.aiProfileId ?? (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai?.defaultProfileId ?? null;
-    if (profileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [profileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
-    const persona = cleanPersona(req.body?.persona);
-    const scope = validScope(req.body?.scope ?? 'all');
-    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, agent_scope) values ($1,$2,$3,'','user','agent',$4,$5,$6) returning *`, [user.orgId, email, name, profileId, persona, scope]);
-    if (Array.isArray(req.body?.projectIds)) await setAgentProjects(user.orgId, r.id, req.body.projectIds);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, persona, scope } });
-    return { agent: mapAgent(await db.one(`select u.*, coalesce((select json_agg(x.project_id) from agent_projects x where x.agent_user_id = u.id), '[]'::json) as scope_project_ids from users u where u.id = $1`, [r.id])) };
+    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, signature, thinking_mode, agent_scope, agent_project_id, agent_created_by, agent_daily_budget, agent_rights, agent_policy)
+      values ($1,$2,$3,'','user','agent',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
+      [user.orgId, email, name, profile.id, cleanPersona(b.persona), cleanSignature(b.signature), thinking(b.thinkingMode), scope, profile.project_id, user.id, budget, rights, JSON.stringify(policy)]);
+    if (!profile.project_id && Array.isArray(b.projectIds)) await setAgentProjects(user.orgId, r.id, b.projectIds);
+    // Agent am eigenen LLM eines Projekts: dort gleich Mitglied (ein anderes Projekt kann ihn nicht nutzen)
+    if (profile.project_id) await db.query(`insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail) values ($1,$2,'member',true,false,false,false,true,true) on conflict do nothing`, [profile.project_id, r.id]);
+    await audit(db, { orgId: user.orgId, projectId: profile.project_id ?? null, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, profile: profile.name, rights, policy, dailyBudget: budget } });
+    return { agent: mapAgent(await db.one(`${AGENT_SELECT} where u.id = $1`, [r.id]), true) };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string | null; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null } }>('/agents/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
-    if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung');
-    const a = await db.maybeOne(`select * from users where id = $1 and org_id = $2 and kind = 'agent'`, [req.params.id, user.orgId]);
+    const a = await db.maybeOne(`select u.*, p.project_id as profile_project_id from users u left join ai_profiles p on p.id = u.ai_profile_id where u.id = $1 and u.org_id = $2 and u.kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
     const b = req.body ?? {};
-    // Agent einer PL: der Org-Admin sieht ihn und kann ihn (de)aktivieren, gestaltet ihn aber nicht
-    if (a.agent_project_id && Object.keys(b).some((k) => k !== 'active')) throw forbidden('Dieser Agent gehört zu einem Projekt; Einstellungen macht dessen PL');
-    if (b.aiProfileId && !(await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.aiProfileId, user.orgId]))) throw badRequest('KI-Profil nicht gefunden');
-    const persona = 'persona' in b ? cleanPersona(b.persona) : null;
-    if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
-    if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, b.thinkingMode ?? null]);
-    if ('signature' in b) await db.query(`update users set signature = $2 where id = $1`, [a.id, cleanSignature(b.signature)]);
-    // Tagesbudget des Agenten (Läufe); null = Mandantenwert; wirksam ist das Minimum aus beidem
-    if ('dailyBudget' in b) {
-      if (b.dailyBudget !== null && !(Number.isInteger(b.dailyBudget) && Number(b.dailyBudget) >= 0 && Number(b.dailyBudget) <= 1000)) throw badRequest('Tagesbudget: 0 bis 1000 oder leer');
-      await db.query(`update users set agent_daily_budget = $2 where id = $1`, [a.id, b.dailyBudget]);
+    const manages = await canManageProfile(user, { project_id: a.profile_project_id ?? a.agent_project_id ?? null });
+    // Die KI-Verwaltung darf jeden Agenten (de)aktivieren; alles andere nur, wer sein LLM verwaltet
+    const onlyActive = Object.keys(b).every((k) => k === 'active');
+    if (!manages && !(onlyActive && hasOrgRight(user, 'ai_admin'))) throw forbidden('Diesen Agenten verwaltet, wer sein LLM verwaltet');
+    if (b.aiProfileId !== undefined && b.aiProfileId !== a.ai_profile_id) {
+      const np = await profileOf(user.orgId, b.aiProfileId);
+      if (!np || !(await canManageProfile(user, np))) throw badRequest('LLM nicht gefunden oder nicht von dir verwaltet');
+      if ((np.project_id ?? null) !== (a.agent_project_id ?? null)) throw badRequest('Ein Agent wechselt nur zwischen LLMs derselben Ebene (Mandant bzw. dasselbe Projekt)');
+      await db.query(`update users set ai_profile_id = $2 where id = $1`, [a.id, np.id]);
     }
-    if (b.scope !== undefined) await db.query(`update users set agent_scope = $2 where id = $1`, [a.id, validScope(b.scope)]);
-    if (Array.isArray(b.projectIds)) await setAgentProjects(user.orgId, a.id, b.projectIds);
-    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active), ai_profile_id = case when $4 then $5::uuid else ai_profile_id end, persona = case when $6 then $7 else persona end where id = $1`, [a.id, b.name?.trim() || null, typeof b.active === 'boolean' ? b.active : null, 'aiProfileId' in b, b.aiProfileId ?? null, 'persona' in b, persona]);
+    if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, thinking(b.thinkingMode)]);
+    if ('signature' in b) await db.query(`update users set signature = $2 where id = $1`, [a.id, cleanSignature(b.signature)]);
+    if ('persona' in b) await db.query(`update users set persona = $2 where id = $1`, [a.id, cleanPersona(b.persona)]);
+    if ('dailyBudget' in b) await db.query(`update users set agent_daily_budget = $2 where id = $1`, [a.id, await validBudget(user.orgId, b.dailyBudget)]);
+    if (b.rights !== undefined) await db.query(`update users set agent_rights = $2 where id = $1`, [a.id, validRights(b.rights)]);
+    if (b.policy !== undefined) await db.query(`update users set agent_policy = $2::jsonb where id = $1`, [a.id, JSON.stringify(validPolicy(b.policy))]);
+    if (!a.agent_project_id && b.scope !== undefined) await db.query(`update users set agent_scope = $2 where id = $1`, [a.id, validScope(b.scope)]);
+    if (!a.agent_project_id && Array.isArray(b.projectIds)) await setAgentProjects(user.orgId, a.id, b.projectIds);
+    await db.query(`update users set name = coalesce($2, name), active = coalesce($3, active) where id = $1`, [a.id, b.name?.trim().slice(0, 80) || null, typeof b.active === 'boolean' ? b.active : null]);
     if (b.active === false) await db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 and archived_at is null`, [a.id]);
-    await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.update', objectType: 'user', objectId: a.id, details: b });
+    await audit(db, { orgId: user.orgId, projectId: a.agent_project_id ?? null, userId: user.id, action: 'agent.update', objectType: 'user', objectId: a.id, details: { ...b, persona: undefined, signature: undefined } });
     // Warnungen: Projekte, in denen der Agent nach der Änderung nicht mehr läuft (Mitgliedschaft bleibt)
     const warnings: string[] = [];
     const rows = await db.query(`select p.id, ${projectLabelSql('p', 'o')} as label from project_members m join projects p on p.id = m.project_id left join users o on o.id = p.created_by where m.user_id = $1 and p.status = 'active' order by p.key`, [a.id]);
     for (const r of rows.rows) { const u = await agentUsableIn(db, a.id, r.id); if (!u.ok) warnings.push(`Läuft in ${r.label} nicht: ${u.reason}`); }
-    return { agent: mapAgent(await db.one(`select u.*, coalesce((select json_agg(x.project_id) from agent_projects x where x.agent_user_id = u.id), '[]'::json) as scope_project_ids from users u where u.id = $1`, [a.id])), warnings };
+    return { agent: mapAgent(await db.one(`${AGENT_SELECT} where u.id = $1`, [a.id]), manages), warnings };
   });
 
-  // ---- Eigene Agenten der PL: nur für das eigene Projekt, nur freigegebene KI-Profile, Tagesbudget höchstens der Mandantenwert;
-  // erlaubt über die KI-Freigaben (pl.agents für die PL im Projekt)
-  const boundOf = async (projectId: string, id: string) => db.maybeOne(`select * from users where id = $1 and kind = 'agent' and agent_project_id = $2`, [id, projectId]);
-  const checkPolicy = async (user: User, projectId: string, b: { aiProfileId?: string | null; dailyBudget?: number | null }, cur?: any) => {
-    const s = await orgAiSettings(db, user.orgId);
-    const d = await aiAllowed(db, { userId: user.id, projectId, feature: 'pl.agents' });
-    if (!d.allowed) throw forbidden(`Eigene Agenten der PL sind nicht freigegeben: ${d.reason}`);
-    // Nur LLMs, die im Projekt verfügbar sind (vom Org-Admin freigegeben oder eigenes LLM des Projekts)
-    const available = await projectProfiles(db, projectId);
-    const profileId = 'aiProfileId' in b ? b.aiProfileId ?? null : cur?.ai_profile_id ?? available[0]?.id ?? null;
-    if (!profileId || !available.some((p) => p.id === profileId)) throw badRequest('Dieses LLM ist im Projekt nicht verfügbar');
-    const budget = 'dailyBudget' in b ? (b.dailyBudget == null ? s.plAgents.maxBudget : Number(b.dailyBudget)) : cur?.agent_daily_budget ?? s.plAgents.maxBudget;
-    if (!Number.isInteger(budget) || budget < 0 || budget > s.plAgents.maxBudget) throw badRequest(`Tagesbudget 0 bis ${s.plAgents.maxBudget} Läufe`);
-    return { profileId, budget, policy: s.plAgents };
-  };
+  /**
+   * Agenten für die Projekteinstellungen: die eingeladenen (Rolle, wirksame Rechte, läuft oder warum nicht) und die einladbaren
+   * des Mandanten bzw. vom eigenen LLM des Projekts (einsetzbar oder Grund).
+   */
   app.get<{ Params: { id: string } }>('/projects/:id/agents', async (req) => {
     const user = requireUser(req);
-    const m = await requireProject(db, user, req.params.id);
-    const s = await orgAiSettings(db, user.orgId);
-    const rows = await db.query(`select u.*, (select count(*)::int from agent_runs r where r.agent_user_id = u.id) as runs, (select max(created_at) from agent_runs r where r.agent_user_id = u.id) as last_run_at from users u where u.agent_project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id]);
-    const profiles = (await projectProfiles(db, req.params.id)).map((p) => ({ id: p.id, name: p.name }));
-    const d = m.role === 'pl' ? await aiAllowed(db, { userId: user.id, projectId: req.params.id, feature: 'pl.agents' }) : null;
-    // Agenten der Organisation für den Aufnahme-Dialog: einsetzbar oder Grund (Einsatz, LLM im Projekt), schon Mitglied
-    const org = await db.query(`select u.id, u.name, u.persona, (select a.name from ai_profiles a where a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id))) as profile_name, exists (select 1 from project_members pm where pm.project_id = $2 and pm.user_id = u.id) as member from users u where u.org_id = $1 and u.kind = 'agent' and u.active and u.agent_project_id is null order by u.name`, [user.orgId, req.params.id]);
-    const orgAgents = [] as { id: string; name: string; persona: string | null; profileName: string | null; member: boolean; usable: boolean; reason: string | null }[];
-    for (const r of org.rows) { const u = await agentUsableIn(db, r.id, req.params.id); orgAgents.push({ id: r.id, name: r.name, persona: r.persona ?? null, profileName: r.profile_name ?? null, member: Boolean(r.member), usable: u.ok, reason: u.ok ? null : u.reason }); }
-    // Agenten im Projekt (Mitglieder): Einsetzbarkeit mit Grund
-    const members = await db.query(`select u.id, u.name, m.role, m.is_deputy, u.agent_project_id, (select a.name from ai_profiles a where a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id))) as profile_name from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind = 'agent' order by u.name`, [req.params.id]);
-    const inProject = [] as { id: string; name: string; role: string; profileName: string | null; own: boolean; usable: boolean; reason: string | null }[];
-    for (const r of members.rows) { const u = await agentUsableIn(db, r.id, req.params.id); inProject.push({ id: r.id, name: r.name, role: r.role, profileName: r.profile_name ?? null, own: Boolean(r.agent_project_id), usable: u.ok, reason: u.ok ? null : u.reason }); }
-    return { agents: rows.rows.map((r: any) => ({ ...mapAgent(r), runs: r.runs, lastRunAt: r.last_run_at })), orgAgents, inProject, policy: { enabled: Boolean(d?.allowed), maxBudget: s.plAgents.maxBudget, profiles }, canManage: Boolean(d?.allowed), manageReason: d ? (d.allowed ? null : d.reason) : 'Nur die PL' };
-  });
-  app.post<{ Params: { id: string }; Body: { name: string; persona?: string | null; signature?: string | null; aiProfileId?: string | null; thinkingMode?: 'off' | 'on' | null; dailyBudget?: number | null; role?: 'member' | 'pl'; agentCanMail?: boolean } }>('/projects/:id/agents', async (req) => {
-    const user = requireUser(req);
-    await requireProject(db, user, req.params.id, 'pl');
-    const b = req.body ?? ({} as any);
-    const name = String(b.name ?? '').trim().slice(0, 80);
-    if (!name) throw badRequest('Name erforderlich');
-    const { profileId, budget } = await checkPolicy(user, req.params.id, b);
-    if (b.thinkingMode != null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
-    const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
-    const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, signature, thinking_mode, agent_project_id, agent_daily_budget, agent_created_by) values ($1,$2,$3,'','user','agent',$4,$5,$6,$7,$8,$9,$10) returning *`,
-      [user.orgId, email, name, profileId, cleanPersona(b.persona), cleanSignature(b.signature), b.thinkingMode ?? null, req.params.id, budget, user.id]);
-    const role = b.role === 'pl' ? 'pl' : 'member';
-    await db.query(`insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail) values ($1,$2,$3,true,$4,false,false,true,$5)`, [req.params.id, r.id, role, role === 'pl', b.agentCanMail !== false]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, projectBound: true, role, dailyBudget: budget } });
-    return { agent: mapAgent(r) };
-  });
-  app.patch<{ Params: { id: string; aid: string }; Body: { name?: string; persona?: string | null; signature?: string | null; aiProfileId?: string | null; thinkingMode?: 'off' | 'on' | null; dailyBudget?: number | null; active?: boolean } }>('/projects/:id/agents/:aid', async (req) => {
-    const user = requireUser(req);
-    await requireProject(db, user, req.params.id, 'pl');
-    const a = await boundOf(req.params.id, req.params.aid);
-    if (!a) throw notFound('Agent des Projekts nicht gefunden');
-    const b = req.body ?? {};
-    const { profileId, budget } = await checkPolicy(user, req.params.id, b, a);
-    if ('thinkingMode' in b && b.thinkingMode !== null && b.thinkingMode !== 'off' && b.thinkingMode !== 'on') throw badRequest('Denkmodus: off, on oder null (wie Profil)');
-    await db.query(`update users set name = coalesce($2, name), persona = case when $3 then $4 else persona end, signature = case when $5 then $6 else signature end, ai_profile_id = $7, thinking_mode = case when $8 then $9 else thinking_mode end, agent_daily_budget = $10, active = coalesce($11, active) where id = $1`,
-      [a.id, b.name?.trim().slice(0, 80) || null, 'persona' in b, cleanPersona(b.persona), 'signature' in b, cleanSignature(b.signature), profileId, 'thinkingMode' in b, b.thinkingMode ?? null, budget, typeof b.active === 'boolean' ? b.active : null]);
-    if (b.active === false) await db.query(`update tasks set responsible_user_id = null where responsible_user_id = $1 and archived_at is null`, [a.id]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'agent.update', objectType: 'user', objectId: a.id, details: { ...b, persona: undefined, signature: undefined } });
-    return { agent: mapAgent(await db.one(`select * from users where id = $1`, [a.id])) };
+    await requireProject(db, user, req.params.id);
+    const rows = await db.query(`${AGENT_SELECT} where u.org_id = $1 and u.kind = 'agent' and (u.agent_project_id is null or u.agent_project_id = $2) order by u.name`, [user.orgId, req.params.id]);
+    const members = new Map((await db.query(`select user_id, role, agent_policy from project_members where project_id = $1`, [req.params.id])).rows.map((r: any) => [r.user_id, r]));
+    const inProject = []; const candidates = [];
+    for (const r of rows.rows) {
+      const u = await agentUsableIn(db, r.id, req.params.id);
+      const base = { ...mapAgent(r, await canManageProfile(user, { project_id: r.profile_project_id ?? null })), usable: u.ok, reason: u.ok ? null : u.reason };
+      const m = members.get(r.id);
+      if (m) inProject.push({ ...base, role: m.role, deny: Array.isArray(m.agent_policy?.deny) ? m.agent_policy.deny : [] });
+      else if (r.active) candidates.push(base);
+    }
+    return { inProject, candidates };
   });
 
   // Läufe je Projekt (Mitglieder lesen), je Arbeitspaket; Läufe an Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf
@@ -242,7 +234,7 @@ export async function agentRoutes(app: FastifyInstance) {
     await requireProject(db, user, t.project_id, 'pl');
     const agent = await agentForTask(db, t.id);
     if (!agent) throw badRequest('Für das Arbeitspaket ist kein Agent zuständig (direkt oder geerbt)');
-    // Auch der Lauf von Hand beachtet Pause, KI-Freigaben und Tagesbudget
+    // Auch der Lauf von Hand beachtet Pause, Rechte und Tagesbudget
     if (t.agent_paused) throw badRequest('Der Agent ist an diesem Arbeitspaket pausiert. Erst fortsetzen.');
     const d = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id });
     if (!d.allowed) throw aiError(d, true);

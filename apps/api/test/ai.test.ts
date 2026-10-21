@@ -47,14 +47,16 @@ test('Ohne Profil keine KI; Org-Admin legt Profile an, Test prüft den Schlüsse
   assert.equal(calls[calls.length - 1].body.fallbacks, 'default', 'Refusal-Fallback aktiv');
   const st = (await t.api(pl).get('/ai/status')).json();
   assert.equal(st.enabled, true);
-  assert.equal(st.defaultProfileId, bad.id, 'erstes Profil wird Standard');
   assert.equal(JSON.stringify(st).includes('good'), false, 'Schlüssel bleibt auf dem Server');
-  // Projekt-KI ist aus, bis die PL ein Profil zuweist
-  assert.equal((await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`)).statusCode, 400);
-  assert.equal((await t.api(await t.login('max@demo.local')).patch(`/projects/${pid}`, { aiProfileId: bad.id })).statusCode, 403);
-  const set = await t.api(pl).patch(`/projects/${pid}`, { aiProfileId: bad.id });
-  assert.equal(set.statusCode, 200, set.body);
-  assert.equal((await t.api(pl).get(`/projects/${pid}`)).json().project.aiProfileId, bad.id);
+  // Im Projekt arbeiten nur Agenten: Assistenz erst, wenn die PL einen Agenten mit dem Recht einlädt
+  const none = await t.api(pl).post(`/mail/mails/${mid}/ai/summarize`);
+  assert.equal(none.statusCode, 400); assert.match(none.json().error, /Kein Agent im Projekt darf „Mail zusammenfassen“/);
+  const helper = (await t.api(admin).post('/agents', { name: 'Assistent', aiProfileId: bad.id })).json().agent;
+  assert.equal((await t.api(await t.login('max@demo.local')).put(`/projects/${pid}/members/${helper.id}`, { role: 'member' })).statusCode, 403, 'einladen nur die PL');
+  assert.equal((await t.api(pl).put(`/projects/${pid}/members/${helper.id}`, { role: 'member' })).statusCode, 200);
+  const caps = (await t.api(pl).get(`/projects/${pid}/ai/capabilities`)).json();
+  assert.equal(caps.assistAgentId, helper.id, 'einziger Agent mit Assistenz-Rechten');
+  assert.equal(caps.features['assist.summarize'].allowed, true);
 });
 
 test('Zusammenfassen: nur mit KI-Recht der Ansicht, Ergebnis wird an der Mail gespeichert', async () => {
@@ -70,6 +72,23 @@ test('Zusammenfassen: nur mit KI-Recht der Ansicht, Ergebnis wird an der Mail ge
   assert.equal(calls.length, n + 1, 'zweiter Aufruf aus dem Speicher');
   const a = await t.db.one(`select 1 from audit_log where action = 'ai.call' and object_id = $1`, [mid]);
   assert.ok(a);
+  assert.equal(r.json().viaChat, 'Assistent', 'ausgeführt vom Agenten, Antwort auch per Chat');
+  assert.equal((await t.db.one(`select count(*)::int as c from agent_runs r join users u on u.id = r.agent_user_id where u.name = 'Assistent' and r.trigger = 'assist'`)).c, 1, 'zählt ins Budget des Agenten, der Speicher nicht');
+  // Zwei geeignete Agenten ohne Projektagent: die Person wählt; der Projektagent ist Standard
+  const admin = await t.login('admin@demo.local');
+  const profile = (await t.api(admin).get('/ai/profiles')).json().profiles[0];
+  const second = (await t.api(admin).post('/agents', { name: 'Zweiter', aiProfileId: profile.id })).json().agent;
+  await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${second.id}`, { role: 'member' });
+  assert.equal((await t.api(pl).get(`/projects/${t.ids.projects.web}/ai/capabilities`)).json().assistAgentId, null);
+  const ask = await t.api(pl).post(`/projects/${t.ids.projects.web}/ai/ask`, { question: 'Was läuft im Projekt?' });
+  assert.equal(ask.statusCode, 400); assert.match(ask.json().error, /bitte einen wählen/);
+  assert.equal((await t.api(pl).post(`/projects/${t.ids.projects.web}/ai/ask`, { question: 'Was läuft im Projekt?', agentId: second.id })).statusCode, 200);
+  // Die PL schaltet die Assistenz beim zweiten ab: wieder eindeutig
+  assert.equal((await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${second.id}/agent-policy`, { deny: ['assist.summarize', 'assist.essence', 'assist.report', 'assist.ask', 'assist.final_reply'] })).statusCode, 200);
+  const helper = (await t.api(pl).get(`/projects/${t.ids.projects.web}/ai/capabilities`)).json();
+  assert.equal(helper.agents.find((x: any) => x.id === helper.assistAgentId).name, 'Assistent');
+  const denied = await t.api(pl).post(`/projects/${t.ids.projects.web}/ai/ask`, { question: 'Was läuft?', agentId: second.id });
+  assert.equal(denied.statusCode, 403); assert.match(denied.json().error, /in diesem Projekt abgeschaltet/);
 });
 
 test('Essenz → Arbeitspaket: Vorschlag, Freigabe nur mit Recht, Anwendung setzt Log (Quelle KI), Status, Termin und Verknüpfung', async () => {

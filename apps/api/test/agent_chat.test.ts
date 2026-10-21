@@ -37,7 +37,7 @@ test('KI-Agent im Chat: Direktnachricht, Erwähnung im Projektkanal mit Thread, 
   const max = await t.login('max@demo.local');
   const web = t.ids.projects.web;
   const profile = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen3' })).json().profile;
-  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50, defaultProfileId: profile.id });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   const agent = (await t.api(admin).post('/agents', { name: 'Chatty' })).json().agent;
   assert.equal((await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member', agentCanMail: false })).statusCode, 200);
   assert.equal((await t.api(pl).patch(`/tasks/${t.ids.tasks.t4}`, { responsibleUserId: agent.id })).statusCode, 200);

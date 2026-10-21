@@ -157,68 +157,50 @@ export interface OrgSettings {
   /** KI-Modul: Anbieter, Modell, lokale Adresse, Tagesbudget je Agent; der Schlüssel liegt getrennt und verlässt den Server nie. enabled = false ist der Notaus */
   /** Benachrichtigungen: Stunde des Tages-Digests (Europe/Berlin, Standard 7) */
   notify?: { digestHour?: number };
-  ai?: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; /** Höchstes Tagesbudget eigener Agenten der PL (nie über agentDailyBudget) */ plAgents?: { maxBudget?: number }; /** Eigene LLMs der Projekte: aus, nur persönliche Projekte (Standard) oder alle */ ownLlm?: 'off' | 'personal' | 'all'; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Konzept 6): Vorgabe und Grenzen für alle Projekte */ agentPolicy?: AgentPolicy; /** Online-Recherche (Konzept 8): Suchdienst für lokale Profile, Grenzen, Domains */ web?: WebSearchSettings; /** Arbeitszeitfenster für Mails der Agenten nach außen (Standard Mo–Fr 07–19 Europe/Berlin) */ externalWindow?: ExternalWindow };
+  ai?: { enabled?: boolean; /** Tagesbudget je Agent (Obergrenze; der Verwalter des LLM setzt je Agent weniger) */ agentDailyBudget?: number; /** Eigene LLMs der Projekte: aus, nur persönliche Projekte (Standard) oder alle */ ownLlm?: 'off' | 'personal' | 'all'; /** Außenprüfung für Agenten-Mails an Nicht-Interne: strict = neu formulieren und prüfen (Standard), check = nur prüfen */ externalGuard?: 'strict' | 'check'; /** Online-Recherche (Konzept 8): Suchdienst für lokale Profile, Grenzen, Domains */ web?: WebSearchSettings; /** Arbeitszeitfenster für Mails der Agenten nach außen (Standard Mo–Fr 07–19 Europe/Berlin) */ externalWindow?: ExternalWindow };
 }
 
 /**
- * KI-Freigaben: Funktionskatalog. Eine Regel gilt für eine Funktion, eine Kategorie oder „*“. who sagt, wer geprüft wird
- * (Person, Agent oder beide); defaultDeny = ohne Regel gesperrt; later = noch ohne Prüfstelle im Code, in der Matrix ausgeblendet
- * (Kategorie- und „*“-Regeln gelten trotzdem).
+ * Rechte eines KI-Agenten: Funktionskatalog. Im Projekt arbeiten nur Agenten; wer das LLM eines Agenten verwaltet, legt fest,
+ * was er darf (users.agent_rights), die PL schränkt im Projekt nur weiter ein. who: Assistenz löst eine Person aus („KI nutzen“),
+ * ausgeführt wird sie von einem Agenten; defaultDeny = beim Anlegen aus.
  */
-export type AiFeatureCategory = 'assist' | 'mail' | 'agent' | 'pl';
-export const AI_CATEGORIES: { key: AiFeatureCategory; label: string }[] = [
-  { key: 'assist', label: 'KI-Assistenz' },
-  { key: 'mail', label: 'Mail-KI' },
-  { key: 'agent', label: 'Agenten' },
-  { key: 'pl', label: 'PL-Funktionen' }
+export type AiFeatureCategory = 'assist' | 'mail' | 'agent' | 'action';
+export const AI_CATEGORIES: { key: AiFeatureCategory; label: string; hint: string }[] = [
+  { key: 'assist', label: 'Assistenz', hint: 'auf Knopfdruck einer Person mit „KI nutzen“' },
+  { key: 'mail', label: 'Mail', hint: 'Mails im Projekt vorschlagen oder bearbeiten' },
+  { key: 'agent', label: 'Arbeit', hint: 'Arbeitspakete, Chat, Aufträge, Recherche' },
+  { key: 'action', label: 'Aktionen', hint: 'was er dabei verändern darf' }
 ];
-export interface AiFeatureDef { key: string; category: AiFeatureCategory; label: string; who: 'person' | 'agent' | 'both'; defaultDeny?: boolean; later?: boolean }
+export interface AiFeatureDef { key: string; category: AiFeatureCategory; label: string; who: 'person' | 'agent' | 'both'; defaultDeny?: boolean }
 export const AI_FEATURES = [
-  { key: 'assist.summarize', category: 'assist', label: 'Mail zusammenfassen', who: 'person' },
-  { key: 'assist.essence', category: 'assist', label: 'Essenz in Arbeitspaket oder Seite', who: 'person' },
-  { key: 'assist.report', category: 'assist', label: 'Statusbericht-Entwurf', who: 'person' },
-  { key: 'assist.ask', category: 'assist', label: 'Frage ans Projekt', who: 'person' },
-  { key: 'assist.final_reply', category: 'assist', label: 'Abschluss-Antwort mit KI', who: 'person' },
-  { key: 'mail.triage', category: 'mail', label: 'Agent schlägt zu Mails vor (als Mitglied)', who: 'agent' },
-  { key: 'agent.mail', category: 'mail', label: 'Agent bearbeitet Mails direkt (als stellvertretende PL)', who: 'agent' },
-  { key: 'agent.run', category: 'agent', label: 'Agentenläufe', who: 'agent' },
-  { key: 'agent.chat', category: 'agent', label: 'Chat mit Agenten', who: 'both' },
-  { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat', who: 'both' },
+  { key: 'assist.summarize', category: 'assist', label: 'Mail zusammenfassen', who: 'both' },
+  { key: 'assist.essence', category: 'assist', label: 'Essenz in Arbeitspaket oder Seite', who: 'both' },
+  { key: 'assist.report', category: 'assist', label: 'Statusbericht-Entwurf', who: 'both' },
+  { key: 'assist.ask', category: 'assist', label: 'Frage ans Projekt', who: 'both' },
+  { key: 'assist.final_reply', category: 'assist', label: 'Abschluss-Antwort formulieren', who: 'both' },
+  { key: 'mail.triage', category: 'mail', label: 'Zu Mails vorschlagen (als Mitglied)', who: 'agent' },
+  { key: 'agent.mail', category: 'mail', label: 'Mails direkt bearbeiten (als Projektagent)', who: 'agent' },
+  { key: 'agent.run', category: 'agent', label: 'Arbeitspakete bearbeiten', who: 'agent' },
+  { key: 'agent.chat', category: 'agent', label: 'Chat', who: 'both' },
+  { key: 'agent.order', category: 'agent', label: 'Aufträge im Chat annehmen', who: 'both' },
   { key: 'agent.web', category: 'agent', label: 'Online-Recherche', who: 'agent', defaultDeny: true },
-  { key: 'agent.finalize', category: 'agent', label: 'Final setzen', who: 'agent' },
-  { key: 'agent.distribute', category: 'agent', label: 'PDF an Verteiler', who: 'agent' },
-  { key: 'agent.send_external', category: 'agent', label: 'Mails nach außen', who: 'agent' },
-  { key: 'agent.close', category: 'agent', label: 'Erledigt setzen', who: 'agent' },
-  { key: 'agent.restructure', category: 'agent', label: 'Umstrukturieren', who: 'agent' },
-  { key: 'agent.plan', category: 'agent', label: 'Planen', who: 'agent' },
-  { key: 'agent.assign', category: 'agent', label: 'Zuweisen', who: 'agent' },
-  { key: 'agent.schedule', category: 'agent', label: 'Termine ändern', who: 'agent' },
-  { key: 'agent.foreign', category: 'agent', label: 'Fremde Arbeitspakete', who: 'agent' },
-  { key: 'agent.workflow', category: 'agent', label: 'Workflow-Schritte übernehmen', who: 'agent' },
-  { key: 'pl.agents', category: 'pl', label: 'Eigene Agenten der PL', who: 'person', defaultDeny: true },
-  { key: 'pl.own_llm', category: 'pl', label: 'Eigenes LLM im Projekt', who: 'person' }
+  { key: 'agent.finalize', category: 'action', label: 'Final setzen', who: 'agent' },
+  { key: 'agent.distribute', category: 'action', label: 'PDF an Verteiler', who: 'agent' },
+  { key: 'agent.send_external', category: 'action', label: 'Mails nach außen', who: 'agent' },
+  { key: 'agent.close', category: 'action', label: 'Erledigt setzen', who: 'agent' },
+  { key: 'agent.restructure', category: 'action', label: 'Umstrukturieren', who: 'agent' },
+  { key: 'agent.plan', category: 'action', label: 'Planen', who: 'agent' },
+  { key: 'agent.assign', category: 'action', label: 'Zuweisen', who: 'agent' },
+  { key: 'agent.schedule', category: 'action', label: 'Termine ändern', who: 'agent' },
+  { key: 'agent.foreign', category: 'action', label: 'Fremde Arbeitspakete', who: 'agent' },
+  { key: 'agent.workflow', category: 'action', label: 'Workflow-Schritte übernehmen', who: 'agent' }
 ] as const satisfies readonly AiFeatureDef[];
 export type AiFeature = (typeof AI_FEATURES)[number]['key'];
+/** Rechte eines neuen Agenten (alles außer defaultDeny) */
+export const DEFAULT_AGENT_RIGHTS: AiFeature[] = AI_FEATURES.filter((f) => !('defaultDeny' in f && f.defaultDeny)).map((f) => f.key);
 
-/** Regel der KI-Freigaben: Ort (Projekt oder alle) × Wer (Person/Agent, Gruppe oder alle) × Funktion × Wirkung. */
-export interface AiPolicyRule {
-  id: string;
-  projectId: string | null;
-  userId: string | null;
-  groupId: string | null;
-  feature: string;
-  effect: 'allow' | 'deny';
-  note: string | null;
-  setBy: string | null;
-  setByName: string | null;
-  updatedAt: string;
-  projectLabel: string | null;
-  userName: string | null;
-  userKind: 'person' | 'agent' | null;
-  groupName: string | null;
-}
-
-/** Prüfstufen von aiAllowed: Notaus → Regeln des Org-Admins → Ebene der PL → Profil → Budget. */
+/** Prüfstufen von aiAllowed: Notaus → Rechte des Agenten (Verwalter des LLM) → Ebene der PL → Profil → Budget. */
 export type AiStage = 'killswitch' | 'policy' | 'project' | 'profile' | 'budget' | 'ok';
 export interface AiTraceStep { stage: AiStage; ok: boolean; text: string }
 export interface AiDecision {
@@ -231,18 +213,21 @@ export interface AiDecision {
    */
   publicReason: string;
   stage: AiStage;
-  /** Regel, die in Stufe 1 entschieden hat */
-  rule?: { id: string; effect: 'allow' | 'deny' } | null;
   /** fehlende Einrichtung (keine Projekt-KI, kein Profil) statt Sperre */
   missing?: boolean;
   trace: AiTraceStep[];
 }
 export type AiCapability = Pick<AiDecision, 'allowed' | 'reason' | 'stage'>;
-/** Was die angemeldete Person im Projekt mit KI darf, je Funktion mit Begründung; dazu die Agenten des Projekts. */
+/**
+ * Was die angemeldete Person im Projekt mit KI darf, je Assistenz-Funktion mit Begründung (Person und ausführender Agent);
+ * dazu die Agenten des Projekts mit ihren Assistenz-Rechten und der Standard-Agent (Projektagent, sonst der einzige geeignete).
+ */
 export interface AiCapabilities {
   killswitch: boolean;
   features: Partial<Record<AiFeature, AiCapability>>;
-  agents: { id: string; name: string; run: AiCapability; chat: AiCapability }[];
+  agents: { id: string; name: string; run: AiCapability; chat: AiCapability; assist: AiFeature[] }[];
+  /** Agent, der Assistenz ohne Auswahl ausführt; null = mehrere geeignet, die Person wählt */
+  assistAgentId: string | null;
 }
 
 export type AiProposalKind = 'task_update' | 'page_append' | 'agent_action';
@@ -529,7 +514,7 @@ export type SynergyMode = 'off' | 'ask' | 'use';
 /** Denktiefe: schnell (eine Leserunde, knapper Kontext), Standard, gründlich (vier Leserunden, voller Kontext, kostet zwei Läufe) */
 export type AgentDepth = 'quick' | 'standard' | 'deep';
 export const AGENT_DEPTHS: { key: AgentDepth; label: string }[] = [{ key: 'quick', label: 'schnell' }, { key: 'standard', label: 'Standard' }, { key: 'deep', label: 'gründlich' }];
-export interface AgentPolicy { mode?: AgentMode; confirm?: AgentActionClass[]; maxMode?: AgentMode; lockedConfirm?: AgentActionClass[]; workflows?: boolean; chatOrders?: ChatOrdersLevel; scope?: AgentScope; synergies?: SynergyMode; /** Uhrzeit des Projektdurchlaufs (Europe/Berlin, werktags) */ reviewAt?: string; depth?: AgentDepth; /** Grenze (Org, Projekt): höchste erlaubte Denktiefe */ maxDepth?: AgentDepth }
+export interface AgentPolicy { /** nur Agent im Projekt: von der PL abgeschaltete Rechte */ deny?: AiFeature[]; mode?: AgentMode; confirm?: AgentActionClass[]; maxMode?: AgentMode; lockedConfirm?: AgentActionClass[]; workflows?: boolean; chatOrders?: ChatOrdersLevel; scope?: AgentScope; synergies?: SynergyMode; /** Uhrzeit des Projektdurchlaufs (Europe/Berlin, werktags) */ reviewAt?: string; depth?: AgentDepth; /** Grenze (Org, Projekt): höchste erlaubte Denktiefe */ maxDepth?: AgentDepth }
 /** Wirksame Policy mit Herkunft je Feld */
 export interface EffectiveAgentPolicy {
   mode: AgentMode; confirm: AgentActionClass[]; workflows: boolean; chatOrders: ChatOrdersLevel; scope: AgentScope; synergies: SynergyMode; reviewAt: string; depth: AgentDepth;

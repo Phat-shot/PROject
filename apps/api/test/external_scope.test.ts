@@ -206,7 +206,7 @@ test('Agenten-Mail an Externe (strict): Neuformulierung kennt nur den Außenkont
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const prof = (await t.api(admin).post('/ai/profiles', { name: 'Lokales LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'lokal-llm' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: prof.id, agentDailyBudget: 100 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
   agent = (await t.api(admin).post('/agents', { name: 'Außendienst' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member', agentCanMail: true });
   other = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Elektroinstallation Küche planen' })).json().task;

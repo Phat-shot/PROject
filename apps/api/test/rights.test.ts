@@ -12,6 +12,11 @@ import { mapUser } from '../src/auth.js';
 // Rechteprüfung an Arbeitspaketen (requireTask: Projektrolle und eingeschränkte Teilprojekte zusammen) und Empfänger aus Gruppen
 const t = await testApp();
 test.after(() => t.close());
+
+/** Agenten gehören zu einem LLM: einmal anlegen, dann wiederverwenden. */
+let llmId = '';
+const llmFor = async (admin: Record<string, string>) => llmId || (llmId = (await t.api(admin).post('/ai/profiles', { name: 'Test-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'm' })).json().profile.id);
+
 const ids = t.ids.users;
 const web = t.ids.projects.web;
 
@@ -139,7 +144,7 @@ test('Eingeschränkte Teilprojekte in Listen: Läufe, Vorschläge, Besprechungen
   const max = await t.login('max@demo.local');
   const pl = await t.login('pl@demo.local');
   const t2 = t.ids.tasks.t2;
-  const agent = (await t.api(admin).post('/agents', { name: 'Listenagent' })).json().agent.id;
+  const agent = (await t.api(admin).post('/agents', { name: 'Listenagent', aiProfileId: await llmFor(admin) })).json().agent.id;
   for (const [task, reasoning] of [[secret.id, 'Konditionen 12% Rabatt'], [t2, 'Wireframes geprüft'], [null, 'Projektlauf']]) {
     await t.db.query(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, reasoning) values ($1,$2,$3,$4,'manual',$5)`, [t.ids.org, agent, web, task, reasoning]);
   }
@@ -248,7 +253,7 @@ test('groupRecipients: aktive Personen der Gruppe mit Projektsicht und Sicht auf
   const pl = await t.login('pl@demo.local');
   await t.api(pl).put(`/projects/${web}/members/${inactive}`, { role: 'member' });
   await t.db.query(`update users set active = false where id = $1`, [inactive]);
-  const agent = (await t.api(admin).post('/agents', { name: 'Empfangsagent' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Empfangsagent', aiProfileId: await llmFor(admin) })).json().agent;
   await t.api(pl).put(`/projects/${web}/members/${agent.id}`, { role: 'member' });
   const gid = (await t.api(admin).post('/groups', { name: 'Empfänger', memberIds: [ids.pl, ids.anna, ids.max, ids.leser, inactive, outsider] })).json().group.id;
   await t.db.query(`insert into group_members (group_id, user_id) values ($1,$2)`, [gid, agent.id]);

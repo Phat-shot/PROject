@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { syncTaskBookings } from '../resources/service.js';
-import { parseAgentPolicy } from '../ai/agentPolicy.js';
 import { parseWindow } from '../ai/web.js';
 import { decideProposals } from '../ai/agentApproval.js';
-import type { AiFeature, AiProposal, User, AgentPolicy } from '@projekttool/shared';
+import type { AiFeature, AiProposal, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -12,13 +11,12 @@ import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
 import { linkMailToTask } from '../mail/link.js';
 import { aiConfigFor, aiStatus, complete, MODELS, profileWarnings, projectProfiles } from '../ai/client.js';
-import { aiError, ownLlmAllowed, ownLlmReason, setAiPolicy } from '../ai/policy.js';
+import { aiError, assistAgent, ownLlmAllowed } from '../ai/policy.js';
 import { askProject, essenceForPage, essenceForTask, statusReportDraft, summarizeMail } from '../ai/service.js';
 import { loadTask, touchTask } from '../tasks/service.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import { mapPage } from '../docs/service.js';
 import { notify } from '../notify.js';
-import { suggestAgent } from '../ai/mailAi.js';
 import { agentChatMessage } from '../ai/plan.js';
 import { seal } from '../secrets.js';
 import { PROJECT_LABEL_SQL } from '../projectPolicy.js';
@@ -29,21 +27,20 @@ function mapProposal(r: any): AiProposal {
 }
 
 /**
- * KI-Modul (letztes Modul, Regel vor KI): Zusammenfassen direkt; Essenz in Arbeitspaket oder Seite nur als Vorschlag,
- * den eine Person mit Freigaberecht (oder die PL) anwendet; Statusbericht als Entwurfsseite; Frage ans Projekt mit Quellen.
- * Jede Funktion läuft über aiConfigFor (KI-Freigaben); Verwaltung › KI dürfen Org-Admin und KI-Verwaltung (ai_admin).
+ * KI-Modul (letztes Modul, Regel vor KI): Assistenz auf Knopfdruck, ausgeführt von einem Agenten des Projekts (Projektagent,
+ * sonst Auswahl): Zusammenfassen direkt; Essenz in Arbeitspaket oder Seite nur als Vorschlag, den eine Person mit Freigaberecht
+ * (oder die PL) anwendet; Statusbericht als Entwurfsseite; Frage ans Projekt mit Quellen. LLMs des Mandanten und die Einstellungen
+ * pflegen Org-Admin und KI-Verwaltung (ai_admin), eigene LLMs eines Projekts dessen PL.
  */
 export async function aiRoutes(app: FastifyInstance) {
   const db = app.db;
   /**
-   * KI-Funktion im Projekt: Projektzugriff, dann Freigabe (Notaus, Regeln, Mitgliedschaft und „KI nutzen“, Projekt-KI, Budget);
-   * Leser nur „Frage ans Projekt“, implizite Leser (Sichtbarkeit „alle Benutzer“) haben keine KI.
+   * Assistenz im Projekt: Projektzugriff, die Person mit „KI nutzen“ (Leser nur „Frage ans Projekt“), ausgeführt vom gewählten
+   * Agenten bzw. dem Projektagenten (Recht am Agenten, Einschränkung im Projekt, LLM, Budget des Agenten).
    */
-  const gate = async (user: User, projectId: string, feature: AiFeature) => {
+  const gate = async (user: User, projectId: string, feature: AiFeature, agentId?: string | null) => {
     await requireProject(db, user, projectId, 'reader');
-    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId, feature });
-    if (!cfg) throw aiError(decision);
-    return cfg;
+    return assistAgent(db, user, projectId, feature, agentId || null);
   };
   const requireAiAdmin = (user: User) => { if (!hasOrgRight(user, 'ai_admin')) throw forbidden('Nur Org-Admin oder KI-Verwaltung'); };
   const canApprove = async (user: any, projectId: string) => { const m = await requireProject(db, user, projectId, 'member'); if (m.role !== 'pl' && !m.canApprove) throw forbidden('Freigabe nur mit dem Recht „Freigeben“ oder als PL'); return m; };
@@ -55,14 +52,11 @@ export async function aiRoutes(app: FastifyInstance) {
 
   app.get('/ai/status', async (req) => { const user = requireUser(req); return { ...(await aiStatus(db, user.orgId)), models: MODELS }; });
 
-  app.put<{ Body: { enabled?: boolean; defaultProfileId?: string | null; agentDailyBudget?: number; assistDailyBudget?: number; plAgents?: { enabled?: boolean; maxBudget?: number }; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check'; agentPolicy?: AgentPolicy | null; web?: Record<string, unknown> | null; externalWindow?: Record<string, unknown> | null } }>('/ai/settings', async (req) => {
+  app.put<{ Body: { enabled?: boolean; agentDailyBudget?: number; ownLlm?: 'off' | 'personal' | 'all'; externalGuard?: 'strict' | 'check'; web?: Record<string, unknown> | null; externalWindow?: Record<string, unknown> | null } }>('/ai/settings', async (req) => {
     const user = requireUser(req);
     requireAiAdmin(user);
     const b = req.body ?? {};
     const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
-    // Agenten-Policy des Mandanten: Vorgabe (mode, confirm) und Grenzen (maxMode, lockedConfirm) für alle Projekte
-    let agentPolicy: AgentPolicy | undefined;
-    if (b.agentPolicy !== undefined) { try { agentPolicy = parseAgentPolicy(b.agentPolicy, { limits: true, workflows: true }); } catch (e: any) { throw badRequest(e.message); } }
     // Online-Recherche: Suchdienst für lokale Profile (Schlüssel versiegelt, null löscht ihn), Grenzen, Domains (allowed oder blocked, nicht beides)
     let web: Record<string, unknown> | undefined;
     if (b.web !== undefined) {
@@ -84,18 +78,12 @@ export async function aiRoutes(app: FastifyInstance) {
       if (w.from >= w.to) throw badRequest('Arbeitszeitfenster: Beginn vor Ende');
       externalWindow = w as unknown as Record<string, unknown>;
     }
-    if (b.defaultProfileId) { const p = await db.maybeOne(`select 1 from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [b.defaultProfileId, user.orgId]); if (!p) throw badRequest('Profil nicht gefunden'); }
     if (b.enabled !== undefined && typeof b.enabled !== 'boolean') throw badRequest('Notaus: enabled true oder false');
-    // Eigene Agenten der PL: Budget je Agent höchstens das Mandantenbudget; ob sie erlaubt sind, ist die Regel pl.agents (KI-Freigaben)
-    const plMax = b.plAgents?.maxBudget !== undefined ? Math.max(0, Math.min(1000, Number(b.plAgents.maxBudget) || 0)) : cur.plAgents?.maxBudget;
     if (b.ownLlm !== undefined && !['off', 'personal', 'all'].includes(b.ownLlm)) throw badRequest('Eigenes LLM: off, personal oder all');
     if (b.externalGuard !== undefined && !['strict', 'check'].includes(b.externalGuard)) throw badRequest('Außenprüfung: strict oder check');
     const clamp = (v: unknown) => Math.max(0, Math.min(10000, Number(v) || 0));
-    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: 'defaultProfileId' in b ? b.defaultProfileId : cur.defaultProfileId ?? null, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.assistDailyBudget != null ? { assistDailyBudget: clamp(b.assistDailyBudget) } : {}), ...(plMax !== undefined ? { plAgents: { maxBudget: plMax } } : {}), ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}), ...(agentPolicy !== undefined ? { agentPolicy } : {}), ...(web !== undefined ? { web } : {}), ...(externalWindow !== undefined ? { externalWindow } : {}) } })]);
+    await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, agentDailyBudget: b.agentDailyBudget != null ? Math.min(1000, clamp(b.agentDailyBudget)) : cur.agentDailyBudget, ...(b.ownLlm ? { ownLlm: b.ownLlm } : {}), ...(b.externalGuard ? { externalGuard: b.externalGuard } : {}), ...(b.enabled !== undefined ? { enabled: b.enabled } : {}), ...(web !== undefined ? { web } : {}), ...(externalWindow !== undefined ? { externalWindow } : {}) } })]);
     if (web !== undefined || externalWindow !== undefined) await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: { web: web ? { ...web, apiKey: undefined, keySet: Boolean(web.apiKey) } : undefined, externalWindow } });
-    if (agentPolicy !== undefined) await audit(db, { orgId: user.orgId, userId: user.id, action: 'agent.policy', objectType: 'org', objectId: user.orgId, details: agentPolicy as Record<string, unknown> });
-    // Der frühere Schalter „Eigene Agenten der PL“ ist die Regel pl.agents für den Mandanten
-    if (typeof b.plAgents?.enabled === 'boolean') await setAiPolicy(db, user, { projectId: null, userId: null, groupId: null, feature: 'pl.agents', effect: b.plAgents.enabled ? 'allow' : 'deny' });
     if (b.enabled !== undefined && b.enabled !== (cur.enabled !== false)) await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.killswitch', objectType: 'org', objectId: user.orgId, details: { enabled: b.enabled } });
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.settings', objectType: 'org', objectId: user.orgId, details: b });
     return aiStatus(db, user.orgId);
@@ -135,12 +123,12 @@ export async function aiRoutes(app: FastifyInstance) {
     return { llms: r.rows.map((x: any) => ({ id: x.id, name: x.name, provider: x.provider, model: x.model, baseUrl: x.base_url, active: x.active, adminBlocked: x.admin_blocked, tokensIn: Number(x.tokens_in), tokensOut: Number(x.tokens_out), lastUsedAt: x.last_used_at, createdAt: x.created_at, project: x.project_label, createdBy: x.created_by_name ?? null })) };
   });
 
-  // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden (PL), wenn der Mandant es für diese Projektart erlaubt und pl.own_llm freigegeben ist
+  // ---- Im Projekt verfügbare LLMs; eigenes LLM einbinden und verwalten (PL), wenn der Mandant es für diese Projektart erlaubt
   const ownAllowed = (orgId: string, projectId: string) => ownLlmAllowed(db, orgId, projectId);
   /** Kontextfenster des Modells in Token (leer = Standard 32k); die Eingabe belegt höchstens 45 % (Konzept 6.8) */
   const validContext = (v: unknown): number | null => { if (v === null || v === undefined || v === '') return null; const n = Number(v); if (!Number.isInteger(n) || n < 4000 || n > 2_000_000) throw badRequest('Kontextgröße: ganze Zahl ab 4000 Token'); return n; };
   const mapOwn = (r: any) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(r.api_key), active: r.active, adminBlocked: r.admin_blocked, thinkingOff: Boolean(r.thinking_off), webSearch: Boolean(r.web_search), contextTokens: r.context_tokens ?? null, tokensIn: Number(r.tokens_in), tokensOut: Number(r.tokens_out), lastUsedAt: r.last_used_at });
-  const ownReason = (user: User, projectId: string) => ownLlmReason(db, user, projectId);
+  const ownReason = async (_user: User, projectId: string) => ((await ownAllowed(_user.orgId, projectId)) ? null : 'Eigene LLMs sind für dieses Projekt nicht erlaubt (Verwaltung › KI)');
   app.get<{ Params: { id: string } }>('/projects/:id/llms', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id);
@@ -167,7 +155,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const cur = await ownOf(req.params.id, req.params.lid);
     const b: any = req.body ?? {};
     const v = validProfile(b, cur);
-    // Ohne Freigabe (Profilachse, pl.own_llm) nur einschränken: deaktivieren oder Schlüssel entfernen; jede andere Änderung wie Einbinden
+    // Ohne Erlaubnis des Mandanten nur einschränken: deaktivieren oder Schlüssel entfernen; jede andere Änderung wie Einbinden
     const changes = v.name !== cur.name || v.provider !== cur.provider || v.baseUrl !== cur.base_url || v.model !== cur.model || Boolean(b.apiKey?.trim?.())
       || (b.active === true && !cur.active) || (typeof b.thinkingOff === 'boolean' && b.thinkingOff !== Boolean(cur.thinking_off)) || (b.webSearch === true && !cur.web_search);
     if (changes) { const reason = await ownReason(user, req.params.id); if (reason) throw forbidden(reason); }
@@ -180,6 +168,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const cur = await ownOf(req.params.id, req.params.lid);
+    if (await db.maybeOne(`select 1 from users where ai_profile_id = $1 and active`, [cur.id])) throw badRequest('Das LLM hat noch aktive Agenten: erst die Agenten deaktivieren');
     await db.query(`update projects set ai_profile_id = null where ai_profile_id = $1`, [cur.id]);
     await db.query(`update users set ai_profile_id = null where ai_profile_id = $1`, [cur.id]);
     await db.query(`delete from ai_profiles where id = $1`, [cur.id]);
@@ -189,10 +178,10 @@ export async function aiRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string; lid: string } }>('/projects/:id/llms/:lid/test', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt und pl.own_llm freigegeben ist
-    if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht freigegeben (Verwaltung › KI)');
+    // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt
+    if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht erlaubt (Verwaltung › KI)');
     const own = await ownOf(req.params.id, req.params.lid);
-    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: req.params.id, feature: 'pl.own_llm', profileId: own.id });
+    const { cfg, decision } = await aiConfigFor(db, { userId: user.id, feature: 'profile.test', profileId: own.id });
     if (!cfg) throw aiError(decision);
     const c = await complete(cfg, app.fetchFn, { system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
     return { ok: true, model: c.model, reply: c.text };
@@ -207,8 +196,6 @@ export async function aiRoutes(app: FastifyInstance) {
     const contextTokens = validContext(b.contextTokens);
     const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search, context_tokens) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true, contextTokens]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
-    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
-    if (!cur.defaultProfileId) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: r.id } })]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, thinkingOff: b.thinkingOff === true } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === r.id) };
   });
@@ -243,9 +230,9 @@ export async function aiRoutes(app: FastifyInstance) {
   app.delete<{ Params: { id: string } }>('/ai/profiles/:id', async (req) => {
     const user = requireUser(req);
     requireAiAdmin(user);
+    if (await db.maybeOne(`select 1 from users where ai_profile_id = $1 and active`, [req.params.id])) throw badRequest('Das LLM hat noch aktive Agenten: erst die Agenten deaktivieren');
+    await db.query(`update users set ai_profile_id = null where ai_profile_id = $1`, [req.params.id]);
     await db.query(`delete from ai_profiles where id = $1 and org_id = $2 and project_id is null`, [req.params.id, user.orgId]);
-    const cur = (await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.ai ?? {};
-    if (cur.defaultProfileId === req.params.id) await db.query(`update orgs set settings = settings || $2::jsonb where id = $1`, [user.orgId, JSON.stringify({ ai: { ...cur, defaultProfileId: null } })]);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.delete', objectType: 'ai_profile', objectId: req.params.id });
     return { ok: true };
   });
@@ -261,7 +248,7 @@ export async function aiRoutes(app: FastifyInstance) {
   });
 
   // Mail zusammenfassen (direkt, Ergebnis wird an der Mail gespeichert)
-  app.post<{ Params: { mid: string } }>('/mail/mails/:mid/ai/summarize', async (req) => {
+  app.post<{ Params: { mid: string }; Body: { agentId?: string | null } }>('/mail/mails/:mid/ai/summarize', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
     if (!mail) throw notFound('Mail nicht gefunden');
@@ -271,15 +258,14 @@ export async function aiRoutes(app: FastifyInstance) {
     const pid = access.viewIds.length ? (await db.maybeOne(`select project_id from mail_views where id = $1`, [access.viewIds[0]]))?.project_id ?? null : null;
     if (!pid) throw badRequest('Mail gehört zu keiner Projektansicht');
     // Gleiche Regel wie bei den Vorschlägen: KI-Recht an der Ansicht und Freigabe im Projekt („KI nutzen“)
-    const cfg = await gate(user, pid, 'assist.summarize');
+    const { cfg, agent } = await gate(user, pid, 'assist.summarize', req.body?.agentId);
     const summary = await summarizeMail(db, cfg, app.fetchFn, user, mail, pid);
-    const agent = await suggestAgent(db, pid, mail.account_id);
-    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Zusammenfassung von „${String(mail.subject ?? '').slice(0, 80)}“:\n${summary}`, pid);
-    return { summary, viaChat: agent ? agent.name : null };
+    await agentChatMessage(db, agent, { userId: user.id }, `Zusammenfassung von „${String(mail.subject ?? '').slice(0, 80)}“:\n${summary}`, pid);
+    return { summary, viaChat: agent.name };
   });
 
   // Essenz → Arbeitspaket (Vorschlag)
-  app.post<{ Params: { mid: string }; Body: { taskId: string } }>('/mail/mails/:mid/ai/essence', async (req) => {
+  app.post<{ Params: { mid: string }; Body: { taskId: string; agentId?: string | null } }>('/mail/mails/:mid/ai/essence', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
     if (!mail) throw notFound('Mail nicht gefunden');
@@ -288,19 +274,18 @@ export async function aiRoutes(app: FastifyInstance) {
     const task = await db.maybeOne(`select t.*, c.name as column_name from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.body?.taskId]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
     await requireTask(db, user, task.id);
-    const cfg = await gate(user, task.project_id, 'assist.essence');
+    const { cfg, agent } = await gate(user, task.project_id, 'assist.essence', req.body?.agentId);
     const cols = await db.query(`select name from board_columns where project_id = $1 order by position`, [task.project_id]);
     const e = await essenceForTask(db, cfg, app.fetchFn, user, mail, { id: task.id, title: task.title, description: task.description, dueDate: task.due_date ? String(task.due_date).slice(0, 10) : null, columnName: task.column_name, projectId: task.project_id }, cols.rows.map((c: any) => c.name));
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, task_id, payload, created_by) values ($1,$2,'task_update',$3,$4,$5,$6) returning *`, [user.orgId, task.project_id, mail.id, task.id, JSON.stringify(e), user.id]);
     await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'task_update', taskId: task.id, mailId: mail.id } });
     await notifyApprovers(task.project_id, user.id, `KI-Vorschlag: ${task.title}`, e.summary, `/projekte/${task.project_id}/ki`, task.subproject_id);
-    const agent = await suggestAgent(db, task.project_id, mail.account_id);
-    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag zu „${task.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${e.summary}\nFreigabe: /projekte/${task.project_id}/ki`, task.project_id);
-    return { proposal: mapProposal(r), viaChat: agent ? agent.name : null };
+    await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag zu „${task.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${e.summary}\nFreigabe: /projekte/${task.project_id}/ki`, task.project_id);
+    return { proposal: mapProposal(r), viaChat: agent.name };
   });
 
   // Essenz → Seite (Vorschlag)
-  app.post<{ Params: { mid: string }; Body: { pageId: string } }>('/mail/mails/:mid/ai/merge-page', async (req) => {
+  app.post<{ Params: { mid: string }; Body: { pageId: string; agentId?: string | null } }>('/mail/mails/:mid/ai/merge-page', async (req) => {
     const user = requireUser(req);
     const mail = await loadMailRow(db, req.params.mid);
     if (!mail) throw notFound('Mail nicht gefunden');
@@ -309,14 +294,13 @@ export async function aiRoutes(app: FastifyInstance) {
     const page = await db.maybeOne(`select * from doc_pages where id = $1 and deleted_at is null`, [req.body?.pageId]);
     if (!page) throw notFound('Seite nicht gefunden');
     if (page.status === 'final') throw badRequest('Finale Seite ist gesperrt. Erst wieder öffnen.');
-    const cfg = await gate(user, page.project_id, 'assist.essence');
+    const { cfg, agent } = await gate(user, page.project_id, 'assist.essence', req.body?.agentId);
     const section = await essenceForPage(db, cfg, app.fetchFn, user, mail, page);
     const r = await db.one(`insert into ai_proposals (org_id, project_id, kind, mail_id, page_id, payload, created_by) values ($1,$2,'page_append',$3,$4,$5,$6) returning *`, [user.orgId, page.project_id, mail.id, page.id, JSON.stringify({ section }), user.id]);
     await audit(db, { orgId: user.orgId, projectId: page.project_id, userId: user.id, action: 'ai.proposal', objectType: 'ai_proposal', objectId: r.id, details: { kind: 'page_append', pageId: page.id, mailId: mail.id } });
     await notifyApprovers(page.project_id, user.id, `KI-Vorschlag für Seite: ${page.title}`, `Aus Mail „${mail.subject}“`, `/projekte/${page.project_id}/ki`);
-    const agent = await suggestAgent(db, page.project_id, mail.account_id);
-    if (agent) await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag für die Seite „${page.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${section.slice(0, 200).replace(/\s+/g, ' ')} …\nFreigabe: /projekte/${page.project_id}/ki`, page.project_id);
-    return { proposal: mapProposal(r), viaChat: agent ? agent.name : null };
+    await agentChatMessage(db, agent, { userId: user.id }, `Vorschlag für die Seite „${page.title}“ aus der Mail „${String(mail.subject ?? '').slice(0, 80)}“: ${section.slice(0, 200).replace(/\s+/g, ' ')} …\nFreigabe: /projekte/${page.project_id}/ki`, page.project_id);
+    return { proposal: mapProposal(r), viaChat: agent.name };
   });
 
   // Vorschläge zu Arbeitspaketen eingeschränkter Teilprojekte nur mit Sicht darauf
@@ -392,9 +376,9 @@ export async function aiRoutes(app: FastifyInstance) {
   });
 
   // Statusbericht-Entwurf als Seite (Status Entwurf) im Ordner „Berichte“
-  app.post<{ Params: { id: string } }>('/projects/:id/ai/status-report', async (req) => {
+  app.post<{ Params: { id: string }; Body: { agentId?: string | null } }>('/projects/:id/ai/status-report', async (req) => {
     const user = requireUser(req);
-    const cfg = await gate(user, req.params.id, 'assist.report');
+    const { cfg } = await gate(user, req.params.id, 'assist.report', req.body?.agentId);
     const today = new Date().toISOString().slice(0, 10);
     const md = await statusReportDraft(db, cfg, app.fetchFn, user, req.params.id, today);
     const folder = await db.maybeOne(`select id from doc_folders where project_id = $1 and name = 'Berichte'`, [req.params.id]);
@@ -406,12 +390,12 @@ export async function aiRoutes(app: FastifyInstance) {
     return { page: mapPage(page) };
   });
 
-  app.post<{ Params: { id: string }; Body: { question: string } }>('/projects/:id/ai/ask', async (req) => {
+  app.post<{ Params: { id: string }; Body: { question: string; agentId?: string | null } }>('/projects/:id/ai/ask', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'reader');
     const q = req.body?.question?.trim();
     if (!q || q.length < 3) throw badRequest('Frage erforderlich');
-    const cfg = await gate(user, req.params.id, 'assist.ask');
+    const { cfg } = await gate(user, req.params.id, 'assist.ask', req.body?.agentId);
     return askProject(db, cfg, app.fetchFn, user, req.params.id, q);
   });
 

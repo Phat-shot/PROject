@@ -28,7 +28,7 @@ import { webAvailable } from './web.js';
  * Arbeitspakete, hält er es dort im Log fest (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Behauptet die
  * Antwort in der ersten Person, etwas sei angelegt, gesendet oder erledigt, ohne dass eine Notiz dahintersteht, ersetzt das
  * System den Satz (claimCheck). Jeder LLM-Lauf zählt gegen das Tagesbudget.
- * KI-Freigaben (agent.chat) gelten für Absender und Agent; in Direktnachrichten ohne Projekt, danach antwortet der Agent
+ * agent.chat gilt für Absender („KI nutzen“) und Agent (Recht); in Direktnachrichten ohne Projekt, danach antwortet der Agent
  * nur aus Projekten, in denen der Absender „KI nutzen“ hat oder PL ist und beide freigegeben sind. Gesperrt antwortet er
  * nur auf Direktnachrichten und Erwähnungen (nicht auf jede Folgenachricht im Thread); im Projektkanal ohne Namen und Notiz
  * persönlicher Regeln, die volle Begründung bekommt der Absender als Meldung.
@@ -120,7 +120,7 @@ function findMentions(text: string, projects: ScopeProject[]): { refs: { project
  * in dieser Reihenfolge: Kennungen oder Projektname/-kürzel in der Nachricht (mentioned), ausdrücklich „über alle Projekte“
  * (all), zuletzt genanntes Arbeitspaket/Projekt des Verlaufs ohne Zeitfenster (history), sonst bei genau einem gemeinsamen
  * Projekt dieses (all), bei mehreren Rückfrage (ask). Gemeinsam heißt: beide Mitglied, Absender PL oder „KI nutzen“, beide per
- * KI-Freigabe (agent.chat) frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
+ * Recht agent.chat frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
  * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
  */
 export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string }[]; senderId: string; agent: { id: string; org_id: string; name?: string } }, now = new Date()): Promise<ChatScope> {
@@ -154,7 +154,7 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
     return scope;
   }
 
-  // Direktnachricht: gemeinsame, beidseitig freie Projekte (Absender PL oder „KI nutzen“, KI-Freigaben für beide)
+  // Direktnachricht: gemeinsame, beidseitig freie Projekte (Absender PL oder „KI nutzen“, Agent mit Recht)
   const common: ScopeProject[] = [];
   const candidates = await db.query(
     `select p.id, p.key, p.name from projects p

@@ -1,13 +1,13 @@
-import { AGENT_DEPTHS, type AgentDepth, AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type SynergyMode } from '@projekttool/shared';
+import { AI_FEATURES, type AiFeature, AGENT_DEPTHS, type AgentDepth, AGENT_ACTION_CLASSES, AGENT_MODES, type AgentActionClass, type AgentMode, type AgentPolicy, type AgentScope, type ChatOrdersLevel, type EffectiveAgentPolicy, type SynergyMode } from '@projekttool/shared';
 import type { Db } from '../db.js';
-import { resolveRules } from './policy.js';
+import { agentRightsIn } from './policy.js';
 
 /**
- * Agenten-Policy (Konzept 6, Regel A): Selbstständigkeit je Org → Projekt → Agent im Projekt → Arbeitspaket.
- * - mode: auto (alles, was Rechte und KI-Freigaben erlauben), confirm_critical (Klassen in confirm werden bestätigt),
- *   confirm_all (alles außer der Grundmenge). Die tiefste gesetzte Angabe gilt, begrenzt durch die strengste maxMode von Org und Projekt.
- * - confirm: gewählte Klassen plus lockedConfirm von Org und Projekt; bei auto nur die gesperrten, bei confirm_all alle.
- * - Gesperrte Klassen kommen aus den KI-Freigaben (agent.<klasse>): weder ausführen noch vorschlagen.
+ * Agenten-Policy (Konzept 6, Regel A): Selbstständigkeit je Agent (Verwalter des LLM) → Projekt → Agent im Projekt → Arbeitspaket.
+ * - mode: auto (alles, was die Rechte erlauben), confirm_critical (Klassen in confirm werden bestätigt), confirm_all (alles außer
+ *   der Grundmenge). Die tiefste gesetzte Angabe gilt, begrenzt durch die strengste maxMode von Agent und Projekt.
+ * - confirm: gewählte Klassen plus lockedConfirm von Agent und Projekt; bei auto nur die gesperrten, bei confirm_all alle.
+ * - Gesperrte Klassen: Recht agent.<klasse> fehlt am Agenten oder die PL hat es im Projekt abgeschaltet; weder ausführen noch vorschlagen.
  * Grundmenge (immer frei): Log, Tasks, Status außer Erledigt, Aufgaben unter dem eigenen AP ohne Zuweisung an Dritte, Doku (nicht final),
  * Ordner, intern kommunizieren (chat, ask), lesen, wait, blocked, escalate, resolve, refer, none; create_event ist selbst die Rückfrage.
  */
@@ -24,14 +24,20 @@ export const DEPTH_LIMITS: Record<AgentDepth, { rounds: number; accesses: number
 export const modeLabel = (m: AgentMode) => AGENT_MODES.find((x) => x.key === m)?.label ?? m;
 const stricter = (a: AgentMode, b: AgentMode) => (MODE_ORDER.indexOf(a) >= MODE_ORDER.indexOf(b) ? a : b);
 
-/** Eingabe einer Ebene prüfen; limits = darf Grenzen setzen (Org, Projekt); unbekannte Felder fallen weg. */
-export function parseAgentPolicy(raw: unknown, opts: { limits: boolean; workflows: boolean } = { limits: true, workflows: true }): AgentPolicy {
+/** Eingabe einer Ebene prüfen; limits = darf Grenzen setzen (Agent, Projekt); deny = abgeschaltete Rechte (Agent im Projekt); unbekannte Felder fallen weg. */
+export function parseAgentPolicy(raw: unknown, opts: { limits: boolean; workflows: boolean; deny?: boolean } = { limits: true, workflows: true }): AgentPolicy {
   if (raw === null || raw === undefined) return {};
   if (typeof raw !== 'object') throw new Error('Agenten-Policy: Objekt erwartet');
   const x = raw as any;
   const out: AgentPolicy = {};
   const mode = (v: unknown, name: string) => { if (v === undefined || v === null || v === '') return undefined; if (!MODE_ORDER.includes(v as AgentMode)) throw new Error(`Agenten-Policy: ${name} muss auto, confirm_critical oder confirm_all sein`); return v as AgentMode; };
   const classes = (v: unknown, name: string) => { if (v === undefined || v === null) return undefined; if (!Array.isArray(v)) throw new Error(`Agenten-Policy: ${name} ist eine Liste`); const bad = v.find((c) => !CLASS_KEYS.includes(c)); if (bad) throw new Error(`Agenten-Policy: unbekannte Klasse ${String(bad)}`); return [...new Set(v as AgentActionClass[])]; };
+  if (opts.deny && x.deny !== undefined && x.deny !== null) {
+    if (!Array.isArray(x.deny)) throw new Error('Agenten-Policy: deny ist eine Liste');
+    const bad = x.deny.find((f: unknown) => !AI_FEATURES.some((d) => d.key === f));
+    if (bad) throw new Error(`Agenten-Policy: unbekanntes Recht ${String(bad)}`);
+    out.deny = [...new Set(x.deny as AiFeature[])];
+  }
   const m = mode(x.mode, 'mode'); if (m) out.mode = m;
   const c = classes(x.confirm, 'confirm'); if (c) out.confirm = c;
   if (opts.limits) {
@@ -56,8 +62,10 @@ const pol = (v: any): AgentPolicy => (v && typeof v === 'object' ? (v as AgentPo
  * Bestandsprojekte haben per Migration auto). taskId darf eine Aufgabe sein: ihre Policy, sonst die ihres Arbeitspakets.
  */
 export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null; projectId: string; taskId?: string | null }): Promise<EffectiveAgentPolicy> {
-  const p = await db.one(`select p.agent_policy, p.key, p.org_id, o.settings->'ai'->'agentPolicy' as org_policy from projects p join orgs o on o.id = p.org_id where p.id = $1`, [q.projectId]);
-  const org = pol(p.org_policy); const project = pol(p.agent_policy);
+  const p = await db.one(`select p.agent_policy, p.key, p.org_id from projects p where p.id = $1`, [q.projectId]);
+  const project = pol(p.agent_policy);
+  // Obergrenze des Verwalters am Agenten (früher die Policy des Mandanten)
+  const org = q.agentId ? pol((await db.maybeOne(`select agent_policy from users where id = $1`, [q.agentId]))?.agent_policy) : {};
   const member = q.agentId ? pol((await db.maybeOne(`select agent_policy from project_members where project_id = $1 and user_id = $2`, [q.projectId, q.agentId]))?.agent_policy) : {};
   let task: AgentPolicy = {}; let taskLabel = 'Arbeitspaket';
   if (q.taskId) {
@@ -65,20 +73,20 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
     if (t?.agent_policy && typeof t.agent_policy === 'object' && Object.keys(t.agent_policy).length) { task = pol(t.agent_policy); taskLabel = `${p.key}-${t.number}`; }
     else if (t?.parent_policy && typeof t.parent_policy === 'object' && Object.keys(t.parent_policy).length) { task = pol(t.parent_policy); taskLabel = `Arbeitspaket ${p.key}-${t.parent_number}`; }
   }
-  const levels: [string, AgentPolicy][] = [[taskLabel, task], ['Agent im Projekt', member], [`Projekt ${p.key}`, project], ['Mandant', org]];
+  const levels: [string, AgentPolicy][] = [[taskLabel, task], ['Agent im Projekt', member], [`Projekt ${p.key}`, project], ['Agent (Verwalter)', org]];
   const pick = <K extends keyof AgentPolicy>(k: K): { value: AgentPolicy[K]; origin: string } | null => { for (const [name, v] of levels) if (v[k] !== undefined) return { value: v[k], origin: name }; return null; };
   const m = pick('mode');
   let mode: AgentMode = (m?.value as AgentMode) ?? DEFAULT_MODE;
   let modeOrigin = m ? m.origin : 'Standard';
-  // Grenze: die strengste maxMode von Org und Projekt (ein lascherer mode wird angehoben)
-  const caps: [string, AgentMode | undefined][] = [['Mandant', org.maxMode], [`Projekt ${p.key}`, project.maxMode]];
+  // Grenze: die strengste maxMode von Agent und Projekt (ein lascherer mode wird angehoben)
+  const caps: [string, AgentMode | undefined][] = [['Agent (Verwalter)', org.maxMode], [`Projekt ${p.key}`, project.maxMode]];
   for (const [name, cap] of caps) if (cap && MODE_ORDER.indexOf(mode) < MODE_ORDER.indexOf(cap)) { mode = stricter(mode, cap); modeOrigin = `${name} erzwungen`; }
   const c = pick('confirm');
   const chosen = (c?.value as AgentActionClass[] | undefined) ?? DEFAULT_CONFIRM;
   const confirm = new Map<AgentActionClass, string>();
   if (mode === 'confirm_all') for (const k of CLASS_KEYS) confirm.set(k, modeOrigin === 'Standard' ? 'Rückfrage bei allem' : `${modeOrigin} (Rückfrage bei allem)`);
   else if (mode === 'confirm_critical') for (const k of chosen) confirm.set(k, c ? c.origin : 'Standard');
-  for (const [name, v] of [['Mandant', org], [`Projekt ${p.key}`, project]] as [string, AgentPolicy][]) for (const k of v.lockedConfirm ?? []) confirm.set(k, `${name} erzwungen`);
+  for (const [name, v] of [['Agent (Verwalter)', org], [`Projekt ${p.key}`, project]] as [string, AgentPolicy][]) for (const k of v.lockedConfirm ?? []) confirm.set(k, `${name} erzwungen`);
   const w = pick('workflows');
   const co = pick('chatOrders');
   const sc = pick('scope'); const sy = pick('synergies'); const ra = pick('reviewAt');
@@ -86,15 +94,13 @@ export async function effectiveAgentPolicy(db: Db, q: { agentId?: string | null;
   const dp = pick('depth');
   let depth: AgentDepth = (dp?.value as AgentDepth | undefined) ?? 'standard';
   let depthOrigin = dp ? dp.origin : 'Standard';
-  for (const [name, cap] of [['Mandant', org.maxDepth], [`Projekt ${p.key}`, project.maxDepth]] as [string, AgentDepth | undefined][]) if (cap && DEPTH_ORDER.indexOf(depth) > DEPTH_ORDER.indexOf(cap)) { depth = cap; depthOrigin = `${name} begrenzt`; }
+  for (const [name, cap] of [['Agent (Verwalter)', org.maxDepth], [`Projekt ${p.key}`, project.maxDepth]] as [string, AgentDepth | undefined][]) if (cap && DEPTH_ORDER.indexOf(depth) > DEPTH_ORDER.indexOf(cap)) { depth = cap; depthOrigin = `${name} begrenzt`; }
   // Synergien: in den Rückfrage-Stufen immer nachfragen
   const synergies: SynergyMode = (sy?.value as SynergyMode | undefined) ?? 'ask';
   const denied: Partial<Record<AgentActionClass, string>> = {};
   if (q.agentId) {
-    for (const k of CLASS_KEYS) {
-      const r = await resolveRules(db, { orgId: p.org_id, userId: q.agentId, projectId: q.projectId, feature: `agent.${k}` as any });
-      if (r.effect === 'deny') denied[k] = r.publicText;
-    }
+    const rights = await agentRightsIn(db, q.agentId, q.projectId);
+    for (const k of CLASS_KEYS) if (!rights.includes(`agent.${k}` as any)) denied[k] = 'Recht fehlt (am Agenten oder im Projekt abgeschaltet)';
   }
   return { mode, confirm: [...confirm.keys()], workflows: w ? Boolean(w.value) : true, chatOrders: (co?.value as ChatOrdersLevel | undefined) ?? 'pl', scope: (sc?.value as AgentScope | undefined) ?? 'task', synergies: synergies === 'use' && mode !== 'auto' ? 'ask' : synergies, reviewAt: (ra?.value as string | undefined) ?? '06:45', depth, origin: { depth: depthOrigin, mode: modeOrigin, confirm: Object.fromEntries(confirm) as Partial<Record<AgentActionClass, string>>, workflows: w ? w.origin : 'Standard', chatOrders: co ? co.origin : 'Standard', scope: sc ? sc.origin : 'Standard', synergies: sy ? (synergies === 'use' && mode !== 'auto' ? `${sy.origin} (nutzen nur bei Selbstständig)` : sy.origin) : 'Standard' }, denied };
 }
@@ -106,7 +112,7 @@ export function policyText(e: EffectiveAgentPolicy): string {
   if (e.depth !== 'standard') parts.push(`Denktiefe: ${depthLabel(e.depth)}${e.depth === 'quick' ? ' (eine Leserunde, knapper Kontext; sag, wenn dir etwas fehlt, statt zu raten)' : ' (bis zu vier Leserunden, voller Kontext)'}.`);
   if (held.length) parts.push(`Bestätigung durch eine Person vor: ${held.map(classLabel).join(', ')} (das System hält diese Aktionen an und legt sie der PL vor; schlage sie trotzdem vor, wenn sie nötig sind, aber nicht erneut, solange sie offen sind).`);
   const den = Object.keys(e.denied) as AgentActionClass[];
-  if (den.length) parts.push(`Gesperrt (KI-Freigaben, nicht vorschlagen): ${den.map(classLabel).join(', ')}.`);
+  if (den.length) parts.push(`Gesperrt (keine Berechtigung, nicht vorschlagen): ${den.map(classLabel).join(', ')}.`);
   return parts.join(' ');
 }
 

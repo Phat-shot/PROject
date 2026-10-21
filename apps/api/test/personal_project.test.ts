@@ -9,8 +9,6 @@ const t = await testApp();
 test.after(() => t.close());
 
 let pid = '';
-let profileA = '';
-let profileB = '';
 
 test('Persönliches Projekt: anlegen nur mit Freigabe, leer, nur Ersteller und Agenten, keine Einladungen, nur Mitglieder sichtbar', async () => {
   const admin = await t.login('admin@demo.local');
@@ -27,9 +25,10 @@ test('Persönliches Projekt: anlegen nur mit Freigabe, leer, nur Ersteller und A
   assert.equal((await t.api(max).post('/invitations', { email: 'neu@extern.de', name: 'Neu', projectId: pid })).statusCode, 403);
   assert.equal((await t.api(max).patch(`/projects/${pid}`, { visibility: 'org' })).statusCode, 400);
   // Org-Agent nur mit einem LLM, das auch in persönlichen Projekten freigegeben ist
-  const noLlm = (await t.api(admin).post('/agents', { name: 'Ohne' })).json().agent;
+  const orgOnly = (await t.api(admin).post('/ai/profiles', { name: 'Nur Projekte', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x' })).json().profile;
+  const noLlm = (await t.api(admin).post('/agents', { name: 'Ohne', aiProfileId: orgOnly.id })).json().agent;
   const blocked = await t.api(max).put(`/projects/${pid}/members/${noLlm.id}`, { role: 'pl' });
-  assert.equal(blocked.statusCode, 400); assert.match(blocked.json().error, /kein LLM|nicht freigegeben/);
+  assert.equal(blocked.statusCode, 400); assert.match(blocked.json().error, /nicht freigegeben/);
   const llm = (await t.api(admin).post('/ai/profiles', { name: 'Agenten-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'x', personalScope: true })).json().profile;
   const agent = (await t.api(admin).post('/agents', { name: 'Hilfe', aiProfileId: llm.id })).json().agent;
   assert.equal((await t.api(max).put(`/projects/${pid}/members/${agent.id}`, { role: 'pl' })).statusCode, 200, 'Agenten ja, auch als stellv. PL');
@@ -57,24 +56,21 @@ test('Persönliches Projekt: Audit-Export des Org-Admins ohne Details, Projektko
   assert.ok(JSON.stringify((await t.api(max).get(`/audit?projectId=${pid}`)).json().entries).includes('Geheimes Thema'));
 });
 
-test('Eigene Agenten der PL: nur mit Freigabe, nur freigegebene Profile, Budget gedeckelt, nur im eigenen Projekt, Org-Admin nur (de)aktivieren', async () => {
+test('Eigenes LLM im persönlichen Projekt: der Eigentümer verwaltet LLM und Agenten (Rechte, Budget bis zum Mandanten), nur im eigenen Projekt; Org-Admin nur (de)aktivieren', async () => {
   const admin = await t.login('admin@demo.local');
   const max = await t.login('max@demo.local');
   const pl = await t.login('pl@demo.local');
   const anna = await t.login('anna@demo.local');
-  profileA = (await t.api(admin).post('/ai/profiles', { name: 'Lokal A', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile.id;
-  profileB = (await t.api(admin).post('/ai/profiles', { name: 'Teuer B', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'big', projectScope: 'none' })).json().profile.id;
-  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA })).statusCode, 403, 'nicht freigegeben');
-  await t.api(admin).put('/ai/settings', { agentDailyBudget: 40, plAgents: { enabled: true, maxBudget: 10 } });
-  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileB })).statusCode, 400, 'Profil im Projekt nicht freigegeben');
-  // „alle Projekte“ gilt im persönlichen Projekt erst mit „auch in persönlichen Projekten“
-  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA })).statusCode, 400, 'ohne personalScope nicht im persönlichen Projekt');
-  assert.equal((await t.api(admin).patch(`/ai/profiles/${profileA}`, { personalScope: true })).statusCode, 200);
-  assert.equal((await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 11 })).statusCode, 400, 'Budget über dem Deckel');
-  const r = await t.api(max).post(`/projects/${pid}/agents`, { name: 'Morton', aiProfileId: profileA, dailyBudget: 5, role: 'pl', persona: 'knapp', signature: 'Morton\nfür Max' });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 10, ownLlm: 'off' });
+  assert.equal((await t.api(max).post(`/projects/${pid}/llms`, { name: 'Mein LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).statusCode, 403, 'eigene LLMs aus');
+  await t.api(admin).put('/ai/settings', { ownLlm: 'personal' });
+  const own = (await t.api(max).post(`/projects/${pid}/llms`, { name: 'Mein LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().llm;
+  assert.equal((await t.api(max).post('/agents', { name: 'Morton', aiProfileId: own.id, dailyBudget: 11 })).statusCode, 400, 'Budget über dem Mandanten');
+  const r = await t.api(max).post('/agents', { name: 'Morton', aiProfileId: own.id, dailyBudget: 5, persona: 'knapp', signature: 'Morton\nfür Max', rights: ['assist.ask', 'agent.run', 'agent.chat', 'agent.plan'] });
   assert.equal(r.statusCode, 200, r.body);
   const morton = r.json().agent;
   assert.equal(morton.projectBound.id, pid);
+  assert.equal((await t.api(max).put(`/projects/${pid}/members/${morton.id}`, { role: 'pl' })).statusCode, 200);
   const mem = await t.db.one(`select role, is_deputy from project_members where project_id = $1 and user_id = $2`, [pid, morton.id]);
   assert.deepEqual([mem.role, mem.is_deputy], ['pl', true]);
   assert.equal(await agentBudgetLeft(t.db, { id: morton.id, org_id: t.ids.org }), 5, 'eigenes Budget');
@@ -82,9 +78,9 @@ test('Eigene Agenten der PL: nur mit Freigabe, nur freigegebene Profile, Budget 
   assert.equal((await t.api(pl).put(`/projects/${t.ids.projects.web}/members/${morton.id}`, { role: 'member' })).statusCode, 403);
   assert.equal((await t.api(anna).post('/chat/dm', { userId: morton.id })).statusCode, 403);
   assert.equal((await t.api(max).post('/chat/dm', { userId: morton.id })).statusCode, 200);
-  // Fremde PL bearbeitet ihn nicht; PL ändert im Rahmen
-  assert.equal((await t.api(pl).patch(`/projects/${t.ids.projects.web}/agents/${morton.id}`, { name: 'X' })).statusCode, 404);
-  assert.equal((await t.api(max).patch(`/projects/${pid}/agents/${morton.id}`, { dailyBudget: 8, persona: 'freundlich' })).json().agent.dailyBudget, 8);
+  // Fremde PL bearbeitet ihn nicht; der Eigentümer im Rahmen des Mandanten
+  assert.equal((await t.api(pl).patch(`/agents/${morton.id}`, { name: 'X' })).statusCode, 403);
+  assert.equal((await t.api(max).patch(`/agents/${morton.id}`, { dailyBudget: 8, persona: 'freundlich' })).json().agent.dailyBudget, 8);
   // Org-Admin: sieht ihn, darf deaktivieren, nicht gestalten
   const listed = (await t.api(admin).get('/agents')).json().agents.find((a: any) => a.id === morton.id);
   assert.match(listed.projectBound.label, /^persönlich \(Max Keller\)$/, 'eine Beschriftung für alle Org-Sichten');

@@ -31,7 +31,7 @@ import { askMeetingConfirm } from '../questions.js';
  *   (triage = nur Vorschläge, auch als PL); sonst der Agent an der Ansicht (Ordner „KI Bearbeiten“ oder beliebige Ansicht).
  * Offene Punkte (openPoints) gehen an die Mail-Rückfrage (mailInquiry.ts): Frage an die PL, ins Projekt, beim Absender oder nur Log.
  * Jede Mail wird je Projekt und Art höchstens einmal bearbeitet (eindeutiger Index), Läufe zählen gegen das Tagesbudget.
- * Vor jedem Lauf gelten die KI-Freigaben des Agenten (agent.mail bzw. mail.triage): gesperrt heißt
+ * Vor jedem Lauf gelten die Rechte des Agenten (agent.mail bzw. mail.triage): gesperrt heißt
  * übersprungen mit Begründung, ein erreichtes Tagesbudget lässt den Lauf warten.
  */
 export type MailAiAction = { type: 'create_ap' | 'create_aufgabe' | 'link' | 'create_event' | 'reply_draft' | 'move' | 'none'; title?: string | null; text?: string | null; ref?: string | null; subproject?: string | null; responsible?: string | null; startDate?: string | null; dueDate?: string | null; items?: string[] | null; startsAt?: string | null; endsAt?: string | null; location?: string | null; attendees?: string[] | null; folder?: string | null; reason?: string | null };

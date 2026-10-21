@@ -81,9 +81,9 @@ test('Anpassen mit Beleg nur mit Leserecht; Aktionskatalog spiegelt Rechte; Zusa
   assert.equal(rule('task_log').enabled, false);
   assert.equal(rule('task_adjust').enabled, false);
   assert.match(rule('task_adjust').reason, /Leser/);
-  // Begründung aus den KI-Freigaben (Prüfstufen in fester Reihenfolge): Leser scheitern an der Ebene der PL vor der Projekt-KI
+  // Begründung in fester Reihenfolge: Leser scheitern an der Person, bevor es um den ausführenden Agenten geht
   assert.ok(cat.ai.every((a: any) => a.enabled === false && /Leser stellen nur Fragen ans Projekt/.test(a.reason)));
-  assert.ok((await t.api(pl).get(`/mail/mails/${gf.id}/actions`)).json().ai.every((a: any) => a.enabled === false && /KI im Projekt nicht aktiv/.test(a.reason)), 'PL: Projekt-KI fehlt');
+  assert.ok((await t.api(pl).get(`/mail/mails/${gf.id}/actions`)).json().ai.every((a: any) => a.enabled === true), 'PL: Agent Postbote führt aus');
   assert.deepEqual(cat.ai.map((a: any) => a.key), ['summarize', 'essence_task', 'essence_page']);
   const plCat = (await t.api(pl).get(`/mail/mails/${gf.id}/actions`)).json();
   assert.equal(plCat.rule.find((a: any) => a.key === 'task_log').enabled, true);

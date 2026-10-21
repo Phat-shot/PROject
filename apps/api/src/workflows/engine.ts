@@ -23,7 +23,7 @@ export interface WorkflowStep {
   title: string;
   /** task: Beschreibung (Platzhalter {{projekt}}, {{workflow}}, {{lauf}}, {{starter}}, {{datum}}, eigene {{vars}}) */
   description?: string | null;
-  /** task: starter (wer den Lauf gestartet hat), pl (geerbt), user, email, previous (Zuständige des vorigen Arbeitspakets), agent (KI-Agent; sperrbar über KI-Freigabe agent.workflow und Agenten-Policy, sonst Rückfall auf die PL) */
+  /** task: starter (wer den Lauf gestartet hat), pl (geerbt), user, email, previous (Zuständige des vorigen Arbeitspakets), agent (KI-Agent; sperrbar über das Recht agent.workflow und Agenten-Policy, sonst Rückfall auf die PL) */
   responsible?: 'starter' | 'pl' | 'user' | 'email' | 'previous' | 'agent';
   responsibleUserId?: string | null;
   responsibleEmail?: string | null;
@@ -210,7 +210,7 @@ async function createStepTask(db: Db, run: any, step: WorkflowStep, steps: Workf
   else if (step.responsible === 'user') userId = step.responsibleUserId ?? null;
   else if (step.responsible === 'email') email = step.responsibleEmail ?? null;
   else if (step.responsible === 'previous') ({ userId, email } = await responsibleOfTask(db, previousTaskId(steps, state, idx)));
-  // Schritt an einen KI-Agenten: aktives Mitglied, KI-Freigabe „Workflow-Schritte übernehmen“ und Agenten-Policy erlauben es; sonst an die PL mit Hinweis
+  // Schritt an einen KI-Agenten: aktives Mitglied, Recht „Workflow-Schritte übernehmen“ und Agenten-Policy erlauben es; sonst an die PL mit Hinweis
   let agentNote: string | null = null; let agentId: string | null = null;
   if (step.responsible === 'agent') {
     const a = step.responsibleUserId ? await db.maybeOne(`select u.id, u.name from users u join project_members m on m.user_id = u.id and m.project_id = $2 where u.id = $1 and u.kind = 'agent' and u.active`, [step.responsibleUserId, run.project_id]) : null;

@@ -1,10 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { externalWindow, webSettings } from './web.js';
-import type { AiDecision, AgentPolicy, WebSearchSettings, ExternalWindow } from '@projekttool/shared';
+import type { AiDecision, WebSearchSettings, ExternalWindow } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { unseal } from '../secrets.js';
-import { checkAi, orgRuleAllows, type AiQuery } from './policy.js';
+import { checkAi, type AiQuery } from './policy.js';
 import { projectLabelSql, SQL } from '../projectPolicy.js';
 
 /**
@@ -21,9 +21,9 @@ export interface AiProfileRow { id: string; org_id: string; name: string; provid
  * enableThinking (nur lokal): false = Denkmodus aus, true = ausdrücklich an, undefined = Standard von Modell/Server;
  * gesendet als chat_template_kwargs.enable_thinking (ausgewertet von vLLM und llama.cpp).
  */
-export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number }
+export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number; /** Agent, der mit diesem LLM arbeitet */ agentUserId?: string }
 export type OwnLlmMode = 'off' | 'personal' | 'all';
-export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget: number; plAgents: { enabled: boolean; maxBudget: number }; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Agenten-Policy des Mandanten (Rohwert) */ agentPolicy: AgentPolicy; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
+export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; agentDailyBudget: number; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
 
 /** Konfiguration aus einem Profil; der Anthropic-Schlüssel darf nur bei Profilen des Mandanten aus ANTHROPIC_API_KEY kommen, eigene LLMs eines Projekts brauchen einen eigenen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
@@ -34,19 +34,16 @@ export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | nu
 }
 
 /**
- * Einstellungen des Mandanten: enabled = false ist der Notaus; Tagesbudgets je Agent (Läufe) und je Projekt für die
- * KI-Assistenz (Anfragen); höchstes Tagesbudget eigener Agenten der PL (nie über dem Mandantenwert). Ob PL eigene Agenten
- * anlegen dürfen, entscheidet die Regel pl.agents der KI-Freigaben.
+ * Einstellungen des Mandanten: enabled = false ist der Notaus; Tagesbudget je Agent als Obergrenze (der Verwalter des LLM setzt
+ * je Agent weniger); ob Projekte ein eigenes LLM haben dürfen (aus, nur persönliche, alle).
  */
-export async function orgAiSettings(db: Db, orgId: string): Promise<{ enabled: boolean; defaultProfileId: string | null; agentDailyBudget: number; assistDailyBudget: number; plAgents: { maxBudget: number }; ownLlm: OwnLlmMode; externalGuard: 'strict' | 'check' }> {
+export async function orgAiSettings(db: Db, orgId: string): Promise<{ enabled: boolean; agentDailyBudget: number; ownLlm: OwnLlmMode; externalGuard: 'strict' | 'check' }> {
   const o = await db.one(`select settings from orgs where id = $1`, [orgId]);
   const ai = o.settings?.ai ?? {};
   // 0 gilt (keine Läufe); nur ein fehlender oder unlesbarer Wert fällt auf den Standard zurück
   const num = (v: unknown, def: number) => { const n = Number(v ?? def); return Number.isFinite(n) ? Math.max(0, n) : def; };
-  const agentDailyBudget = num(ai.agentDailyBudget, 50);
-  const pa = ai.plAgents ?? {};
   const ownLlm: OwnLlmMode = ai.ownLlm === 'off' || ai.ownLlm === 'all' ? ai.ownLlm : 'personal';
-  return { enabled: ai.enabled !== false, defaultProfileId: ai.defaultProfileId ?? null, agentDailyBudget, assistDailyBudget: num(ai.assistDailyBudget, 200), plAgents: { maxBudget: Math.min(agentDailyBudget, Math.max(0, Number(pa.maxBudget ?? 20) || 0)) }, ownLlm, externalGuard: ai.externalGuard === 'check' ? 'check' : 'strict' };
+  return { enabled: ai.enabled !== false, agentDailyBudget: num(ai.agentDailyBudget, 50), ownLlm, externalGuard: ai.externalGuard === 'check' ? 'check' : 'strict' };
 }
 
 /**
@@ -82,32 +79,23 @@ export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   const own = await db.maybeOne(`select 1 from ai_profiles where org_id = $1 and project_id is not null and active and not admin_blocked limit 1`, [orgId]);
   const s = await orgAiSettings(db, orgId);
   const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
-  const plAgents = { enabled: await orgRuleAllows(db, orgId, 'pl.agents'), maxBudget: s.plAgents.maxBudget };
-  return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, defaultProfileId: s.defaultProfileId, agentDailyBudget: s.agentDailyBudget, assistDailyBudget: s.assistDailyBudget, plAgents, ownLlm: s.ownLlm, externalGuard: s.externalGuard, agentPolicy: (await db.one(`select settings->'ai'->'agentPolicy' as p from orgs where id = $1`, [orgId])).p ?? {}, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
+  return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, agentDailyBudget: s.agentDailyBudget, ownLlm: s.ownLlm, externalGuard: s.externalGuard, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
 }
 
 /**
- * Einziger Weg zu einer KI-Konfiguration: prüft die Freigabe (aiAllowed: Notaus, Regeln, Ebene der PL, Profil, Budget)
- * und liefert das Profil des Projekts bzw. Agenten; gesperrt → cfg null mit Begründung in decision. Alle Aufrufe von
- * complete() holen ihre Konfiguration hier.
+ * Einziger Weg zu einer KI-Konfiguration: prüft (Notaus, Rechte des Agenten, Ebene der PL, LLM, Budget) und liefert das LLM
+ * des Agenten; Personen bekommen nie eine Konfiguration (Assistenz: assistAgent). Alle Aufrufe von complete() holen sie hier.
  */
 export async function aiConfigFor(db: Db, q: AiQuery): Promise<{ cfg: AiConfig | null; decision: AiDecision }> {
   return checkAi(db, q);
 }
 
-/** Intern (nur aiConfigFor bzw. policy.ts): Projekt-KI, das dem Projekt zugewiesene Profil, solange es dort verfügbar ist (Freigabe, eigenes LLM erlaubt, nicht gesperrt); sonst ist die KI im Projekt aus. */
-export async function aiConfigForProject(db: Db, projectId: string): Promise<AiConfig | null> {
-  const r = await db.maybeOne<AiProfileRow>(`select a.* from projects p join orgs o on o.id = p.org_id join ai_profiles a on a.id = p.ai_profile_id and ${PROJECT_PROFILE_SQL} where p.id = $1`, [projectId]);
-  return profileConfig(r);
-}
 /**
- * Intern (nur aiConfigFor bzw. policy.ts): Agent, eigenes Profil, sonst das Standardprofil des Mandanten; der Denkmodus des
- * Agenten (aus/an) überschreibt den des Profils. Agenten der PL laufen nur auf LLMs, die in ihrem Projekt verfügbar sind; Agenten der
- * Org laufen mit ihrem Profil überall (project_scope sperrt kein Projekt), in persönlichen Projekten aber nur, wenn das Profil dort
- * freigegeben ist („auch in persönlichen Projekten“ oder Auswahl).
+ * Intern (nur aiConfigFor bzw. policy.ts): das LLM des Agenten; der Denkmodus des Agenten (aus/an) überschreibt den des LLM.
+ * Im Projekt nur, wenn sein Einsatz das Projekt umfasst und das LLM dort freigegeben ist.
  */
 export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: string | null): Promise<AiConfig | null> {
-  const r = await db.maybeOne<AiProfileRow & { agent_thinking: 'off' | 'on' | null; agent_project_id: string | null; agent_scope: string }>(`select a.*, u.thinking_mode as agent_thinking, u.agent_project_id, u.agent_scope from users u join ai_profiles a on a.id = coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) where u.id = $1`, [agentUserId]);
+  const r = await db.maybeOne<AiProfileRow & { agent_thinking: 'off' | 'on' | null; agent_project_id: string | null; agent_scope: string }>(`select a.*, u.thinking_mode as agent_thinking, u.agent_project_id, u.agent_scope from users u join ai_profiles a on a.id = u.ai_profile_id where u.id = $1`, [agentUserId]);
   if (!r) return null;
   // Konzept LLM/Agenten 2.2: im Projekt nur, wenn der Einsatz des Agenten es umfasst und sein LLM dort verfügbar ist
   const pid = projectId ?? r.agent_project_id ?? null;
@@ -118,6 +106,7 @@ export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: 
   } else if (r.project_id) return null;
   const cfg = profileConfig(r);
   if (cfg && cfg.provider === 'local' && r?.agent_thinking) cfg.enableThinking = r.agent_thinking === 'on';
+  if (cfg) cfg.agentUserId = agentUserId;
   return cfg;
 }
 /**
@@ -125,12 +114,12 @@ export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: 
  * dort verfügbar. Dieselbe Prüfung beim Aufnehmen, beim Setzen als Projektagent und bei jedem Lauf; der Grund ist für die PL lesbar.
  */
 export async function agentUsableIn(db: Db, agentUserId: string, projectId: string): Promise<{ ok: true; profile: string } | { ok: false; reason: string }> {
-  const u = await db.maybeOne(`select u.id, u.name, u.active, u.agent_project_id, u.agent_scope, coalesce(u.ai_profile_id, (select (o.settings->'ai'->>'defaultProfileId')::uuid from orgs o where o.id = u.org_id)) as profile_id from users u where u.id = $1 and u.kind = 'agent'`, [agentUserId]);
+  const u = await db.maybeOne(`select u.id, u.name, u.active, u.agent_project_id, u.agent_scope, u.ai_profile_id as profile_id from users u where u.id = $1 and u.kind = 'agent'`, [agentUserId]);
   if (!u) return { ok: false, reason: 'Kein KI-Agent' };
   if (!u.active) return { ok: false, reason: `${u.name} ist deaktiviert` };
   if (u.agent_project_id && u.agent_project_id !== projectId) return { ok: false, reason: `${u.name} gehört zu einem anderen Projekt` };
   if (!u.agent_project_id && u.agent_scope === 'selected' && !(await db.maybeOne(`select 1 from agent_projects where agent_user_id = $1 and project_id = $2`, [u.id, projectId]))) return { ok: false, reason: `${u.name} ist nicht für dieses Projekt vorgesehen (Verwaltung › KI › Agenten: Einsatz)` };
-  if (!u.profile_id) return { ok: false, reason: `${u.name} hat kein LLM (Verwaltung › KI: Standard-LLM oder LLM am Agenten)` };
+  if (!u.profile_id) return { ok: false, reason: `${u.name} hat kein LLM (Verwaltung › KI)` };
   const a = await db.maybeOne(`select a.name from projects p join orgs o on o.id = p.org_id join ai_profiles a on ${PROJECT_PROFILE_SQL} where p.id = $1 and a.id = $2`, [projectId, u.profile_id]);
   if (!a) {
     const name = (await db.maybeOne(`select name from ai_profiles where id = $1`, [u.profile_id]))?.name ?? 'LLM';
@@ -146,7 +135,7 @@ export async function agentUsableIn(db: Db, agentUserId: string, projectId: stri
 export async function profileWarnings(db: Db, orgId: string, profileId: string): Promise<string[]> {
   const rows = await db.query(
     `select u.id, u.name, p.id as project_id, ${projectLabelSql('p', 'o')} as label from users u join project_members m on m.user_id = u.id join projects p on p.id = m.project_id and p.status = 'active' left join users o on o.id = p.created_by
-     where u.org_id = $1 and u.kind = 'agent' and u.active and coalesce(u.ai_profile_id, (select (x.settings->'ai'->>'defaultProfileId')::uuid from orgs x where x.id = u.org_id)) = $2 order by u.name, p.key`, [orgId, profileId]);
+     where u.org_id = $1 and u.kind = 'agent' and u.active and u.ai_profile_id = $2 order by u.name, p.key`, [orgId, profileId]);
   const out: string[] = [];
   for (const r of rows.rows) {
     const u = await agentUsableIn(db, r.id, r.project_id);

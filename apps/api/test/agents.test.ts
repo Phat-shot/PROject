@@ -44,19 +44,19 @@ test('Lokales LLM als Profil: Org-Admin legt es an (Adresse, Modell, optional Sc
   const wrong = (await t.api(admin).post('/ai/profiles', { name: 'Kaputt', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'gibtsnicht' })).json().profile;
   assert.equal((await t.api(admin).post(`/ai/profiles/${wrong.id}/test`)).statusCode, 400);
   assert.equal((await t.api(admin).post('/ai/profiles', { name: 'Ohne Adresse', provider: 'local', model: 'x' })).statusCode, 400);
-  const s = await t.api(admin).put('/ai/settings', { agentDailyBudget: 5, defaultProfileId: profileId });
+  const s = await t.api(admin).put('/ai/settings', { agentDailyBudget: 5 });
   assert.equal(s.json().agentDailyBudget, 5);
-  assert.equal(s.json().defaultProfileId, profileId);
 });
 
 test('Agent: nur Org-Admin legt an; kein Login; Mitgliedschaft wird Mitglied mit Stellvertretung; Zuweisung nur durch PL', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
-  assert.equal((await t.api(pl).post('/agents', { name: 'Nachfasser' })).statusCode, 403);
-  const a = (await t.api(admin).post('/agents', { name: 'Nachfasser' })).json().agent;
+  assert.equal((await t.api(pl).post('/agents', { name: 'Nachfasser', aiProfileId: profileId })).statusCode, 403);
+  const a = (await t.api(admin).post('/agents', { name: 'Nachfasser', aiProfileId: profileId })).json().agent;
   assert.match(a.email, /@agent\.local$/);
-  assert.equal(a.aiProfileId, profileId, 'Standardprofil des Mandanten');
+  assert.equal(a.aiProfileId, profileId, 'gehört zum gewählten LLM');
+  assert.equal((await t.api(admin).post('/agents', { name: 'Ohne LLM' })).statusCode, 400, 'bei mehreren LLMs muss eines gewählt werden');
   const wrong = (await t.api(admin).get('/ai/profiles')).json().profiles.find((p: any) => p.name === 'Kaputt');
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { aiProfileId: wrong.id })).json().agent.aiProfileId, wrong.id);
   assert.equal((await t.api(admin).patch(`/agents/${a.id}`, { aiProfileId: profileId })).json().agent.aiProfileId, profileId);
@@ -178,7 +178,7 @@ test('Sofortlauf bei Zuweisung und Kommentar; Wartezustand mit Wiedervorlage, Na
   const pl = await t.login('pl@demo.local');
   const pid = t.ids.projects.web;
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
-  const agent = (await t.api(admin).post('/agents', { name: 'Prüfer' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Prüfer', aiProfileId: profileId })).json().agent;
   await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true });
   // Agent wartet auf Rückmeldung: Nachfassen nach 2 h, Eskalation nach 5 h, Prüfung nach 1 h
   nextActions = [{ type: 'mail', to: ['lieferant@example.com'], subject: 'Stand?', text: 'Bitte Rückmeldung. Prüfer (KI-Agent, Projekt WEB)' }, { type: 'wait', kind: 'reply', reason: 'Antwort des Lieferanten', checkAfterHours: 1, remindAfterHours: 2, escalateAfterHours: 5 }];
@@ -264,7 +264,7 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   const pl = await t.login('pl@demo.local');
   const pid = t.ids.projects.web;
   await t.api(admin).put('/ai/settings', { agentDailyBudget: 100 });
-  const agent = (await t.api(admin).post('/agents', { name: 'Schreiber' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Schreiber', aiProfileId: profileId })).json().agent;
   await t.api(pl).put(`/projects/${pid}/members/${agent.id}`, { role: 'member', agentCanMail: true });
   nextActions = [{ type: 'none', reason: 'erst lesen' }];
   const created = await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Jour fixe dokumentieren', responsibleUserId: agent.id });

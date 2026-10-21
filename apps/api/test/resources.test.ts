@@ -178,7 +178,7 @@ test('Agent: book_resource immer vorläufig mit Frage confirm an den Ansprechpar
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   const agent = (await t.api(admin).post('/agents', { name: 'Planer' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member' });
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' });

@@ -7,6 +7,11 @@ import { syncProjectGroups } from '../src/rights.js';
 // Rechte, Rollen, Gruppen (Konzept Abschnitt 2): Gruppen als Projektmitglied (Regel M), Gruppenverwalter, Benutzerverwaltung, PL neu bestimmen
 const t = await testApp();
 test.after(() => t.close());
+
+/** Agenten gehören zu einem LLM: einmal anlegen, dann wiederverwenden. */
+let llmId = '';
+const llmFor = async (admin: Record<string, string>) => llmId || (llmId = (await t.api(admin).post('/ai/profiles', { name: 'Test-LLM', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'm' })).json().profile.id);
+
 const ids = t.ids.users;
 
 const row = (projectId: string, userId: string) => t.db.maybeOne(`select * from project_members where project_id = $1 and user_id = $2`, [projectId, userId]);
@@ -157,7 +162,7 @@ test('Gruppenmitglieder ändern und Gruppe löschen ziehen die Projektmitgliedsc
 test('Agenten werden nie Gruppenmitglied; persönliche Projekte nehmen keine Gruppen auf', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
-  const agent = (await t.api(admin).post('/agents', { name: 'Gruppenagent' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Gruppenagent', aiProfileId: await llmFor(admin) })).json().agent;
   assert.equal((await t.api(admin).post('/groups', { name: 'Mit Agent', memberIds: [ids.max, agent.id] })).statusCode, 400);
   assert.equal(await t.db.maybeOne(`select 1 from groups where name = 'Mit Agent'`), null, 'keine leere Gruppe angelegt');
   assert.equal((await t.api(admin).post('/groups', { name: 'Mit Agent', memberIds: [ids.max], managerIds: [agent.id] })).statusCode, 400, 'auch nicht als Verwalter');
@@ -266,7 +271,7 @@ test('Benutzer: Rolle, Org-Rechte, Deaktivieren und Reaktivieren (Gruppenzeilen 
   assert.equal((await t.api(admin).patch(`/users/${ids.admin}`, { globalRole: 'user' })).statusCode, 400, 'deaktivierte Org-Admins zählen nicht');
 
   // Agenten: keine Rolle, kein Aktiv-Status über diese Route
-  const agent = (await t.api(admin).post('/agents', { name: 'Rollenagent' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Rollenagent', aiProfileId: await llmFor(admin) })).json().agent;
   assert.equal((await t.api(admin).patch(`/users/${agent.id}`, { globalRole: 'project_creator' })).statusCode, 400);
   assert.equal((await t.api(admin).patch(`/users/${agent.id}`, { active: false })).statusCode, 400);
 });
@@ -333,7 +338,7 @@ test('Org-Admin bestimmt die verantwortliche PL neu, ohne Inhaltszugriff; die bi
   assert.equal((await t.api(pl).get('/admin/projects')).statusCode, 403);
   assert.equal((await t.api(pl).put(`/admin/projects/${pid}/lead`, { userId: ids.max })).statusCode, 403, 'nur Org-Admin, auch nicht die PL selbst');
 
-  const agent = (await t.api(admin).post('/agents', { name: 'Leitagent' })).json().agent;
+  const agent = (await t.api(admin).post('/agents', { name: 'Leitagent', aiProfileId: await llmFor(admin) })).json().agent;
   assert.equal((await t.api(admin).put(`/admin/projects/${pid}/lead`, { userId: agent.id })).statusCode, 400, 'nur Personen');
   const dora = await newUser('dora@demo.local', 'Dora Deaktiviert');
   assert.equal((await t.api(admin).patch(`/users/${dora}`, { active: false })).statusCode, 200);

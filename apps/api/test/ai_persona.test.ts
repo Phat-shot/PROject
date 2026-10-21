@@ -32,7 +32,7 @@ test('KI-Profil: Denkmodus aus sendet enable_thinking=false an das lokale Modell
   assert.equal(calls.at(-1).chat_template_kwargs, undefined);
   assert.equal((await t.api(admin).get('/ai/status')).json().profiles.find((x: any) => x.id === p.id).thinkingOff, false);
   await t.api(admin).patch(`/ai/profiles/${p.id}`, { thinkingOff: true });
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
 });
 
 test('Agent-Persona: eine Zeile, nur Org-Admin, steht als Schreibstil im Prompt für Arbeitspaket und Chat', async () => {
@@ -76,7 +76,7 @@ test('Denkmodus je Agent: überschreibt das Profil (an/aus), null = wie Profil',
   assert.deepEqual(calls.at(-1).chat_template_kwargs, { enable_thinking: true });
   assert.equal(calls.at(-1).max_tokens, 6500);
   // Profil an (Modellstandard), Agent aus
-  const prof = (await t.api(admin).get('/ai/status')).json().defaultProfileId;
+  const prof = a.aiProfileId;
   await t.api(admin).patch(`/ai/profiles/${prof}`, { thinkingOff: false });
   await t.api(admin).patch(`/agents/${a.id}`, { thinkingMode: 'off' });
   await t.api(pl).post(`/tasks/${t.ids.tasks.t2}/agent-run`);

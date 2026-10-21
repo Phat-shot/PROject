@@ -37,7 +37,7 @@ test('Projektagent setzen: nur PL, nur Agenten; Mitgliedschaft wird stellvertret
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   await t.api(pl).patch(`/projects/${web()}`, { aiProfileId: p.id });
   agent = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   assert.equal((await t.api(max).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'process' })).statusCode, 403, 'nur PL');
@@ -183,17 +183,18 @@ test('Einstellung je Projekt (aus, im Projekt fragen) und Vorgabe des Mandanten;
   assert.equal((await t.db.one(`select role from project_members where project_id = $1 and user_id = $2`, [web(), agent.id])).role, 'member');
 });
 
-test('KI-Freigabe agent.mail gesperrt: Lauf übersprungen mit Begründung', async () => {
+test('Recht agent.mail entzogen: Lauf übersprungen mit Begründung', async () => {
   const pl = await t.login('pl@demo.local');
   const admin = await t.login('admin@demo.local');
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent`, { agentUserId: agent.id, agentMail: 'process' })).statusCode, 200);
-  const rule = await t.api(admin).put('/ai/policies', { projectId: null, userId: agent.id, groupId: null, note: null, feature: 'agent.mail', effect: 'deny' });
+  const rights = (await t.api(admin).get('/agents')).json().agents.find((a: any) => a.id === agent.id).rights;
+  const rule = await t.api(admin).patch(`/agents/${agent.id}`, { rights: rights.filter((f: string) => f !== 'agent.mail') });
   assert.equal(rule.statusCode, 200, rule.body);
   mailOpen = [];
   mailNext = [M({ type: 'create_ap', title: 'Kabel', text: 'Kabel' })];
   const mail = await inject('Kabel');
   const run = await t.db.one(`select * from mail_ai_runs where mail_id = $1`, [mail.id]);
   assert.equal(run.status, 'skipped');
-  assert.match(run.error ?? '', /gesperrt|Gesperrt|Projektagent bearbeitet Mails/);
+  assert.match(run.error ?? '', /Mails direkt bearbeiten \(als Projektagent\): für .* nicht freigegeben/);
   assert.equal(await t.db.maybeOne(`select 1 from tasks where title = 'Kabel'`), null);
 });

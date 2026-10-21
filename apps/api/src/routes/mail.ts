@@ -6,7 +6,7 @@ import { badRequest, forbidden, notFound } from '../errors.js';
 import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject, requireTask, requireTaskRef } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
 import { aiConfigFor } from '../ai/client.js';
-import { aiAllowed, aiError } from '../ai/policy.js';
+import { aiAllowed, aiError, assistAgent, assistCapability, recordAssist } from '../ai/policy.js';
 import type { AccountRow } from '../mail/types.js';
 import { AI_ACTIONS, loadMailRow, mailToLogEntry, mailToMarkdown } from '../mail/actions.js';
 import { PERSONAL_MAIL_ONLY, accountAllowedInProject, mailAccess, mailAllowedInProject } from '../mail/access.js';
@@ -971,12 +971,12 @@ export async function mailRoutes(app: FastifyInstance) {
       ? (await db.query(`select distinct project_id from mail_views where id = any($1::uuid[])`, [access.viewIds])).rows.map((r: any) => r.project_id as string)
       : (await db.query(`select distinct t.project_id from mail_task_links l join tasks t on t.id = l.task_id where l.mail_id = $1 and l.copied`, [mail.id])).rows.map((r: any) => r.project_id as string);
     let writer = false;
-    // KI-Aktionen: Freigabe je Funktion (assist.summarize, assist.essence) in einem der Projekte, sonst deren Begründung
+    // KI-Aktionen: Person („KI nutzen“) und ein Agent mit dem Recht (assist.summarize, assist.essence) in einem der Projekte, sonst deren Begründung
     const aiReasons: Record<string, string | undefined> = { summarize: undefined, essence_task: undefined, essence_page: undefined };
     for (const [key, feature] of [['summarize', 'assist.summarize'], ['essence_task', 'assist.essence'], ['essence_page', 'assist.essence']] as const) {
       let reason: string | undefined = projectIds.length ? undefined : 'Mail gehört zu keiner Projektansicht';
       for (const [i, pid] of projectIds.entries()) {
-        const d = await aiAllowed(db, { userId: user.id, projectId: pid, feature });
+        const d = await assistCapability(db, user, pid, feature);
         if (d.allowed) { reason = undefined; break; }
         if (i === 0) reason = d.reason;
       }
@@ -1017,7 +1017,7 @@ export async function mailRoutes(app: FastifyInstance) {
   });
 
   // Abschluss: Antwort auf die Ursprungsmail vorbereiten (aufbereitetes Ergebnis, optional mit der Projekt-KI); gesendet wird über den normalen Entwurf
-  app.get<{ Params: { id: string }; Querystring: { ai?: string } }>('/tasks/:id/final-reply', async (req) => {
+  app.get<{ Params: { id: string }; Querystring: { ai?: string; agent?: string } }>('/tasks/:id/final-reply', async (req) => {
     const user = requireUser(req);
     const task = await db.maybeOne(`select t.*, c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1 and t.deleted_at is null`, [req.params.id]);
     if (!task) throw notFound('Arbeitspaket nicht gefunden');
@@ -1032,11 +1032,12 @@ export async function mailRoutes(app: FastifyInstance) {
     for (const v of views.rows) { const r = await getViewRights(db, v.id, user, m); if (r.canDraft || r.canSend) { viewId = v.id; break; } }
     let body = await finalReplyText(db, task, mail, user.name);
     if (req.query.ai === '1') {
-      const { cfg, decision } = await aiConfigFor(db, { userId: user.id, projectId: task.project_id, feature: 'assist.final_reply' });
-      if (!cfg) throw aiError(decision);
+      // Formuliert vom Agenten des Projekts (Projektagent, sonst der gewählte bzw. einzige mit diesem Recht)
+      const { cfg, agent } = await assistAgent(db, user, task.project_id, 'assist.final_reply', req.query.agent || null);
       const r = await aiFinalReply(db, cfg, app.fetchFn, task, mail, user.name);
       body = r.text || body;
-      await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.final_reply', objectType: 'task', objectId: task.id, details: { mailId: mail.id, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
+      await recordAssist(db, agent, task.project_id, 'final_reply', r);
+      await audit(db, { orgId: user.orgId, projectId: task.project_id, userId: user.id, action: 'ai.final_reply', objectType: 'task', objectId: task.id, details: { mailId: mail.id, agent: agent.name, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     }
     // KI-Text an Nicht-Interne: Außenprüfung nur als Hinweis, die Person entscheidet selbst
     const outbound = req.query.ai === '1' ? await checkHint(db, { orgId: user.orgId, projectId: task.project_id, taskId: task.id, recipients: [mail.from_addr], subject: reSubject(mail.subject), text: body, userId: user.id }) : null;

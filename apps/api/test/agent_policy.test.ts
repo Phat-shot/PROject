@@ -25,12 +25,12 @@ let agent: any; let page: any; let task: any;
 const agentRow = () => ({ id: agent.id, name: agent.name, org_id: t.ids.org, persona: null });
 const openApproval = () => t.db.maybeOne(`select * from questions where task_id = $1 and kind = 'approval' and status = 'open'`, [task.id]);
 
-test('Vorbereitung und wirksame Policy: Standard, Mandant, Projekt, Agent, AP mit Herkunft; Grenzen maxMode und lockedConfirm', async () => {
+test('Vorbereitung und wirksame Policy: Standard, Agent (Verwalter), Projekt, Agent im Projekt, AP mit Herkunft; Grenzen maxMode und lockedConfirm', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
-  agent = (await t.api(admin).post('/agents', { name: 'Schreiber' })).json().agent;
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
+  agent = (await t.api(admin).post('/agents', { name: 'Schreiber', aiProfileId: p.id })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'pl', agentCanMail: true, canFinalize: true });
   // Demo-Projekt verhält sich wie Bestand: auto
   let e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json();
@@ -40,17 +40,19 @@ test('Vorbereitung und wirksame Policy: Standard, Mandant, Projekt, Agent, AP mi
   e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json();
   assert.equal(e.effective.mode, 'confirm_critical'); assert.equal(e.effective.origin.mode, 'Standard');
   assert.deepEqual(e.effective.confirm.sort(), ['close', 'distribute', 'finalize', 'restructure', 'send_external']);
-  // Mandant erzwingt mindestens confirm_critical und immer finalize; Projekt will auto → angehoben
-  assert.equal((await t.api(admin).put('/ai/settings', { agentPolicy: { maxMode: 'confirm_critical', lockedConfirm: ['finalize'] } })).statusCode, 200);
-  assert.equal((await t.api(admin).get('/ai/status')).json().agentPolicy.maxMode, 'confirm_critical');
+  // Verwalter des LLM erzwingt am Agenten mindestens confirm_critical und immer finalize; Projekt will auto → angehoben
+  assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { policy: { maxMode: 'confirm_critical', lockedConfirm: ['finalize'] } })).statusCode, 200);
+  assert.equal((await t.api(pl).patch(`/agents/${agent.id}`, { policy: {} })).statusCode, 403, 'PL verwaltet kein Org-LLM');
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto', confirm: [] })).statusCode, 200);
   e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json();
-  assert.equal(e.effective.mode, 'confirm_critical', 'Grenze des Mandanten');
-  assert.equal(e.effective.origin.mode, 'Mandant erzwungen');
+  assert.equal(e.effective.mode, 'confirm_critical', 'Grenze am Agenten');
+  assert.equal(e.effective.origin.mode, 'Agent (Verwalter) erzwungen');
   assert.deepEqual(e.effective.confirm, ['finalize'], 'gewählte Liste leer, gesperrte Klasse bleibt');
-  assert.equal(e.effective.origin.confirm.finalize, 'Mandant erzwungen');
+  assert.equal(e.effective.origin.confirm.finalize, 'Agent (Verwalter) erzwungen');
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'sofort' })).statusCode, 400);
-  assert.equal((await t.api(admin).put('/ai/settings', { agentPolicy: {} })).statusCode, 200);
+  // Die PL schränkt den Agenten im Projekt nur ein: lockerer als die Obergrenze geht nicht
+  assert.equal((await t.api(pl).put(`/projects/${web()}/members/${agent.id}/agent-policy`, { mode: 'auto' })).statusCode, 400);
+  assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { policy: {} })).statusCode, 200);
   // Agent im Projekt: confirm_all; AP: zurück auf confirm_critical mit eigener Liste
   assert.equal((await t.api(pl).put(`/projects/${web()}/members/${agent.id}/agent-policy`, { mode: 'confirm_all' })).statusCode, 200);
   e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json();
@@ -157,18 +159,18 @@ test('Ablehnen mit Grund: Vorschlag und Abhängige abgelehnt, Log, 14 Tage nicht
   assert.equal(await dmCount(), before + 1, 'gleiche Störung nur einmal');
 });
 
-test('KI-Freigabe sperrt eine Klasse (agent.close): nicht ausgeführt, nicht vorgeschlagen; selbstständig (auto) läuft Erledigt direkt; Ordner mit Agentenzugriff „nur lesen“ sperrt Schreiben', async () => {
+test('Ohne Recht auf eine Klasse (agent.close, im Projekt abgeschaltet): nicht ausgeführt, nicht vorgeschlagen; selbstständig (auto) läuft Erledigt direkt; Ordner mit Agentenzugriff „nur lesen“ sperrt Schreiben', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' });
-  assert.equal((await t.api(admin).put('/ai/policies', { projectId: web(), userId: null, groupId: null, note: null, feature: 'agent.close', effect: 'deny' })).statusCode, 200);
+  assert.equal((await t.api(pl).put(`/projects/${web()}/members/${agent.id}/agent-policy`, { deny: ['agent.close'] })).statusCode, 200);
   nextActions = [{ type: 'set_status', column: 'Erledigt' }];
   let run = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
-  assert.match(run.error ?? '', /gesperrt durch KI-Freigabe „Erledigt setzen“/);
-  assert.ok(prompts.at(-1)?.includes('Gesperrt (KI-Freigaben, nicht vorschlagen): Erledigt setzen'), 'Sperre im Prompt');
+  assert.match(run.error ?? '', /keine Berechtigung „Erledigt setzen“/);
+  assert.ok(prompts.at(-1)?.includes('Gesperrt (keine Berechtigung, nicht vorschlagen): Erledigt setzen'), 'Sperre im Prompt');
   assert.notEqual((await t.db.one(`select c.name from tasks t join board_columns c on c.id = t.column_id where t.id = $1`, [task.id])).name, 'Erledigt');
   assert.equal(await openApproval(), null, 'gesperrt wird nicht vorgelegt');
-  await t.api(admin).put('/ai/policies', { projectId: web(), userId: null, groupId: null, note: null, feature: 'agent.close', effect: null });
+  await t.api(pl).put(`/projects/${web()}/members/${agent.id}/agent-policy`, null);
   // Ordnerzugriff: Protokolle nur lesen → doc_update verworfen, read_page bleibt
   const folder = await t.db.one(`select id from doc_folders where project_id = $1 and name = 'Protokolle'`, [web()]);
   assert.equal((await t.api(pl).patch(`/projects/${web()}/docs/folders/${folder.id}`, { agentAccess: 'read' })).statusCode, 200);
@@ -225,8 +227,9 @@ test('Workflow-Schritt an einen KI-Agenten: Agent wird zuständig und läuft; ge
   const t1 = await t.db.one(`select * from tasks where title = 'Recherche Meier'`);
   assert.equal(t1.responsible_user_id, agent.id);
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'assigned'`, [t1.id]), 'Agent läuft sofort');
-  // Sperre über KI-Freigabe
-  await t.api(admin).put('/ai/policies', { projectId: null, userId: agent.id, groupId: null, note: null, feature: 'agent.workflow', effect: 'deny' });
+  // Recht am Agenten entzogen (Verwalter des LLM)
+  const allRights = (await t.api(admin).get('/agents')).json().agents.find((a: any) => a.id === agent.id).rights;
+  await t.api(admin).patch(`/agents/${agent.id}`, { rights: allRights.filter((f: string) => f !== 'agent.workflow') });
   const run2 = await t.api(pl).post(`/projects/${web()}/workflows/${def.json().definition.id}/start`, { name: 'Lauf B', vars: { kunde: 'Huber' } });
   assert.equal(run2.statusCode, 200, run2.body);
   await flushAgentRuns();
@@ -234,7 +237,7 @@ test('Workflow-Schritt an einen KI-Agenten: Agent wird zuständig und läuft; ge
   assert.equal(t2.responsible_user_id, null, 'an die PL (geerbt)');
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Der Schritt war für Schreiber (KI-Agent) vorgesehen%'`, [t2.id]));
   assert.ok(await t.db.maybeOne(`select 1 from notifications where user_id = $1 and title like 'Workflow-Schritt an dich%'`, [t.ids.users.pl]));
-  await t.api(admin).put('/ai/policies', { projectId: null, userId: agent.id, groupId: null, note: null, feature: 'agent.workflow', effect: null });
+  await t.api(admin).patch(`/agents/${agent.id}`, { rights: allRights });
   // Sperre über die Agenten-Policy des Projekts
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'confirm_critical', workflows: false });
   const run3 = await t.api(pl).post(`/projects/${web()}/workflows/${def.json().definition.id}/start`, { name: 'Lauf C', vars: { kunde: 'Schulz' } });
@@ -244,10 +247,10 @@ test('Workflow-Schritt an einen KI-Agenten: Agent wird zuständig und läuft; ge
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like '%Agenten-Policy%Workflow-Schritte nicht zu%'`, [t3.id]));
 });
 
-test('Denktiefe: schnell (eine Leserunde, keine Suche), gründlich (vier Leserunden, kostet zwei Läufe), Grenze maxDepth von Mandant und Projekt, Chat-Befehl policy mit depth', async () => {
+test('Denktiefe: schnell (eine Leserunde, keine Suche), gründlich (vier Leserunden, kostet zwei Läufe), Grenze maxDepth von Agent und Projekt, Chat-Befehl policy mit depth', async () => {
   const admin = await t.login('admin@demo.local');
   const pl = await t.login('pl@demo.local');
-  await t.api(admin).put('/ai/settings', { agentPolicy: {} });
+  await t.api(admin).patch(`/agents/${agent.id}`, { policy: {} });
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto', depth: 'quick' });
   let e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective;
   assert.equal(e.depth, 'quick'); assert.equal(e.origin.depth, 'Projekt WEB');
@@ -262,7 +265,7 @@ test('Denktiefe: schnell (eine Leserunde, keine Suche), gründlich (vier Leserun
   assert.match(prompts.at(-1) ?? '', /in der Denktiefe „schnell“ nicht verfügbar/);
   assert.ok(prompts.at(-2)!.includes('Denktiefe: schnell'), 'Policy-Text nennt die Tiefe');
   assert.equal((await t.db.one(`select cost from agent_runs where id = $1`, [run.runId])).cost, 1);
-  // gründlich kostet zwei Läufe; Mandant begrenzt auf standard
+  // gründlich kostet zwei Läufe; Verwalter begrenzt den Agenten auf standard
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto', depth: 'deep' });
   nextActions = [{ type: 'comment', text: 'gründlich geprüft' }];
   const { agentBudgetLeft } = await import('../src/ai/policy.js');
@@ -270,15 +273,15 @@ test('Denktiefe: schnell (eine Leserunde, keine Suche), gründlich (vier Leserun
   const run2 = await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), tk.id, 'manual');
   assert.equal((await t.db.one(`select cost from agent_runs where id = $1`, [run2.runId])).cost, 2);
   assert.equal(await agentBudgetLeft(t.db, { id: agent.id, org_id: t.ids.org }), left0 - 2, 'Budget summiert die Kosten');
-  assert.equal((await t.api(admin).put('/ai/settings', { agentPolicy: { maxDepth: 'standard' } })).statusCode, 200);
+  assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { policy: { maxDepth: 'standard' } })).statusCode, 200);
   e = (await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective;
-  assert.equal(e.depth, 'standard'); assert.equal(e.origin.depth, 'Mandant begrenzt');
+  assert.equal(e.depth, 'standard'); assert.equal(e.origin.depth, 'Agent (Verwalter) begrenzt');
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { depth: 'tief' })).statusCode, 400);
   // je AP: auch „Projektplan ändern“ darf die Tiefe setzen; die Grenze gilt weiter
   const max = await t.login('max@demo.local');
   assert.equal((await t.api(max).put(`/tasks/${tk.id}/agent-policy`, { depth: 'quick' })).statusCode, 200);
   assert.equal((await t.api(pl).get(`/projects/${web()}/agent-policy?agentId=${agent.id}`)).json().effective.depth, 'standard', 'AP-Tiefe gilt nur am AP');
   assert.equal((await t.api(pl).put(`/tasks/${tk.id}/agent-policy`, { depth: 'deep' })).json().effective.depth, 'standard', 'über der Grenze → begrenzt');
-  await t.api(admin).put('/ai/settings', { agentPolicy: {} });
+  await t.api(admin).patch(`/agents/${agent.id}`, { policy: {} });
   await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' });
 });

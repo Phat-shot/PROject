@@ -30,7 +30,7 @@ test('Ordner „KI Bearbeiten“ einrichten: nur mit Agent, Projektkonto nur dur
   const max = await t.login('max@demo.local');
   assert.equal((await t.api(pl).post(`/projects/${web()}/mail/ai-folder`, { accountId: t.ids.accounts.project })).statusCode, 400, 'ohne Agent');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   await t.api(pl).patch(`/projects/${web()}`, { aiProfileId: p.id });
   agent = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member' });

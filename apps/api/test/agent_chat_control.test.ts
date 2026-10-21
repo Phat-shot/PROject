@@ -35,7 +35,7 @@ test('Vorbereitung: Agent als Mitglied, DMs; Kontext nennt Absenderrolle, Rechte
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
   const p = (await t.api(admin).post('/ai/profiles', { name: 'Qwen', provider: 'local', baseUrl: 'http://llm.local:8000/v1', model: 'qwen' })).json().profile;
-  await t.api(admin).put('/ai/settings', { defaultProfileId: p.id, agentDailyBudget: 50 });
+  await t.api(admin).put('/ai/settings', { agentDailyBudget: 50 });
   agent = (await t.api(admin).post('/agents', { name: 'Morton' })).json().agent;
   await t.api(pl).put(`/projects/${web()}/members/${agent.id}`, { role: 'member' });
   dmPl = (await t.api(pl).post('/chat/dm', { userId: agent.id })).json().channelId;

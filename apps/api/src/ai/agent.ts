@@ -194,13 +194,13 @@ export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetc
   return { db, mail, fetchFn, agent: { ...agent, email: u.email }, task, m, cfg, now, trigger, columns, items, pages, folders, members, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, code: `${task.project_key}-${task.number}`, policy, folderAccess, doneColumns: new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => String(x.name).toLowerCase())), tokens: { input: 0, output: 0 }, checkIds: [], webSources: [], webSourceIds: [], webSearches: 0, window };
 }
 
-/** Gate (Konzept 6.4): Klasse bestimmen, KI-Freigaben, Ablehnungssperre (14 Tage), dann run oder hold nach der Policy. */
+/** Gate (Konzept 6.4): Klasse bestimmen, Rechte des Agenten, Ablehnungssperre (14 Tage), dann run oder hold nach der Policy. */
 export async function gateAction(ctx: RunCtx, a: any, opts: { hold: boolean; approvedBy?: string | null }): Promise<{ verdict: 'run' | 'hold' | 'deny'; classes: AgentActionClass[]; reason: string }> {
   const classes = classifyAction(a, { task: ctx.task, agentEmail: ctx.agent.email, doneColumns: ctx.doneColumns, pageStatus: (id) => ctx.pages.rows.find((p: any) => p.id === id)?.status ?? null });
   if (!classes.length) return { verdict: 'run', classes, reason: '' };
   const label = actionLabel(a, { pageTitle: (id) => ctx.pages.rows.find((p: any) => p.id === id)?.title ?? null });
   const denied = classes.find((k) => ctx.policy.denied[k]);
-  if (denied) return { verdict: 'deny', classes, reason: `${label}: gesperrt durch KI-Freigabe „${classLabel(denied)}“ (${ctx.policy.denied[denied]})` };
+  if (denied) return { verdict: 'deny', classes, reason: `${label}: keine Berechtigung „${classLabel(denied)}“ (${ctx.policy.denied[denied]})` };
   if (!opts.approvedBy) {
     const rej = await ctx.db.maybeOne(`select p.decided_at, u.name from ai_proposals p left join users u on u.id = p.decided_by where p.project_id = $1 and p.task_id = $2 and p.fingerprint = $3 and p.status = 'rejected' and p.decided_at > now() - interval '14 days' order by p.decided_at desc limit 1`, [ctx.task.project_id, ctx.task.id, actionFingerprint(a)]);
     if (rej) return { verdict: 'deny', classes, reason: `${label}: am ${new Date(rej.decided_at).toLocaleDateString('de-DE')} von ${rej.name ?? 'einer Person'} abgelehnt; nicht erneut vorschlagen (14 Tage)` };
@@ -1137,7 +1137,7 @@ export async function agentForTask(db: Db, taskId: string): Promise<{ id: string
 export { agentBudgetLeft };
 
 /**
- * Gesperrter Lauf (KI-Freigaben): ohne LLM-Aufruf als skipped mit Begründung protokolliert, zählt nicht gegen das Budget;
+ * Gesperrter Lauf (Rechte, Notaus, Budget): ohne LLM-Aufruf als skipped mit Begründung protokolliert, zählt nicht gegen das Budget;
  * je Agent und Arbeitspaket höchstens ein Eintrag am Tag, damit Worker und Ereignisse das Protokoll nicht fluten. Die
  * Lauflisten sehen alle Mitglieder: reason ist die Begründung für geteilte Orte (publicReason).
  */
