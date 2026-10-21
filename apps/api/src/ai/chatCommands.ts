@@ -6,7 +6,7 @@ import { canSeeSubproject, getMembership } from '../rights.js';
 import { contactChain, touchTask } from '../tasks/service.js';
 import { askQuestion, cancelQuestions, type Asker } from '../questions.js';
 import { setRules } from '../rules.js';
-import { createPlannedTask, findTaskByRef, ymd, type PlanActor } from './plan.js';
+import { cleanTitle, createPlannedTask, findTaskByRef, ymd, type PlanActor } from './plan.js';
 import { queueAgentRun } from './agentEvents.js';
 import { CHAT_ORDERS, MODE_ORDER, effectiveAgentPolicy, parseAgentPolicy } from './agentPolicy.js';
 import { aiAllowed } from './policy.js';
@@ -232,7 +232,7 @@ async function orderRequest(ctx: CommandCtx, project: { id: string; key: string 
 /** Auftrag aus dem Chat (7.4): Projekt bestimmen, Rechte des Auftraggebers, Dubletten, Anlage, Kette, Lauf mit Anlass order, Karte mit Rückgängig. */
 async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
   const { db, agent, sender, now } = ctx;
-  const title = cut(c.title, 200);
+  const title = cut(cleanTitle(c.title), 200);
   if (!title) return { type: 'order', status: 'denied', text: 'Auftrag ohne Titel' };
   // Projekt: Kanalprojekt, Projekt des genannten Über-AP, sonst einziges gemeinsames
   let project = ctx.project;
@@ -278,12 +278,15 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   // Dubletten: gleicher Titel unter demselben Über-AP (offen) → nachfragen statt anlegen
   const dup = await db.maybeOne(`select t.number from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and lower(t.title) = lower($2) and t.parent_id is not distinct from $3::uuid`, [project.id, title, parent?.id ?? null]);
   if (dup) return { type: 'order', status: 'denied', text: `„${title}“ gibt es schon offen als ${project.key}-${dup.number} – dort weiter?`, link: null };
-  const due = ymd(c.dueDate);
-  if (due === undefined) return { type: 'order', status: 'denied', text: 'Termin nicht als YYYY-MM-DD' };
+  // Unlesbarer Termin hält den Auftrag nicht auf: ohne Termin anlegen, Hinweis auf der Karte
+  const due0 = ymd(c.dueDate);
+  const due = due0 === undefined ? null : due0;
+  if (due0 === undefined) parentNote += ` (Termin „${c.dueDate}“ nicht lesbar: ohne Termin)`;
   const actor: PlanActor = { id: sender.id, name: sender.name, orgId: sender.orgId, role: m.role, label: `${sender.name} (per Chat)`, isAgent: false };
   const t = await createPlannedTask(db, actor, { projectId: project.id, projectKey: project.key, title, description: text || null, parentId: parent?.id ?? null, subprojectId, dueDate: due, items: Array.isArray(c.deliverables) ? c.deliverables : [] });
   // Auftraggeber, Ursprungsnachricht, Zuständigkeit des Agenten (Ausnahme zu „Agenten weist nur die PL zu“ nur auf diesem Weg)
   await db.query(`update tasks set requested_by = $2, origin_message_id = $3, responsible_user_id = $4 where id = $1`, [t.id, sender.id, ctx.messageId, agent.id]);
+  await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [t.id, sender.id, `Zuständig: ${agent.name} (Auftrag von ${sender.name} per Chat)`]);
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [t.id, sender.id, `Auftrag von ${sender.name} per Chat: ${cut(text || title, 1500)}`]);
   await audit(db, { orgId: sender.orgId, projectId: project.id, userId: sender.id, action: 'task.order', objectType: 'task', objectId: t.id, details: { title, parent: parent ? `${project.key}-${parent.number}` : null, agentId: agent.id, messageId: ctx.messageId } });
   // Berichtswunsch und Lieferung per Mail: Regel auf Benutzer-AP-Ebene (Ereignis progress)

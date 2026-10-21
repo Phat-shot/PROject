@@ -12,7 +12,7 @@ import { effectiveAgentPolicy } from './agentPolicy.js';
 import { audienceOf, guardOutbound, recordCheck } from '../outbound.js';
 import { externalWindow, inWindow, nextWindowStart } from './web.js';
 import { AGENT_SHEET, MAIL_RULES } from './sheet.js';
-import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, agentChatMessage, cleanTitle, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
 import { checkHint } from '../outbound.js';
@@ -290,8 +290,8 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
   const linkMail = (taskId: string, origin: boolean) => linkMailToTask(db, { mailId: mail.id, taskId, copied, linkedBy: actor.id, origin, actorId: actor.id, logged: true });
   // Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an (Inhalt würde sonst ins Projekt gelangen)
   if (ctx.run.mode === 'triage' && mail.use === 'personal' && mail.use_user_id !== actor.id && a.type !== 'none') fail('Vorschläge zu Mails aus einem persönlichen Konto nimmt nur der Eigentümer an');
-  const title = String(a.title ?? '').trim().slice(0, 200);
-  const start = ymd(a.startDate); const due = ymd(a.dueDate);
+  const title = cleanTitle(a.title);
+  const start = ymd(a.startDate, 'start'); const due = ymd(a.dueDate);
   if (start === undefined || due === undefined) fail('Datum nicht als YYYY-MM-DD');
   switch (a.type) {
     case 'create_ap':
@@ -334,11 +334,17 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
     }
     case 'create_event': {
       if (!title) fail('Titel fehlt');
-      const raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
-      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) fail('Beginn als YYYY-MM-DDTHH:MM angeben');
+      let raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
+      let rawEnd = a.endsAt ? String(a.endsAt).trim().replace(' ', 'T') : '';
       const now = new Date();
+      // Ohne Uhrzeit (z. B. „6.–8.11.“): 09:00 am ersten bis 17:00 am letzten Tag, wie im Lauf am Arbeitspaket
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) {
+        const d1 = ymd(raw || a.startDate, 'start', now); const d2 = ymd(rawEnd || a.dueDate || raw || a.startDate, 'end', now);
+        if (!d1 || !d2) fail('Beginn als YYYY-MM-DDTHH:MM oder Datum angeben');
+        raw = `${d1}T09:00`; rawEnd = `${d2}T17:00`;
+      }
       const starts = parseUntil(raw, now);
-      const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + 3600_000) : null;
+      const ends = rawEnd ? parseUntil(rawEnd, now) : starts ? new Date(starts.getTime() + 3600_000) : null;
       if (!starts || !ends || ends <= starts) fail('Beginn oder Ende nicht lesbar');
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [project.id, title, starts])) fail(`„${title}“ steht schon im Kalender`);
       // Teilnehmer: genannte Personen (Mitglieder per Name/E-Mail, sonst externe Adressen), nie Agenten

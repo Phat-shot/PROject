@@ -17,12 +17,61 @@ export const EFFECTIVE_JOINS = `left join tasks pt on pt.id = t.parent_id left j
 
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-/** YYYY-MM-DD oder null; ungültige Werte liefern undefined (Aufrufer meldet den Fehler). */
-export function ymd(v: unknown): string | null | undefined {
+/**
+ * Heute und die nächsten 14 Tage in Europe/Berlin mit Wochentag und Kalenderwoche, damit Modelle Fristen wie „Ende der Woche“
+ * oder „morgen“ nicht selbst ausrechnen: „Mi 21.10.2026 (KW 43). Kalender: Do 22.10., Fr 23.10. (Ende der Woche), Sa 24.10. …“
+ */
+export function calendarText(now: Date, days = 14): string {
+  const tz = 'Europe/Berlin';
+  const wd = (d: Date) => new Intl.DateTimeFormat('de-DE', { timeZone: tz, weekday: 'short' }).format(d).replace('.', '');
+  const dm = (d: Date) => new Intl.DateTimeFormat('de-DE', { timeZone: tz, day: '2-digit', month: '2-digit' }).format(d);
+  const ymdB = new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const base = new Date(`${ymdB}T12:00:00Z`);
+  const iso = new Date(base); const dayNr = (base.getUTCDay() + 6) % 7; iso.setUTCDate(base.getUTCDate() - dayNr + 3);
+  const kw = 1 + Math.round(((iso.getTime() - Date.UTC(iso.getUTCFullYear(), 0, 4)) / 86400000 - 3 + ((new Date(Date.UTC(iso.getUTCFullYear(), 0, 4)).getUTCDay() + 6) % 7)) / 7);
+  const list: string[] = [];
+  for (let i = 1; i <= days; i++) {
+    const d = new Date(base.getTime() + i * 86400000);
+    const sameWeek = i <= 6 - dayNr;
+    const note = sameWeek && d.getUTCDay() === 5 ? ' (Ende der Woche)' : sameWeek && (d.getUTCDay() === 6 || d.getUTCDay() === 0) ? ' (Wochenende)' : d.getUTCDay() === 1 && i <= 7 ? ' (nächste Woche)' : i === 1 ? ' (morgen)' : '';
+    list.push(`${wd(d)} ${dm(d)}${i === 1 && note !== ' (morgen)' ? ' (morgen)' : ''}${note}`);
+  }
+  return `${wd(base)} ${dm(base)}${base.getUTCFullYear()} (KW ${kw}, Europe/Berlin). Kalender: ${list.join(', ')}`;
+}
+
+/** Titel aus Modellen: vorangestellte Kennungen („AGP-0: …“, „[WEB-12] …“) entfernen; die Kennung vergibt das System. */
+export function cleanTitle(v: unknown, max = 200): string {
+  return String(v ?? '').trim().replace(/^\[?[A-Z][A-Z0-9]{1,9}-\d+\]?\s*[:–—-]?\s*/, '').trim().slice(0, max);
+}
+
+/**
+ * Datum als YYYY-MM-DD oder null; ungültige Werte liefern undefined (Aufrufer meldet den Fehler). Nimmt auch, was Modelle und
+ * Menschen schreiben: ISO mit Uhrzeit, „8.11.2026“, „8.11.“ (dieses Jahr, liegt es mehr als zwei Monate zurück: nächstes) und
+ * Spannen „6.–8.11.“ (pick: start = erster, end = letzter Tag).
+ */
+export function ymd(v: unknown, pick: 'start' | 'end' = 'end', now = new Date()): string | null | undefined {
   const s = String(v ?? '').trim();
   if (!s) return null;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(s) || isNaN(new Date(s + 'T00:00:00Z').getTime())) return undefined;
-  return s;
+  const valid = (y: number, m: number, d: number) => { const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? t.toISOString().slice(0, 10) : undefined; };
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
+  if (iso) return valid(+iso[1], +iso[2], +iso[3]);
+  // Spanne: zwei Datumsangaben mit Strich, Gedankenstrich oder „bis“; dem ersten Teil fehlende Monate und Jahre vom zweiten
+  const parts = s.split(/\s*(?:–|—|-|bis)\s*/).filter(Boolean);
+  const de = (x: string) => x.match(/^(\d{1,2})\.(?:(\d{1,2})\.?(?:(\d{2}|\d{4}))?)?$/);
+  const last = de(parts[parts.length - 1] ?? '');
+  const first = de(parts[0] ?? '');
+  if (!last || !first || parts.length > 2) return undefined;
+  const month = Number(last[2] ?? NaN);
+  if (!month) return undefined;
+  const yearOf = (y: string | undefined, m: number, d: number) => {
+    if (y) return y.length === 2 ? 2000 + Number(y) : Number(y);
+    const cur = now.getUTCFullYear();
+    return new Date(Date.UTC(cur, m - 1, d)).getTime() < now.getTime() - 62 * 86400_000 ? cur + 1 : cur;
+  };
+  const use = pick === 'start' ? first : last;
+  const m = Number(use[2] ?? month);
+  const d = Number(use[1]);
+  return valid(yearOf(use[3] ?? last[3], m, d), m, d);
 }
 
 /** Zuständige Person aus E-Mail oder Name: aktives Projektmitglied (Agenten nur durch die PL) oder externe Adresse; leer = keine. */

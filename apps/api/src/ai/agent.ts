@@ -13,8 +13,8 @@ import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, TASK_RULES } from './sheet.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
-import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
-import { audienceOf, audienceText, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, afterAssign, agentChatMessage, calendarText, cleanTitle, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
+import { audienceOf, audienceText, externalContacts, guardOutbound, isInternal, normAddr, recordCheck, referToChain, type Audience, type GuardResult } from '../outbound.js';
 import { USE_LATERAL, accountUseIn, projectAccount } from '../mail/accounts.js';
 import { askQuestion, answerQuestion, type QuestionRow } from '../questions.js';
 import type { AgentActionClass, EffectiveAgentPolicy } from '@projekttool/shared';
@@ -733,9 +733,14 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const humans = members.rows.filter((x: any) => x.kind !== 'agent').map((x: any) => x.user_id);
   const bodyOk = (x: any) => mailBodyOk(x, humans);
   const today = now.toISOString().slice(0, 10);
+  const calendar = calendarText(now);
   const openQs = await db.query(`select q.id, q.body, q.created_at, u.name as to_name from questions q left join users u on u.id = q.addressee_id where q.task_id = $1 and q.asked_by = $2 and q.status = 'open' order by q.created_at`, [task.id, agent.id]);
   // Zuständigkeit (direkt oder geerbt) und Planungsrahmen: stellvertretende PL oder „Projektplan ändern“ plant im ganzen Projekt, Teilprojekt-Verantwortung in ihren Teilprojekten
   const eff = await db.one(`select (${EFFECTIVE_RESPONSIBLE_SQL}) as eff, pt.responsible_user_id as parent_resp, s.name as sp_name from tasks t ${EFFECTIVE_JOINS} where t.id = $1`, [task.id]);
+  const requester = task.requested_by ? await db.maybeOne(`select name from users where id = $1`, [task.requested_by]) : null;
+  const contacts = await externalContacts(db, task.project_id);
+  // Was im letzten Lauf nicht ausgeführt wurde (Fehlertexte), damit der Agent es richtig macht statt es zu wiederholen
+  const lastErr = await db.maybeOne(`select error, created_at from agent_runs where task_id = $1 and agent_user_id = $2 and status = 'error' and error is not null and created_at > $3::timestamptz - interval '3 days' order by created_at desc limit 1`, [task.id, agent.id, now]);
   const basis = task.responsible_user_id === agent.id ? 'direkt zugewiesen' : eff.eff === agent.id ? (eff.parent_resp === agent.id ? `geerbt vom Arbeitspaket ${task.project_key}-${task.parent_number}` : `geerbt vom Teilprojekt „${eff.sp_name}“, für das du verantwortlich bist`) : 'nicht deine Zuständigkeit (Lauf von Hand gestartet)';
   const subprojects = await db.query(`select s.id, s.name, s.start_date, s.end_date, u.name as resp from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1 and (not s.restricted or s.responsible_user_id = $2 or $3) order by s.position, s.created_at`, [task.project_id, agent.id, isPl]);
   const apScope = canPlan ? null : task.subproject_id;
@@ -780,7 +785,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   // Kontextbudget: die Eingabe belegt höchstens 45 % des Kontextfensters; gekürzt wird in fester Reihenfolge, das eigene AP bleibt vollständig
   const limit = Math.max(3000, Math.floor((c.contextTokens ?? 32000) * 0.45) - estTokens(system));
   const sections = [
-    { key: 'task', keep: true, text: `Heute: ${today}
+    { key: 'task', keep: true, text: `Heute: ${calendar}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
 ${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
@@ -796,7 +801,8 @@ Doku-Seiten (${found.pages.length ? 'passend zum Arbeitspaket; weitere per searc
 ${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}` },
     { key: 'similar', text: `${similar.length ? `Ähnliche Arbeitspakete (per read_task lesbar): ${similar.map((x) => `${x.ref} „${cut(x.title, 60)}“ · ${x.status}`).join('; ')}\n` : ''}${candidates.length ? `Mögliche Überschneidungen (prüfen, ggf. read_task; bei echtem Zusammenhang relate, sonst nichts):\n${candidatesText(candidates)}\n` : ''}${relations.rows.length ? `Beziehungen dieses Arbeitspakets (nicht erneut melden): ${relations.rows.map(relText).join('; ')}\n` : ''}`.replace(/\n$/, '') },
     { key: 'members', keep: true, text: `Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
-Deine Zuständigkeit: ${basis}.
+Deine Zuständigkeit: ${basis}${requester ? `; übertragen von ${requester.name} per Chat-Auftrag. Das ist die verbindliche Zuweisung; ein Arbeitspaket braucht kein Teilprojekt. Frag nicht nach Struktur oder Zuweisung, erledige die Arbeit` : ''}.
+${contacts.length ? `Kontakte des Projekts (Adressen für Mails und Termine): ${contacts.map((x) => `${x.name} <${x.email}>${x.role ? ` (${x.role})` : ''}`).join(', ')}` : 'Kontakte des Projekts: keine (fehlt eine Adresse, frag den Auftraggeber oder die PL per ask)'}
 Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“ (verantwortlich ${x.resp ?? 'PL'}${span(x.start_date, x.end_date)})`).join(', ') || '–'}` },
     { key: 'aps', text: `Arbeitspakete${apScope ? ` im Teilprojekt „${task.subproject_name}“` : ' im Projekt'}:
 ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${!apScope && x.sp_name ? ` · ${x.sp_name}` : ''} · ${x.responsible_user_id || x.responsible_email ? (x.eff_name ?? x.responsible_email) : `${x.eff_name ?? 'PL'} (geerbt)`}${span(x.start_date, x.due_date)}${x.subs ? ` · ${x.subs} Aufgaben` : ''}`).join('\n') || '–'}` },
@@ -804,9 +810,9 @@ ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ �
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (${contact.name}: Termine, Belegungen, Abwesenheiten, ohne Details): ${busy.rows.map((x: any) => `${x.kind === 'absence' ? 'abwesend ' : ''}${fmtSpan(x.starts_at, x.ends_at)}${x.tentative ? ' (vorläufig)' : ''}`).join(', ')}` : ''}
 Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis eine Person bestätigt): ${resources.rows.map((r: any) => `${r.name} (${{ room: 'Raum', equipment: 'Gerät', scaffold: 'Gerüst', vehicle: 'Fahrzeug', person: 'Person', other: 'Sonstiges' }[String(r.kind)] ?? r.kind}${r.location ? `, ${r.location}` : ''})${Array.isArray(r.busy) && r.busy.length ? ` belegt: ${r.busy.map((b: any) => `${fmtSpan(b.s, b.e, b.a)}${b.t ? ' (vorläufig)' : ''}`).join('; ')}` : ' frei'}`).join('\n  ') || '–'}${apBookings.rows.length ? `\nBelegungen dieses Arbeitspakets: ${apBookings.rows.map((b: any) => `${b.resource_name ?? b.user_name} ${fmtSpan(b.starts_at, b.ends_at, b.all_day)}${b.tentative ? ' (vorläufig)' : ''}`).join('; ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
-Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Teilprojekte und Zuweisungen anderer macht die PL; frag nur, wenn die Arbeit es wirklich verlangt.'}
 Agenten-Policy: ${policyText(policy)}
-${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
+${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${lastErr ? `Im letzten Lauf (${new Date(lastErr.created_at).toLocaleDateString('de-DE')}) nicht ausgeführt: ${cut(lastErr.error, 600)}. Mach es diesmal richtig oder wähle einen anderen Weg; wiederhole den Fehler nicht.\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
 
 Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder bereits gefragter Dinge (siehe Log und Mails). Bis zu drei Mails je Lauf; was heute erledigt werden kann, erledige in diesem Lauf statt es zu vertagen.` }
   ].filter((s) => s.text);
@@ -993,8 +999,8 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
   const subprojectByName = (name: unknown) => db.maybeOne(`select id, name from subprojects where project_id = $1 and lower(name) = lower($2)`, [task.project_id, String(name ?? '').trim()]);
   let created = 0;
   return async (a: any): Promise<{ applied: any } | { error: string }> => {
-    const title = String(a.title ?? '').trim().slice(0, 200);
-    const start = ymd(a.startDate);
+    const title = cleanTitle(a.title);
+    const start = ymd(a.startDate, 'start');
     const due = ymd(a.dueDate);
     if (start === undefined || due === undefined) return { error: `${a.type}: Datum nicht als YYYY-MM-DD (${[a.startDate, a.dueDate].filter(Boolean).join(', ')})` };
     if (start && due && start > due) return { error: `${a.type}: Start ${start} liegt nach dem Termin ${due}` };
@@ -1032,6 +1038,8 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       if (!t) return { error: `${a.type}: ${a.ref || 'Kennung fehlt'} nicht gefunden` };
       if (!inScope(t) || !(await canSeeSubproject(db, agent.id, t.subproject_id))) return { error: `${a.type}: ${code(t.number)} liegt außerhalb deines Bereichs` };
       if (a.type === 'assign') {
+        const self = String(a.responsible ?? '').trim().toLowerCase();
+        if (t.responsible_user_id === agent.id && [agent.name.toLowerCase(), 'ich', 'mir', 'mich'].includes(self)) return { applied: null };
         const who = await resolvePerson(db, task.project_id, actor, a.responsible);
         if ('error' in who) return { error: `assign ${code(t.number)}: ${who.error}` };
         if ((t.responsible_user_id ?? null) === who.userId && (t.responsible_email ?? null) === who.email) return { applied: null };
@@ -1094,10 +1102,16 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       } catch (e: any) { return { error: e instanceof BookingConflict ? `book_resource „${res.name}“: ${e.message}` : `book_resource: ${String(e?.message ?? e)}` }; }
     }
     if (a.type === 'create_event') {
-      const raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
-      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) return { error: `create_event „${title}“: Beginn als YYYY-MM-DDTHH:MM angeben` };
+      let raw = String(a.startsAt ?? '').trim().replace(' ', 'T');
+      let rawEnd = a.endsAt ? String(a.endsAt).trim().replace(' ', 'T') : '';
+      // Ohne Uhrzeit (z. B. „6.–8.11.“ oder nur Tage): ganztägig gedacht, 09:00 am ersten bis 17:00 am letzten Tag (Europe/Berlin)
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw)) {
+        const d1 = ymd(raw || a.startDate, 'start', now); const d2 = ymd(rawEnd || a.dueDate || raw || a.startDate, 'end', now);
+        if (!d1 || !d2) return { error: `create_event „${title}“: Beginn als YYYY-MM-DDTHH:MM oder Datum angeben` };
+        raw = `${d1}T09:00`; rawEnd = `${d2}T17:00`;
+      }
       const starts = parseUntil(raw, now);
-      const ends = a.endsAt ? parseUntil(String(a.endsAt).trim().replace(' ', 'T'), now) : starts ? new Date(starts.getTime() + H) : null;
+      const ends = rawEnd ? parseUntil(rawEnd, now) : starts ? new Date(starts.getTime() + H) : null;
       if (!starts || !ends || ends <= starts) return { error: `create_event „${title}“: Beginn oder Ende nicht lesbar` };
       if (await db.maybeOne(`select 1 from meetings where project_id = $1 and lower(title) = lower($2) and starts_at = $3`, [task.project_id, title, starts])) return { error: `create_event: „${title}“ steht schon im Kalender` };
       // Teilnehmer: Ansprechpartner (Stufe 0) und genannte Adressen; Ressourcen werden vorläufig mitgebucht (Konflikte als Fehler)

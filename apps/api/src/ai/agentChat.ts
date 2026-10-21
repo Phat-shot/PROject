@@ -7,7 +7,7 @@ import { aiAllowed } from './policy.js';
 import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
 import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
-import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL } from './plan.js';
+import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, calendarText } from './plan.js';
 import { isInternal } from '../outbound.js';
 import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
 import { search as knowledgeSearch, searchText, tokens, type SearchHit } from './knowledge.js';
@@ -49,7 +49,7 @@ const SCHEMA = {
         parent: { type: 'string', description: 'order: Kennung eines bestehenden Über-AP aus dem Kontext, wenn eine Aufgabe darunter entstehen soll; nie erfinden; sonst leer (neues Arbeitspaket)' },
         project: { type: 'string', description: 'order: Kürzel des Projekts, in das der Auftrag gehört (aus Thema, Treffern oder Übersicht der gemeinsamen Projekte); leer = Thema bzw. persönliches Projekt' },
         subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer' },
-        dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD oder leer' },
+        dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD (deutsche Angaben wie 8.11. gehen auch) oder leer' },
         deliverables: { type: 'array', items: { type: 'string' }, description: 'order: Lieferergebnisse als Tasks; sonst leer' },
         every: { type: 'string', description: 'order/report: Zwischenstände each, milestones, daily oder done; sonst leer' },
         level: { type: 'string', description: 'priority: niedrig, normal, hoch oder kritisch; sonst leer' },
@@ -460,7 +460,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const canMail = Boolean(agentMember?.agent_can_mail) && Boolean(cmdProject && (await projectAccount(db, cmdProject.id)));
   const web = cmdProject ? await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: cmdProject.id, cfg, now }) : null;
   const ctxCmd: CommandCtx = { db, agent, sender: { id: msg.user_id, name: msg.user_name, orgId: agent.org_id }, project: cmdProject, projects: scope.common?.length ? scope.common : scope.projects, channelId: channel.id, threadId, messageId: msg.id, now, policy };
-  const prompt = `Jetzt: ${hhmm(now)}
+  const prompt = `Jetzt: ${hhmm(now)} · Heute: ${calendarText(now, 10)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Thema: ${theme}
 Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
@@ -473,13 +473,14 @@ ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Tite
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; du prüfst das Arbeitspaket gleich erneut. Bestätige kurz und beantworte, was darüber hinaus gefragt ist; keine weitere Notiz dazu.` : ''}
+${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await complete(cfg, fetchFn, { system, prompt, maxTokens: cfg.enableThinking === true ? 5200 : 1200, schema: SCHEMA });
     const j = parseJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(r.text);
     // Befehle: prüfen und ausführen, bevor gepostet wird; die Karte zeigt das tatsächliche Ergebnis
-    const cmds = (Array.isArray(j.commands) ? j.commands : []).filter((c) => c && COMMAND_TYPES.includes(c.type)).slice(0, 5);
+    // Antwort auf eine Frage des Agenten (steht schon im Log eines AP): keinen neuen Auftrag anlegen, den Lauf dort setzt sie um
+    const cmds = (Array.isArray(j.commands) ? j.commands : []).filter((c) => c && COMMAND_TYPES.includes(c.type) && !(loggedRefs.length && c.type === 'order')).slice(0, 5);
     const results = cmds.length ? await runCommands(ctxCmd, cmds) : [];
     const acted = results.some((x) => x.status === 'ok' && x.type !== 'note');
     const notedCmd = results.some((x) => x.status === 'ok' && x.type === 'note');

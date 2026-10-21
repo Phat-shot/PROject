@@ -73,7 +73,7 @@ test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termin
     A({ type: 'set_dates', ref: `WEB-${other.number}`, dueDate: '2026-12-24' }),
     A({ type: 'assign', ref: 'Material bestellen', responsible: 'Lotte' }),
     A({ type: 'create_subproject', title: 'Maler' }),
-    A({ type: 'create_aufgabe', title: 'Kaputt', dueDate: '24.12.2026' })
+    A({ type: 'create_aufgabe', title: 'Kaputt', dueDate: 'irgendwann' })
   ];
   const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run`);
   assert.equal(r.statusCode, 200, r.body);
