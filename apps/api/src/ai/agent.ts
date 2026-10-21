@@ -37,6 +37,7 @@ import { SQL } from '../projectPolicy.js';
  */
 export type AgentAction =
   | { type: 'comment'; text: string }
+  | { type: 'describe'; text: string }
   | { type: 'set_status'; column: string }
   | { type: 'check_item'; itemId: string }
   | { type: 'mail'; to: string[]; subject: string; text: string }
@@ -84,7 +85,9 @@ const DOC_TRANSITIONS: Record<string, string[]> = { draft: ['review', 'final'], 
 const clampH = (v: unknown, def: number) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? Math.min(24 * 14, Math.max(0.1, n)) : def; };
 /** Termin aus until: ISO-Datum/-Zeit, YYYY-MM-DD oder HH:MM (heute, sonst morgen); Zeiten ohne Zone gelten als Europe/Berlin. */
 export function parseUntil(v: unknown, now: Date): Date | null {
-  const s = String(v ?? '').trim();
+  const s0 = String(v ?? '').trim();
+  const day = s0.match(/^\d{4}-\d{2}-\d{2}/);
+  const s = day ? (ymd(day[0], 'end', now) ?? day[0]) + s0.slice(10) : s0; // Jahr wie bei ymd plausibel machen
   if (!s) return null;
   const berlinOffsetMin = (d: Date) => { const z = new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', timeZoneName: 'shortOffset' }).formatToParts(d).find((x) => x.type === 'timeZoneName')?.value ?? 'GMT+1'; const m = z.match(/GMT([+-])(\d+)(?::(\d+))?/); return m ? (m[1] === '-' ? -1 : 1) * (Number(m[2]) * 60 + Number(m[3] ?? 0)) : 60; };
   const hm = s.match(/^(\d{1,2}):(\d{2})$/);
@@ -108,8 +111,8 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
@@ -366,6 +369,19 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, a.text.trim()]);
         applied.push(a);
       } else if (a.type === 'comment') errors.push('Log-Eintrag ohne Text verworfen');
+      else if (a.type === 'describe') {
+        // Beschreibung des eigenen AP: lesbar und aktuell halten (Ziel, Stand, nächste Schritte); alte Fassung bleibt im Audit
+        const text = cut(String(a.text ?? '').trim(), 5000);
+        if (!text) errors.push('describe ohne Text verworfen');
+        else if (text === String(task.description ?? '').trim()) applied.push(a);
+        else {
+          await db.query(`update tasks set description = $2, updated_at = now() where id = $1`, [task.id, text]);
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, 'Beschreibung aktualisiert']);
+          await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'task.describe', objectType: 'task', objectId: task.id, details: { before: cut(String(task.description ?? ''), 2000) } });
+          task.description = text;
+          applied.push(a);
+        }
+      }
       else if (a.type === 'set_status' && a.column) {
         // „erledigt“/„done“ meint die erste Erledigt-Spalte; sonst exakt, mit den gültigen Spalten in der Fehlermeldung
         const doneWord = /^(erledigt|done|fertig|abgeschlossen)$/i.test(String(a.column).trim());
@@ -612,7 +628,11 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         if (!text) errors.push('ask ohne Text verworfen');
         else if (asked >= 3) errors.push('ask verworfen: mehr als drei Fragen im Lauf');
         else {
-          const r = await askQuestion(db, { taskId: task.id, asker: agent, kind: a.kind === 'decision' ? 'decision' : 'question', body: text, to: Array.isArray(a.to) ? a.to[0] ?? null : typeof a.to === 'string' ? a.to : null, dueHours: a.remindAfterHours || null, now });
+          const to = Array.isArray(a.to) ? a.to[0] ?? null : typeof a.to === 'string' ? a.to : null;
+          const ask = (to: string | null, body: string) => askQuestion(db, { taskId: task.id, asker: agent, kind: a.kind === 'decision' ? 'decision' : 'question', body, to, dueHours: a.remindAfterHours || null, now });
+          let r = await ask(to, text);
+          // Adressat unbekannt oder extern: die Frage geht trotzdem an die Kette (bei Entscheidungen an die PL), mit Hinweis, statt verloren zu gehen
+          if ('error' in r && to && !('existing' in r)) r = await ask(null, `${text}\n(Eigentlich an ${to} gedacht: ${r.error}.)`);
           if ('error' in r) errors.push(`ask: ${r.error}`);
           else { asked++; applied.push({ type: 'ask', text, to: a.to, questionId: r.question.id } as any); }
         }
@@ -956,8 +976,8 @@ async function reportRunErrors(db: Db, agent: { id: string; name: string; org_id
   const contact = (await contactChain(db, task, { exclude: [agent.id] }))[0];
   if (!contact) return;
   const code = `${task.project_key}-${task.number}`;
-  const body = `Bei ${code} „${task.title}“ konnte ich nicht alles ausführen:\n${errors.slice(0, 5).map((e) => `- ${cut(e, 300)}`).join('\n')}${errors.length > 5 ? `\n- … und ${errors.length - 5} weitere` : ''}\nArbeitspaket: /projekte/${task.project_id}/board?task=${task.id}`;
-  await agentChatMessage(db, agent, { userId: contact.id }, body, task.project_id);
+  const body = `Bei ${code} „${task.title}“ konnte ich nicht alles ausführen:\n${errors.slice(0, 5).map((e) => `- ${cut(e, 300)}`).join('\n')}${errors.length > 5 ? `\n- … und ${errors.length - 5} weitere` : ''}`;
+  await agentChatMessage(db, agent, { userId: contact.id }, body, task.project_id, `/projekte/${task.project_id}/board?task=${task.id}`);
 }
 
 const ACTION_LABEL: Record<string, string> = {
@@ -1014,7 +1034,7 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
   let created = 0;
   // hold: Grenze der Rolle (nicht der Rechte): der Lauf legt die Aktion der PL als Freigabe vor, statt zu scheitern
   return async (a: any): Promise<{ applied: any } | { error: string; hold?: AgentActionClass }> => {
-    const title = cleanTitle(a.title);
+    const title = cleanTitle(a.title) || (a.type === 'create_event' ? cleanTitle(task.title) : '');
     const start = ymd(a.startDate, 'start');
     const due = ymd(a.dueDate);
     if (start === undefined || due === undefined) return { error: `${a.type}: Datum nicht als YYYY-MM-DD (${[a.startDate, a.dueDate].filter(Boolean).join(', ')})` };
@@ -1081,7 +1101,8 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
     if (a.type === 'create_subproject' || a.type === 'create_milestone') {
       if (!canPlan) return { error: `${a.type} „${title}“: nur als stellvertretende PL oder mit Recht „Projektplan ändern“` , hold: 'plan' };
       if (a.type === 'create_subproject') {
-        if (await subprojectByName(title)) return { error: `create_subproject: „${title}“ gibt es schon` };
+        // Vorhandenes Teilprojekt: kein Fehler, der Lauf arbeitet damit weiter
+        if (await subprojectByName(title)) return { applied: { type: 'none', reason: `Teilprojekt „${title}“ gibt es schon` } };
         const who = await resolvePerson(db, task.project_id, actor, a.responsible);
         if ('error' in who) return { error: `create_subproject „${title}“: ${who.error}` };
         if (who.email) return { error: `create_subproject „${title}“: verantwortlich kann nur ein Projektmitglied sein` };

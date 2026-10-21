@@ -122,7 +122,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
         : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
       {m.fromAgent && !m.deleted && <Thumbs value={m.myRating} onRate={(v) => rating.rate(m.id, m.myRating, v)} />}
-      {system(m) && !m.deleted && m.meta?.link && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
+      {!m.deleted && m.meta?.link && (system(m) || !('question' in m.meta)) && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (

@@ -52,7 +52,13 @@ export function cleanTitle(v: unknown, max = 200): string {
 export function ymd(v: unknown, pick: 'start' | 'end' = 'end', now = new Date()): string | null | undefined {
   const s = String(v ?? '').trim();
   if (!s) return null;
-  const valid = (y: number, m: number, d: number) => { const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? t.toISOString().slice(0, 10) : undefined; };
+  // Jahr aus der Vergangenheit (kleine Modelle schreiben oft das Jahr ihrer Trainingsdaten, z. B. 2024-10-24): auf dieses bzw. das nächste Jahr
+  const plausible = (y: number, m: number, d: number) => {
+    const cur = now.getUTCFullYear();
+    if (y >= cur) return y;
+    return new Date(Date.UTC(cur, m - 1, d)).getTime() < now.getTime() - 62 * 86400_000 ? cur + 1 : cur;
+  };
+  const valid = (y0: number, m: number, d: number) => { const y = plausible(y0, m, d); const t = new Date(Date.UTC(y, m - 1, d)); return t.getUTCFullYear() === y && t.getUTCMonth() === m - 1 && t.getUTCDate() === d ? t.toISOString().slice(0, 10) : undefined; };
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/);
   if (iso) return valid(+iso[1], +iso[2], +iso[3]);
   // Spanne: zwei Datumsangaben mit Strich, Gedankenstrich oder „bis“; dem ersten Teil fehlende Monate und Jahre vom zweiten
@@ -139,9 +145,9 @@ export const fmtWhen = (d: Date) => d.toLocaleString('de-DE', { weekday: 'short'
  * Chat-Nachricht eines Agenten: Direktnachricht an eine Person (Kanal wird bei Bedarf angelegt) oder in den Projektkanal.
  * Die Person bekommt eine Benachrichtigung; Antworten im Chat beantwortet der Agent im Chat und hält sie im Log fest.
  */
-export async function agentChatMessage(db: Db, agent: { id: string; name: string; org_id: string }, target: { userId: string } | { projectId: string }, body: string, projectId: string): Promise<string> {
+export async function agentChatMessage(db: Db, agent: { id: string; name: string; org_id: string }, target: { userId: string } | { projectId: string }, body: string, projectId: string, link?: string): Promise<string> {
   const channelId = 'userId' in target ? await dmChannel(db, agent.org_id, agent.id, target.userId) : await projectChannelId(db, agent.org_id, target.projectId);
-  await db.query(`insert into chat_messages (channel_id, user_id, body) values ($1,$2,$3)`, [channelId, agent.id, body.slice(0, 8000)]);
+  await db.query(`insert into chat_messages (channel_id, user_id, body, meta) values ($1,$2,$3,$4)`, [channelId, agent.id, body.slice(0, 8000), link ? JSON.stringify({ link }) : null]);
   await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channelId, agent.id]);
   if ('userId' in target) await notify(db, { userId: target.userId, projectId, type: 'chat.dm', title: `Nachricht von ${agent.name}`, body: body.length > 160 ? body.slice(0, 160) + ' …' : body, link: `/chat/${channelId}`, ref: { type: 'chat_channel', id: channelId }, actorId: agent.id, chatted: true, dedupeKey: null });
   return channelId;

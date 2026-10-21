@@ -295,3 +295,23 @@ test('Anlass im Prompt: Änderung seit dem letzten Lauf und regelmäßige Durchs
   assert.equal(await lastTrigger(), 'periodic');
   assert.match(promptOf(before), /Anlass dieses Laufs: Regelmäßige Durchsicht: seit drei Tagen kein Lauf/);
 });
+
+test('Kleine Modelle: Beschreibung pflegen, Frage an Externe geht an die Kette, Termin ohne Titel, vorhandenes Teilprojekt, Jahr aus der Vergangenheit', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id, title, subproject_id from tasks where title = 'Teilprojekt durchplanen'`);
+  const sp = await t.db.one(`select name from subprojects where id = $1`, [ap.subproject_id]);
+  next = [
+    A({ type: 'describe', text: 'Ziel: Plan für das Teilprojekt. Stand: Termine offen.' }),
+    A({ type: 'ask', text: 'Passt der 24.10.?', kind: 'question', to: 'kunde@extern.de' }),
+    A({ type: 'create_event', startsAt: '2024-10-28T10:00' }),
+    A({ type: 'create_subproject', title: sp.name })
+  ];
+  const run = (await t.api(pl).post(`/tasks/${ap.id}/agent-run`)).json();
+  assert.equal(run.error, undefined, run.error);
+  assert.equal((await t.db.one(`select description from tasks where id = $1`, [ap.id])).description, 'Ziel: Plan für das Teilprojekt. Stand: Termine offen.');
+  const q = await t.db.one(`select addressee_id, body from questions where task_id = $1 and body like 'Passt der 24.10.?%'`, [ap.id]);
+  assert.ok(q.addressee_id, 'an die Kette statt verworfen');
+  assert.match(q.body, /Eigentlich an kunde@extern\.de gedacht/);
+  const ev = await t.db.one(`select starts_at from meetings where title = $1`, [ap.title]);
+  assert.equal(new Date(ev.starts_at).getUTCFullYear(), 2026);
+});

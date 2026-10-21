@@ -56,7 +56,7 @@ Das Arbeitspaket trägt den Absender als **Auftraggeber**; er bekommt Zwischenst
 
 ### Fragen beantworten
 
-Der Agent fragt per **offener Frage**: Direktnachricht an den Ansprechpartner oder Thread im Projektkanal, dazu eine Meldung und ein Log-Eintrag. Er kann auch ein bestimmtes Projektmitglied außerhalb der Kette fragen (z. B. die Person, die eine Information hat), mit Frist („bis Freitag“). Antworten gehen im Thread, in der Direktnachricht, in der Aufgabe (Block „Offene Fragen“) oder über die Karte mit Knöpfen. Nach Frist fasst er nach und gibt bei Schweigen an die nächste Stufe weiter. Die Antwort steht danach im Log; der Agent läuft weiter.
+Der Agent fragt per **offener Frage**: Direktnachricht an den Ansprechpartner oder Thread im Projektkanal, dazu eine Meldung und ein Log-Eintrag. Nennt er einen Adressaten, den es nicht gibt (z. B. einen Externen), geht die Frage mit Hinweis an die Kette. Er kann auch ein bestimmtes Projektmitglied außerhalb der Kette fragen (z. B. die Person, die eine Information hat), mit Frist („bis Freitag“). Antworten gehen im Thread, in der Direktnachricht, in der Aufgabe (Block „Offene Fragen“) oder über die Karte mit Knöpfen. Nach Frist fasst er nach und gibt bei Schweigen an die nächste Stufe weiter. Die Antwort steht danach im Log; der Agent läuft weiter.
 
 > **Morton:** Zu WEB-23: Soll ich nur Betriebe mit Notdienst berücksichtigen? Antwort bis morgen 12 Uhr wäre gut.
 > **Petra:** Ja, nur mit Notdienst.

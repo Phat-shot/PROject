@@ -17,6 +17,10 @@ test('Datum aus Modellen und Menschen: ISO, deutsch, Spannen, Jahreswechsel, Uns
   assert.equal(ymd('', 'end', now), null);
   assert.equal(ymd('nächste Woche', 'end', now), undefined);
   assert.equal(ymd('31.2.2026'), undefined);
+  // Jahr aus den Trainingsdaten kleiner Modelle: auf dieses bzw. das nächste Jahr
+  assert.equal(ymd('2024-10-24', 'end', now), '2026-10-24');
+  assert.equal(ymd('24.10.2024', 'end', now), '2026-10-24');
+  assert.equal(ymd('2025-01-05', 'end', now), '2027-01-05');
 });
 
 test('Titel: vorangestellte Kennungen entfernt die Vergabe des Systems', () => {

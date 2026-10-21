@@ -283,7 +283,10 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
   const due = due0 === undefined ? null : due0;
   if (due0 === undefined) parentNote += ` (Termin „${c.dueDate}“ nicht lesbar: ohne Termin)`;
   const actor: PlanActor = { id: sender.id, name: sender.name, orgId: sender.orgId, role: m.role, label: `${sender.name} (per Chat)`, isAgent: false };
-  const t = await createPlannedTask(db, actor, { projectId: project.id, projectKey: project.key, title, description: text || null, parentId: parent?.id ?? null, subprojectId, dueDate: due, items: Array.isArray(c.deliverables) ? c.deliverables : [] });
+  // Beschreibung: Fassung des Modells, darunter der Auftrag im Wortlaut (lesbar, auch wenn das Modell schlecht zusammenfasst)
+  const said = cut(String((await db.maybeOne(`select body from chat_messages where id = $1`, [ctx.messageId]))?.body ?? '').replace(/@\S+\s*/g, '').trim(), 3000);
+  const description = [text, said && said.toLowerCase() !== text.toLowerCase() ? `**Auftrag von ${sender.name} im Wortlaut:**\n> ${said.replace(/\n/g, '\n> ')}` : ''].filter(Boolean).join('\n\n') || null;
+  const t = await createPlannedTask(db, actor, { projectId: project.id, projectKey: project.key, title, description, parentId: parent?.id ?? null, subprojectId, dueDate: due, items: Array.isArray(c.deliverables) ? c.deliverables : [] });
   // Auftraggeber, Ursprungsnachricht, Zuständigkeit des Agenten (Ausnahme zu „Agenten weist nur die PL zu“ nur auf diesem Weg)
   await db.query(`update tasks set requested_by = $2, origin_message_id = $3, responsible_user_id = $4 where id = $1`, [t.id, sender.id, ctx.messageId, agent.id]);
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [t.id, sender.id, `Zuständig: ${agent.name} (Auftrag von ${sender.name} per Chat)`]);

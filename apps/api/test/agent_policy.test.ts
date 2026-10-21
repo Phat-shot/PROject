@@ -153,8 +153,8 @@ test('Ablehnen mit Grund: Vorschlag und Abhängige abgelehnt, Log, 14 Tage nicht
   assert.equal(await openApproval(), null);
   // Fehler im Lauf: Direktnachricht des Agenten an den Ansprechpartner; dieselbe Störung wird nicht noch einmal gemeldet
   assert.equal(await dmCount(), before + 1, 'Info per Chat');
-  const dm = await t.db.one(`select body from chat_messages where user_id = $1 and kind = 'user' and body like 'Bei WEB-% konnte ich nicht alles ausführen:%' order by created_at desc limit 1`, [agent.id]);
-  assert.match(dm.body, /abgelehnt; nicht erneut vorschlagen/); assert.match(dm.body, new RegExp(`/projekte/[0-9a-f-]+/board\\?task=${task.id}`));
+  const dm = await t.db.one(`select body, meta from chat_messages where user_id = $1 and kind = 'user' and body like 'Bei WEB-% konnte ich nicht alles ausführen:%' order by created_at desc limit 1`, [agent.id]);
+  assert.match(dm.body, /abgelehnt; nicht erneut vorschlagen/); assert.match(dm.meta.link, new RegExp(`^/projekte/[0-9a-f-]+/board\\?task=${task.id}$`), 'Link als Knopf, nicht als Pfad im Text');
   await runAgentOnTask(t.db, t.mail, fakeFetch, agentRow(), task.id, 'manual');
   assert.equal(await dmCount(), before + 1, 'gleiche Störung nur einmal');
 });
