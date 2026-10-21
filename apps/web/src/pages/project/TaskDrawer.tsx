@@ -77,6 +77,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
     <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
         {saved && <span className="muted small">gespeichert</span>}
+        {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <button className="btn sm primary" title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>✓ Erledigt</button>}
         {me.role !== 'reader' && !t.deletedAt && <button className="btn sm" title="Kopie anlegen, hier oder in einem anderen Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>}
         {canPlan && !t.deletedAt && <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>}
         {me.role !== 'reader' && (t.archivedAt
@@ -164,7 +165,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
-      <h3 className="mt">Tasks {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
+      <h3 className="mt">Checkliste {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
       <ul className="checklist">
         {t.checklist?.map((i) => (
           <li key={i.id} className={i.done ? 'done' : ''}>
@@ -183,11 +184,11 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
-        <input type="text" placeholder="Neuer Task … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
+        <input type="text" placeholder="Neuer Punkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
       <h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
-      {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Tasks stehen beim Task.</p> : (
+      {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Checklistenpunkten stehen beim Punkt.</p> : (
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
       )}
       {canEdit && <div className="row mt">
@@ -259,7 +260,7 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
   return (
     <>
       <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
-      {subtasks.length === 0 && <p className="muted small" style={{ margin: '0 0 6px' }}>Keine. Aufgaben teilen das Arbeitspaket in zuweisbare Schritte mit eigenem Log und Termin; Tasks bleiben die Checkliste.</p>}
+      {subtasks.length === 0 && <p className="muted small" style={{ margin: '0 0 6px' }}>Keine. Aufgaben teilen das Arbeitspaket in zuweisbare Schritte mit eigenem Log und Termin; die Checkliste bleibt für kleine Punkte.</p>}
       <ul className="subtasks">
         {subtasks.map((x) => {
           const col = detail.columns.find((c) => c.id === x.columnId);

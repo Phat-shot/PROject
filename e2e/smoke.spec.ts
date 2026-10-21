@@ -21,9 +21,9 @@ test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten',
   const title = `E2E ${Date.now()}`;
   await page.getByLabel('Titel').fill(title);
   await page.getByRole('button', { name: 'Anlegen' }).click();
-  await expect(page.locator('.drawer')).toContainText('Tasks');
-  await page.locator('.drawer input[placeholder^="Neuer Task"]').fill('Erster Schritt');
-  await page.locator('.drawer input[placeholder^="Neuer Task"]').press('Enter');
+  await expect(page.locator('.drawer')).toContainText('Checkliste');
+  await page.locator('.drawer input[placeholder^="Neuer Punkt"]').fill('Erster Schritt');
+  await page.locator('.drawer input[placeholder^="Neuer Punkt"]').press('Enter');
   await expect(page.locator('.drawer .checklist input.inline-text').first()).toHaveValue('Erster Schritt');
   await page.getByRole('button', { name: 'Schließen' }).click();
   await expect(page.locator('.task-card', { hasText: title })).toBeVisible();

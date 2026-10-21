@@ -870,3 +870,13 @@ body:has(.drawer) .chat-fab { display: none; }
 .msg-avatar.pinned { box-shadow: 0 0 0 2px var(--primary); }
 .draft-card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin-top: 6px; background: var(--surface); }
 .draft-card .draft-body { white-space: pre-wrap; margin-top: 6px; max-height: 240px; overflow: auto; }
+
+/* Board: Status ohne Ziehen („→“ auf der Karte); am Telefon immer sichtbar, sonst beim Überfahren */
+.task-card { position: relative; }
+.status-menu { position: absolute; right: 4px; top: 2px; }
+.status-menu .status-btn { opacity: 0; padding: 0 6px; font-weight: 700; }
+.task-card:hover .status-btn, .status-menu .status-btn:focus { opacity: 1; }
+@media (max-width: 900px), (hover: none) { .status-menu .status-btn { opacity: 0.8; } }
+.status-pop { position: absolute; right: 0; top: 24px; z-index: 30; display: flex; flex-direction: column; gap: 4px; min-width: 150px; padding: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 6px 18px rgba(0,0,0,.18); }
+.status-pop .btn { justify-content: flex-start; text-align: left; }
+.task-card .title, .task-card .labels { padding-right: 18px; }

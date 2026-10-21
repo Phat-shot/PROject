@@ -17,7 +17,7 @@ Für Projektleitung, Mitglieder und Verwaltung. Dieses Handbuch beschreibt, was 
 | Doku | Seiten lesen, anlegen, ändern, ergänzen; Status Entwurf und In Prüfung; PDF finaler Seiten senden | Final setzen nur mit Recht „Final setzen“; Ordner mit Zugriff „kein“ sieht er nicht; löscht nie |
 | Kommunikation intern | Fragen per Chat (offene Frage mit Frist, Nachfassen, Weitergabe), Informationen per Chat, Eskalation an die Projektleitung | Interne nie per Mail |
 | Kommunikation extern | Mails an Externe zu ihrer Aufgabe; Antwort auf die Ursprungsmail zum Abschluss | nur Außenkontext (Kapitel 6); ohne „darf Mails senden“ und beim ersten Kontakt immer Entwurf |
-| Planung | Aufgaben, Arbeitspakete, Teilprojekte, Meilensteine, Termine, Zuweisungen je nach Rolle und Recht | Termine sagt er nie zu, Kalendereinträge sind vorläufig |
+| Planung | Aufgaben, Arbeitspakete, Teilprojekte, Meilensteine, Termine, Zuweisungen je nach Rolle und Recht; Termine verschieben oder absagen, Einladung an die Teilnehmer senden (bestätigte Termine, aus dem Projektkonto) | Termine sagt er nie zu, Kalendereinträge sind vorläufig; Einladungen gelten als Mail nach außen |
 | Ressourcen | Räume, Geräte, externe Personen buchen (immer vorläufig, eine Person bestätigt) | übersteuert nie einen Konflikt |
 | Wissen | Überblick über das Projekt, passende Seiten, ähnliche Arbeitspakete; Suche im Projekt; Überschneidungen melden | nur, was er sehen darf |
 | Recherche online | Suchen und Seiten lesen, Quellen an die Seite hängen | nur mit Freigabe; nur lesen, keine Kontaktaufnahme |
@@ -56,7 +56,7 @@ Das Arbeitspaket trägt den Absender als **Auftraggeber**; er bekommt Zwischenst
 
 ### Fragen beantworten
 
-Der Agent fragt per **offener Frage**: Direktnachricht an den Ansprechpartner oder Thread im Projektkanal, dazu eine Meldung und ein Log-Eintrag. Antworten gehen im Thread, in der Direktnachricht, in der Aufgabe (Block „Offene Fragen“) oder über die Karte mit Knöpfen. Nach Frist fasst er nach und gibt bei Schweigen an die nächste Stufe weiter. Die Antwort steht danach im Log; der Agent läuft weiter.
+Der Agent fragt per **offener Frage**: Direktnachricht an den Ansprechpartner oder Thread im Projektkanal, dazu eine Meldung und ein Log-Eintrag. Er kann auch ein bestimmtes Projektmitglied außerhalb der Kette fragen (z. B. die Person, die eine Information hat), mit Frist („bis Freitag“). Antworten gehen im Thread, in der Direktnachricht, in der Aufgabe (Block „Offene Fragen“) oder über die Karte mit Knöpfen. Nach Frist fasst er nach und gibt bei Schweigen an die nächste Stufe weiter. Die Antwort steht danach im Log; der Agent läuft weiter.
 
 > **Morton:** Zu WEB-23: Soll ich nur Betriebe mit Notdienst berücksichtigen? Antwort bis morgen 12 Uhr wäre gut.
 > **Petra:** Ja, nur mit Notdienst.
@@ -85,7 +85,7 @@ Geprüft wird in dieser Reihenfolge: Notaus → Rechte des Agenten → Einschrä
 | **Rückfrage bei wichtigen Schritten** (Standard für neue Projekte) | hält die Klassen der Liste „Bestätigung vor“ an: Final setzen, PDF an Verteiler, Mails nach außen, Erledigt setzen, Umstrukturieren (anpassbar; dazu Planen, Zuweisen an Dritte, Termine ändern, fremde Arbeitspakete) |
 | **Rückfrage bei allem** | hält jede Aktion außerhalb der Grundmenge an |
 
-Die **Grundmenge** (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei. Angehaltene Aktionen legt der Agent der Projektleitung als **Karte „Freigabe“** vor (Chat, Arbeitspaket, Projekt › KI): einzeln bestätigen oder mit Grund ablehnen; Abgelehntes wird 14 Tage nicht erneut vorgeschlagen, nach 7 Tagen verfallen offene Vorschläge. Die Policy vererbt sich **Projekt → Agent im Projekt → Arbeitspaket**; der Verwalter des LLM setzt am Agenten Grenzen (höchstens diese Stufe, immer zu bestätigende Klassen, höchste Denktiefe), die keine Ebene lockern kann. Mails nach außen gehen bei Bestätigungspflicht als Entwurf in Mail › Freigaben.
+Die **Grundmenge** (Log, Tasks, Doku-Entwürfe, interner Chat, Fragen) ist immer frei. Angehaltene Aktionen legt der Agent der Projektleitung als **Karte „Freigabe“** vor (Chat, Arbeitspaket, Projekt › KI): einzeln bestätigen oder mit Grund ablehnen; Abgelehntes wird 14 Tage nicht erneut vorgeschlagen, nach 14 Tagen verfallen offene Vorschläge. Fehlt dem Agenten als Mitglied ein Recht für einen Planungsschritt (Teilprojekt oder Meilenstein anlegen, fremdes Arbeitspaket, Termine), bricht er nicht ab: er gibt die Aktion an, und das System legt sie der Projektleitung ebenso als Freigabe vor. Die Policy vererbt sich **Projekt → Agent im Projekt → Arbeitspaket**; der Verwalter des LLM setzt am Agenten Grenzen (höchstens diese Stufe, immer zu bestätigende Klassen, höchste Denktiefe), die keine Ebene lockern kann. Mails nach außen gehen bei Bestätigungspflicht als Entwurf in Postfach › Zur Freigabe.
 
 ### Weitere Felder
 
@@ -138,7 +138,7 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 - **Projekt › KI › Agenten-Läufe:** jeder Lauf mit Anlass, Begründung, Aktionen, Token, Suchen, Kontextumfang und Fehlern; Projektdurchläufe mit Kennzeichen.
 - **Im Arbeitspaket:** Wartezustand mit nächster Prüfung, offene Fragen, Freigaben, Quellen, verwandte Arbeitspakete, Ressourcen, „Läuft nicht: …“ mit Grund.
-- **Mail › Freigaben:** Entwürfe ohne Senderecht, erste Kontakte, von der Außenprüfung angehaltene Mails, geplanter Versand außerhalb des Arbeitszeitfensters.
+- **Postfach › Zur Freigabe:** Entwürfe ohne Senderecht, erste Kontakte, von der Außenprüfung angehaltene Mails, geplanter Versand außerhalb des Arbeitszeitfensters.
 - **Fehler im Lauf** (fehlendes Recht, Konflikt, KI-Dienst): Direktnachricht des Agenten an den Ansprechpartner mit Link zum Arbeitspaket; dieselbe Störung nur einmal.
 - **Bestätigungskarten im Chat** nur bei Bedarf (abgelehnt, angehalten, Auftrag mit Rückgängig, Bestätigung); „auch für Kleinigkeiten“ in den Benutzereinstellungen.
 - **Audit-Log** (Verwaltung): Läufe, Aktionen, Policy-Änderungen, Außenprüfungen, Buchungen.
@@ -156,7 +156,7 @@ Externe erfahren nur, was zu ihrer Aufgabe gehört. Empfänger werden eingestuft
 
 **Warum fragt er?** Weil ihm eine Information oder Entscheidung fehlt, die weder in Log, Mails, Chat noch Doku steht, oder weil die Policy für diesen Schritt eine Bestätigung verlangt. Fragen haben ein Thema und eine Frist; nach der Frist fasst er nach und gibt weiter.
 
-**Warum hat er nicht gesendet?** Mögliche Gründe stehen im Log unter seinem Namen: kein Senderecht (Entwurf in Mail › Freigaben), erster Kontakt zu einer Adresse ohne Bezug (Entwurf), Außenprüfung angehalten (Fundstellen), Bestätigungspflicht laut Policy, außerhalb des Arbeitszeitfensters (geplanter Versand), kein Mailkonto. Den Versandstatus schreibt immer das System.
+**Warum hat er nicht gesendet?** Mögliche Gründe stehen im Log unter seinem Namen: kein Senderecht (Entwurf in Postfach › Zur Freigabe), erster Kontakt zu einer Adresse ohne Bezug (Entwurf), Außenprüfung angehalten (Fundstellen), Bestätigungspflicht laut Policy, außerhalb des Arbeitszeitfensters (geplanter Versand), kein Mailkonto. Den Versandstatus schreibt immer das System.
 
 **Woher weiß ich, was er getan hat?** Jede Aktion steht im Log des Arbeitspakets und im Lauf unter Projekt › KI; Chat-Befehle zeigt die Systemkarte unter der Antwort. Was er nur behauptet, aber nicht ausgeführt hat, ersetzt das System sichtbar.
 

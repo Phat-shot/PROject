@@ -262,7 +262,39 @@ export function MyNotifyCard() {
           : <button className="btn sm" disabled={busy} title="Für dieses Projekt keine Mails und keine Chat-Beiträge mehr, nur noch In-App (Sperren der Org oder PL gelten weiter)" onClick={() => void save([{ event: '*', channels: { mail: 'off', chat: 'off' } }])}>Projekt stummschalten</button>}
       </div>}
       {error && <div className="error mb">{error}</div>}
-      {d.data && <RulesMatrix level={projectId ? 'user_project' : 'user'} data={d.data} canEdit={!busy} onSave={save} />}
+      {d.data && <Presets data={d.data} level={projectId ? 'user_project' : 'user'} busy={busy} onSave={save} />}
+      {d.data && <details className="mt"><summary className="small">Erweitert: je Klasse einstellen</summary>
+        <RulesMatrix level={projectId ? 'user_project' : 'user'} data={d.data} canEdit={!busy} onSave={save} />
+      </details>}
+    </div>
+  );
+}
+
+/** Mail je Klasse für die Voreinstellungen; null heißt erben (Org bzw. Code). */
+const URGENT = ['question', 'decision', 'approval', 'escalation'];
+const PRESETS: { key: string; label: string; title: string; mail: (event: string) => NotifyMail | null }[] = [
+  { key: 'few', label: 'Wenig', title: 'Mail nur für Fragen, Entscheidungen, Bestätigungen und Eskalationen (im Tages-Digest); alles andere nur in der App', mail: (e) => (URGENT.includes(e) ? 'digest' : 'off') },
+  { key: 'std', label: 'Standard', title: 'Eigene Mail-Einstellungen entfernen: es gilt, was die Org vorgibt', mail: () => null },
+  { key: 'all', label: 'Alles', title: 'Jede Meldung sofort per Mail', mail: () => 'now' }
+];
+
+function Presets({ data, level, busy, onSave }: { data: RulesListing; level: Level; busy: boolean; onSave: (items: RuleItem[]) => Promise<unknown> }) {
+  const events = ['*', ...NOTIFY_EVENTS.map((e) => e.key)];
+  const rowAt = (e: string) => data.rules.find((r) => r.event === e);
+  const locked = (e: string) => { const l = data.effective.find((x) => x.event === e)?.locked.mail; return Boolean(l && ABOVE[level].includes(l)); };
+  const mailOf = (e: string) => (rowAt(e)?.channels as { mail?: NotifyMail } | undefined)?.mail ?? null;
+  const active = PRESETS.find((p) => events.every((e) => locked(e) || mailOf(e) === p.mail(e)))?.key;
+  const apply = (p: (typeof PRESETS)[number]) => onSave(events.filter((e) => !locked(e)).map((e) => {
+    const it = itemOf(rowAt(e), e);
+    const mail = p.mail(e);
+    if (mail) it.channels = { ...it.channels, mail }; else delete (it.channels as { mail?: string }).mail;
+    return it;
+  }));
+  return (
+    <div className="row mb small" role="group" aria-label="Voreinstellung">
+      <span>Mails:</span>
+      {PRESETS.map((p) => <button key={p.key} className={`btn sm ${active === p.key ? 'primary' : ''}`} aria-pressed={active === p.key} title={p.title} disabled={busy} onClick={() => void apply(p)}>{p.label}</button>)}
+      {!active && <span className="muted">eigene Auswahl</span>}
     </div>
   );
 }

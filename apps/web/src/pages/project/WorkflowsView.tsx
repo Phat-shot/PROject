@@ -172,7 +172,7 @@ export function WorkflowEditor({ existing, members, agents = [], contacts, save:
                   <label className="field"><span>Fällig nach Tagen</span><input type="number" min={0} value={s.dueDays ?? ''} onChange={(e) => upd(i, { dueDays: e.target.value === '' ? null : Number(e.target.value) })} style={{ width: 90 }} /></label>
                   <label className="field"><span>Priorität</span><select value={s.priority ?? 'normal'} onChange={(e) => upd(i, { priority: e.target.value })}><option value="low">niedrig</option><option value="normal">normal</option><option value="high">hoch</option><option value="critical">kritisch</option></select></label>
                 </div>
-                <label className="field"><span>Tasks (eine je Zeile)</span><textarea value={(s.checklist ?? []).join('\n')} rows={2} onChange={(e) => upd(i, { checklist: e.target.value.split('\n') })} /></label>
+                <label className="field"><span>Checkliste (ein Punkt je Zeile)</span><textarea value={(s.checklist ?? []).join('\n')} rows={2} onChange={(e) => upd(i, { checklist: e.target.value.split('\n') })} /></label>
                 <label className="check"><input type="checkbox" checked={s.waitForDone !== false} onChange={(e) => upd(i, { waitForDone: e.target.checked })} /> auf Erledigung warten, bevor der nächste Schritt startet</label>
               </>}
               {s.type === 'timer' && <div className="row" style={{ gap: 12 }}>

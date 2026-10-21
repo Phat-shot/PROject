@@ -144,6 +144,30 @@ describe('Benutzereinstellungen › Benachrichtigungen', () => {
   });
 });
 
+describe('Benutzereinstellungen › Voreinstellungen', () => {
+  it('Wenig/Standard/Alles schreiben nur die Mail je Klasse, behalten eigene Chat-Werte und überspringen gesperrte Klassen', async () => {
+    get.mockReset();
+    put.mockReset();
+    const listing = { level: 'user', rules: [row('progress', { channels: { chat: 'off' }, userId: 'me' })], effective: eff({ assigned: { locked: { mail: 'org' } } }) };
+    get.mockImplementation(async (url: string) => (url === '/projects' ? { projects: [] } : listing));
+    put.mockResolvedValue(listing);
+    render(<MyNotifyCard />);
+    expect(await screen.findByRole('button', { name: 'Standard' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Wenig' }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(1));
+    const rules = put.mock.calls[0][1].rules as { event: string; channels: Record<string, unknown> }[];
+    expect(rules.find((r) => r.event === 'assigned')).toBeUndefined();
+    expect(rules.find((r) => r.event === '*')!.channels).toEqual({ mail: 'off' });
+    expect(rules.find((r) => r.event === 'question')!.channels).toEqual({ mail: 'digest' });
+    expect(rules.find((r) => r.event === 'progress')!.channels).toEqual({ chat: 'off', mail: 'off' });
+    fireEvent.click(screen.getByRole('button', { name: 'Standard' }));
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(2));
+    const std = put.mock.calls[1][1].rules as { event: string; channels: Record<string, unknown> }[];
+    expect(std.find((r) => r.event === 'progress')!.channels).toEqual({ chat: 'off' });
+    expect(std.find((r) => r.event === 'question')!.channels).toEqual({});
+  });
+});
+
 describe('Berichtswunsch am AP', () => {
   const taskRules = (over: Record<string, unknown> = {}) => ({ rules: [], effective: eff(), canEdit: false, canEditProgress: false, mine: [], myEffective: eff().find((e) => e.event === 'progress'), ...over });
   beforeEach(() => { get.mockReset(); put.mockReset(); put.mockResolvedValue({}); });

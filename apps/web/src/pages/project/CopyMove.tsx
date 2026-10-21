@@ -9,7 +9,7 @@ import type { ProjectDetail } from '../ProjectPage';
 /** Bestandteile beim Kopieren/Verschieben; der Dialog löst „Alles / Alles außer / Nichts außer“ in eine Liste auf. */
 const TASK_PARTS: { key: string; label: string; hint?: string }[] = [
   { key: 'subtasks', label: 'Aufgaben', hint: 'beim Verschieben immer mit' },
-  { key: 'checklist', label: 'Tasks (Checkliste)', hint: 'beim Kopieren offen' },
+  { key: 'checklist', label: 'Checkliste', hint: 'beim Kopieren offen' },
   { key: 'comments', label: 'Log und Kommentare' },
   { key: 'attachments', label: 'Anhänge' },
   { key: 'mails', label: 'Verknüpfte Mails' },

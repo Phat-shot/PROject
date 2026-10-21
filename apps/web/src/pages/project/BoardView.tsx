@@ -93,6 +93,8 @@ export function BoardView() {
     return out.filter((g) => g.tasks.length > 0 || !active);
   }, [filtered, lanes, detail.subprojects, active]);
 
+  // Schnell anlegen nur in einer Spalte je Teilprojekt (erste aktive, sonst erste): weniger Knöpfe, gleicher Weg
+  const addColumnId = (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0])?.id;
   const columnCount = (colId: string) => tasks.filter((x) => x.columnId === colId && !x.parentId).length;
 
   const onDrop = async (laneKey: string, colId: string) => {
@@ -150,11 +152,11 @@ export function BoardView() {
         {canEdit && <button className="btn primary" onClick={() => setCreate({ columnId: (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0]).id, subprojectId: null })}>Neues Arbeitspaket<kbd style={{ marginLeft: 6, opacity: 0.8 }}>n</kbd></button>}
       </div>
       )}
-      {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen über die Arbeitspaket.</div>}
-      {groups.map((g) => (
-        <div key={g.key} className={`swimlane ${laneClosed.has(g.key) ? 'collapsed' : ''}`}>
-          {g.name && <h2><button className="lane-toggle" title={laneClosed.has(g.key) ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{laneClosed.has(g.key) ? '▸' : '▾'}</button><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
-          {g.name && laneClosed.has(g.key) ? null : <div className="board">
+      {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen im Arbeitspaket.</div>}
+      {groups.map((g) => { const closed = g.tasks.length === 0 ? !laneClosed.has(g.key) : laneClosed.has(g.key); return (
+        <div key={g.key} className={`swimlane ${closed ? 'collapsed' : ''}`}>
+          {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} onClick={() => toggleLane(g.key)}>{closed ? '▸' : '▾'}</button><span className="lane-name">{g.name}</span><span className="badge">{g.tasks.length}</span>{g.key !== 'none' && <SubprojectResp id={g.key} />}</h2>}
+          {g.name && closed ? null : <div className="board">
             {detail.columns.map((c) => {
               const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
               const total = columnCount(c.id);
@@ -185,14 +187,14 @@ export function BoardView() {
                       onDragOverCard={(e) => { if (!drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
                       onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
-                  {!isCollapsed && inCol.length === 0 && <div className="col-empty">{drag ? 'Hier ablegen' : 'leer'}</div>}
-                  {!isCollapsed && canEdit && !f.archived && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} onMore={() => setCreate({ columnId: c.id, subprojectId: laneKey === 'none' || laneKey === 'all' ? null : laneKey })} />}
+                  {!isCollapsed && inCol.length === 0 && drag && <div className="col-empty">Hier ablegen</div>}
+                  {!isCollapsed && canEdit && !f.archived && c.id === addColumnId && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} onMore={() => setCreate({ columnId: c.id, subprojectId: laneKey === 'none' || laneKey === 'all' ? null : laneKey })} />}
                 </div>
               );
             })}
           </div>}
         </div>
-      ))}
+      ); })}
       {create && <CreateTask columnId={create.columnId} subprojectId={create.subprojectId} onClose={() => setCreate(null)} />}
       {selectMode && canEdit && (
         <div className="bulkbar">
@@ -232,6 +234,8 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   const { detail } = useProject();
   const dueClass = x.done ? 'done' : x.dueDate && x.dueDate < t ? 'overdue' : x.dueDate && x.dueDate <= soon ? 'soon' : '';
   const labels = x.labelIds.map((id) => detail.labels.find((l) => l.id === id)).filter(Boolean);
+  // Fortschritt aus Aufgaben und Checkliste zusammen
+  const stepsTotal = x.subtaskTotal + x.checklistTotal; const stepsDone = x.subtaskDone + x.checklistDone;
   return (
     <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''}`} draggable={canEdit && !selectable}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
@@ -246,17 +250,36 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.dueDate && <span className={`due ${dueClass}`} title={x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline'}>{x.done ? '✓ ' : '⏰ '}{fmtDate(x.dueDate)}</span>}
         {x.conflicts.length > 0 && <span className="conflict" title={x.conflicts.join('\n')}>⚠</span>}
         {x.workflowRunId && <Link to={`/workflows/laeufe/${x.workflowRunId}`} title="Aus einem Workflow-Lauf" onClick={(e) => e.stopPropagation()}>⟳</Link>}
-        {x.hasDescription && <span title="Beschreibung vorhanden">≡</span>}
-        {x.commentCount > 0 && <span title="Kommentare">💬 {x.commentCount}</span>}
-        {x.attachmentCount > 0 && <span title="Anhänge">📎 {x.attachmentCount}</span>}
-        {x.mailCount > 0 && <span title="Verknüpfte Mails">✉ {x.mailCount}</span>}
-        {x.subtaskTotal > 0 && <span title="Aufgaben erledigt / gesamt" className={x.subtaskDone === x.subtaskTotal ? 'ok' : ''}>▤ {x.subtaskDone}/{x.subtaskTotal}</span>}
-        {x.checklistTotal > 0 && <span title="Checkliste" className={x.checklistDone === x.checklistTotal ? 'ok' : ''}>☑ {x.checklistDone}/{x.checklistTotal}</span>}
+        {x.commentCount > 0 && <span title="Log-Einträge">💬 {x.commentCount}</span>}
+        {stepsTotal > 0 && <span title={`Erledigt: ${x.subtaskDone}/${x.subtaskTotal} Aufgaben, ${x.checklistDone}/${x.checklistTotal} Checkliste`} className={stepsDone === stepsTotal ? 'ok' : ''}>☑ {stepsDone}/{stepsTotal}</span>}
         <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
           {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : x.responsible.name ? <span className="avatar-wrap external" title={`${x.responsible.name} (extern)`}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
         </span>
       </div>
-      {x.checklistTotal > 0 && <div className={`progress ${x.checklistDone === x.checklistTotal ? 'complete' : ''}`}><div style={{ width: `${Math.round((x.checklistDone / x.checklistTotal) * 100)}%` }} /></div>}
+      {stepsTotal > 0 && <div className={`progress ${stepsDone === stepsTotal ? 'complete' : ''}`}><div style={{ width: `${Math.round((stepsDone / stepsTotal) * 100)}%` }} /></div>}
+      {canEdit && !selectable && <StatusMenu task={x} />}
+    </div>
+  );
+}
+
+/**
+ * Status ohne Ziehen (Telefon, Tastatur): „→“ auf der Karte öffnet die Spalten, „Erledigt“ zuerst. Gleicher Weg wie Ziehen
+ * (/tasks/:id/move), an den Anfang der Zielspalte.
+ */
+function StatusMenu({ task }: { task: Task }) {
+  const { detail, reloadTasks } = useProject();
+  const [open, setOpen] = useState(false);
+  const { busy, error, run } = useAsync();
+  const done = detail.columns.find((c) => c.isDone);
+  const move = (columnId: string) => void run(async () => { await api.post(`/tasks/${task.id}/move`, { columnId, index: 0 }); setOpen(false); await reloadTasks(); });
+  return (
+    <div className="status-menu" onClick={(e) => e.stopPropagation()}>
+      <button className="btn sm link status-btn" aria-label="Status ändern" title="Status ändern" onClick={() => setOpen((o) => !o)}>→</button>
+      {open && <div className="status-pop" role="menu">
+        {done && !task.done && <button role="menuitem" className="btn sm primary" disabled={busy} onClick={() => move(done.id)}>✓ Erledigt</button>}
+        {detail.columns.filter((c) => c.id !== task.columnId && c.id !== (task.done ? '' : done?.id)).map((c) => <button key={c.id} role="menuitem" className="btn sm" disabled={busy} onClick={() => move(c.id)}>{c.name}</button>)}
+        {error && <span className="error small">{error}</span>}
+      </div>}
     </div>
   );
 }

@@ -12,7 +12,8 @@ import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
 import { useOpenChat } from '../components/Messenger';
 import { NotifIcon, NotificationRow, sortNotifications } from '../components/Notifications';
-import { useOpenForMe, type Waiting } from '../lib/useOpenForMe';
+import { useOpenForMe } from '../lib/useOpenForMe';
+import { OpenForMeList } from '../components/OpenForMe';
 import type { NotifyEvent } from '@projekttool/shared';
 
 /**
@@ -109,7 +110,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
           <Link className={`kpi ${dueWeek.length ? 'warn' : ''}`} to={list('&filter=week')} title="Als Liste öffnen"><div className="v">{dueWeek.length}</div><div className="l">fällig in 7 Tagen</div></Link>
           <Link className={`kpi ${trouble.length ? 'bad' : 'ok'}`} to={list('&filter=trouble')} title="Als Liste öffnen"><div className="v">{trouble.length}</div><div className="l">blockiert / eskaliert / Konflikt</div></Link>
           <div className={`kpi ${pct < 80 ? 'warn' : 'ok'}`}><div className="v">{pct}%</div><div className="l">im Plan ({inPlan}/{open.length} Soll erreicht)</div></div>
-          <div className="kpi"><div className="v">{tasksOpen}</div><div className="l">offene Tasks</div></div>
+          <div className="kpi"><div className="v">{tasksOpen}</div><div className="l">offene Checklistenpunkte</div></div>
           <div className={`kpi ${notes.data?.unread ? 'warn' : ''}`}><div className="v">{notes.data?.unread ?? 0}</div><div className="l">ungelesene Meldungen</div></div>
           <div className={`kpi ${myQuestions.filter((q) => q.kind !== 'confirm').length ? 'warn' : ''}`} title="Fragen und Entscheidungen, die auf deine Antwort warten (Chat-Thread oder Arbeitspaket)"><div className="v">{myQuestions.filter((q) => q.kind !== 'confirm').length}</div><div className="l">offene Fragen an mich</div></div>
           <div className={`kpi ${myQuestions.filter((q) => q.kind === 'confirm').length ? 'warn' : ''}`} title="Vorläufige Termine und Buchungen, die du bestätigen sollst"><div className="v">{myQuestions.filter((q) => q.kind === 'confirm').length}</div><div className="l">Bestätigungen für mich</div></div>
@@ -154,33 +155,3 @@ function MyWork({ projectId }: { projectId: string | null }) {
   );
 }
 
-/**
- * „Offen für dich“: alles, was auf eine Entscheidung oder Handlung der Person wartet, als eine Liste unter den Kennzahlen:
- * Fragen, Entscheidungen und Bestätigungen, KI-Vorschläge, Vorschläge der Mail-KI, Mail-Entwürfe zur Freigabe, Seiten in
- * Prüfung, blockierte und eskalierte Arbeitspakete. Ersetzt einen eigenen Menüpunkt.
- */
-function OpenForMeList({ questions, waiting, projectId }: { questions: Question[]; waiting: Waiting | null; projectId: string | null }) {
-  const openChat = useOpenChat();
-  const inP = <T extends { projectId: string }>(xs: T[] | undefined) => (xs ?? []).filter((x) => !projectId || x.projectId === projectId);
-  type Row = { key: string; icon: NotifyEvent; kind: string; projectKey: string; text: string; to?: string; onClick?: () => void; badge?: string };
-  const qKind = (q: Question) => (q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : q.kind === 'approval' ? 'Freigabe' : 'Frage');
-  const rows: Row[] = [
-    ...questions.filter((q) => q.kind === 'decision' || q.kind === 'confirm' || q.kind === 'approval').map((q): Row => ({ key: `q${q.id}`, icon: q.kind === 'confirm' ? 'confirm' : q.kind === 'approval' ? 'approval' : 'decision', kind: qKind(q), projectKey: q.projectKey ?? '', text: `${q.askedByName ?? '?'}${q.taskCode ? ` zu ${q.taskCode}` : ''}: ${q.body.length > 110 ? `${q.body.slice(0, 110)} …` : q.body}`, onClick: () => { if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); } })),
-    ...inP(waiting?.proposals).map((p): Row => ({ key: `p${p.projectId}`, icon: 'review', kind: 'KI-Vorschläge', projectKey: p.projectKey, text: `${p.count} Vorschl${p.count === 1 ? 'ag wartet' : 'äge warten'} auf Freigabe`, to: `/projekte/${p.projectId}/ki` })),
-    ...inP(waiting?.drafts).map((d): Row => ({ key: `d${d.projectId}`, icon: 'mail_in', kind: 'Mail-Entwürfe', projectKey: d.projectKey, text: `${d.count} Entw${d.count === 1 ? 'urf wartet' : 'ürfe warten'} auf Freigabe`, to: `/postfach/freigaben?projekt=${d.projectId}` })),
-    ...inP(waiting?.mailSuggestions).map((m): Row => ({ key: `m${m.mailId}`, icon: 'mail_in', kind: 'Mail-KI', projectKey: m.projectKey, text: `Vorschläge zu „${m.subject.length > 80 ? `${m.subject.slice(0, 80)} …` : m.subject}“`, to: `/postfach/m/${m.mailId}?projekt=${m.projectId}` })),
-    ...inP(waiting?.tasks).map((x): Row => ({ key: `t${x.id}`, icon: x.escalationLevel > 0 ? 'escalation' : 'blocked', kind: x.blocked ? 'Blockiert' : 'Eskaliert', projectKey: x.projectKey, text: `${x.projectKey}-${x.number} ${x.title}`, to: `/projekte/${x.projectId}/board?task=${x.id}`, badge: x.escalationLevel > 0 ? `Esk. ${x.escalationLevel}` : undefined })),
-    ...inP(waiting?.pagesInReview).map((p): Row => ({ key: `s${p.id}`, icon: 'review', kind: 'Seite in Prüfung', projectKey: p.projectKey, text: p.title, to: `/projekte/${p.projectId}/doku/${p.id}` })),
-    ...questions.filter((q) => q.kind !== 'decision' && q.kind !== 'confirm' && q.kind !== 'approval').map((q): Row => ({ key: `q${q.id}`, icon: 'question', kind: qKind(q), projectKey: q.projectKey ?? '', text: `${q.askedByName ?? '?'}${q.taskCode ? ` zu ${q.taskCode}` : ''}: ${q.body.length > 110 ? `${q.body.slice(0, 110)} …` : q.body}`, onClick: () => { if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); } }))
-  ];
-  return (
-    <div className="card mb open-for-me">
-      <h2>Offen für dich {rows.length > 0 && <span className="badge warn">{rows.length}</span>}</h2>
-      {waiting && rows.length === 0 && <div className="muted small">Nichts offen.</div>}
-      {rows.map((r) => {
-        const body = <><NotifIcon event={r.icon} /><span className="k">{r.kind}</span>{!projectId && r.projectKey && <span className="badge">{r.projectKey}</span>}<span className="x">{r.text}</span>{r.badge && <span className="badge danger">{r.badge}</span>}</>;
-        return r.to ? <Link key={r.key} className={`ofm ev-${r.icon}`} to={r.to}>{body}</Link> : <a key={r.key} className={`ofm ev-${r.icon}`} href="#" onClick={(e) => { e.preventDefault(); r.onClick?.(); }}>{body}</a>;
-      })}
-    </div>
-  );
-}

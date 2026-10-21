@@ -1,3 +1,5 @@
+import { api } from '../lib/api';
+import { useNavigate } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 
 interface Member { userId: string; name: string }
@@ -57,16 +59,31 @@ export function MentionInput({ value, onChange, members, placeholder, onSubmit, 
 
 /** Rendert @Name der Mitglieder hervorgehoben. */
 export function MentionText({ text, members }: { text: string; members: Member[] }) {
+  // @Namen hervorheben, Kennungen wie WEB-12 verlinken (öffnet das Arbeitspaket, wenn man es sehen darf)
   const names = [...members].sort((a, b) => b.name.length - a.name.length).map((m) => m.name);
-  if (!names.length) return <>{text}</>;
-  const re = new RegExp(`@(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}])`, 'giu');
+  const nameRe = names.length ? `@(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}])` : null;
+  const re = new RegExp(`${nameRe ? `${nameRe}|` : ''}(?<![\\p{L}\\p{N}-])([A-Z][A-Z0-9]{1,9}-\\d{1,6})(?![\\p{L}\\p{N}])`, 'gu');
   const parts: (string | JSX.Element)[] = [];
   let last = 0; let m: RegExpExecArray | null; let i = 0;
   while ((m = re.exec(text))) {
     parts.push(text.slice(last, m.index));
-    parts.push(<span key={i++} className="mention">@{m[1]}</span>);
+    if (nameRe && m[1]) parts.push(<span key={i++} className="mention">@{m[1]}</span>);
+    else parts.push(<TaskRefLink key={i++} code={m[nameRe ? 2 : 1]} />);
     last = m.index + m[0].length;
   }
   parts.push(text.slice(last));
   return <>{parts}</>;
+}
+
+/** Kennung als Link: sucht das Arbeitspaket (nur sichtbare) und öffnet es im Board; sonst bleibt es Text. */
+function TaskRefLink({ code }: { code: string }) {
+  const nav = useNavigate();
+  const open = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    const [key, n] = [code.slice(0, code.lastIndexOf('-')), Number(code.slice(code.lastIndexOf('-') + 1))];
+    const r = await api.get<{ tasks: { id: string; number: number; projectId: string; projectKey: string }[] }>(`/search?q=${encodeURIComponent(code)}`).catch(() => null);
+    const t = r?.tasks.find((x) => x.projectKey.toUpperCase() === key.toUpperCase() && x.number === n);
+    if (t) nav(`/projekte/${t.projectId}/board?task=${t.id}`);
+  };
+  return <a href="#" className="task-ref" title={`${code} öffnen`} onClick={(e) => void open(e)}>{code}</a>;
 }

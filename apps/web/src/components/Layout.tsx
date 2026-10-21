@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { Notification, NotifyEvent, Project, Question } from '@projekttool/shared';
+import type { Notification, NotifyEvent, Project } from '@projekttool/shared';
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -10,8 +10,8 @@ import { useMailUnread } from '../lib/useMailUnread';
 import { refreshOpenForMe, useOpenForMe } from '../lib/useOpenForMe';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
+import { OpenForMeList } from './OpenForMe';
 import { NotifIcon, NotificationItem, sortNotifications, useOpenNotification } from './Notifications';
-import { useOpenChat } from './Messenger';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -167,14 +167,12 @@ function Bell() {
   const [filter, setFilter] = useState<{ event: NotifyEvent | ''; projectId: string; unread: boolean }>({ event: '', projectId: '', unread: false });
   const [projects, setProjects] = useState<Project[]>([]);
   const [tab, setTab] = useState<'all' | 'open'>('all');
-  // Offene Fragen an mich (Reiter „Offen für mich“): bleiben, bis jemand antwortet oder sie abgebrochen werden
-  const [questions, setQuestions] = useState<Question[]>([]);
-  const openChat = useOpenChat();
+  // „Offen für dich“: dieselbe Liste und Zahl wie im Dashboard (Fragen, Freigaben, Entwürfe, Blocker, Seiten in Prüfung)
+  const openForMe = useOpenForMe();
   const openNotification = useOpenNotification();
   const query = new URLSearchParams({ ...(filter.event ? { event: filter.event } : {}), ...(filter.projectId ? { projectId: filter.projectId } : {}), ...(filter.unread ? { unread: '1' } : {}) }).toString();
   const load = () => Promise.all([
-    api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData),
-    api.get<{ questions: Question[] }>('/questions?status=open').then((r) => setQuestions(r.questions ?? []))
+    api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData)
   ]).catch(() => undefined);
   useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, [query]);
   useEffect(() => { if (open && !projects.length) api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined); }, [open]);
@@ -188,15 +186,8 @@ function Bell() {
       <button className="btn" title="Benachrichtigungen" aria-label="Benachrichtigungen" onClick={() => setOpen(!open)}><NotifIcon event="bell" size={18} />{data.unread > 0 && <span className="dot">{data.unread > 99 ? '99+' : data.unread}</span>}</button>
       {open && (
         <div className="notif-panel">
-          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span className="row" style={{ gap: 8 }}><button className={`btn sm ${tab === 'all' ? 'primary' : ''}`} onClick={() => setTab('all')}>Alle</button><button className={`btn sm ${tab === 'open' ? 'primary' : ''}`} title="Fragen, Entscheidungen und Bestätigungen, die auf dich warten" onClick={() => setTab('open')}>Offen für mich{questions.length > 0 && <span className="badge" style={{ marginLeft: 4 }}>{questions.length}</span>}</button></span>{tab === 'all' && data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
-          {tab === 'open' && <div className="question-list" style={{ padding: '4px 12px' }}>
-            {questions.length === 0 && <div className="empty" style={{ margin: 12 }}>Nichts offen für dich.</div>}
-            {questions.map((q) => <div key={q.id} className="q notif" role="button" tabIndex={0} onClick={() => { setOpen(false); if (q.channelId) openChat(q.channelId, q.messageId, q.messageId); }}>
-              <div className="t">{q.kind === 'confirm' ? 'Bestätigung' : q.kind === 'decision' ? 'Entscheidung' : 'Frage'} von {q.askedByName ?? '?'}{q.taskCode ? ` zu ${q.taskCode}` : ''}{q.addresseeId ? '' : ' (Projektkanal)'}</div>
-              <div className="b">{q.body.length > 140 ? `${q.body.slice(0, 140)} …` : q.body}</div>
-              <div className="b">{new Date(q.createdAt).toLocaleString('de-DE')}{q.remindAt && q.status === 'open' ? ` · Erinnerung ${new Date(q.remindAt).toLocaleDateString('de-DE')}` : ''}</div>
-            </div>)}
-          </div>}
+          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span className="row" style={{ gap: 8 }}><button className={`btn sm ${tab === 'all' ? 'primary' : ''}`} onClick={() => setTab('all')}>Alle</button><button className={`btn sm ${tab === 'open' ? 'primary' : ''}`} title="Fragen, Freigaben, Entwürfe, Blocker und Seiten in Prüfung, die auf dich warten (wie im Dashboard)" onClick={() => setTab('open')}>Offen für dich{openForMe.total > 0 && <span className="badge" style={{ marginLeft: 4 }}>{openForMe.total}</span>}</button></span>{tab === 'all' && data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
+          {tab === 'open' && <div style={{ padding: '4px 12px' }}><OpenForMeList questions={openForMe.questions} waiting={openForMe.waiting} projectId={null} bare onNavigate={() => setOpen(false)} />{openForMe.waiting && openForMe.total === 0 && <div className="empty" style={{ margin: 12 }}>Nichts offen für dich.</div>}</div>}
           {tab === 'all' && <><div className="notif-filter">
             <select aria-label="Klasse" value={filter.event} onChange={(e) => setFilter({ ...filter, event: e.target.value as NotifyEvent | '' })}><option value="">alle Klassen</option>{NOTIFY_EVENTS.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}</select>
             <select aria-label="Projekt" value={filter.projectId} onChange={(e) => setFilter({ ...filter, projectId: e.target.value })}><option value="">alle Projekte</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.key}</option>)}</select>
