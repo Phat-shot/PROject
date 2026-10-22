@@ -45,6 +45,8 @@ Die App hängt am bestehenden Traefik: externes Docker-Netz `proxy`, Entrypoints
 
 Erster Start mit `SEED=false`: Die App zeigt eine Ersteinrichtung, in der Mandant und erster Org-Admin angelegt werden; danach ist dieser Weg gesperrt. `SEED=true` legt stattdessen die Demodaten an.
 
+Offene Schritte nach dem Update vom 22.10.2026: [docs/Betrieb-Update-2026-10.md](docs/Betrieb-Update-2026-10.md).
+
 Update: `IMAGE_TAG` in `deploy/.env` setzen, dann `docker compose … pull && docker compose … up -d`. Migrationen laufen beim Start automatisch.
 Das Image läuft ohne Root, mit Healthcheck auf `/api/health`; Uploads und PGlite-Daten liegen im Volume `/data`.
 Ist das Paket in ghcr.io privat, vorher `docker login ghcr.io` mit einem Token mit `read:packages`.
