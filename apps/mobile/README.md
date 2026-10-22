@@ -27,4 +27,4 @@ cd android && ./gradlew assembleDebug
 # → android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Voraussetzungen: JDK 17, Android SDK (Android Studio oder `sdkmanager`).
+Voraussetzungen: Node 22, JDK 21, Android SDK 36 (Android Studio oder `sdkmanager`).
