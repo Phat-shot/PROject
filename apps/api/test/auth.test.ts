@@ -90,14 +90,36 @@ test('Zweiter Faktor: einrichten, aktivieren, Anmeldung in zwei Schritten, absch
   assert.ok(!step1.cookies.find((c) => c.name === 'pt_session'), 'noch keine Sitzung');
   const bad = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: '123456' } });
   assert.equal(bad.statusCode, 401);
-  const step2 = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
+  const sealed = await t.db.one(`select totp_secret from users where email = 'anna@demo.local'`);
+  assert.ok(!String(sealed.totp_secret).includes(secret), 'Secret verschlüsselt gespeichert');
+  const replay = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
+  assert.equal(replay.statusCode, 401, 'Code der Aktivierung gilt nicht ein zweites Mal');
+  const step2 = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret, Date.now() + 30_000) } });
   assert.equal(step2.statusCode, 200, step2.body);
   assert.ok(step2.cookies.find((c) => c.name === 'pt_session'), 'Sitzung nach zweitem Schritt');
   assert.equal(step2.json().user.totpEnabled, true);
   assert.equal(step2.json().user.managesGroups, true, 'Gruppenverwalterin');
   const again = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: step1.json().challenge, code: totpCode(secret) } });
   assert.equal(again.statusCode, 401, 'Challenge nur einmal');
-  const sess = { pt_session: step2.cookies.find((c) => c.name === 'pt_session')!.value };
+  // Durchprobieren: nach 5 falschen Codes ist die Challenge weg
+  const brute = (await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'anna@demo.local', password: 'demo1234' } })).json().challenge;
+  for (let i = 0; i < 5; i++) assert.equal((await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: brute, code: String(100000 + i) } })).statusCode, 401);
+  const late = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: brute, code: totpCode(secret, Date.now() + 60_000) } });
+  assert.match(late.json().error, /abgelaufen/);
+  // Passwort-Reset ersetzt den zweiten Faktor nicht: keine Sitzung aus dem Mail-Link
+  const resetToken = 'r'.repeat(64);
+  await t.db.query(`insert into password_resets (token, user_id, expires_at) values ($1, (select id from users where email = 'anna@demo.local'), now() + interval '1 hour')`, [resetToken]);
+  const reset = await t.app.inject({ method: 'POST', url: `/api/auth/reset/${resetToken}`, payload: { password: 'neuesPasswort123' } });
+  assert.equal(reset.statusCode, 200, reset.body);
+  assert.equal(reset.json().mfaRequired, true);
+  assert.ok(!reset.cookies.find((c) => c.name === 'pt_session'));
+  const relogin = (await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'anna@demo.local', password: 'neuesPasswort123' } })).json().challenge;
+  await t.db.query(`update users set totp_last_step = totp_last_step - 2 where email = 'anna@demo.local'`); // eine Minute später
+  const step3 = await t.app.inject({ method: 'POST', url: '/api/auth/login/totp', payload: { challenge: relogin, code: totpCode(secret, Date.now() + 30_000) } });
+  assert.equal(step3.statusCode, 200, step3.body);
+  const { hashPassword } = await import('../src/auth.js');
+  await t.db.query(`update users set password_hash = $1 where email = 'anna@demo.local'`, [hashPassword('demo1234')]);
+  const sess = { pt_session: step3.cookies.find((c) => c.name === 'pt_session')!.value };
   assert.equal((await t.api(sess).post('/me/totp/disable', { password: 'falsch' })).statusCode, 400);
   assert.equal((await t.api(sess).post('/me/totp/disable', { password: 'demo1234' })).statusCode, 200);
   const plain = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'anna@demo.local', password: 'demo1234' } });

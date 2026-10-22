@@ -4,7 +4,8 @@ import { createSession, hashPassword, mapUser, publicOrgSettings, requireUser, S
 import { audit } from '../audit.js';
 import { badRequest, notFound, unauthorized } from '../errors.js';
 import { publicBase } from '../docs/share.js';
-import { verifyTotp } from '../totp.js';
+import { totpStep } from '../totp.js';
+import { unseal } from '../secrets.js';
 import { orgAccount } from '../mail/accounts.js';
 
 export async function authRoutes(app: FastifyInstance) {
@@ -29,10 +30,17 @@ export async function authRoutes(app: FastifyInstance) {
 
   app.post<{ Body: { challenge: string; code: string } }>('/auth/login/totp', async (req, reply) => {
     const { challenge, code } = req.body ?? ({} as any);
-    const c = challenge ? await app.db.maybeOne(`select c.*, u.totp_secret, u.org_id from login_challenges c join users u on u.id = c.user_id where c.token = $1 and c.expires_at > now() and u.active`, [challenge]) : null;
+    const c = challenge ? await app.db.maybeOne(`select c.*, u.totp_secret, u.totp_last_step, u.org_id from login_challenges c join users u on u.id = c.user_id where c.token = $1 and c.expires_at > now() and u.active`, [challenge]) : null;
     if (!c) throw unauthorized('Anmeldung abgelaufen, bitte neu anmelden');
-    if (!verifyTotp(c.totp_secret, String(code ?? ''))) throw unauthorized('Code falsch');
+    // Kein Durchprobieren (5 Versuche je Challenge) und kein zweites Mal derselbe Code
+    const step = totpStep(unseal(c.totp_secret) ?? '', String(code ?? ''));
+    if (step === null || (c.totp_last_step != null && step <= Number(c.totp_last_step))) {
+      const r = await app.db.one(`update login_challenges set attempts = attempts + 1 where token = $1 returning attempts`, [challenge]);
+      if (r.attempts >= 5) { await app.db.query(`delete from login_challenges where token = $1`, [challenge]); throw unauthorized('Zu viele falsche Codes, bitte neu anmelden'); }
+      throw unauthorized('Code falsch');
+    }
     await app.db.query(`delete from login_challenges where token = $1`, [challenge]);
+    await app.db.query(`update users set totp_last_step = $2 where id = $1`, [c.user_id, step]);
     const row = await app.db.one(`select * from users where id = $1`, [c.user_id]);
     const token = await createSession(app.db, row.id);
     setSessionCookie(reply, token);
@@ -76,7 +84,7 @@ export async function authRoutes(app: FastifyInstance) {
     return { ok: true, sent: true };
   });
 
-  const openReset = (token: string) => app.db.maybeOne(`select r.*, u.email, u.name, u.org_id from password_resets r join users u on u.id = r.user_id where r.token = $1 and r.used_at is null and r.expires_at > now() and u.active`, [token]);
+  const openReset = (token: string) => app.db.maybeOne(`select r.*, u.email, u.name, u.org_id, u.totp_enabled from password_resets r join users u on u.id = r.user_id where r.token = $1 and r.used_at is null and r.expires_at > now() and u.active`, [token]);
   app.get<{ Params: { token: string } }>('/auth/reset/:token', async (req) => {
     const r = await openReset(req.params.token);
     if (!r) throw notFound('Link ungültig oder abgelaufen');
@@ -91,6 +99,8 @@ export async function authRoutes(app: FastifyInstance) {
     await app.db.query(`update password_resets set used_at = now() where token = $1`, [req.params.token]);
     await app.db.query(`delete from sessions where user_id = $1`, [r.user_id]);
     await audit(app.db, { orgId: r.org_id, userId: r.user_id, action: 'user.password_reset', objectType: 'user', objectId: r.user_id });
+    // Mit zweitem Faktor keine Sitzung aus dem Mail-Link: Anmeldung mit neuem Passwort und Code
+    if (r.totp_enabled) return { ok: true, mfaRequired: true };
     const token = await createSession(app.db, r.user_id);
     setSessionCookie(reply, token);
     const row = await app.db.one(`select * from users where id = $1`, [r.user_id]);

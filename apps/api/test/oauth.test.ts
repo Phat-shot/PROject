@@ -30,13 +30,15 @@ const fakeFetch: typeof fetch = async (input, init) => {
   if (url === 'https://idp.example/userinfo') return json(currentUserinfo);
   return json({ error: `unbekannt: ${url}` }, 404);
 };
-let currentUserinfo: Record<string, unknown> = { sub: 'sub-max', email: 'Max@demo.local', name: 'Max Keller', groups: ['PM-Team', 'Alle'] };
+let currentUserinfo: Record<string, unknown> = { sub: 'sub-max', email: 'Max@demo.local', email_verified: true, name: 'Max Keller', groups: ['PM-Team', 'Alle'] };
 
 process.env.OAUTH_MS_CLIENT_ID = 'cid';
 process.env.OAUTH_MS_CLIENT_SECRET = 'secret';
 process.env.PUBLIC_URL = 'https://project.example';
 const t = await testApp({ fetchFn: fakeFetch });
 test.after(() => t.close());
+/** Rückruf im Browser, der den Ablauf gestartet hat: State-Cookie (und ggf. Sitzung) wird mitgeschickt */
+const callback = (url: string, state: string, cookies: Record<string, string> = {}) => t.app.inject({ method: 'GET', url: `${url}&state=${state}`, cookies: { ...cookies, pt_oauth: state } });
 
 test('OAuth2 Microsoft: Start prüft Rechte und leitet mit State weiter, Rückruf legt Graph-Konto an', async () => {
   const pl = await t.login('pl@demo.local');
@@ -54,14 +56,31 @@ test('OAuth2 Microsoft: Start prüft Rechte und leitet mit State weiter, Rückru
   assert.match(u.searchParams.get('scope') ?? '', /Mail\.ReadWrite/);
   const state = u.searchParams.get('state')!;
 
-  const bad = await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=wrong&state=${state}` });
+  const bad = await callback('/api/oauth/callback/microsoft?code=wrong', state, pl);
   assert.match(bad.headers.location as string, /oauthError=.*Code/);
-  const again = await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=good&state=${state}` });
+  const again = await callback('/api/oauth/callback/microsoft?code=good', state, pl);
   assert.match(again.headers.location as string, /oauthError=/, 'State ist nur einmal gültig');
 
   const start2 = await t.api(pl).get(`/oauth/start?provider=microsoft&type=project&projectId=${t.ids.projects.web}&name=Projektpostfach`);
   const state2 = new URL(start2.headers.location as string).searchParams.get('state')!;
-  const cb = await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=good&state=${state2}` });
+  assert.equal(start2.cookies.find((c) => c.name === 'pt_oauth')?.value, state2, 'State im Cookie des startenden Browsers');
+  const u2 = new URL(start2.headers.location as string);
+  assert.equal(u2.searchParams.get('code_challenge_method'), 'S256');
+  const challenge = u2.searchParams.get('code_challenge')!;
+  // Fremder Browser (ohne State-Cookie) oder fremde Sitzung: kein Konto
+  const noCookie = await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=good&state=${state2}`, cookies: pl });
+  assert.match(noCookie.headers.location as string, /oauthError=/);
+  const start2b = await t.api(pl).get(`/oauth/start?provider=microsoft&type=project&projectId=${t.ids.projects.web}&name=Projektpostfach`);
+  const state2b = new URL(start2b.headers.location as string).searchParams.get('state')!;
+  const otherUser = await callback('/api/oauth/callback/microsoft?code=good', state2b, await t.login('anna@demo.local'));
+  assert.match(otherUser.headers.location as string, /oauthError=/, 'Rückruf nur für die Person, die verbunden hat');
+  assert.equal(await t.db.maybeOne(`select 1 from mail_accounts where address = 'petra@contoso.com'`), null);
+  const start2c = await t.api(pl).get(`/oauth/start?provider=microsoft&type=project&projectId=${t.ids.projects.web}&name=Projektpostfach`);
+  const state2c = new URL(start2c.headers.location as string).searchParams.get('state')!;
+  const before = calls.length;
+  const cb = await callback('/api/oauth/callback/microsoft?code=good', state2c, pl);
+  const verifier = new URLSearchParams(String(calls.slice(before).find((c) => c.url.endsWith('/token'))!.init?.body)).get('code_verifier')!;
+  assert.ok(verifier && verifier !== challenge, 'PKCE-Verifier beim Code-Tausch');
   assert.equal(cb.statusCode, 302);
   assert.equal(cb.headers.location, `https://project.example/projekte/${t.ids.projects.web}/einstellungen/mail?connected=petra%40contoso.com`);
   const acc = await t.db.one<AccountRow>(`select * from mail_accounts where address = 'petra@contoso.com'`);
@@ -79,7 +98,7 @@ test('OAuth2 Microsoft: Start prüft Rechte und leitet mit State weiter, Rückru
   // Erneut verbinden: kein zweites Konto, Tokens erneuert
   const start3 = await t.api(pl).get(`/oauth/start?provider=microsoft&type=project&projectId=${t.ids.projects.web}`);
   const state3 = new URL(start3.headers.location as string).searchParams.get('state')!;
-  await t.app.inject({ method: 'GET', url: `/api/oauth/callback/microsoft?code=good&state=${state3}` });
+  await callback('/api/oauth/callback/microsoft?code=good', state3, pl);
   const n = await t.db.one(`select count(*)::int as c from mail_accounts where address = 'petra@contoso.com'`);
   assert.equal(n.c, 1);
 });
@@ -137,7 +156,20 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.equal(u.searchParams.get('redirect_uri'), 'https://project.example/api/auth/oidc/callback');
   const state = u.searchParams.get('state')!;
 
-  const cb = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${state}` });
+  // Ohne State-Cookie (Link aus fremdem Browser): keine Anmeldung
+  const foreign = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${state}` });
+  assert.match(foreign.headers.location as string, /\/login\?oauthError=/);
+  assert.equal(foreign.cookies.find((c) => c.name === 'pt_session'), undefined);
+  // Adresse nicht bestätigt: keine Zuordnung per E-Mail
+  currentUserinfo = { ...currentUserinfo, email_verified: false };
+  const sv = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
+  const unverified = await callback('/api/auth/oidc/callback?code=c', sv);
+  assert.match(unverified.headers.location as string, /oauthError=.*Kein%20Benutzer/);
+  currentUserinfo = { ...currentUserinfo, email_verified: true };
+  const s1 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start?next=//evil.example' })).headers.location as string).searchParams.get('state')!;
+  const tokenCalls = calls.length;
+  const cb = await callback('/api/auth/oidc/callback?code=c', s1);
+  assert.ok(new URLSearchParams(String(calls.slice(tokenCalls).find((c) => c.url === 'https://idp.example/token')!.init?.body)).get('code_verifier'), 'PKCE-Verifier');
   assert.equal(cb.statusCode, 302);
   assert.equal(cb.headers.location, 'https://project.example/', 'kein Open Redirect');
   const cookie = cb.cookies.find((c) => c.name === 'pt_session');
@@ -163,7 +195,7 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.deepEqual(await membership(ctlProject), { role: 'member', origin: 'group' });
   assert.equal(await membership(ssoProject), null);
   const s1b = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
-  await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${s1b}` });
+  await callback('/api/auth/oidc/callback?code=c', s1b);
   assert.deepEqual(await membership(ssoProject), { role: 'reader', origin: 'group' }, 'über die SSO-Gruppe Leser im Projekt');
   assert.equal(await membership(ctlProject), null, 'aus der Gruppe entfernt → Projektzugang über die Gruppe entfällt');
   const groups = (await t.api(admin).get('/groups')).json().groups;
@@ -173,16 +205,16 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'user.groups_synced' and object_id = $1`, [t.ids.users.max]));
 
   // Unbekannte Person ohne Auto-Anlage: Hinweis statt Konto
-  currentUserinfo = { sub: 'sub-neu', email: 'neu@example.com', name: 'Neu Nutzer' };
+  currentUserinfo = { sub: 'sub-neu', email: 'neu@example.com', email_verified: true, name: 'Neu Nutzer' };
   const s2 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
-  const cb2 = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${s2}` });
+  const cb2 = await callback('/api/auth/oidc/callback?code=c', s2);
   assert.match(cb2.headers.location as string, /\/login\?oauthError=.*Kein%20Benutzer/);
   assert.equal(await t.db.maybeOne(`select 1 from users where email = 'neu@example.com'`), null);
 
   // Mit Auto-Anlage: Mitglied ohne Passwort, Anmeldung nur per SSO
   process.env.OIDC_AUTO_CREATE = 'true';
   const s3 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start?next=/portfolio' })).headers.location as string).searchParams.get('state')!;
-  const cb3 = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${s3}` });
+  const cb3 = await callback('/api/auth/oidc/callback?code=c', s3);
   assert.equal(cb3.headers.location, 'https://project.example/portfolio');
   const created = await t.db.one(`select * from users where email = 'neu@example.com'`);
   assert.equal(created.global_role, 'user');

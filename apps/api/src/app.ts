@@ -62,8 +62,17 @@ declare module 'fastify' {
 function safeOrigin(u: string): string | null { try { return new URL(u).origin; } catch { return null; } }
 function safeHost(u: string | null | undefined): string { try { return u ? new URL(u).host : ''; } catch { return ''; } }
 
+/**
+ * Hinter einem Reverse-Proxy (Traefik) ist req.ip sonst die Proxy-Adresse: alle Clients teilten sich die Drosselung.
+ * TRUST_PROXY: true oder vertrauenswürdige Adressen/Netze (z. B. "loopback,linklocal,uniquelocal" für Docker-Netze).
+ */
+export function trustProxyFrom(v: string | undefined): boolean | string {
+  if (!v || v === 'false') return false;
+  return v === 'true' ? true : v;
+}
+
 export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
-  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 10 * 1024 * 1024 });
+  const app = Fastify({ logger: opts.logger ?? false, bodyLimit: 10 * 1024 * 1024, trustProxy: trustProxyFrom(process.env.TRUST_PROXY) });
   app.decorate('db', opts.db);
   app.decorate('mail', opts.mail);
   app.decorate('fetchFn', opts.fetchFn ?? fetch);

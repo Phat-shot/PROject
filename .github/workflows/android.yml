@@ -24,22 +24,24 @@ jobs:
       contents: write
     env:
       APP_URL: ${{ github.event.inputs.url || 'https://project.srz.one' }}
+      # Step-eigenes env ist im if desselben Steps nicht sichtbar: Vorhandensein des Keystores auf Job-Ebene prüfen
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: 17
+          java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
         with:
-          packages: platform-tools platforms;android-34 build-tools;34.0.0
+          packages: platform-tools platforms;android-36 build-tools;36.0.0
 
       - name: Abhängigkeiten
         run: npm ci --no-audit --no-fund
@@ -72,7 +74,7 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ../PROject-debug.apk
 
       - name: Release-APK bauen (nur mit Keystore-Secrets)
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: env.HAS_KEYSTORE == 'true'
         working-directory: apps/mobile/android
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -90,7 +92,7 @@ jobs:
           rm -f release.jks
 
       - name: Debug-APK als Artefakt
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PROject-debug-apk
           path: apps/mobile/PROject-debug.apk
@@ -98,16 +100,15 @@ jobs:
 
       - name: Release-APK als Artefakt
         if: ${{ hashFiles('apps/mobile/PROject-release.apk') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: PROject-release-apk
           path: apps/mobile/PROject-release.apk
           retention-days: 90
 
-      - name: APKs an das Release hängen
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+      # Nur die signierte Release-APK geht ans öffentliche Release; die Debug-APK (debuggable) bleibt Workflow-Artefakt
+      - name: Release-APK an das Release hängen
+        if: startsWith(github.ref, 'refs/tags/v') && hashFiles('apps/mobile/PROject-release.apk') != ''
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
-          files: |
-            apps/mobile/PROject-debug.apk
-            apps/mobile/PROject-release.apk
+          files: apps/mobile/PROject-release.apk

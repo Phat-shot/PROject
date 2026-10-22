@@ -26,6 +26,17 @@ export function htmlToText(html: string): string {
   return parse(html ?? '').textContent.replace(/\s+/g, ' ').trim();
 }
 
+/** Links nur relativ oder mit bekanntem Schema; Steuer- und Leerzeichen zählen nicht (Browser entfernen sie, z. B. java&#9;script:). */
+function safeLink(attr: 'href' | 'src', value: string): boolean {
+  const v = String(value ?? '').replace(/[\u0000-\u0020\u007f-\u009f]/g, '');
+  const colon = v.indexOf(':');
+  const delim = v.search(/[/?#]/);
+  if (colon < 0 || (delim >= 0 && delim < colon)) return true;
+  const scheme = v.slice(0, colon).toLowerCase();
+  if (attr === 'src') return scheme === 'http' || scheme === 'https' || /^data:image\/(png|jpe?g|gif|webp);/i.test(v);
+  return ['http', 'https', 'mailto', 'tel'].includes(scheme);
+}
+
 const ALLOWED_TAGS = new Set(['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'code', 'pre', 'blockquote', 'hr', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col', 'img', 'a', 'span', 'div', 'sup', 'sub', 'mark', 'input', 'label']);
 const ALLOWED_ATTRS = new Set(['href', 'src', 'alt', 'title', 'style', 'colspan', 'rowspan', 'colwidth', 'width', 'height', 'class', 'data-type', 'data-checked', 'type', 'checked', 'start', 'target', 'rel']);
 
@@ -37,15 +48,16 @@ export function sanitizeHtml(html: string): string {
       if (child.nodeType === 1) {
         const tag = child.rawTagName?.toLowerCase();
         if (!tag || !ALLOWED_TAGS.has(tag)) {
-          if (tag === 'script' || tag === 'style' || tag === 'iframe' || tag === 'object' || tag === 'embed') { child.remove(); continue; }
-          // Unbekanntes Element: Inhalt behalten, Element entfernen
+          if (tag === 'script' || tag === 'style' || tag === 'iframe' || tag === 'object' || tag === 'embed' || tag === 'noscript' || tag === 'template' || tag === 'textarea' || tag === 'title') { child.remove(); continue; }
+          // Unbekanntes Element: Inhalt erst bereinigen, dann ohne das Element behalten
+          walk(child);
           child.replaceWith(...child.childNodes);
           continue;
         }
         for (const [name, value] of Object.entries(child.attributes as Record<string, string>)) {
           const n = name.toLowerCase();
           if (!ALLOWED_ATTRS.has(n) || n.startsWith('on')) { child.removeAttribute(name); continue; }
-          if ((n === 'href' || n === 'src') && /^\s*(javascript|vbscript|data:text\/html)/i.test(value)) child.removeAttribute(name);
+          if ((n === 'href' || n === 'src') && !safeLink(n, value)) { child.removeAttribute(name); continue; }
           if (n === 'style') {
             const safe = value.split(';').map((s) => s.trim()).filter((s) => /^(font-size|text-align|color|background-color|width|min-width|font-weight|font-style|text-decoration)\s*:/i.test(s)).join('; ');
             if (safe) child.setAttribute('style', safe); else child.removeAttribute('style');

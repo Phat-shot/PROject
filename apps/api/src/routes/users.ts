@@ -9,7 +9,8 @@ import type { Group, Invitation, MailInquiry, User } from '@projekttool/shared';
 import { DEFAULT_INQUIRY, parseInquiry } from '../ai/mailInquiry.js';
 import { ORG_RIGHTS, USER_SETTING_KEYS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
-import { newSecret, otpauthUrl, verifyTotp } from '../totp.js';
+import { newSecret, otpauthUrl, totpStep } from '../totp.js';
+import { seal, unseal } from '../secrets.js';
 import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { orgAccount as orgAccountOf, releaseUserAccounts } from '../mail/accounts.js';
 
@@ -144,15 +145,16 @@ export async function userRoutes(app: FastifyInstance) {
     const row = await app.db.one(`select totp_enabled from users where id = $1`, [user.id]);
     if (row.totp_enabled) throw badRequest('Zweiter Faktor ist bereits aktiv');
     const secret = newSecret();
-    await app.db.query(`update users set totp_secret = $2 where id = $1`, [user.id, secret]);
+    await app.db.query(`update users set totp_secret = $2 where id = $1`, [user.id, seal(secret)]);
     return { secret, otpauth: otpauthUrl(secret, user.email) };
   });
   app.post<{ Body: { code: string } }>('/me/totp/enable', async (req) => {
     const user = requireUser(req);
     const row = await app.db.one(`select totp_secret, totp_enabled from users where id = $1`, [user.id]);
     if (!row.totp_secret) throw badRequest('Erst einrichten');
-    if (!verifyTotp(row.totp_secret, String(req.body?.code ?? ''))) throw badRequest('Code falsch, bitte den aktuellen Code aus der App eingeben');
-    await app.db.query(`update users set totp_enabled = true where id = $1`, [user.id]);
+    const step = totpStep(unseal(row.totp_secret) ?? '', String(req.body?.code ?? ''));
+    if (step === null) throw badRequest('Code falsch, bitte den aktuellen Code aus der App eingeben');
+    await app.db.query(`update users set totp_enabled = true, totp_last_step = $2 where id = $1`, [user.id, step]);
     await app.db.query(`delete from sessions where user_id = $1 and token <> $2`, [user.id, req.cookies.pt_session ?? '']);
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.totp_enabled', objectType: 'user', objectId: user.id });
     return { ok: true };

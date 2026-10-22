@@ -374,7 +374,7 @@ export async function applyOne(db: Db, svc: MailService, ctx: Ctx, a: MailAiActi
       // (Neuformulierung nach Stufe, Prüfung); bestanden und kein erster Kontakt → senden bzw. im Arbeitszeitfenster planen, sonst Entwurf zur Freigabe
       const autonomous = asAgent && ctx.run.mode === 'process' && Boolean(ctx.cfg && ctx.fetchFn) && rights.canSend && membership!.agentCanMail && (await effectiveAgentPolicy(db, { agentId: actor.id, projectId: project.id })).mode === 'auto';
       if (autonomous) {
-        const aud = await audienceOf(db, { projectId: project.id, taskId: state.taskId, recipients: [mail.from_addr] });
+        const aud = await audienceOf(db, { projectId: project.id, taskId: state.taskId, recipients: [mail.from_addr], humanLinksOnly: true });
         const g = aud.audience === 'internal' ? null : await guardOutbound(db, ctx.cfg!, ctx.fetchFn!, { projectId: project.id, taskId: state.taskId, aud, subject, text, compose: true, keepSubject: true });
         const sendable = !g || (g.result === 'pass' && aud.audience !== 'unknown_external');
         const now = ctx.now ?? new Date();

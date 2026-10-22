@@ -522,7 +522,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
           // An Nicht-Interne: Begleittext und Anhang prüfen (keine Neuformulierung); nicht final oder nicht freigegeben → nicht gesendet,
           // Fundstellen im Begleittext → Entwurf mit der Seite zur Freigabe
           const text = a.text || `Anbei „${page.title}“ als PDF.`;
-          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to });
+          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to, humanLinksOnly: true });
           const g = aud.audience === 'internal' ? null : await guard({ aud, subject: a.subject, text, compose: false, pageIds: [page.id] });
           if (g?.result === 'blocked') {
             await record('pdf', aud, g, null);
@@ -561,7 +561,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
       else if (a.type === 'mail' && mailsSent >= 3) errors.push('Mail verworfen: mehr als drei Mails im Lauf');
       else if (a.type === 'mail') {
         const to = a.to.map((x) => String(x).trim().toLowerCase()).filter((x) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x)).slice(0, 5);
-        const aud = to.length ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to }) : null;
+        const aud = to.length ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: to, humanLinksOnly: true }) : null;
         if (!to.length || !aud) errors.push(`Mail nicht gesendet: keine gültige Empfängeradresse (${a.to.join(', ')})`);
         else if (aud.audience === 'internal') errors.push(`Mail an ${to.join(', ')} verworfen: Projektmitglieder erreichst du per chat, nicht per Mail`);
         else if (!account && !viewAccount) { errors.push('Mail nicht gesendet: kein Mailkonto im Projekt'); await logSys(`Mail an ${to.join(', ')} nicht gesendet: kein Mailkonto im Projekt („${a.subject}“)`); }
@@ -585,7 +585,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
           const view = await db.maybeOne(`select v.id from mail_view_matches x join mail_views v on v.id = x.view_id where x.mail_id = $1 and v.project_id = $2 order by v.created_at limit 1`, [o.id, task.project_id]);
           const subject = reSubject(o.subject);
           // An Nicht-Interne (Absender ohne Projektzugriff): Neuformulierung mit dem Außenkontext, Betreff bleibt für den Verlauf
-          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [o.from_addr] });
+          const aud = await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [o.from_addr], humanLinksOnly: true });
           const g = aud.audience === 'internal' ? null : await guard({ aud, subject, text, compose: true, keepSubject: true });
           const body = g?.text ?? text;
           mailsSent++;
@@ -656,7 +656,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         if ('error' in r) errors.push(r.error);
         else {
           applied.push({ type: 'refer', text: q, to: [r.contact.email] });
-          const aud = ext ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [ext] }) : null;
+          const aud = ext ? await audienceOf(db, { projectId: task.project_id, taskId: task.id, recipients: [ext], humanLinksOnly: true }) : null;
           if (aud && aud.audience !== 'internal' && (account || viewAccount) && mailsSent < 3) {
             mailsSent++;
             const topic = String(a.subject ?? '').trim();

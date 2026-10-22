@@ -12,8 +12,9 @@ services:
   # Optional: automatische Updates, sobald ein neues Image mit dem gewählten Tag in der Registry liegt
   #   docker compose -f deploy/docker-compose.yml --env-file deploy/.env --profile autoupdate up -d
   # Prüft alle 5 Minuten; aktualisiert nur Container mit dem Label com.centurylinklabs.watchtower.enable=true (nur die App, nicht die Datenbank).
+  # containrrr/watchtower ist seit 12/2025 archiviert (keine Sicherheitsupdates): gepflegter Fork, per Digest gepinnt, da er den Docker-Socket hält.
   watchtower:
-    image: containrrr/watchtower:latest
+    image: ghcr.io/nicholas-fedor/watchtower:1.21.2@sha256:3b8d2e3f0f6ff9295a5d634e4fdb7062e5e6602f71d89baa15cd4d39d22b5743
     container_name: projekttool-watchtower
     restart: unless-stopped
     profiles: ["autoupdate"]
@@ -57,6 +58,10 @@ services:
       COOKIE_SECURE: "true"
       PUBLIC_URL: https://${DOMAIN:?DOMAIN fehlt in deploy/.env}
       LOG: "true"
+      # Client-Adresse aus X-Forwarded-For übernehmen, wenn die Anfrage aus einem privaten Netz (Traefik im Docker-Netz) kommt
+      TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
+      # Interne Ziele für CalDAV, IMAP/SMTP, eigene LLMs freigeben (Hostnamen oder CIDR, kommagetrennt)
+      OUTBOUND_ALLOW_HOSTS: ${OUTBOUND_ALLOW_HOSTS:-}
       # Schlüssel für gespeicherte Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel); leer = Datei /data/secret.key
       SECRET_KEY: ${SECRET_KEY:-}
     volumes:

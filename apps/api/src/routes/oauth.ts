@@ -1,32 +1,40 @@
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { createSession, requireUser, setSessionCookie } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, publicRedirect, redirectUri } from '../oauth.js';
+import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, pkceChallenge, pkceVerifier, publicRedirect, redirectUri } from '../oauth.js';
 import { requireProject, syncProjectGroups } from '../rights.js';
 import { publicBase } from '../docs/share.js';
 import { seal } from '../secrets.js';
 import { bind, orgAccount } from '../mail/accounts.js';
 import type { AccountRow } from '../mail/types.js';
 
-interface MailPurpose { kind: 'mail'; provider: string; /** Verwalter des neuen Kontos (type bleibt eine Version als Alias) */ type: 'personal' | 'project' | 'org'; /** zentrales Postfach (Organisation, mehrere Projekte): keine org-Bindung, für alle Projekte wählbar */ central?: boolean; projectId: string | null; name: string | null }
-interface OidcPurpose { kind: 'oidc'; next: string }
+interface MailPurpose { kind: 'mail'; verifier?: string; provider: string; /** Verwalter des neuen Kontos (type bleibt eine Version als Alias) */ type: 'personal' | 'project' | 'org'; /** zentrales Postfach (Organisation, mehrere Projekte): keine org-Bindung, für alle Projekte wählbar */ central?: boolean; projectId: string | null; name: string | null }
+interface OidcPurpose { kind: 'oidc'; next: string; verifier?: string }
+
+/** Der State gilt nur im Browser, der den Ablauf gestartet hat (sonst Konto- bzw. Login-Unterschiebung per Link) */
+const STATE_COOKIE = 'pt_oauth';
 
 /**
  * OAuth2-Anbindung von Mail-Konten (Microsoft 365, Google) und OIDC-Anmeldung.
  * Der State liegt in oauth_states (10 Minuten gültig) und trägt den Zweck: welches Konto angelegt werden soll bzw. Login.
+ * Zusätzlich steht er in einem httpOnly-Cookie des startenden Browsers; der Code wird per PKCE an den Start gebunden.
  */
 export async function oauthRoutes(app: FastifyInstance) {
   const db = app.db;
-  const newState = async (userId: string | null, purpose: MailPurpose | OidcPurpose) => {
+  const newState = async (reply: FastifyReply, userId: string | null, purpose: MailPurpose | OidcPurpose) => {
     const state = randomBytes(24).toString('base64url');
     await db.query(`delete from oauth_states where expires_at < now()`);
     await db.query(`insert into oauth_states (state, user_id, purpose, expires_at) values ($1, $2, $3, now() + interval '10 minutes')`, [state, userId, JSON.stringify(purpose)]);
+    reply.setCookie(STATE_COOKIE, state, { path: '/api', httpOnly: true, sameSite: 'lax', secure: process.env.COOKIE_SECURE === 'true', maxAge: 600 });
     return state;
   };
-  const takeState = async (state: string | undefined) => {
-    if (!state) return null;
+  const takeState = async (req: FastifyRequest, reply: FastifyReply) => {
+    const state = (req.query as { state?: string }).state;
+    const bound = req.cookies?.[STATE_COOKIE];
+    reply.clearCookie(STATE_COOKIE, { path: '/api' });
+    if (!state || !bound || bound !== state) return null;
     const r = await db.maybeOne(`delete from oauth_states where state = $1 and expires_at > now() returning *`, [state]);
     return r ? { userId: r.user_id as string | null, purpose: r.purpose as MailPurpose | OidcPurpose } : null;
   };
@@ -52,8 +60,9 @@ export async function oauthRoutes(app: FastifyInstance) {
       if (user.globalRole !== 'org_admin') throw forbidden('Konten der Organisation legt der Org-Admin an');
       if (!central && (await orgAccount(db, user.orgId))) throw badRequest('Es gibt bereits ein Org-Postfach');
     } else if (type !== 'personal' && type !== 'project') throw badRequest('managedBy: me, project oder org');
-    const state = await newState(user.id, { kind: 'mail', provider: p.key, type, central, projectId, name: req.query.name?.trim() || null });
-    return reply.redirect(authorizeUrl(p, state));
+    const verifier = pkceVerifier();
+    const state = await newState(reply, user.id, { kind: 'mail', provider: p.key, type, central, projectId, name: req.query.name?.trim() || null, verifier });
+    return reply.redirect(authorizeUrl(p, state, verifier));
   });
 
   // Rückruf vom Anbieter: Code tauschen, Adresse lesen, Konto anlegen oder Token eines bestehenden Kontos erneuern
@@ -62,15 +71,15 @@ export async function oauthRoutes(app: FastifyInstance) {
     let back = '/einstellungen/mail';
     const p = oauthProviders().find((x) => x.key === req.params.provider);
     if (!p) throw notFound('OAuth2-Anbieter nicht konfiguriert');
-    const st = await takeState(req.query.state);
+    const st = await takeState(req, reply);
     if (st?.purpose.kind === 'mail') back = st.purpose.type === 'project' && st.purpose.projectId ? `/projekte/${st.purpose.projectId}/einstellungen/mail` : st.purpose.type === 'org' ? '/verwaltung/mail' : '/einstellungen/mail';
-    if (!st || st.purpose.kind !== 'mail' || !st.userId) return reply.redirect(failTo(back, 'Anmeldung abgelaufen oder ungültig, bitte erneut verbinden'));
+    if (!st || st.purpose.kind !== 'mail' || !st.userId || req.user?.id !== st.userId) return reply.redirect(failTo(back, 'Anmeldung abgelaufen oder ungültig, bitte erneut verbinden'));
     if (req.query.error || !req.query.code) return reply.redirect(failTo(back, req.query.error_description ?? req.query.error ?? 'Vom Anbieter abgelehnt'));
     const purpose = st.purpose;
     const user = await db.maybeOne(`select * from users where id = $1 and active`, [st.userId]);
     if (!user) return reply.redirect(failTo(back, 'Benutzer nicht gefunden'));
     try {
-      const tokens = await exchangeCode(p, req.query.code, app.fetchFn);
+      const tokens = await exchangeCode(p, req.query.code, purpose.verifier ?? '', app.fetchFn);
       if (!tokens.refreshToken) return reply.redirect(failTo(back, 'Der Anbieter hat kein Refresh-Token geliefert (Zustimmung erneut erteilen)'));
       const info = await p.userinfo(tokens.accessToken, app.fetchFn);
       const existing = await db.maybeOne(`select * from mail_accounts where org_id = $1 and lower(address) = $2 and oauth_provider = $3 and coalesce(managed_project_id::text, '') = $4 and coalesce(managed_user_id::text, '') = $5`,
@@ -104,30 +113,33 @@ export async function oauthRoutes(app: FastifyInstance) {
     const cfg = oidcConfig();
     if (!cfg) throw notFound('Single Sign-on ist nicht konfiguriert');
     const disc = await oidcDiscovery(cfg, app.fetchFn);
-    const state = await newState(null, { kind: 'oidc', next: publicRedirect(req.query.next) });
-    const q = new URLSearchParams({ client_id: cfg.clientId, response_type: 'code', redirect_uri: `${publicBase()}/api/auth/oidc/callback`, scope: cfg.scopes.join(' '), state });
+    const verifier = pkceVerifier();
+    const state = await newState(reply, null, { kind: 'oidc', next: publicRedirect(req.query.next), verifier });
+    const q = new URLSearchParams({ client_id: cfg.clientId, response_type: 'code', redirect_uri: `${publicBase()}/api/auth/oidc/callback`, scope: cfg.scopes.join(' '), state, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256' });
     return reply.redirect(`${disc.authorization_endpoint}?${q.toString()}`);
   });
 
   app.get<{ Querystring: { code?: string; state?: string; error?: string; error_description?: string } }>('/auth/oidc/callback', async (req, reply) => {
     const cfg = oidcConfig();
     if (!cfg) throw notFound('Single Sign-on ist nicht konfiguriert');
-    const st = await takeState(req.query.state);
+    const st = await takeState(req, reply);
     if (!st || st.purpose.kind !== 'oidc') return reply.redirect(failTo('/login', 'Anmeldung abgelaufen, bitte erneut versuchen'));
     if (req.query.error || !req.query.code) return reply.redirect(failTo('/login', req.query.error_description ?? req.query.error ?? 'Vom Identitätsanbieter abgelehnt'));
     try {
       const disc = await oidcDiscovery(cfg, app.fetchFn);
-      const body = new URLSearchParams({ grant_type: 'authorization_code', code: req.query.code, redirect_uri: `${publicBase()}/api/auth/oidc/callback`, client_id: cfg.clientId, client_secret: cfg.clientSecret });
+      const body = new URLSearchParams({ grant_type: 'authorization_code', code: req.query.code, redirect_uri: `${publicBase()}/api/auth/oidc/callback`, client_id: cfg.clientId, client_secret: cfg.clientSecret, code_verifier: st.purpose.verifier ?? '' });
       const tr = await app.fetchFn(disc.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
       const tj: any = await tr.json().catch(() => ({}));
       if (!tr.ok || !tj.access_token) throw new Error(tj.error_description ?? tj.error ?? `Token ${tr.status}`);
       const ur = await app.fetchFn(disc.userinfo_endpoint, { headers: { authorization: `Bearer ${tj.access_token}` } });
       const u: any = await ur.json().catch(() => ({}));
       if (!ur.ok || !u.sub) throw new Error(`Userinfo ${ur.status}`);
-      const email = String(u.email ?? '').toLowerCase();
+      // Zuordnung und Anlage per E-Mail nur mit geprüfter Adresse (sonst übernimmt, wer beim IdP eine fremde Adresse einträgt, das Konto)
+      const emailVerified = u.email_verified === true || u.email_verified === 'true' || cfg.trustEmail;
+      const email = emailVerified ? String(u.email ?? '').toLowerCase() : '';
       let row = await db.maybeOne(`select * from users where oidc_subject = $1 and active`, [String(u.sub)]);
       if (!row && email) {
-        row = await db.maybeOne(`select * from users where lower(email) = $1 and active`, [email]);
+        row = await db.maybeOne(`select * from users where lower(email) = $1 and active and (oidc_subject is null or oidc_subject = $2)`, [email, String(u.sub)]);
         if (row) await db.query(`update users set oidc_subject = $2 where id = $1 and oidc_subject is null`, [row.id, String(u.sub)]);
       }
       if (!row && cfg.autoCreate && email) {

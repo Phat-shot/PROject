@@ -1,4 +1,5 @@
 import { HttpError } from '../errors.js';
+import { outboundUrlError } from '../netGuard.js';
 
 /**
  * Termine in den Kalender einer Person schreiben: Microsoft Graph (persönliches OAuth-Konto im Graph-Modus),
@@ -52,6 +53,8 @@ export function caldavIcs(ev: PushEvent, sequence: number): string {
 
 /** PUT der VEVENT-Datei in die Kalendersammlung; die Datei heißt wie die UID, ein erneuter PUT aktualisiert. */
 export async function pushCaldav(fetchFn: typeof fetch, cfg: CaldavCfg, ev: PushEvent, sequence: number): Promise<string> {
+  const blocked = await outboundUrlError(cfg.url);
+  if (blocked) throw new HttpError(400, `CalDAV: ${blocked}`);
   const href = `${cfg.url.replace(/\/$/, '')}/${encodeURIComponent(ev.uid)}.ics`;
   const r = await fetchFn(href, { method: 'PUT', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), 'content-type': 'text/calendar; charset=utf-8' }, body: caldavIcs(ev, sequence) });
   if (!r.ok && r.status !== 204 && r.status !== 201) throw new HttpError(400, `CalDAV: ${r.status === 401 ? 'Anmeldung abgelehnt (App-Passwort prüfen)' : r.status === 404 ? 'Kalender-Adresse nicht gefunden' : `HTTP ${r.status}`}`);
@@ -60,6 +63,8 @@ export async function pushCaldav(fetchFn: typeof fetch, cfg: CaldavCfg, ev: Push
 
 /** Prüft Zugang und Adresse per PROPFIND (Tiefe 0). */
 export async function testCaldav(fetchFn: typeof fetch, cfg: CaldavCfg): Promise<{ ok: boolean; displayName?: string | null; error?: string }> {
+  const blocked = await outboundUrlError(cfg.url);
+  if (blocked) return { ok: false, error: blocked };
   try {
     const r = await fetchFn(cfg.url, { method: 'PROPFIND', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), depth: '0', 'content-type': 'application/xml' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>' });
     if (r.status === 401) return { ok: false, error: 'Anmeldung abgelehnt (App-Passwort prüfen)' };

@@ -10,6 +10,8 @@ export interface PdfStyle {
 export interface PdfMeta {
   title: string;
   project: string;
+  /** Bild-Anhänge werden nur aus diesem Projekt eingebettet (ohne: keine Anhang-Bilder) */
+  projectId?: string;
   version: number;
   status: string;
   author?: string | null;

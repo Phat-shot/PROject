@@ -24,12 +24,14 @@ services:
       DATABASE_URL: postgres://projekttool:${POSTGRES_PASSWORD:-projekttool}@db:5432/projekttool
       PORT: "3000"
       DATA_DIR: /data
-      SEED: ${SEED:-true}
+      # Demodaten (admin@demo.local / demo1234) nur bewusst einschalten: SEED=true docker compose up
+      SEED: ${SEED:-false}
       SYNC_INTERVAL_MS: "60000"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+    # Nur lokal erreichbar; für den Betrieb im Netz deploy/docker-compose.yml (hinter Traefik, TLS) verwenden
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - appdata:/data
 

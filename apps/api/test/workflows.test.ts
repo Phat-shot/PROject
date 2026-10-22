@@ -145,3 +145,20 @@ test('Isolierte Instanz: eigenes Mini-Projekt (kind workflow, unsichtbar in List
   assert.equal((await t.api(admin).del(`/workflows/${def.id}`)).statusCode, 200);
   assert.equal((await t.api(pl).get(`/workflow-runs/${run.id}`)).json().run.defId, null, 'Lauf bleibt als Historie');
 });
+
+test('Workflow in eingeschränktem Teilprojekt: Start, Lauf und Liste nur mit Teilprojekt-Zugriff', async () => {
+  const admin = await t.login('admin@demo.local');
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const web = t.ids.projects.web;
+  const def = (await t.api(admin).post('/workflows', { name: 'Geheim-Ablauf', steps: [{ key: 'a', type: 'task', title: 'Geheimer Schritt', responsible: 'starter' }] })).json().definition;
+  const sp = (await t.api(pl).post(`/projects/${web}/subprojects`, { name: 'Geheim-WF', restricted: true })).json().subproject;
+  assert.equal((await t.api(max).post(`/projects/${web}/workflows/${def.id}/start`, { subprojectId: sp.id })).statusCode, 404, 'Mitglied ohne Zugriff startet dort nichts');
+  const run = (await t.api(pl).post(`/projects/${web}/workflows/${def.id}/start`, { name: 'Geheimlauf', subprojectId: sp.id })).json().run;
+  assert.ok(run?.id);
+  assert.equal((await t.api(max).get(`/workflow-runs/${run.id}`)).statusCode, 404);
+  assert.equal((await t.api(max).get(`/projects/${web}/workflow-runs/${run.id}`)).statusCode, 404);
+  assert.ok(!(await t.api(max).get(`/projects/${web}/workflows`)).json().runs.some((r: any) => r.id === run.id));
+  assert.equal((await t.api(pl).get(`/workflow-runs/${run.id}`)).json().tasks.length, 1);
+  assert.ok((await t.api(pl).get(`/projects/${web}/workflows`)).json().runs.some((r: any) => r.id === run.id));
+});

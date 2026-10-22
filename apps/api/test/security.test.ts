@@ -71,4 +71,32 @@ test('Upload: ausführbare Dateien abgelehnt, HTML nur als Download, normale Dat
   assert.equal(txt.statusCode, 200, txt.body);
   const dl2 = await t.app.inject({ method: 'GET', url: `/api/attachments/${(txt.json().attachment ?? txt.json()).id}`, cookies: pl });
   assert.match(String(dl2.headers['content-disposition']), /^inline/);
+  // MIME vom Client: Skript- und XML-Typen nie inline, sonst wären sie auf der eigenen Origin ausführbar
+  for (const mime of ['application/javascript', 'application/rss+xml', 'text/html; charset=utf-8', 'image/svg+xml']) {
+    const up = await upload('daten.txt', mime, '<html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>');
+    assert.equal(up.statusCode, 200, up.body);
+    const d = await t.app.inject({ method: 'GET', url: `/api/attachments/${(up.json().attachment ?? up.json()).id}`, cookies: pl });
+    assert.match(String(d.headers['content-disposition']), /^attachment/, mime);
+    assert.match(String(d.headers['content-security-policy']), /sandbox/, mime);
+    if (mime !== 'image/svg+xml') assert.equal(d.headers['content-type'], 'application/octet-stream', mime);
+  }
+  assert.doesNotMatch(String(dl2.headers['content-security-policy']), /script-src 'self'/, 'Anhänge mit eigener, strengerer CSP');
+});
+
+test('Mail-Konto: gespeichertes Passwort geht nicht an einen geänderten Server', async () => {
+  const pl = await t.login('pl@demo.local');
+  const r = await t.api(pl).post('/mail/accounts', { type: 'personal', name: 'Umleitung', address: 'pl-umleitung@example.com', imapHost: 'imap.example.com', smtpHost: 'smtp.example.com', imapPassword: 'pw-imap', smtpPassword: 'pw-smtp' });
+  assert.equal(r.statusCode, 200, r.body);
+  const id = r.json().account.id;
+  for (const change of [{ imapHost: 'evil.example' }, { imapSecure: false }, { smtpPort: 25 }, { smtpHost: 'evil.example' }]) {
+    const patch = await t.api(pl).patch(`/mail/accounts/${id}`, change);
+    assert.equal(patch.statusCode, 400, JSON.stringify(change));
+    assert.match(patch.json().error, /Passwort erneut/);
+    const probe = await t.api(pl).post('/mail/accounts/test', { accountId: id, ...change });
+    assert.equal(probe.statusCode, 400, JSON.stringify(change));
+  }
+  const row = await t.db.one(`select imap_host, smtp_host from mail_accounts where id = $1`, [id]);
+  assert.deepEqual(row, { imap_host: 'imap.example.com', smtp_host: 'smtp.example.com' });
+  assert.equal((await t.api(pl).patch(`/mail/accounts/${id}`, { imapHost: 'imap2.example.com', imapPassword: 'neu' })).statusCode, 200, 'mit neuem Passwort erlaubt');
+  assert.equal((await t.api(pl).patch(`/mail/accounts/${id}`, { name: 'Nur Name', imapHost: 'imap2.example.com', smtpHost: 'smtp.example.com' })).statusCode, 200, 'unveränderte Werte zählen nicht als Änderung');
 });

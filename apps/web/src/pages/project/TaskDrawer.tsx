@@ -516,7 +516,7 @@ function WebSourcesBlock({ taskId }: { taskId: string }) {
   if (!list.length) return null;
   return <>
     <h3 className="mt">Quellen aus der Online-Recherche <span className="badge">{list.length}</span></h3>
-    <ul className="small">{list.slice(0, 30).map((s) => <li key={s.id}><a href={s.url} target="_blank" rel="noreferrer">{s.title ?? s.url}</a> <span className="muted">· {fmtDateTime(s.retrievedAt)}{s.query ? ` · „${s.query}“` : ''}</span>{s.citedText && <div className="muted">{s.citedText.slice(0, 200)}</div>}</li>)}</ul>
+    <ul className="small">{list.slice(0, 30).map((s) => <li key={s.id}>{/^https?:\/\//i.test(s.url) ? <a href={s.url} target="_blank" rel="noreferrer">{s.title ?? s.url}</a> : <span>{s.title ?? s.url}</span>} <span className="muted">· {fmtDateTime(s.retrievedAt)}{s.query ? ` · „${s.query}“` : ''}</span>{s.citedText && <div className="muted">{s.citedText.slice(0, 200)}</div>}</li>)}</ul>
   </>;
 }
 

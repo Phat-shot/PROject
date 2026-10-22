@@ -1,16 +1,6 @@
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect } from '@playwright/test';
+import { login } from './login';
 
-async function login(page: Page, email = 'pl@demo.local') {
-  await page.goto('/');
-  // Die Anmeldeseite belegt im Demo-Modus die Felder nach /setup/status vor; erst danach ausfüllen
-  await page.waitForLoadState('networkidle');
-  await page.getByLabel('E-Mail').fill(email);
-  await page.getByLabel('Passwort').fill('demo1234');
-  await page.getByRole('button', { name: 'Anmelden' }).click();
-  await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
-  const skip = page.getByRole('button', { name: 'Überspringen' });
-  if (await skip.count()) await skip.first().click();
-}
 
 test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten', async ({ page }) => {
   await login(page);

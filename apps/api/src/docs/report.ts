@@ -128,7 +128,7 @@ export async function createReport(db: Db, mail: MailService, projectId: string,
     return { pageId: page.id, title, sent: false, to: p.recipients, status: 'final', error };
   }
   try {
-    const pdf = await htmlToPdf(db, html, { title, project: pr.name, version: 1, status: 'final', author: lead.name ?? 'Projektleitung', date: new Date(), folder: await folderName(db, folder) }, await layoutFor(db, page.id));
+    const pdf = await htmlToPdf(db, html, { title, project: pr.name, projectId, version: 1, status: 'final', author: lead.name ?? 'Projektleitung', date: new Date(), folder: await folderName(db, folder) }, await layoutFor(db, page.id));
     const filename = `${title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v1.pdf`;
     const r = await mail.sendFromAccount(account, {
       to: p.recipients, subject: title,
