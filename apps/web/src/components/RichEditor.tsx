@@ -1,40 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { EditorContent, useEditor, type Editor } from '@tiptap/react';
-import StarterKit from '@tiptap/starter-kit';
-import Table from '@tiptap/extension-table';
-import TableRow from '@tiptap/extension-table-row';
-import TableCell from '@tiptap/extension-table-cell';
-import TableHeader from '@tiptap/extension-table-header';
-import Image from '@tiptap/extension-image';
-import TextStyle from '@tiptap/extension-text-style';
-import Underline from '@tiptap/extension-underline';
-import Link from '@tiptap/extension-link';
-import Placeholder from '@tiptap/extension-placeholder';
-import { Extension } from '@tiptap/core';
+import { StarterKit } from '@tiptap/starter-kit';
+import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
+import { Image } from '@tiptap/extension-image';
+import { TextStyle, FontSize } from '@tiptap/extension-text-style';
+import { Placeholder } from '@tiptap/extensions';
 import { api } from '../lib/api';
-
-/** Schriftgröße als Attribut von textStyle (span style="font-size: …"). */
-const FontSize = Extension.create({
-  name: 'fontSize',
-  addOptions() { return { types: ['textStyle'] }; },
-  addGlobalAttributes() {
-    return [{
-      types: this.options.types,
-      attributes: {
-        fontSize: {
-          default: null,
-          parseHTML: (el: HTMLElement) => el.style.fontSize || null,
-          renderHTML: (attrs: { fontSize?: string | null }) => (attrs.fontSize ? { style: `font-size: ${attrs.fontSize}` } : {})
-        }
-      }
-    }];
-  },
-  addCommands() {
-    return {
-      setFontSize: (size: string | null) => ({ chain }: any) => (size ? chain().setMark('textStyle', { fontSize: size }).run() : chain().setMark('textStyle', { fontSize: null }).removeEmptyTextStyle().run())
-    } as any;
-  }
-});
 
 const SIZES: [string, string][] = [['', 'Normal'], ['12px', 'Klein'], ['16px', 'Groß'], ['20px', 'Sehr groß'], ['26px', 'Riesig']];
 
@@ -54,18 +25,20 @@ export function RichEditor({ html, onChange, pageId, uploadUrl, placeholder, min
   const fileRef = useRef<HTMLInputElement>(null);
   const editor = useEditor({
     extensions: [
-      StarterKit.configure({ heading: { levels: [1, 2, 3, 4] } }),
-      TextStyle, FontSize, Underline,
-      Link.configure({ openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener', target: '_blank' } }),
+      // Tiptap 3: Link und Unterstreichen sind Teil des StarterKits
+      StarterKit.configure({ heading: { levels: [1, 2, 3, 4] }, link: { openOnClick: false, autolink: true, HTMLAttributes: { rel: 'noopener', target: '_blank' } } }),
+      TextStyle, FontSize,
       Image.configure({ inline: false, allowBase64: true }),
       Table.configure({ resizable: true }), TableRow, TableHeader, TableCell,
       Placeholder.configure({ placeholder: placeholder ?? 'Schreiben … (Überschriften, Tabellen und Bilder über die Leiste)' })
     ],
     content: html,
+    // Leiste zeigt aktive Formate: bei jeder Änderung neu rendern (Standard in Tiptap 2)
+    shouldRerenderOnTransaction: true,
     onUpdate: ({ editor }) => onChange(editor.getHTML())
   });
   useEffect(() => {
-    if (editor && html !== editor.getHTML() && !editor.isFocused) editor.commands.setContent(html, false);
+    if (editor && html !== editor.getHTML() && !editor.isFocused) editor.commands.setContent(html, { emitUpdate: false });
   }, [html]);
   useEffect(() => {
     if (!onSave) return;
@@ -98,7 +71,7 @@ export function RichEditor({ html, onChange, pageId, uploadUrl, placeholder, min
         <select value={headingValue} onChange={(e) => { const l = Number(e.target.value); l ? editor.chain().focus().setHeading({ level: l as 1 | 2 | 3 | 4 }).run() : editor.chain().focus().setParagraph().run(); }} title="Absatzformat">
           <option value={0}>Text</option><option value={1}>Überschrift 1</option><option value={2}>Überschrift 2</option><option value={3}>Überschrift 3</option><option value={4}>Überschrift 4</option>
         </select>
-        <select value={sizeValue} onChange={(e) => (editor.chain().focus() as any).setFontSize(e.target.value || null).run()} title="Schriftgröße">
+        <select value={sizeValue} onChange={(e) => (e.target.value ? editor.chain().focus().setFontSize(e.target.value).run() : editor.chain().focus().unsetFontSize().run())} title="Schriftgröße">
           {SIZES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
         <span className="sep" />

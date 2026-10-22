@@ -1,0 +1,41 @@
+import { test, expect } from '@playwright/test';
+import { login } from './login';
+
+test('Doku-Editor: Fett, Unterstrichen, Schriftgröße, Tabelle, Speichern ohne Fehler in der Konsole', async ({ page }) => {
+  // 401 von /auth/me vor der Anmeldung ist erwartet
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => { if ((m.type() === 'error' && !/401/.test(m.text())) || /Duplicate extension/.test(m.text())) errors.push(m.text()); });
+  await login(page);
+  const projects = await page.evaluate(async () => (await (await fetch('/api/projects')).json()).projects);
+  const web = projects.find((p: any) => p.key === 'WEB');
+  const docs = await page.evaluate(async (id) => (await (await fetch(`/api/projects/${id}/docs`)).json()), web.id);
+  const folder = docs.folders[0];
+  const created = await page.evaluate(async ([id, folderId]) => (await (await fetch(`/api/projects/${id}/docs/pages`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ title: 'Editor-Probe', folderId, contentHtml: '<p>Start</p>' }) })).json()), [web.id, folder.id]);
+  await page.goto(`/projekte/${web.id}/doku/${created.page.id}`);
+  await page.getByRole('button', { name: 'Bearbeiten' }).click();
+  const ed = page.locator('.editor-content .ProseMirror');
+  await ed.click();
+  await page.keyboard.press('End');
+  await page.keyboard.type(' fett');
+  await page.keyboard.press('Shift+Home');
+  await page.getByTitle('Fett (Strg+B)').click();
+  await expect(page.getByTitle('Fett (Strg+B)')).toHaveClass(/on/);
+  await page.getByTitle('Unterstrichen (Strg+U)').click();
+  await page.getByTitle('Schriftgröße').selectOption('20px');
+  await ed.locator('p').first().click();
+  await expect(ed).toBeFocused();
+  await ed.press('End');
+  await ed.press('Enter');
+  await page.getByTitle('Tabelle einfügen (3×3)').click();
+  await expect(page.getByTitle('Spalte rechts')).toBeVisible();
+  await page.getByTitle('Spalte rechts').click();
+  await page.getByRole('button', { name: /Speichern/ }).first().click();
+  await expect.poll(async () => (await page.evaluate(async (pid) => (await (await fetch(`/api/docs/pages/${pid}`)).json()).page.contentHtml, created.page.id))).toMatch(/<table/);
+  const html: string = await page.evaluate(async (pid) => (await (await fetch(`/api/docs/pages/${pid}`)).json()).page.contentHtml, created.page.id);
+  expect(html).toMatch(/<strong>/);
+  expect(html).toMatch(/<u>/);
+  expect(html).toMatch(/font-size: 20px/);
+  expect((html.match(/<th/g) ?? []).length).toBe(4);
+  expect(errors).toEqual([]);
+});

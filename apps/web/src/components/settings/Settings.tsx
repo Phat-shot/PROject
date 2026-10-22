@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { Navigate, Route, Routes } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
 
 /**
  * Gemeinsames Muster der drei Einstellungsseiten (Verwaltung, Projekt, Meine Einstellungen): Reiter sind Routen unter einer
@@ -12,13 +12,17 @@ export const settingsTabLinks = (base: string, tabs: SettingsTab[]) => tabs.map(
 
 /** Inhalt der Einstellungsseite: Route je Reiter, ohne Reiter in der URL der erste. Muss unter einem Pfad mit `/*` liegen. */
 export function SettingsRoutes({ tabs, fallback }: { tabs: SettingsTab[]; fallback?: ReactNode }) {
+  // Absolutes Ziel: relative Pfade unter einer Splat-Route schließen den Splat ein (React Router 7), das gäbe eine Weiterleitungsschleife
+  const { pathname } = useLocation();
+  const splat = useParams()['*'] ?? '';
+  const first = `${pathname.slice(0, pathname.length - splat.length).replace(/\/$/, '')}/${tabs[0]?.key ?? ''}`;
   if (tabs.length === 0) return <div className="content">{fallback ?? <div className="empty">Keine Einstellungen für deine Rolle.</div>}</div>;
   return (
     <div className="content settings">
       <Routes>
-        <Route index element={<Navigate to={tabs[0].key} replace />} />
+        <Route index element={<Navigate to={first} replace />} />
         {tabs.map((t) => <Route key={t.key} path={t.key} element={<div className="stack settings-tab">{t.element}</div>} />)}
-        <Route path="*" element={<Navigate to={tabs[0].key} replace />} />
+        <Route path="*" element={<Navigate to={first} replace />} />
       </Routes>
     </div>
   );
