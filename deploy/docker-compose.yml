@@ -60,6 +60,8 @@ services:
       LOG: "true"
       # Client-Adresse aus X-Forwarded-For übernehmen, wenn die Anfrage aus einem privaten Netz (Traefik im Docker-Netz) kommt
       TRUST_PROXY: ${TRUST_PROXY:-loopback,linklocal,uniquelocal}
+      # Interne Ziele für CalDAV, IMAP/SMTP, eigene LLMs freigeben (Hostnamen oder CIDR, kommagetrennt)
+      OUTBOUND_ALLOW_HOSTS: ${OUTBOUND_ALLOW_HOSTS:-}
       # Schlüssel für gespeicherte Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel); leer = Datei /data/secret.key
       SECRET_KEY: ${SECRET_KEY:-}
     volumes:

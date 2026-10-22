@@ -3,6 +3,7 @@ import type { MailAccount, MailAiRun, MailDraft, MailSummary, MailView, MailView
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+import { assertOutboundHost } from '../netGuard.js';
 import { ALL_RIGHTS, canSeeSubproject, effectiveMembership, getMembership, getViewRights, requireProject, requireTask, requireTaskRef } from '../rights.js';
 import { assertResponsible, loadTask, newMailCode } from '../tasks/service.js';
 import { aiConfigFor } from '../ai/client.js';
@@ -155,6 +156,7 @@ export async function mailRoutes(app: FastifyInstance) {
       if (!b.name || !b.address) throw badRequest('Name und Adresse erforderlich');
       const provider = b.provider ?? 'imap';
       if (provider === 'imap' && (!b.imapHost || !b.smtpHost)) throw badRequest('IMAP- und SMTP-Host erforderlich');
+      if (provider === 'imap') { await assertOutboundHost(b.imapHost!); await assertOutboundHost(b.smtpHost!); }
       if (provider === 'dev' && process.env.NODE_ENV === 'production') throw badRequest('Dev-Konten nur außerhalb der Produktion');
       const m = await managerFromBody(user, b);
       if (b.kind === 'org' && (await orgAccount(db, user.orgId))) throw badRequest('Es gibt bereits ein Org-Postfach');
@@ -194,6 +196,8 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!(await canManageAccount(user, a))) throw forbidden();
     const b = req.body ?? {};
     requirePasswordOnTargetChange(a, b);
+    if (b.imapHost) await assertOutboundHost(b.imapHost);
+    if (b.smtpHost) await assertOutboundHost(b.smtpHost);
     const r = await db.one(
       `update mail_accounts set name = coalesce($2, name), address = coalesce($3, address),
          imap_host = coalesce($4, imap_host), imap_port = coalesce($5, imap_port), imap_user = coalesce($6, imap_user), imap_password = coalesce(nullif($7, ''), imap_password), imap_secure = coalesce($8, imap_secure),
@@ -226,6 +230,8 @@ export async function mailRoutes(app: FastifyInstance) {
       cfg = { id: '', org_id: user.orgId, type: 'personal', owner_user_id: user.id, project_id: null, managed_user_id: user.id, name: b.name ?? '', address: b.address ?? '', provider: 'imap', imap_host: b.imapHost, imap_port: b.imapPort ?? 993, imap_user: b.imapUser ?? b.address, imap_password: b.imapPassword ?? '', imap_secure: b.imapSecure ?? true, smtp_host: b.smtpHost, smtp_port: b.smtpPort ?? 587, smtp_user: b.smtpUser ?? null, smtp_password: b.smtpPassword ?? '', smtp_secure: b.smtpSecure ?? false, sync_cursor: {} };
     }
     if (cfg.provider === 'dev') return { imap: { ok: true, folders: ['INBOX', 'Sent'] }, smtp: { ok: true } };
+    // Kein Verbindungsaufbau in interne Netze (Port-Scan über den Verbindungstest)
+    if (cfg.provider === 'imap' && !cfg.oauth_refresh_token) { await assertOutboundHost(cfg.imap_host ?? ''); await assertOutboundHost(cfg.smtp_host ?? ''); }
     if (cfg.provider === 'graph' || cfg.oauth_refresh_token) {
       // OAuth2-Konto: Token auffrischen und Ordner lesen; der Versand nutzt dasselbe Token
       try {

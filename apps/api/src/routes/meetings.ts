@@ -3,6 +3,7 @@ import type { Meeting, MeetingAttendee, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+import { assertOutboundUrl } from '../netGuard.js';
 import { requireProject, requireTaskRef, visibleSubprojectSql } from '../rights.js';
 import * as L from '../docs/layout.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -267,6 +268,7 @@ export async function meetingRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if (!b.url?.trim() || !/^https?:\/\//.test(b.url.trim())) throw badRequest('Kalender-Adresse (https://…) erforderlich');
     if (!b.user?.trim()) throw badRequest('Benutzername erforderlich');
+    await assertOutboundUrl(b.url.trim());
     const cur = await db.one(`select caldav_password from users where id = $1`, [user.id]);
     const pw = b.password?.trim() ? seal(b.password.trim()) : cur.caldav_password;
     if (!pw) throw badRequest('Passwort (App-Passwort) erforderlich');

@@ -130,10 +130,26 @@ test('Autonomer Modus: Agent als stellv. PL mit Senderecht und Policy „Selbsts
   const pl = await t.login('pl@demo.local');
   assert.equal((await t.api(admin).put('/ai/settings', { externalGuard: 'check' })).statusCode, 200);
   assert.equal((await t.api(pl).put(`/projects/${web()}/agent-policy`, { mode: 'auto' })).statusCode, 200);
-  const sentBefore = t.mail.dev.sent.length;
+  // Erstabsender: die Zuordnung durch den Agenten macht ihn nicht zum Kontakt des AP (sonst wählt die Mail selbst, wem sie antworten lässt)
+  const firstBefore = t.mail.dev.sent.length;
   mailNext = [M({ type: 'create_ap', title: 'Rückruf Elektro Kurz' }), M({ type: 'reply_draft', text: 'Guten Tag,\n\ndanke, wir rufen morgen zurück.\n\nViele Grüße' }), M({ type: 'move', folder: 'Archiv' })];
   await inject({ subject: 'Rückruf bitte', text: 'Bitte um Rückruf.', folder: 'KI Bearbeiten' });
-  const mail = await t.db.one(`select * from mails where subject = 'Rückruf bitte'`);
+  const first = await t.db.one(`select * from mails where subject = 'Rückruf bitte'`);
+  const firstReply = (await t.api(pl).get(`/mail/mails/${first.id}/ai`)).json().runs[0].actions.find((a: any) => a.type === 'reply_draft');
+  assert.equal(firstReply.status, 'done', JSON.stringify(firstReply));
+  assert.notEqual(firstReply.result.sent, true, 'erster Kontakt: nur Entwurf');
+  assert.ok(firstReply.result.draftId);
+  assert.equal(t.mail.dev.sent.length, firstBefore);
+  // Eine Person ordnet eine Mail des Absenders dem AP zu: ab dann Bezug zum AP, die nächste Antwort geht selbstständig
+  const ap = await t.db.one(`select number from tasks where project_id = $1 and title = 'Rückruf Elektro Kurz'`, [web()]);
+  const apId = (await t.db.one(`select id from tasks where project_id = $1 and title = 'Rückruf Elektro Kurz'`, [web()])).id;
+  await inject({ subject: 'Rückruf Nachtrag', text: 'Nummer: 0151 000000' });
+  const manual = await t.db.one(`select id from mails where subject = 'Rückruf Nachtrag'`);
+  assert.equal((await t.api(pl).post(`/mail/mails/${manual.id}/link`, { taskId: apId })).statusCode, 200);
+  const sentBefore = t.mail.dev.sent.length;
+  mailNext = [M({ type: 'link', ref: `WEB-${ap.number}` }), M({ type: 'reply_draft', text: 'Guten Tag,\n\ndanke, wir rufen morgen zurück.\n\nViele Grüße' }), M({ type: 'move', folder: 'Archiv' })];
+  await inject({ subject: 'Rückruf bitte', text: 'Bitte um Rückruf, zweiter Versuch.', folder: 'KI Bearbeiten' });
+  const mail = await t.db.one(`select * from mails where subject = 'Rückruf bitte' and id <> $1`, [first.id]);
   const run = (await t.api(pl).get(`/mail/mails/${mail.id}/ai`)).json().runs[0];
   const reply = run.actions.find((a: any) => a.type === 'reply_draft');
   assert.equal(reply.status, 'done', JSON.stringify(reply));

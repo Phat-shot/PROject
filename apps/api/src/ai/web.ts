@@ -2,6 +2,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import type { ExternalWindow } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { unseal } from '../secrets.js';
+import { isIP } from 'node:net';
+import { isPublicAddress, outboundHostError } from '../netGuard.js';
 import type { AiConfig } from './client.js';
 import { aiAllowed } from './policy.js';
 
@@ -52,19 +54,14 @@ export function filterQuery(q: string, names: string[]): string {
   return s.replace(/\s+/g, ' ').trim().slice(0, 300);
 }
 
-/** Nur öffentliche HTTP(S)-Ziele: keine Zugangsdaten in der URL, kein localhost, keine privaten oder Link-Local-Adressen. */
+/** Nur öffentliche HTTP(S)-Ziele: keine Zugangsdaten in der URL, kein localhost, keine privaten oder Link-Local-Adressen (auch IPv4-mapped IPv6). */
 export function safeUrl(raw: string): URL | null {
   let u: URL;
   try { u = new URL(raw); } catch { return null; }
   if (u.protocol !== 'http:' && u.protocol !== 'https:' || u.username || u.password) return null;
   const h = u.hostname.toLowerCase().replace(/^\[|\]$/g, '');
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.local') || h.endsWith('.internal') || h === '0.0.0.0') return null;
-  const m = h.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
-  if (m) {
-    const [a, b] = [Number(m[1]), Number(m[2])];
-    if (a === 10 || a === 127 || a === 0 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127) || a >= 224) return null;
-  }
-  if (h.includes(':')) { if (h === '::1' || h === '::' || /^(fc|fd|fe8|fe9|fea|feb)/i.test(h)) return null; }
+  if (isIP(h) && !isPublicAddress(h)) return null;
   return u;
 }
 const domainOk = (u: URL, s: WebSettings) => { const h = u.hostname.toLowerCase(); const hit = (list: string[]) => list.some((d) => h === d || h.endsWith(`.${d}`)); if (s.allowedDomains.length) return hit(s.allowedDomains); if (s.blockedDomains.length) return !hit(s.blockedDomains); return true; };
@@ -119,7 +116,7 @@ export async function research(db: Db, cfg: AiConfig, fetchFn: typeof fetch, q: 
         messages: [{ role: 'user', content: query }], tools: [tool]
       } as any);
       const sources: WebSource[] = []; const seen = new Set<string>();
-      const add = (url: unknown, title: unknown, cited: unknown) => { const u = String(url ?? ''); if (!u || seen.has(u)) return; seen.add(u); sources.push({ url: u, title: title ? String(title) : null, citedText: cited ? String(cited).slice(0, 500) : null }); };
+      const add = (url: unknown, title: unknown, cited: unknown) => { const u = String(url ?? ''); if (!u || seen.has(u) || !safeUrl(u)) return; seen.add(u); sources.push({ url: u, title: title ? String(title) : null, citedText: cited ? String(cited).slice(0, 500) : null }); };
       let text = '';
       // Zitierte Quellen zuerst (aus den Textblöcken), danach übrige Treffer der Suche
       for (const b of r.content ?? []) if (b.type === 'text') { text += (text ? '\n' : '') + String(b.text ?? ''); for (const c of b.citations ?? []) if (c.type === 'web_search_result_location') add(c.url, c.title, c.cited_text); }
@@ -136,7 +133,8 @@ export async function research(db: Db, cfg: AiConfig, fetchFn: typeof fetch, q: 
     const hits = (await searchLocal(fetchFn, s, query)).map((h) => ({ ...h, u: safeUrl(h.url) })).filter((h) => h.u && domainOk(h.u, s)).slice(0, 5);
     const sources: WebSource[] = []; const lines: string[] = [];
     for (const [i, h] of hits.entries()) {
-      const excerpt = i < 3 ? await fetchExcerpt(fetchFn, h.u!) : null;
+      // Hostnamen erst nach der DNS-Auflösung prüfen (z. B. 127.0.0.1.nip.io)
+      const excerpt = i < 3 && !(await outboundHostError(h.u!.hostname)) ? await fetchExcerpt(fetchFn, h.u!) : null;
       sources.push({ url: h.u!.toString(), title: h.title, citedText: (excerpt ?? h.snippet ?? '').slice(0, 500) || null });
       lines.push(`[${i + 1}] ${h.title ?? h.u!.hostname} – ${h.u}\n${excerpt ?? h.snippet ?? '(kein Text abgerufen)'}`);
     }

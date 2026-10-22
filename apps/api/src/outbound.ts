@@ -33,17 +33,21 @@ export async function isInternal(db: Db, q: { projectId: string; subprojectId: s
 /** AP-Familie: das AP bzw. die Aufgabe selbst, das Über-AP und die Aufgaben darunter. */
 const FAMILY = `with fam as (select id from tasks where id = $1 union select parent_id from tasks where id = $1 and parent_id is not null union select id from tasks where parent_id = $1 and deleted_at is null)`;
 
+/** Für Versand durch Agenten zählt eine Verknüpfung durch einen Agenten nicht: sonst macht eine Eingangsmail, die das LLM selbst einem AP zuordnet, ihren Absender zum Kontakt. */
+const HUMAN_LINK = `not exists (select 1 from users ua where ua.id = l.linked_by and ua.kind = 'agent')`;
+
 /**
  * Adressen mit Bezug zum AP: Zuständigkeit am AP, Über-AP, an Aufgaben darunter oder an einem Task, Mails am AP (Absender,
- * An, Cc), Teilnahme an einer verknüpften Besprechung. Ab P10 kommen gebuchte Person-Ressourcen, ab P11 task_access dazu.
+ * An, Cc; mit humanLinksOnly nur von Personen verknüpft), Teilnahme an einer verknüpften Besprechung. Ab P10 kommen gebuchte Person-Ressourcen, ab P11 task_access dazu.
  */
-async function relatedAddresses(db: Db, taskId: string): Promise<Set<string>> {
+async function relatedAddresses(db: Db, taskId: string, humanLinksOnly = false): Promise<Set<string>> {
+  const linked = humanLinksOnly ? `and ${HUMAN_LINK}` : '';
   const r = await db.query(
     `${FAMILY}
      select responsible_email as e from tasks where id in (select id from fam) and responsible_email is not null
      union select responsible_email from checklist_items where task_id in (select id from fam) and responsible_email is not null
-     union select m.from_addr from mail_task_links l join mails m on m.id = l.mail_id where l.task_id in (select id from fam)
-     union select x from mail_task_links l join mails m on m.id = l.mail_id, jsonb_array_elements_text(m.to_json || m.cc_json) x where l.task_id in (select id from fam)
+     union select m.from_addr from mail_task_links l join mails m on m.id = l.mail_id where l.task_id in (select id from fam) ${linked}
+     union select x from mail_task_links l join mails m on m.id = l.mail_id, jsonb_array_elements_text(m.to_json || m.cc_json) x where l.task_id in (select id from fam) ${linked}
      union select a->>'email' from meeting_tasks mt join meetings mm on mm.id = mt.meeting_id, jsonb_array_elements(mm.attendees) a where mt.task_id in (select id from fam)
      union select r.email from resource_bookings b join resources r on r.id = b.resource_id where b.task_id in (select id from fam) and r.kind = 'person' and r.email is not null`,
     [taskId]);
@@ -53,13 +57,13 @@ async function relatedAddresses(db: Db, taskId: string): Promise<Set<string>> {
 /**
  * Regel E: Klasse je Empfänger (internal, outside = Org-Benutzer ohne Projektzugriff oder ohne Sicht auf das Teilprojekt,
  * task_external = Bezug zum AP, unknown_external = alle übrigen); für die Nachricht gilt die strengste Klasse, ein externer
- * Cc macht die ganze Mail extern.
+ * Cc macht die ganze Mail extern. humanLinksOnly für Mails, die ein Agent selbst sendet (Bezug nur über Verknüpfungen von Personen).
  */
-export async function audienceOf(db: Db, q: { projectId: string; taskId: string | null; recipients: string[] }): Promise<Audience> {
+export async function audienceOf(db: Db, q: { projectId: string; taskId: string | null; recipients: string[]; humanLinksOnly?: boolean }): Promise<Audience> {
   const list = [...new Set(q.recipients.map(normAddr).filter((x) => EMAIL.test(x)))];
   const p = await db.one(`select org_id from projects where id = $1`, [q.projectId]);
   const task = q.taskId ? await db.maybeOne(`select subproject_id from tasks where id = $1`, [q.taskId]) : null;
-  const related = q.taskId ? await relatedAddresses(db, q.taskId) : new Set<string>();
+  const related = q.taskId ? await relatedAddresses(db, q.taskId, q.humanLinksOnly) : new Set<string>();
   const recipients: Audience['recipients'] = [];
   for (const email of list) {
     const u = await db.maybeOne(`select id from users where org_id = $1 and lower(email) = $2`, [p.org_id, email]);

@@ -6,6 +6,7 @@ import type { AiFeature, AiProposal, User } from '@projekttool/shared';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
+import { assertOutboundUrl } from '../netGuard.js';
 import { canSeeSubproject, hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
 import { mailAccess } from '../mail/access.js';
 import { loadMailRow } from '../mail/actions.js';
@@ -199,6 +200,8 @@ export async function aiRoutes(app: FastifyInstance) {
     if (reason) throw forbidden(reason);
     const b: any = req.body ?? {};
     const v = validProfile(b);
+    // Eigenes LLM der PL: kein Ziel im internen Netz (Org-Admin-Profile dürfen das, z. B. Ollama im LAN)
+    if (v.baseUrl) await assertOutboundUrl(v.baseUrl);
     const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_id, project_scope, created_by, web_search) values ($1,$2,$3,$4,$5,$6,$7,$8,'none',$9,$10) returning *`,
       [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, req.params.id, user.id, b.webSearch === true]);
     await setTimeoutS(r.id, b);
@@ -215,6 +218,7 @@ export async function aiRoutes(app: FastifyInstance) {
     const changes = v.name !== cur.name || v.provider !== cur.provider || v.baseUrl !== cur.base_url || v.model !== cur.model || Boolean(b.apiKey?.trim?.())
       || (b.active === true && !cur.active) || (typeof b.thinkingOff === 'boolean' && b.thinkingOff !== Boolean(cur.thinking_off)) || (b.webSearch === true && !cur.web_search);
     if (changes) { const reason = await ownReason(user, req.params.id); if (reason) throw forbidden(reason); }
+    if (v.baseUrl && v.baseUrl !== cur.base_url) await assertOutboundUrl(v.baseUrl);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     await db.query(`update ai_profiles set name = $2, provider = $3, base_url = $4, model = $5, api_key = $6, active = $7, thinking_off = $8, web_search = $9 where id = $1`, [cur.id, v.name, v.provider, v.baseUrl, v.model, key, typeof b.active === 'boolean' ? b.active : cur.active, typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off), typeof b.webSearch === 'boolean' ? b.webSearch : Boolean(cur.web_search)]);
     await setTimeoutS(cur.id, b);
@@ -238,6 +242,7 @@ export async function aiRoutes(app: FastifyInstance) {
     // Auch der Verbindungstest nur, solange der Mandant eigene LLMs für diese Projektart erlaubt
     if (!(await ownAllowed(user.orgId, req.params.id))) throw forbidden('Eigene LLMs sind für dieses Projekt nicht erlaubt (Verwaltung › KI)');
     const own = await ownOf(req.params.id, req.params.lid);
+    if (own.base_url) await assertOutboundUrl(own.base_url);
     const { cfg, decision } = await aiConfigFor(db, { userId: user.id, feature: 'profile.test', profileId: own.id });
     if (!cfg) throw aiError(decision);
     const c = await complete(cfg, app.fetchFn, { meta: { feature: 'test' }, system: 'Antworte mit genau einem Wort.', prompt: 'Sag „bereit“.', maxTokens: 20 });
