@@ -14,7 +14,7 @@ keytool -genkeypair -v -keystore project.jks -alias project -keyalg RSA -keysize
 base64 -w0 project.jks   # → Secret ANDROID_KEYSTORE_BASE64
 ```
 
-Die Server-Adresse lässt sich beim manuellen Start als Eingabe `url` überschreiben (z. B. Staging). Bei Git-Tags hängt der Workflow die APKs an das Release.
+Die Server-Adresse lässt sich beim manuellen Start als Eingabe `url` überschreiben (z. B. Staging). Bei Git-Tags hängt der Workflow nur die signierte Release-APK an das Release; die Debug-APK (debuggable, App-Daten per adb lesbar) bleibt Workflow-Artefakt.
 
 ## Lokal bauen
 
