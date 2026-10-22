@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { requireUser } from '../auth.js';
+import { visibleSubprojectSql } from '../rights.js';
 import { dateStr, loadTasks } from '../tasks/service.js';
 import { publicBase } from '../docs/share.js';
 
@@ -49,12 +50,12 @@ export async function icsRoutes(app: FastifyInstance) {
   const feed = async (userRow: any, projectId: string | null) => {
     const visible = `exists (select 1 from projects p where p.id = t.project_id and p.org_id = $1 and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2) or p.visibility = 'org'))`;
     const cond = projectId
-      ? `t.project_id = $3 and t.archived_at is null and t.due_date is not null and ${visible}`
-      : `t.archived_at is null and t.due_date is not null and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active') and ${visible}`;
+      ? `t.project_id = $3 and t.archived_at is null and t.deleted_at is null and t.due_date is not null and ${visible} and ${visibleSubprojectSql(2)}`
+      : `t.archived_at is null and t.deleted_at is null and t.due_date is not null and exists (select 1 from projects p where p.id = t.project_id and p.status = 'active') and ${visible} and ${visibleSubprojectSql(2)}`;
     const tasks = await loadTasks(db, cond, projectId ? [userRow.org_id, userRow.id, projectId] : [userRow.org_id, userRow.id]);
     const keys = new Map((await db.query(`select id, key, name from projects where org_id = $1`, [userRow.org_id])).rows.map((r: any) => [r.id, r]));
     const ms = await db.query(
-      `select m.*, p.key from milestones m join projects p on p.id = m.project_id where p.org_id = $1 ${projectId ? 'and m.project_id = $3' : "and p.status = 'active'"} and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2) or p.visibility = 'org')`,
+      `select m.*, p.key from milestones m join projects p on p.id = m.project_id where p.org_id = $1 ${projectId ? 'and m.project_id = $3' : "and p.status = 'active'"} and (exists (select 1 from project_members pm where pm.project_id = p.id and pm.user_id = $2) or p.visibility = 'org') and ${visibleSubprojectSql(2, 'm')}`,
       projectId ? [userRow.org_id, userRow.id, projectId] : [userRow.org_id, userRow.id]
     );
     const meetings = await db.query(

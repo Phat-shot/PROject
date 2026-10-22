@@ -22,12 +22,17 @@ const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final']
 
 const esc = (x: string) => x.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** Ausführbare Dateien und Skripte werden nicht angenommen; aktive Inhalte (HTML, SVG, XML) nur als Download ausgeliefert. */
+/** Ausführbare Dateien und Skripte werden nicht angenommen; ausgeliefert wird nur eine Allowlist inline, alles andere als Download. */
 const BLOCKED_EXT = new Set(['.exe', '.bat', '.cmd', '.com', '.msi', '.scr', '.ps1', '.sh', '.vbs', '.js', '.mjs', '.jar', '.dll', '.hta', '.pif', '.cpl', '.reg', '.lnk']);
-const ACTIVE_MIME = /^(text\/html|image\/svg\+xml|application\/xhtml\+xml|text\/xml|application\/xml)/i;
-export function dispositionFor(mime: string | null, filename: string): 'inline' | 'attachment' {
-  const ext = path.extname(filename).toLowerCase();
-  return ACTIVE_MIME.test(mime ?? '') || ['.html', '.htm', '.svg', '.xml', '.xhtml'].includes(ext) ? 'attachment' : 'inline';
+const INLINE_MIME = /^(image\/(png|jpe?g|gif|webp|avif|bmp)|application\/pdf|text\/plain|audio\/[\w.+-]+|video\/[\w.+-]+)$/i;
+const SANDBOX_CSP = "default-src 'none'; img-src 'self' data:; media-src 'self'; style-src 'unsafe-inline'; sandbox";
+/** Der MIME-Typ stammt vom Client und wird nie ungeprüft übernommen (sonst Skript oder XHTML auf eigener Origin). SVG bleibt als Bild einbettbar, öffnet aber nur als Download und in der Sandbox. */
+export function attachmentHeaders(mime: string | null, filename: string): Record<string, string> {
+  const base = String(mime ?? '').split(';')[0].trim().toLowerCase();
+  const name = `filename="${encodeURIComponent(filename)}"`;
+  if (INLINE_MIME.test(base)) return { 'content-type': base, 'content-disposition': `inline; ${name}`, ...(base === 'application/pdf' ? {} : { 'content-security-policy': SANDBOX_CSP }) };
+  if (base === 'image/svg+xml') return { 'content-type': base, 'content-disposition': `attachment; ${name}`, 'content-security-policy': SANDBOX_CSP };
+  return { 'content-type': 'application/octet-stream', 'content-disposition': `attachment; ${name}`, 'content-security-policy': SANDBOX_CSP };
 }
 
 export async function docRoutes(app: FastifyInstance) {
@@ -314,7 +319,7 @@ export async function docRoutes(app: FastifyInstance) {
       : await projectAccount(db, r.project_id);
     if (!account) throw badRequest('Kein Projektkonto vorhanden');
     const project = await db.one(`select name from projects where id = $1`, [r.project_id]);
-    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: project.name, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await layoutFor(r.id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: project.name, projectId: r.project_id, version: r.version, status: r.status, author: user.name, date: r.finalized_at ? new Date(r.finalized_at) : new Date(), folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     const filename = `${r.title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${r.version}.pdf`;
     const result = await app.mail.sendFromAccount(account, {
       to: list,
@@ -412,8 +417,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!sh) throw notFound('Freigabe ungültig');
     const a = await db.maybeOne(`select * from attachments where id = $1`, [req.params.aid]);
     if (!a || !a.page_id || !(await sharedPageIds(db, sh)).includes(a.page_id)) throw notFound('Anhang nicht gefunden');
-    reply.header('content-type', a.mime);
-    reply.header('content-disposition', `${dispositionFor(a.mime, a.filename)}; filename="${encodeURIComponent(a.filename)}"`);
+    reply.headers(attachmentHeaders(a.mime, a.filename));
     return reply.send(createReadStream(a.storage_path));
   });
 
@@ -447,7 +451,7 @@ export async function docRoutes(app: FastifyInstance) {
     const r = await db.maybeOne(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
-    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, version: r.version, status: r.status, author: user.name, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, projectId: r.project_id, version: r.version, status: r.status, author: user.name, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
@@ -458,7 +462,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!sh) throw notFound('Freigabe ungültig');
     if (!(await sharedPageIds(db, sh)).includes(req.params.pid)) throw forbidden('Seite nicht Teil der Freigabe');
     const r = await db.one(`select p.*, pr.name as project_name from doc_pages p join projects pr on pr.id = p.project_id where p.id = $1`, [req.params.pid]);
-    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, version: r.version, status: r.status, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
+    const pdf = await htmlToPdf(db, r.content_html ?? mdToHtml(r.content_md), { title: r.title, project: r.project_name, projectId: r.project_id, version: r.version, status: r.status, folder: await folderName(r.folder_id) }, await layoutFor(r.id));
     reply.header('content-type', 'application/pdf');
     reply.header('content-disposition', `inline; filename="${encodeURIComponent(r.title)}_v${r.version}.pdf"`);
     return reply.send(pdf);
@@ -518,8 +522,7 @@ export async function docRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Anhang nicht gefunden');
     if (a.task_id) await requireTask(db, user, a.task_id);
     else await requireProject(db, user, a.project_id);
-    reply.header('content-type', a.mime);
-    reply.header('content-disposition', `${dispositionFor(a.mime, a.filename)}; filename="${encodeURIComponent(a.filename)}"`);
+    reply.headers(attachmentHeaders(a.mime, a.filename));
     return reply.send(createReadStream(a.storage_path));
   });
 

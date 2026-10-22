@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { requireProject } from '../rights.js';
+import { canSeeSubproject, requireProject, visibleSubprojectSql } from '../rights.js';
 import { loadTasks, resolveProjectLead } from '../tasks/service.js';
 import { DEFAULT_COLUMNS } from './projects.js';
 import { advanceRun, approveRun, cancelRun, skipStep, validateSteps, type StepState, type WorkflowStep } from '../workflows/engine.js';
@@ -48,6 +48,8 @@ export async function workflowRoutes(app: FastifyInstance) {
     const r = await db.maybeOne(`select * from workflow_runs where id = $1`, [rid]);
     if (!r) throw notFound('Lauf nicht gefunden');
     const m = await requireProject(db, user, r.project_id, min);
+    // Läufe in eingeschränkten Teilprojekten sieht nur, wer das Teilprojekt sieht
+    if (!(await canSeeSubproject(db, user.id, r.subproject_id))) throw notFound('Lauf nicht gefunden');
     return { run: r, membership: m };
   }
 
@@ -130,7 +132,7 @@ export async function workflowRoutes(app: FastifyInstance) {
   app.get<{ Params: { rid: string } }>('/workflow-runs/:rid', async (req) => {
     const user = requireUser(req);
     const { run } = await runAccess(user, req.params.rid);
-    const tasks = await loadTasks(db, `t.workflow_run_id = $1 and t.deleted_at is null`, [run.id], await resolveProjectLead(db, run.project_id));
+    const tasks = await loadTasks(db, `t.workflow_run_id = $1 and t.deleted_at is null and ${visibleSubprojectSql(2)}`, [run.id, user.id], await resolveProjectLead(db, run.project_id));
     return { run: mapRun(await db.one(`${RUN_SELECT} where r.id = $1`, [run.id])), tasks };
   });
 
@@ -173,7 +175,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'reader');
     const defs = await db.query(`${DEF_SELECT} where d.org_id = $2 and d.active and (d.project_id is null or d.project_id = $1) order by d.name`, [req.params.id, user.orgId]);
-    const runs = await db.query(`${RUN_SELECT} where r.project_id = $1 order by (r.status = 'active') desc, r.started_at desc limit 200`, [req.params.id]);
+    const runs = await db.query(`${RUN_SELECT} where r.project_id = $1 and ${visibleSubprojectSql(2, 'r')} order by (r.status = 'active') desc, r.started_at desc limit 200`, [req.params.id, user.id]);
     return { definitions: defs.rows.map(mapDef), runs: runs.rows.map(mapRun) };
   });
 
@@ -185,6 +187,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if (b.columnId && !(await db.maybeOne(`select 1 from board_columns where id = $1 and project_id = $2`, [b.columnId, req.params.id]))) throw badRequest('Spalte gehört nicht zum Projekt');
     if (b.subprojectId && !(await db.maybeOne(`select 1 from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]))) throw badRequest('Teilprojekt gehört nicht zum Projekt');
+    if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw notFound('Teilprojekt nicht gefunden');
     return { run: await startRun(user, d, { name: b.name, vars: b.vars, projectId: req.params.id, columnId: b.columnId, subprojectId: b.subprojectId, standalone: false }) };
   });
 
@@ -193,7 +196,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const { run } = await runAccess(user, req.params.rid);
     if (run.project_id !== req.params.id) throw notFound('Lauf nicht gefunden');
-    const tasks = await loadTasks(db, `t.workflow_run_id = $1 and t.deleted_at is null`, [run.id], await resolveProjectLead(db, run.project_id));
+    const tasks = await loadTasks(db, `t.workflow_run_id = $1 and t.deleted_at is null and ${visibleSubprojectSql(2)}`, [run.id, user.id], await resolveProjectLead(db, run.project_id));
     return { run: mapRun(await db.one(`${RUN_SELECT} where r.id = $1`, [run.id])), tasks };
   });
 }

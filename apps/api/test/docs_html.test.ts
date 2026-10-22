@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { sanitizeHtml, htmlToMd, mdToHtml } from '../src/docs/html.js';
 import { htmlToPdf } from '../src/docs/pdfHtml.js';
+import { writeFile, mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 
 let t: Awaited<ReturnType<typeof testApp>>;
 before(async () => { t = await testApp(); });
@@ -16,6 +19,16 @@ test('HTML-Bereinigung entfernt Skripte und unsichere Stile, erhält Schriftgrö
   assert.ok(clean.includes('<table>'));
   assert.match(htmlToMd('<h2>Titel</h2><p>Text mit <strong>fett</strong></p><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>'), /## Titel[\s\S]*\*\*fett\*\*[\s\S]*\| A \| B \|/);
   assert.match(mdToHtml('# H\n\n- a\n- b'), /<h1>H<\/h1>[\s\S]*<ul>/);
+});
+
+test('HTML-Bereinigung: Inhalt unbekannter Elemente wird mitbereinigt, Links nur mit sicherem Schema', () => {
+  const wrapped = sanitizeHtml('<x><img src=x onerror=alert(1)><script>alert(2)</script><iframe src=https://evil></iframe><p>ok</p></x><svg><a href="javascript:1">a</a></svg><y><z><img src=1 onload=x></z></y>');
+  assert.ok(!/onerror|onload|script|iframe|javascript/i.test(wrapped), wrapped);
+  assert.ok(wrapped.includes('<p>ok</p>'));
+  for (const href of ['java&#9;script:alert(1)', 'java&Tab;script:alert(1)', '&#106;avascript:alert(1)', ' vbscript:x', 'data:text/html,x']) assert.equal(sanitizeHtml(`<a href="${href}">t</a>`), '<a>t</a>', href);
+  for (const href of ['https://example.com/a', '/projekte/x?a=b:c', 'mailto:a@example.com', '#anker']) assert.ok(sanitizeHtml(`<a href="${href}">t</a>`).includes('href='), href);
+  assert.ok(sanitizeHtml('<img src="data:image/png;base64,AAA">').includes('src='));
+  assert.equal(sanitizeHtml('<img src="data:text/html,x">'), '<img>');
 });
 
 test('Seite im WYSIWYG-Format anlegen, bearbeiten, Version und Markdown abgeleitet', async () => {
@@ -117,4 +130,18 @@ test('Ordner sind eine Seite: beim ersten Öffnen angelegt, Umbenennen folgt, L�
   const delFolder = await t.api(pl).del(`/projects/${web}/docs/folders/${folder.id}`);
   assert.equal(delFolder.statusCode, 200, delFolder.body);
   assert.equal((await t.api(pl).get(`/docs/pages/${first.json().page.id}`)).statusCode, 404);
+});
+
+test('PDF bettet Bild-Anhänge nur aus dem eigenen Projekt ein', async () => {
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+  const file = path.join(await mkdtemp(path.join(tmpdir(), 'pt-')), 'bild.png');
+  await writeFile(file, png);
+  const a = await t.db.one(`insert into attachments (project_id, filename, mime, size, storage_path, uploaded_by) values ($1, 'bild.png', 'image/png', $2, $3, $4) returning id`, [t.ids.projects.erp, png.length, file, t.ids.users.pl]);
+  const html = `<p>x</p><img src="/api/attachments/${a.id}">`;
+  const meta = { title: 'B', project: 'P', version: 1, status: 'final' };
+  const own = await htmlToPdf(t.db, html, { ...meta, projectId: t.ids.projects.erp });
+  const foreign = await htmlToPdf(t.db, html, { ...meta, projectId: t.ids.projects.web });
+  const none = await htmlToPdf(t.db, '<p>x</p>', { ...meta, projectId: t.ids.projects.web });
+  assert.ok(own.length > foreign.length, 'eigenes Bild eingebettet');
+  assert.ok(Math.abs(foreign.length - none.length) < 200, 'fremdes Bild nicht eingebettet');
 });

@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from 'node:crypto';
 import { publicBase } from './docs/share.js';
 
 /**
@@ -65,15 +66,19 @@ export const redirectUri = (key: string) => `${publicBase()}/api/oauth/callback/
 /** Nur relative Pfade als Ziel nach der Anmeldung (kein Open Redirect). */
 export const publicRedirect = (next: string | undefined) => (next && /^\/(?!\/)/.test(next) ? next : '/');
 
-export function authorizeUrl(p: OAuthProviderCfg, state: string): string {
-  const q = new URLSearchParams({ client_id: p.clientId, response_type: 'code', redirect_uri: redirectUri(p.key), scope: p.scopes.join(' '), state, ...(p.extraAuthParams ?? {}) });
+/** PKCE (S256): Verifier bleibt im State auf dem Server, der Anbieter bekommt nur die Challenge */
+export const pkceVerifier = () => randomBytes(32).toString('base64url');
+export const pkceChallenge = (verifier: string) => createHash('sha256').update(verifier).digest('base64url');
+
+export function authorizeUrl(p: OAuthProviderCfg, state: string, verifier: string): string {
+  const q = new URLSearchParams({ client_id: p.clientId, response_type: 'code', redirect_uri: redirectUri(p.key), scope: p.scopes.join(' '), state, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256', ...(p.extraAuthParams ?? {}) });
   return `${p.authorizeUrl}?${q.toString()}`;
 }
 
 export interface TokenSet { accessToken: string; refreshToken: string | null; expiresAt: Date }
 
-export async function exchangeCode(p: OAuthProviderCfg, code: string, fetchFn: typeof fetch = fetch): Promise<TokenSet> {
-  return tokenRequest(p, { grant_type: 'authorization_code', code, redirect_uri: redirectUri(p.key) }, fetchFn);
+export async function exchangeCode(p: OAuthProviderCfg, code: string, verifier: string, fetchFn: typeof fetch = fetch): Promise<TokenSet> {
+  return tokenRequest(p, { grant_type: 'authorization_code', code, redirect_uri: redirectUri(p.key), code_verifier: verifier }, fetchFn);
 }
 export async function refreshTokens(p: OAuthProviderCfg, refreshToken: string, fetchFn: typeof fetch = fetch): Promise<TokenSet> {
   const t = await tokenRequest(p, { grant_type: 'refresh_token', refresh_token: refreshToken }, fetchFn);
@@ -88,10 +93,11 @@ async function tokenRequest(p: OAuthProviderCfg, params: Record<string, string>,
 }
 
 /** OIDC-Anmeldung (Keycloak, Entra ID, Authentik …) über Discovery; Benutzer werden per E-Mail zugeordnet. */
-export interface OidcCfg { issuer: string; clientId: string; clientSecret: string; label: string; autoCreate: boolean; scopes: string[]; groupsClaim: string }
+/** trustEmail: IdP liefert nur geprüfte Adressen, aber kein email_verified (z. B. Entra ID mit einem Tenant) */
+export interface OidcCfg { issuer: string; clientId: string; clientSecret: string; label: string; autoCreate: boolean; trustEmail: boolean; scopes: string[]; groupsClaim: string }
 export function oidcConfig(env = process.env): OidcCfg | null {
   if (!env.OIDC_ISSUER || !env.OIDC_CLIENT_ID || !env.OIDC_CLIENT_SECRET) return null;
-  return { issuer: env.OIDC_ISSUER.replace(/\/$/, ''), clientId: env.OIDC_CLIENT_ID, clientSecret: env.OIDC_CLIENT_SECRET, label: env.OIDC_LABEL || 'Single Sign-on', autoCreate: env.OIDC_AUTO_CREATE === 'true', scopes: (env.OIDC_SCOPES || 'openid email profile').split(/\s+/), groupsClaim: env.OIDC_GROUPS_CLAIM || 'groups' };
+  return { issuer: env.OIDC_ISSUER.replace(/\/$/, ''), clientId: env.OIDC_CLIENT_ID, clientSecret: env.OIDC_CLIENT_SECRET, label: env.OIDC_LABEL || 'Single Sign-on', autoCreate: env.OIDC_AUTO_CREATE === 'true', trustEmail: env.OIDC_TRUST_EMAIL === 'true', scopes: (env.OIDC_SCOPES || 'openid email profile').split(/\s+/), groupsClaim: env.OIDC_GROUPS_CLAIM || 'groups' };
 }
 let discoveryCache: { issuer: string; doc: any; at: number } | null = null;
 export async function oidcDiscovery(cfg: OidcCfg, fetchFn: typeof fetch = fetch): Promise<{ authorization_endpoint: string; token_endpoint: string; userinfo_endpoint: string }> {

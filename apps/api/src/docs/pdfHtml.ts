@@ -50,7 +50,7 @@ export async function htmlToPdf(db: Db, html: string, meta: PdfMeta, layout: Pag
   doc.x = left;
   doc.fillColor('#111').font('Helvetica').fontSize(BASE);
 
-  const ctx: Ctx = { db, doc, accent, width, left, images: new Map() };
+  const ctx: Ctx = { db, projectId: meta.projectId ?? null, doc, accent, width, left, images: new Map() };
   await renderChildren(ctx, root, width, left);
 
   const range = doc.bufferedPageRange();
@@ -69,7 +69,7 @@ export async function htmlToPdf(db: Db, html: string, meta: PdfMeta, layout: Pag
   return done;
 }
 
-interface Ctx { db: Db; doc: PDFKit.PDFDocument; accent: string; width: number; left: number; images: Map<string, Buffer | null> }
+interface Ctx { db: Db; projectId: string | null; doc: PDFKit.PDFDocument; accent: string; width: number; left: number; images: Map<string, Buffer | null> }
 
 function statusLabel(s: string) { return s === 'final' ? 'Final' : s === 'review' ? 'In Prüfung' : 'Entwurf'; }
 
@@ -282,7 +282,7 @@ async function loadImage(ctx: Ctx, src: string): Promise<Buffer | null> {
   try {
     const m = /\/api\/(?:share\/[^/]+\/)?attachments\/([0-9a-f-]{36})/i.exec(src);
     if (m) {
-      const a = await ctx.db.maybeOne(`select storage_path, mime from attachments where id = $1`, [m[1]]);
+      const a = ctx.projectId ? await ctx.db.maybeOne(`select storage_path, mime from attachments where id = $1 and project_id = $2`, [m[1], ctx.projectId]) : null;
       if (a && /image\/(png|jpe?g)/i.test(a.mime)) buf = await readFile(a.storage_path);
     } else if (/^data:image\/(png|jpe?g);base64,/i.test(src)) {
       buf = Buffer.from(src.split(',')[1], 'base64');

@@ -172,6 +172,20 @@ export async function mailRoutes(app: FastifyInstance) {
     }
   );
 
+  /** Gespeicherte Passwörter gelten nur für den Server, für den sie eingegeben wurden: Host, Port, TLS oder Benutzer geändert → Passwort neu eingeben */
+  const requirePasswordOnTargetChange = (a: AccountRow, b: Record<string, any>) => {
+    for (const side of ['imap', 'smtp'] as const) {
+      const stored = side === 'imap' ? a.imap_password : a.smtp_password;
+      if (!stored || b[`${side}Password`]) continue;
+      const cur = side === 'imap' ? { host: a.imap_host, port: a.imap_port, secure: a.imap_secure, user: a.imap_user } : { host: a.smtp_host, port: a.smtp_port, secure: a.smtp_secure, user: a.smtp_user };
+      const changed = (b[`${side}Host`] != null && String(b[`${side}Host`]).trim().toLowerCase() !== String(cur.host ?? '').toLowerCase())
+        || (b[`${side}Port`] != null && String(b[`${side}Port`]) !== String(cur.port ?? ''))
+        || (b[`${side}Secure`] != null && Boolean(b[`${side}Secure`]) !== Boolean(cur.secure))
+        || (b[`${side}User`] != null && cur.user != null && String(b[`${side}User`]) !== String(cur.user));
+      if (changed) throw badRequest(`${side.toUpperCase()}-Server oder -Benutzer geändert: bitte das ${side.toUpperCase()}-Passwort erneut eingeben`);
+    }
+  };
+
   // Konto bearbeiten (leeres Passwortfeld = unverändert)
   app.patch<{ Params: { id: string }; Body: Record<string, any> }>('/mail/accounts/:id', async (req) => {
     const user = requireUser(req);
@@ -179,6 +193,7 @@ export async function mailRoutes(app: FastifyInstance) {
     if (!a) throw notFound('Konto nicht gefunden');
     if (!(await canManageAccount(user, a))) throw forbidden();
     const b = req.body ?? {};
+    requirePasswordOnTargetChange(a, b);
     const r = await db.one(
       `update mail_accounts set name = coalesce($2, name), address = coalesce($3, address),
          imap_host = coalesce($4, imap_host), imap_port = coalesce($5, imap_port), imap_user = coalesce($6, imap_user), imap_password = coalesce(nullif($7, ''), imap_password), imap_secure = coalesce($8, imap_secure),
@@ -204,6 +219,7 @@ export async function mailRoutes(app: FastifyInstance) {
       const a = await db.maybeOne<AccountRow>(`select * from mail_accounts where id = $1 and org_id = $2`, [b.accountId, user.orgId]);
       if (!a) throw notFound('Konto nicht gefunden');
       if (!(await canManageAccount(user, a))) throw forbidden();
+      requirePasswordOnTargetChange(a, b);
       cfg = { ...a, imap_password: b.imapPassword || a.imap_password, smtp_password: b.smtpPassword || a.smtp_password, imap_host: b.imapHost ?? a.imap_host, imap_port: b.imapPort ?? a.imap_port, imap_user: b.imapUser ?? a.imap_user, imap_secure: b.imapSecure ?? a.imap_secure, smtp_host: b.smtpHost ?? a.smtp_host, smtp_port: b.smtpPort ?? a.smtp_port, smtp_user: b.smtpUser ?? a.smtp_user, smtp_secure: b.smtpSecure ?? a.smtp_secure, address: b.address ?? a.address };
     } else {
       if (!b.imapHost || !b.smtpHost) throw badRequest('IMAP- und SMTP-Host erforderlich');

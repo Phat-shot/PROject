@@ -34,15 +34,19 @@ export function totpCode(secret: string, time = Date.now(), step = 30): string {
   return String(code % 1_000_000).padStart(6, '0');
 }
 
-/** Prüft den Code mit einem Schritt Toleranz in beide Richtungen (Uhrzeitabweichung). */
-export function verifyTotp(secret: string, code: string, time = Date.now()): boolean {
+/** Zeitschritt des passenden Codes (ein Schritt Toleranz in beide Richtungen wegen Uhrzeitabweichung), sonst null. */
+export function totpStep(secret: string, code: string, time = Date.now()): number | null {
   const given = String(code ?? '').replace(/\s/g, '');
-  if (!/^\d{6}$/.test(given)) return false;
+  if (!/^\d{6}$/.test(given)) return null;
   for (const d of [0, -1, 1]) {
     const expect = totpCode(secret, time + d * 30_000);
-    if (expect.length === given.length && timingSafeEqual(Buffer.from(expect), Buffer.from(given))) return true;
+    if (expect.length === given.length && timingSafeEqual(Buffer.from(expect), Buffer.from(given))) return Math.floor((time + d * 30_000) / 30_000);
   }
-  return false;
+  return null;
+}
+
+export function verifyTotp(secret: string, code: string, time = Date.now()): boolean {
+  return totpStep(secret, code, time) !== null;
 }
 
 export function otpauthUrl(secret: string, account: string, issuer = 'PROject'): string {

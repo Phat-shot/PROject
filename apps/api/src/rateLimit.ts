@@ -34,7 +34,8 @@ export function registerRateLimit(app: FastifyInstance) {
     reply.header('x-content-type-options', 'nosniff');
     reply.header('x-frame-options', 'SAMEORIGIN');
     reply.header('referrer-policy', 'strict-origin-when-cross-origin');
-    // Nur eigene Skripte (keine Inline-Handler): zweite Schutzschicht gegen eingeschleustes HTML, z. B. aus Mails
-    reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
+    if (process.env.COOKIE_SECURE === 'true') reply.header('strict-transport-security', 'max-age=31536000');
+    // Nur eigene Skripte (keine Inline-Handler; Anhänge setzen eine strengere eigene): zweite Schutzschicht gegen eingeschleustes HTML, z. B. aus Mails
+    if (!reply.hasHeader('content-security-policy')) reply.header('content-security-policy', "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https: http:; font-src 'self' data:; connect-src 'self'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; frame-ancestors 'self'");
   });
 }

@@ -53,7 +53,7 @@ export const folderName = async (db: Db, folderId: string | null) =>
 /** PDF einer Seite als Mailanhang (Agent, angehaltener PDF-Versand), Dateiname Titel_vVersion.pdf. */
 export async function pagePdf(db: Db, page: any, author: string): Promise<{ filename: string; content: Buffer; contentType: string }> {
   const project = await db.one(`select name from projects where id = $1`, [page.project_id]);
-  const content = await htmlToPdf(db, page.content_html ?? mdToHtml(page.content_md), { title: page.title, project: project.name, version: page.version, status: page.status, author, date: new Date(), folder: await folderName(db, page.folder_id) }, await layoutFor(db, page.id));
+  const content = await htmlToPdf(db, page.content_html ?? mdToHtml(page.content_md), { title: page.title, project: project.name, projectId: page.project_id, version: page.version, status: page.status, author, date: new Date(), folder: await folderName(db, page.folder_id) }, await layoutFor(db, page.id));
   return { filename: `${String(page.title).replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v${page.version}.pdf`, content, contentType: 'application/pdf' };
 }
 
