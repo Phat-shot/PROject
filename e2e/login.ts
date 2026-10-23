@@ -21,6 +21,7 @@ export async function login(page: Page, email = 'pl@demo.local') {
   }
   await expect(page.getByRole('heading', { name: 'Dashboard' })).toBeVisible();
   if (!saved) sessions.set(email, (await page.context().cookies()).filter((c) => c.name === 'pt_session').map(({ name, value, domain, path }) => ({ name, value, domain, path })));
-  const skip = page.getByRole('button', { name: 'Überspringen' });
-  if (await skip.count()) await skip.first().click();
+  // Das Tutorial öffnet sich je Browser-Kontext und kann etwas später erscheinen
+  const skip = page.getByRole('button', { name: 'Überspringen' }).first();
+  if (await skip.waitFor({ timeout: 2000 }).then(() => true, () => false)) await skip.click();
 }

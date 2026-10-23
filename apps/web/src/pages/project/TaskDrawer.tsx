@@ -45,7 +45,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const [external, setExternal] = useState(false);
   const [item, setItem] = useState('');
   const [saved, setSaved] = useState(false);
-  const [more, setMore] = useState(false);
+  // Einstellungen eingeklappt: oben steht das Arbeiten, die Konfiguration nur bei Bedarf (Zustand je Browser gemerkt)
+  const [cfgOpen, setCfgOpen] = useState(() => { try { return localStorage.getItem('taskDrawer.settings') === 'open'; } catch { return false; } });
   const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
   const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId?: string }>(null);
   const [agentMsg, setAgentMsg] = useState<string | null>(null);
@@ -88,13 +89,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
     <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
         {saved && <span className="muted small">gespeichert</span>}
+        {canEdit && !t.blocked && !t.done && <button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Blockiert melden</button>}
         {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <button className="btn sm primary" title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>✓ Erledigt</button>}
-        {me.role !== 'reader' && !t.deletedAt && <button className="btn sm" title="Kopie anlegen, hier oder in einem anderen Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>}
-        {canPlan && !t.deletedAt && <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>}
-        {me.role !== 'reader' && (t.archivedAt
-          ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
-          : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>)}
-        {me.role === 'pl' && !t.deletedAt && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${t.title}“ in den Papierkorb legen? Dort bleibt es 30 Tage und lässt sich in den Projekteinstellungen wiederherstellen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
       {t.parent && <p className="small mb" style={{ marginTop: 0 }}><span className="muted">Aufgabe im Arbeitspaket</span> <button className="btn sm link" onClick={() => openTask(t.parent!.id)}><span className="tkey">{detail.project.key}-{t.parent.number}</span> {t.parent.title}</button></p>}
@@ -133,11 +129,9 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
         </div>
       )}
 
-      <div className="form cols-2 task-fields">
+      <div className="form cols-3 task-core">
         <label className="field"><span>Status</span>
           <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) await load(); }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small">⏳ {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}</label>
-        <label className="field"><span>Teilprojekt</span>
-          <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
         <label className="field"><span>Zuständig</span>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
@@ -145,34 +139,47 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
             {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
           </select></label>
-        {respAgent && <div className="field full"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || t.agentRunning || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); setAgentMsg(null); await load(); })}>{t.agentRunning ? 'Läuft …' : 'Jetzt laufen lassen'}</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{(isPlHere || me.canEditPlan) && <div className="row small" style={{ marginTop: 4, gap: 6 }}><TaskPolicyInline task={t} onChanged={load} /></div>}{agentRun && !agentRun.allowed && <div className="small" style={{ marginTop: 4, color: 'var(--warn)' }}>Läuft nicht: {agentRun.reason}</div>}{t.agentRunning && <div className="small muted" style={{ marginTop: 4 }}>{respAgent.name} arbeitet; du kannst das Fenster schließen, das Ergebnis steht danach im Log.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
-        <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
-        <ContactsDatalist projectId={detail.project.id} />
+        <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ dueDate: e.target.value || null })} /></label>
+      </div>
+        {respAgent && <div className="field full task-agent"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || t.agentRunning || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); setAgentMsg(null); await load(); })}>{t.agentRunning ? 'Läuft …' : 'Jetzt laufen lassen'}</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentRun && !agentRun.allowed && <div className="small" style={{ marginTop: 4, color: 'var(--warn)' }}>Läuft nicht: {agentRun.reason}</div>}{t.agentRunning && <div className="small muted" style={{ marginTop: 4 }}>{respAgent.name} arbeitet; du kannst das Fenster schließen, das Ergebnis steht danach im Log.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
+      {!canDates && canEdit && <p className="muted small" style={{ margin: '4px 0 0' }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
+
+      <details className="task-settings mt" open={cfgOpen} onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; setCfgOpen(o); try { localStorage.setItem('taskDrawer.settings', o ? 'open' : 'closed'); } catch { /* privat */ } }}>
+        <summary><strong>Einstellungen</strong> <span className="muted small">{[sp?.name ?? (t.subprojectId ? 'Teilprojekt eingeschränkt' : 'kein Teilprojekt'), prioLabel[t.priority], t.startDate ? `Start ${fmtDate(t.startDate)}` : null, t.labelIds.length ? `${t.labelIds.length} Label${t.labelIds.length > 1 ? 's' : ''}` : null, t.responsibleEmail ? `extern: ${t.responsibleEmail}` : null].filter(Boolean).join(' · ')}</span></summary>
+        <div className="form cols-2 task-fields mt">
+        <label className="field"><span>Teilprojekt</span>
+          <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
         <label className="field"><span>Priorität</span>
           <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
         <label className="field"><span>Start</span><input type="date" value={t.startDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ startDate: e.target.value || null })} /></label>
-        <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ dueDate: e.target.value || null })} /></label>
+        <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
+        <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
+        <ContactsDatalist projectId={detail.project.id} />
         {timeTracking && (detail.project.timeTrackingEnabled || t.estimateMinutes) ? <>
           <TextField label="Geschätzter Aufwand (Stunden)" type="number" value={t.estimateMinutes ? String(Math.round((t.estimateMinutes / 60) * 100) / 100) : ''} canEdit={canEdit} onSave={(v) => patch({ estimateMinutes: v ? Math.round(Number(v) * 60) : null })} />
           <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>
         </> : null}
-        <div className="field"><span>Blockiert</span>
-          {canEdit && !t.blocked && !t.done ? <span><button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Als blockiert melden</button></span> : t.blocked ? <span className="badge blocked">ja</span> : <span className="muted">nein</span>}</div>
-        {detail.project.mailAddress && <div className="field"><span>Antwortadresse</span><span className="small muted" title="Antworten an diese Adresse landen automatisch im Arbeitspaket">{detail.project.mailAddress.replace('@', `+t${t.mailCode}@`)}</span></div>}
-        {!canDates && canEdit && <p className="muted small full" style={{ margin: 0 }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
-      </div>
-
-      <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
-      <TextArea label="Außenbeschreibung (für Externe)" value={t.externalBrief ?? ''} canEdit={canEdit && canPlan} empty="Keine. KI-Agenten schreiben Externen nur, was hier, in Log-Einträgen „für Externe sichtbar“ und in freigegebenen Seiten steht; die Beschreibung oben nur, wenn das AP dem Externen zugewiesen ist." onSave={(v) => patch({ externalBrief: v || null })} />
-
-      <button className="btn sm link mt" onClick={() => setMore(!more)}>{more ? '▾' : '▸'} {t.parentId ? 'Vorgänger' : 'Vorgänger, Wiederholung'}</button>
-      {more && (
+        </div>
+        <TextArea label="Außenbeschreibung (für Externe)" value={t.externalBrief ?? ''} canEdit={canEdit && canPlan} empty="Keine. KI-Agenten schreiben Externen nur, was hier, in Log-Einträgen „für Externe sichtbar“ und in freigegebenen Seiten steht; die Beschreibung oben nur, wenn das AP dem Externen zugewiesen ist." onSave={(v) => patch({ externalBrief: v || null })} />
         <div className="form cols-2 mt">
           <PredecessorPicker task={t} all={tasks} projectKey={detail.project.key} canEdit={canEdit && canPlan} onChange={(ids) => patch({ predecessorIds: ids })} />
           {!t.parentId && <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />}
         </div>
-      )}
+        {respAgent && (isPlHere || me.canEditPlan) && <div className="row small mt" style={{ gap: 6 }}><span className="muted">KI-Agent:</span><TaskPolicyInline task={t} onChanged={load} /></div>}
+        <ResourcesBlock task={t} canEdit={canEdit} canForce={isPlHere || Boolean(me.canEditPlan)} />
+        <ReportWish taskId={t.id} />
+      {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
+        {!t.deletedAt && me.role !== 'reader' && <div className="row mt task-admin">
+          <button className="btn sm" title="Kopie anlegen, hier oder in einem anderen Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>
+          {canPlan && <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>}
+          {t.archivedAt
+            ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
+            : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>}
+          {me.role === 'pl' && <button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'In den Papierkorb', text: `„${t.title}“ in den Papierkorb legen? Dort bleibt es 30 Tage und lässt sich in den Projekteinstellungen wiederherstellen.`, confirmLabel: 'In den Papierkorb', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}`); await reloadTasks(); onClose(); }); })}>Löschen</button>}
+        </div>}
+      </details>
+
+      <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
 
       {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
@@ -197,28 +204,24 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
         <input type="text" placeholder="Neuer Punkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
 
-      {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
-      <h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
-      {d.mails.filter((m) => !m.checklistItemId).length === 0 ? <p className="muted small">Keine. Antworten an die Antwortadresse werden automatisch zugeordnet, Mails zu einzelnen Checklistenpunkten stehen beim Punkt.</p> : (
+      <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
+      <RelationsBlock taskId={t.id} canDecide={canEdit} />
+
+      {d.mails.some((m) => !m.checklistItemId) && <><h3 className="mt">{kind === 'Aufgabe' ? 'Mails zur Aufgabe' : 'Mails zum Arbeitspaket'}</h3>
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
-      )}
-      {canEdit && <div className="row mt">
-        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?ap=${t.id}`}>Mail aus {kind === 'Aufgabe' ? 'Aufgabe' : 'Arbeitspaket'} schreiben</Link>
+      </>}
+      {d.attachments.length > 0 && <><h3 className="mt">Anhänge</h3>
+      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{canEdit && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await load(); await reloadTasks(); }); })}>✕</button>}</li>)}</ul>
+      </>}
+      {canEdit && <div className="row mt task-quick">
+        <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?ap=${t.id}`}>Mail schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
+        <label className="btn sm file-btn" title="Datei an {kind === 'Aufgabe' ? 'die Aufgabe' : 'das Arbeitspaket'} anhängen">Datei anhängen<input type="file" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} /></label>
+        {detail.project.mailAddress && <span className="muted small" title="Antworten an diese Adresse landen automatisch hier">Antwortadresse {detail.project.mailAddress.replace('@', `+t${t.mailCode}@`)}</span>}
       </div>}
 
-      <h3 className="mt">Anhänge</h3>
-      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{canEdit && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await load(); await reloadTasks(); }); })}>✕</button>}</li>)}</ul>
-      {canEdit && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} />}
-
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
-
-      <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
       <WebSourcesBlock taskId={t.id} />
-      <RelationsBlock taskId={t.id} canDecide={canEdit} />
-      <ResourcesBlock task={t} canEdit={canEdit} canForce={isPlHere || Boolean(me.canEditPlan)} />
-
-      <ReportWish taskId={t.id} />
 
       <h3 className="mt">Log und Kommentare</h3>
       {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.source === 'ai' && <span className="badge" style={{ marginLeft: 6 }} title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge" style={{ marginLeft: 6 }} title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.visibility === 'external' && <span className="badge ok" style={{ marginLeft: 6 }} title="Teil des Außenkontexts: KI-Agenten dürfen das Externen zu diesem AP mitteilen">für Externe sichtbar</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}{canEdit && (canPlan || c.userId === me.userId) && <button className="btn sm link" title={c.visibility === 'external' ? 'Wieder nur intern' : 'Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)'} onClick={() => void run(async () => { await api.patch(`/tasks/${t.id}/comments/${c.id}`, { visibility: c.visibility === 'external' ? 'internal' : 'external' }); await load(); })}>{c.visibility === 'external' ? 'nur intern' : 'für Externe freigeben'}</button>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
@@ -274,7 +277,6 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
   return (
     <>
       <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
-      {subtasks.length === 0 && <p className="muted small" style={{ margin: '0 0 6px' }}>Keine. Aufgaben teilen das Arbeitspaket in zuweisbare Schritte mit eigenem Log und Termin; die Checkliste bleibt für kleine Punkte.</p>}
       <ul className="subtasks">
         {subtasks.map((x) => {
           const col = detail.columns.find((c) => c.id === x.columnId);
@@ -292,7 +294,7 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
         })}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); void add(); }}>
-        <input type="text" placeholder="Neue Aufgabe … (Enter)" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1 }} />
+        <input type="text" placeholder="Neue Aufgabe … (Enter; eigener Termin, Zuständigkeit und Log)" title="Aufgaben teilen das Arbeitspaket in zuweisbare Schritte; die Checkliste bleibt für kleine Punkte" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1 }} />
         <select value={resp} onChange={(e) => setResp(e.target.value)} style={{ width: 'auto' }} title="Zuständig">
           <option value="">zuständig: geerbt</option>
           {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
