@@ -170,9 +170,19 @@ table.table { width: 100%; border-collapse: collapse; }
 .column.over { outline: 2px dashed var(--primary); outline-offset: -2px; background: var(--primary-soft); }
 .col-empty { border: 1px dashed var(--border); border-radius: 8px; padding: 14px; text-align: center; color: var(--muted); font-size: 12px; }
 .task-card { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 9px 10px 9px 13px; box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05); cursor: grab; transition: box-shadow 0.12s, transform 0.12s, border-color 0.12s; }
-.task-card.is-sub { margin-left: 14px; padding-top: 6px; padding-bottom: 6px; border-left: 3px solid var(--border); }
-.task-card.is-sub .title { font-size: 0.92em; }
-.task-card .sub-of { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
+/* Aufgaben in der Karte des Arbeitspakets */
+.card-subs { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 4px; cursor: default; }
+.card-subs-toggle { background: none; border: 0; padding: 2px 0; color: var(--muted); font-size: 0.82em; cursor: pointer; }
+.card-subs ul { list-style: none; margin: 2px 0 0; padding: 0; }
+.card-subs li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 5px; align-items: center; font-size: 0.85em; padding: 3px 0; }
+.card-subs .sub-meta { grid-column: 2; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
+.card-subs li.done .sub-title { text-decoration: line-through; color: var(--muted); }
+.card-subs .sub-title { min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-subs .sub-title:hover { text-decoration: underline; }
+.card-subs .sub-status { font-size: 0.85em; padding: 0 2px; height: 22px; max-width: 92px; }
+.card-subs .sub-due { color: var(--muted); font-size: 0.85em; white-space: nowrap; }
+.card-subs .sub-due.overdue { color: var(--danger); font-weight: 600; }
+.card-subs .sub-who { margin-left: auto; }
 .task-card::before { content: ''; position: absolute; left: 0; top: 8px; bottom: 8px; width: 3px; border-radius: 3px; background: transparent; }
 .task-card.prio-high::before { background: #f59e0b; }
 .task-card.prio-critical::before { background: #dc2626; }
@@ -344,8 +354,12 @@ table.table { width: 100%; border-collapse: collapse; }
 .checklist li { display: flex; gap: 8px; align-items: center; padding: 4px 0; }
 .checklist li.done span { text-decoration: line-through; color: var(--muted); }
 .subtasks { list-style: none; padding: 0; margin: 0 0 6px; }
-.subtasks li { display: flex; gap: 8px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.subtasks li { padding: 4px 0; border-bottom: 1px solid var(--border); }
+.subtasks li .st-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .subtasks li .st-title { text-align: left; padding: 0; flex: 1; min-width: 160px; }
+.subtasks li.open { background: var(--surface-2, rgba(127, 127, 127, 0.06)); border-radius: 6px; padding: 4px 6px; }
+.subtasks .st-panel { margin: 6px 0 4px 22px; display: flex; flex-direction: column; gap: 6px; }
+.subtasks .st-panel .comment { margin: 0; }
 .subtasks li.done .st-title { text-decoration: line-through; color: var(--muted); }
 .wt-aufgabe { margin-left: 18px; }
 .comment { padding: 8px 0; border-top: 1px solid var(--border); }
