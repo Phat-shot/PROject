@@ -38,6 +38,9 @@ export function BoardView() {
   const setF = (next: Filter | ((x: Filter) => Filter)) => setParams(writeFilter(params, typeof next === 'function' ? next(f) : next), { replace: true });
   const [lanes, setLanesState] = useState(() => { try { return localStorage.getItem(`pt_swim_${pid}`) !== '0'; } catch { return true; } });
   const setLanes = (v: boolean) => { setLanesState(v); try { localStorage.setItem(`pt_swim_${pid}`, v ? '1' : '0'); } catch { /* ignore */ } };
+  // Aufgaben als eigene Karten unter ihrem Arbeitspaket (abschaltbar, je Projekt gemerkt)
+  const [showSubs, setShowSubsState] = useState(() => { try { return localStorage.getItem(`pt_subs_${pid}`) !== '0'; } catch { return true; } });
+  const setShowSubs = (v: boolean) => { setShowSubsState(v); try { localStorage.setItem(`pt_subs_${pid}`, v ? '1' : '0'); } catch { /* ignore */ } };
   const [archived, setArchived] = useState<Task[] | null>(null);
   const [collapsed, setCollapsedState] = useState<Set<string>>(() => readSet(`pt_cols_${pid}`));
   const setCollapsed = (s: Set<string>) => { setCollapsedState(s); writeSet(`pt_cols_${pid}`, s); };
@@ -71,22 +74,35 @@ export function BoardView() {
     return () => window.removeEventListener('keydown', h);
   }, [canEdit, detail.columns]);
 
-  // Board zeigt Arbeitspakete; Aufgaben stehen im Arbeitspaket. Personenfilter treffen ein Arbeitspaket auch über seine offenen Aufgaben.
+  // Board zeigt Arbeitspakete; Aufgaben als eigene Karten unter ihrem Arbeitspaket (Schalter „Aufgaben“).
+  // Personenfilter treffen ein Arbeitspaket auch über seine offenen Aufgaben.
   const all = f.archived ? archived ?? [] : tasks;
   const source = useMemo(() => all.filter((x) => !x.parentId), [all]);
   const kidsOf = useMemo(() => { const m = new Map<string, Task[]>(); for (const x of all) if (x.parentId && !x.done) m.set(x.parentId, [...(m.get(x.parentId) ?? []), x]); return m; }, [all]);
-  const respIs = (x: Task, uid: string) => x.responsible.userId === uid || (kidsOf.get(x.id) ?? []).some((k) => k.responsible.userId === uid);
-  const filtered = useMemo(() => source.filter((x) => {
+  const passes = (x: Task, viaKids: boolean) => {
+    const respIs = (uid: string) => x.responsible.userId === uid || (viaKids && (kidsOf.get(x.id) ?? []).some((k) => k.responsible.userId === uid));
     if (f.q && !(x.title + ' ' + (x.description ?? '')).toLowerCase().includes(f.q.toLowerCase())) return false;
-    if (f.member === 'none' ? x.responsible.userId : f.member && !respIs(x, f.member)) return false;
+    if (f.member === 'none' ? x.responsible.userId : f.member && !respIs(f.member)) return false;
     if (f.label && !x.labelIds.includes(f.label)) return false;
-    if (f.mine && !respIs(x, user?.id ?? '')) return false;
+    if (f.mine && !respIs(user?.id ?? '')) return false;
     if (f.overdue && !(x.dueDate && x.dueDate < t && !x.done)) return false;
     if (f.conflicts && x.conflicts.length === 0) return false;
     if (f.escalated && !x.blocked && x.escalationLevel === 0) return false;
     if (f.prio && x.priority !== f.prio) return false;
     return true;
-  }), [source, kidsOf, f, t, user?.id]);
+  };
+  const filtered = useMemo(() => source.filter((x) => passes(x, true)), [source, kidsOf, f, t, user?.id]);
+  const subs = useMemo(() => (showSubs && !f.archived ? all.filter((x) => x.parentId && passes(x, false)) : []), [all, showSubs, kidsOf, f, t, user?.id]);
+  const byId = useMemo(() => new Map(all.map((x) => [x.id, x])), [all]);
+  /** Karten einer Spalte: Arbeitspakete, darunter ihre Aufgaben in derselben Spalte; Aufgaben, deren Arbeitspaket woanders steht, am Ende. */
+  const columnItems = (aps: Task[], colId: string, laneKey: string) => {
+    const kids = subs.filter((x) => x.columnId === colId && (laneKey === 'all' || (laneKey === 'none' ? !x.subprojectId : x.subprojectId === laneKey))).sort((a, b) => a.position - b.position);
+    const out: { task: Task; apIndex: number | null }[] = [];
+    for (const [i, ap] of aps.entries()) { out.push({ task: ap, apIndex: i }); for (const k of kids) if (k.parentId === ap.id) out.push({ task: k, apIndex: null }); }
+    const shown = new Set(aps.map((x) => x.id));
+    for (const k of kids.filter((x) => !shown.has(x.parentId!)).sort((a, b) => (byId.get(a.parentId!)?.number ?? 0) - (byId.get(b.parentId!)?.number ?? 0))) out.push({ task: k, apIndex: null });
+    return out;
+  };
 
   const groups = useMemo(() => {
     if (!lanes) return [{ key: 'all', name: null as string | null, tasks: filtered }];
@@ -109,6 +125,11 @@ export function BoardView() {
     const task = tasks.find((x) => x.id === drag);
     setDrag(null); setDrop(null);
     if (!task) return;
+    if (task.parentId) {
+      const col = detail.columns.find((c) => c.id === colId);
+      if (col && col.id !== task.columnId && (await moveTaskTo(dialog.form, task.id, col))) await reloadTasks();
+      return;
+    }
     // Zielindex innerhalb der Spalte bestimmen (Swimlane → Position im Gesamt der Spalte)
     const colTasks = tasks.filter((x) => x.columnId === colId && x.id !== task.id && !x.parentId).sort((a, b) => a.position - b.position);
     const laneTasks = colTasks.filter((x) => laneKey === 'all' ? true : laneKey === 'none' ? !x.subprojectId : x.subprojectId === laneKey);
@@ -152,7 +173,8 @@ export function BoardView() {
         <button className={`chip ${f.archived ? 'on' : ''}`} onClick={() => setF({ ...f, archived: !f.archived })}>Archiv</button>
         {canEdit && <button className={`chip ${selectMode ? 'on' : ''}`} title="Mehrere Arbeitspakete auswählen (auch Strg+Klick)" onClick={() => { if (selectMode) clearSelection(); else setSelectMode(true); }}>Auswählen</button>}
         {active && <button className="chip" onClick={() => setF(EMPTY)}>Filter löschen<kbd>x</kbd></button>}
-        <label className="check small right"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
+        <label className="check small right" title="Aufgaben als eigene Karten unter ihrem Arbeitspaket"><input type="checkbox" checked={showSubs} onChange={(e) => setShowSubs(e.target.checked)} /> Aufgaben</label>
+        <label className="check small"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small">{filtered.length}/{source.length}</span>
         <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '']))}>CSV</button>
       </div>
@@ -182,14 +204,15 @@ export function BoardView() {
                     </span>}
                     {isCollapsed && <button className="btn sm link" onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}
                   </h3>
-                  {!isCollapsed && inCol.map((x, i) => (
+                  {!isCollapsed && columnItems(inCol, c.id, laneKey).map(({ task: x, apIndex: i }) => (
                     <TaskCard key={x.id} task={x} t={t} soon={soon} canEdit={canEdit}
+                      parent={x.parentId ? byId.get(x.parentId) ?? null : null}
                       selectable={selectMode} selected={selected.has(x.id)}
                       dragging={drag === x.id}
-                      dropMarker={drop && drop.col === c.id && drop.lane === laneKey ? (drop.index === i ? 'before' : drop.index === i + 1 && i === inCol.length - 1 ? 'after' : null) : null}
+                      dropMarker={i !== null && drop && drop.col === c.id && drop.lane === laneKey ? (drop.index === i ? 'before' : drop.index === i + 1 && i === inCol.length - 1 ? 'after' : null) : null}
                       onDragStart={() => setDrag(x.id)}
                       onDragEnd={() => { setDrag(null); setDrop(null); }}
-                      onDragOverCard={(e) => { if (!drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
+                      onDragOverCard={(e) => { if (i === null || !drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
                       onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
                   {!isCollapsed && inCol.length === 0 && drag && <div className="col-empty">Hier ablegen</div>}
@@ -233,8 +256,8 @@ export function BoardView() {
   );
 }
 
-function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart, onDragEnd, onDragOverCard, onClick, selectable = false, selected = false }: {
-  task: Task; t: string; soon: string; canEdit: boolean; dragging: boolean; dropMarker: 'before' | 'after' | null;
+function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart, onDragEnd, onDragOverCard, onClick, selectable = false, selected = false, parent = null }: {
+  task: Task; t: string; soon: string; canEdit: boolean; dragging: boolean; dropMarker: 'before' | 'after' | null; parent?: Task | null;
   onDragStart: () => void; onDragEnd: () => void; onDragOverCard: (e: React.DragEvent) => void; onClick: (e: React.MouseEvent) => void; selectable?: boolean; selected?: boolean;
 }) {
   const { detail } = useProject();
@@ -243,9 +266,10 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   // Fortschritt aus Aufgaben und Checkliste zusammen
   const stepsTotal = x.subtaskTotal + x.checklistTotal; const stepsDone = x.subtaskDone + x.checklistDone;
   return (
-    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''}`} draggable={canEdit && !selectable}
+    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''} ${x.parentId ? 'is-sub' : ''}`} draggable={canEdit && !selectable}
       onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
       {(selectable || selected) && <input type="checkbox" className="select-box" checked={selected} readOnly aria-label="Auswählen" />}
+      {x.parentId && <div className="sub-of small" title={parent ? `Aufgabe im Arbeitspaket ${detail.project.key}-${parent.number} „${parent.title}“` : 'Aufgabe'}>↳ {parent ? <><span className="tkey">{detail.project.key}-{parent.number}</span> {parent.title}</> : 'Aufgabe'}</div>}
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
       {x.wait && <div className={`wait-line small ${x.wait.expiredAt ? 'expired' : ''}`} title={x.wait.expiredAt ? 'Frist ohne Lösung abgelaufen: zurückgestellt' : 'Wartet; ohne Lösung bis zur Frist → Zurückgestellt'}>⏳ {x.wait.reason}{x.wait.until ? ` · bis ${fmtDate(x.wait.until.slice(0, 10))}` : ''}{x.wait.expiredAt ? ' · Frist abgelaufen' : ''}</div>}

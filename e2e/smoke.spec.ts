@@ -40,7 +40,7 @@ test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Felder
   await login(page);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
-  await page.locator('.task-card').first().click();
+  await page.locator('.task-card:not(.is-sub)').first().click();
   await expect(page.locator('.drawer')).toContainText('Zuständig');
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
   await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();
@@ -61,7 +61,7 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   await page.getByRole('link', { name: 'Projekte', exact: true }).click();
   await expect(page.locator('table.portfolio tbody tr')).toHaveCount(1);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.locator('.task-card', { hasText: 'CMS-Auswahl' }).click();
+  await page.locator('.task-card:not(.is-sub)', { hasText: 'CMS-Auswahl' }).click();
   await expect(page.locator('.drawer')).toContainText('Aufgaben');
   const title = `E2E Aufgabe ${Date.now()}`;
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').fill(title);
