@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
-import { berlinWeek, claimCheck } from '../src/ai/agentChat.js';
+import { bareReady, berlinWeek, claimCheck } from '../src/ai/agentChat.js';
 
 /** Lokales LLM: Chat-Läufe (erkennbar am System-Prompt) bekommen reply/notes, Arbeitspaket-Läufe keine Aktion. */
 const prompts: string[] = [];
@@ -370,4 +370,23 @@ test('Ohne Kontext: Gruß ohne Projektbezug bekommt keine Projektinfos; mit pers
   // Ausdrückliche Nennung holt das andere Projekt zurück
   p = await say('Was läuft gerade in der ERP-Einführung?');
   assert.match(p, /Thema: Projekt ERP „ERP-Einführung“ \(in der Nachricht genannt\)/);
+});
+
+test('Gruß mit Frage: Antwort nur mit Bereitschaftsfloskel löst einen zweiten Versuch aus; reiner Gruß nicht', async () => {
+  assert.ok(bareReady('Hallo Philipp, ich bin bereit. Was soll ich für dich erledigen?'));
+  assert.ok(bareReady('Hi! Wie kann ich dir helfen?'));
+  assert.ok(!bareReady('Nein, keine neuen Mails.'));
+  assert.ok(!bareReady(`Ich bin bereit, ${'x'.repeat(200)}`), 'lange Antwort zählt als inhaltlich');
+  const max = await t.login('max@demo.local');
+  const agent = await t.db.one(`select id from users where name = 'Chatty' and kind = 'agent'`);
+  const cid = (await t.api(max).post('/chat/dm', { userId: agent.id })).json().channelId;
+  const say = async (body: string, reply: string) => { nextReply = reply; const n = prompts.length; assert.equal((await t.api(max).post(`/chat/channels/${cid}/messages`, { body })).statusCode, 200); await flushAgentRuns(); return prompts.slice(n); };
+  let ps = await say('Hallo Chatty, wie weit ist das Angebot?', 'Hallo Max, ich bin bereit. Was soll ich für dich erledigen?');
+  assert.equal(ps.length, 2, 'zweiter Versuch');
+  assert.match(ps[0], /inhaltlich; ein Gruß davor ist nur Anrede/);
+  assert.match(ps[1], /war nur eine Bereitschaftsmeldung/);
+  const last = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 order by created_at desc limit 1`, [cid, agent.id]);
+  assert.equal(last.body, 'Das Angebot liegt vor, ich kläre die Lizenzen.');
+  ps = await say('hallo Chatty', 'Hallo Max, wie kann ich dir helfen?');
+  assert.equal(ps.length, 1, 'reiner Gruß: kein zweiter Versuch');
 });
