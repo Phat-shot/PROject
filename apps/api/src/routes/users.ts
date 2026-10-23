@@ -11,6 +11,7 @@ import { ORG_RIGHTS, USER_SETTING_KEYS } from '@projekttool/shared';
 import { hasOrgRight, requireProject, syncProjectGroups } from '../rights.js';
 import { newSecret, otpauthUrl, totpStep } from '../totp.js';
 import { seal, unseal } from '../secrets.js';
+import { normNumber } from '../telephony/phone.js';
 import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
 import { orgAccount as orgAccountOf, releaseUserAccounts } from '../mail/accounts.js';
 
@@ -137,6 +138,21 @@ export async function userRoutes(app: FastifyInstance) {
     await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.settings', objectType: 'user', objectId: user.id, details: { name: b.name, settings: b.settings, passwordChanged: b.password !== undefined } });
     // Die Web-App ersetzt damit den angemeldeten Benutzer: managesGroups wie bei /auth/me (Menüpunkt Verwaltung)
     return { user: await withManagedGroups(app.db, mapUser(r)) };
+  });
+
+  // ---- Telefonnummer (Telefonie: interne Anrufer erkennt der KI-Agent daran); nur für die Person selbst sichtbar
+  app.get('/me/phone', async (req) => {
+    const user = requireUser(req);
+    return { phone: (await app.db.one(`select phone from users where id = $1`, [user.id])).phone ?? null };
+  });
+  app.put<{ Body: { phone?: string | null } }>('/me/phone', async (req) => {
+    const user = requireUser(req);
+    const phone = req.body?.phone ? normNumber(req.body.phone) : null;
+    if (phone && !/^\d{6,16}$/.test(phone)) throw badRequest('Telefonnummer mit Vorwahl, z. B. +49 171 1234567');
+    if (phone && (await app.db.maybeOne(`select 1 from users where org_id = $1 and phone = $2 and id <> $3`, [user.orgId, phone, user.id]))) throw badRequest('Diese Nummer ist schon bei einer anderen Person hinterlegt');
+    await app.db.query(`update users set phone = $2 where id = $1`, [user.id, phone]);
+    await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.phone', objectType: 'user', objectId: user.id });
+    return { phone };
   });
 
   // ---- Zweiter Faktor (TOTP): einrichten → Code bestätigen → aktiv; abschalten mit Passwort

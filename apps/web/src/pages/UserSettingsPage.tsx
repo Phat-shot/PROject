@@ -48,6 +48,7 @@ function ProfileCard() {
       <div className="form cols-2">
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>E-Mail (Anmeldung)</span><input type="text" value={user?.email ?? ''} readOnly /></label>
+        <PhoneField />
         <label className="field"><span>Theme</span>
           <select value={theme} onChange={(e) => { const v = e.target.value as NonNullable<UserSettings['theme']>; setTheme(v); applyTheme(v); }}>
             <option value="system">wie System</option><option value="light">hell</option><option value="dark">dunkel</option>
@@ -63,6 +64,22 @@ function ProfileCard() {
         })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
       </div>
     </SettingsCard>
+  );
+}
+
+/** Eigene Telefonnummer: daran erkennt der KI-Agent am Telefon interne Anrufer (nur für dich sichtbar). */
+function PhoneField() {
+  const d = useData<{ phone: string | null }>('/me/phone');
+  const [v, setV] = useState<string | null>(null);
+  const { busy, error, run } = useAsync();
+  const cur = d.data?.phone ? `+${d.data.phone}` : '';
+  const value = v ?? cur;
+  return (
+    <label className="field"><span>Telefon (für Anrufe beim KI-Agenten)</span>
+      <span className="row" style={{ gap: 6 }}><input type="tel" value={value} placeholder="+49 171 1234567" onChange={(e) => setV(e.target.value)} style={{ flex: 1 }} />
+        {v !== null && v !== cur && <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.put('/me/phone', { phone: v.trim() || null }); setV(null); await d.reload(); })}>Speichern</button>}</span>
+      {error && <span className="error small">{error}</span>}
+    </label>
   );
 }
 
