@@ -35,8 +35,20 @@ interface TaskDetail {
   meetings?: { id: string; title: string; startsAt: string; pageId: string | null }[];
 }
 
-/** Arbeitspaket oder Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
+interface DrawerView { id: string; expand: string | null; full: boolean }
+
+/**
+ * Arbeitspaket oder Aufgabe. Eine Aufgabe öffnet ihr Arbeitspaket mit der Aufgabe aufgeklappt (Kontext bleibt sichtbar);
+ * „Alle Details“ zeigt die Aufgabe ganz, „← Arbeitspaket“ führt zurück.
+ */
 export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () => void }) {
+  const [view, setView] = useState<DrawerView>({ id: taskId, expand: null, full: false });
+  useEffect(() => setView({ id: taskId, expand: null, full: false }), [taskId]);
+  return <TaskDrawerView key={`${view.id}${view.full ? ':full' : ''}`} taskId={view.id} expand={view.expand} full={view.full} onClose={onClose} onView={setView} />;
+}
+
+/** Arbeitspaket oder Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
+function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: string; expand: string | null; full: boolean; onClose: () => void; onView: (v: DrawerView) => void }) {
   const { detail, users, tasks, reloadTasks, openTask, ai } = useProject();
   const { timeTracking } = useAuth();
   const [d, setD] = useState<TaskDetail | null>(null);
@@ -56,6 +68,8 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const { contacts } = useContacts(detail.project.id);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
+  // Aufgabe ohne „Alle Details“: im Arbeitspaket aufgeklappt zeigen
+  useEffect(() => { if (d?.task.parentId && !full) onView({ id: d.task.parentId, expand: d.task.id, full: false }); }, [d?.task.id]);
   // Agent läuft entkoppelt (lokale Modelle mit Denkmodus brauchen Minuten): Stand alle 5 s nachladen, bis der Lauf fertig ist
   const running = Boolean(d?.task.agentRunning);
   const wasRunning = useRef(false);
@@ -86,14 +100,14 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
   const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
   return (
-    <Drawer title={<><span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span><TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
+    <Drawer title={<>{!t.parentId && <span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span>}<TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
         {saved && <span className="muted small">gespeichert</span>}
         {canEdit && !t.blocked && !t.done && <button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Blockiert melden</button>}
         {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <button className="btn sm primary" title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>✓ Erledigt</button>}
       </>}>
       {error && <div className="error mb">{error}</div>}
-      {t.parent && <p className="small mb" style={{ marginTop: 0 }}><span className="muted">Aufgabe im Arbeitspaket</span> <button className="btn sm link" onClick={() => openTask(t.parent!.id)}><span className="tkey">{detail.project.key}-{t.parent.number}</span> {t.parent.title}</button></p>}
+      {t.parent && <p className="small mb" style={{ marginTop: 0 }}><button className="btn sm link" title="Zurück zum Arbeitspaket" onClick={() => onView({ id: t.parent!.id, expand: t.id, full: false })}>← {t.parent.title}</button></p>}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {(() => {
         // Ursprungsmail: Sprung zur Mail; zum Abschluss die Mail beantworten (aufbereitetes Ergebnis, nicht im Log)
@@ -131,7 +145,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       <div className="form cols-3 task-core">
         <label className="field"><span>Status</span>
-          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) await load(); }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small">⏳ {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}</label>
+          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) { await load(); await reloadTasks(); } }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small">⏳ {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}</label>
         <label className="field"><span>Zuständig</span>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
@@ -181,7 +195,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
 
-      {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} onChanged={async () => { await load(); await reloadTasks(); }} />}
+      {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} expand={expand} onFull={(id) => onView({ id, expand: null, full: true })} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
       <h3 className="mt">Checkliste {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
       <ul className="checklist">
@@ -254,20 +268,22 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 }
 
 /**
- * Aufgaben eines Arbeitspakets: eigene Zuständigkeit, Status, Termin und Log (Klick öffnet die Aufgabe).
- * Häkchen setzt auf die Erledigt-Spalte bzw. zurück auf die erste aktive Spalte.
+ * Aufgaben eines Arbeitspakets: Status und Zuständigkeit direkt in der Zeile, Klick auf den Titel klappt die Aufgabe hier auf
+ * (Termin, Beschreibung, Checkliste, Log); „Alle Details“ öffnet sie ganz. Häkchen setzt auf Erledigt bzw. zurück.
  */
-function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { parent: Task; subtasks: Task[]; canEdit: boolean; members: { id: string; name: string; kind?: string }[]; onChanged: () => Promise<void> }) {
-  const { detail, openTask } = useProject();
+function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, onChanged }: { parent: Task; subtasks: Task[]; canEdit: boolean; members: { id: string; name: string; kind?: string }[]; expand: string | null; onFull: (id: string) => void; onChanged: () => Promise<void> }) {
+  const { detail } = useProject();
+  const dialog = useDialog();
   const [title, setTitle] = useState('');
   const [resp, setResp] = useState('');
+  const [open, setOpen] = useState<string | null>(expand);
+  useEffect(() => { if (expand) setOpen(expand); }, [expand]);
   const { busy, error, run } = useAsync();
   const doneCol = detail.columns.find((c) => c.kind === 'done') ?? detail.columns.find((c) => c.isDone);
   const openCol = detail.columns.find((c) => c.kind === 'active') ?? detail.columns.find((c) => !c.isDone);
   const t0 = today();
-  const toggle = (x: Task) => run(async () => { const col = x.done ? openCol : doneCol; if (col) await api.patch(`/tasks/${x.id}`, { columnId: col.id }); await onChanged(); });
+  const move = (x: Task, colId: string | undefined) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, x.id, col))) await onChanged(); });
   const create = useCreate();
-  // Titel genügt, danach öffnet die Maske der Aufgabe (zurück über „↑ Arbeitspaket“)
   const add = () => run(async () => {
     const t = title.trim();
     if (!t) return;
@@ -278,20 +294,22 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
     <>
       <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
       <ul className="subtasks">
-        {subtasks.map((x) => {
-          const col = detail.columns.find((c) => c.id === x.columnId);
-          return (
-            <li key={x.id} className={x.done ? 'done' : ''}>
-              <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void toggle(x)} />
-              <button className="btn sm link st-title" onClick={() => openTask(x.id)}><span className="tkey">{detail.project.key}-{x.number}</span> {x.title}</button>
-              {col && !x.done && <span className="badge">{col.name}</span>}
+        {subtasks.map((x) => (
+          <li key={x.id} className={`${x.done ? 'done' : ''} ${open === x.id ? 'open' : ''}`}>
+            <div className="st-row">
+              <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void move(x, (x.done ? openCol : doneCol)?.id)} />
+              <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? '▾' : '▸'} {x.title}</button>
               {x.blocked && <span className="badge blocked">blockiert</span>}
               {x.dueDate && <span className="small nowrap" style={!x.done && x.dueDate < t0 ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(x.dueDate)}</span>}
-              <span className="muted small ell">{x.responsible.name ?? x.responsible.email ?? '–'}{x.responsible.inherited ? ' (geerbt)' : ''}</span>
-              {x.commentCount > 0 && <span className="muted small" title="Log-Einträge">✎ {x.commentCount}</span>}
-            </li>
-          );
-        })}
+              {!x.done && <select className="inline-select" value={x.columnId} disabled={!canEdit || busy} title="Status" onChange={(e) => void move(x, e.target.value)}>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
+              <select className="inline-select" value={x.responsibleUserId ?? ''} disabled={!canEdit || busy} title="Zuständig" onChange={(e) => void run(async () => { await api.patch(`/tasks/${x.id}`, { responsibleUserId: e.target.value || null, responsibleEmail: null }); await onChanged(); })}>
+                <option value="">{(x.responsibleUserId ? null : x.responsible.name ?? x.responsible.email) ?? '–'} (geerbt)</option>
+                {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+              </select>
+            </div>
+            {open === x.id && <SubtaskPanel taskId={x.id} canEdit={canEdit} onFull={() => onFull(x.id)} onChanged={onChanged} />}
+          </li>
+        ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); void add(); }}>
         <input type="text" placeholder="Neue Aufgabe … (Enter; eigener Termin, Zuständigkeit und Log)" title="Aufgaben teilen das Arbeitspaket in zuweisbare Schritte; die Checkliste bleibt für kleine Punkte" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1 }} />
@@ -303,6 +321,45 @@ function SubtaskSection({ parent, subtasks, canEdit, members, onChanged }: { par
       </form>}
       {error && <div className="error mt">{error}</div>}
     </>
+  );
+}
+
+/** Aufgeklappte Aufgabe im Arbeitspaket: Termin, Beschreibung, Checkliste und Log, ohne den Kontext zu verlassen. */
+function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; canEdit: boolean; onFull: () => void; onChanged: () => Promise<void> }) {
+  const { detail } = useProject();
+  const [d, setD] = useState<TaskDetail | null>(null);
+  const [item, setItem] = useState('');
+  const [comment, setComment] = useState('');
+  const [all, setAll] = useState(false);
+  const { busy, error, run, setError } = useAsync();
+  const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
+  useEffect(() => { void load(); }, [taskId]);
+  if (!d) return <div className="st-panel muted small">{error ?? 'Lade …'}</div>;
+  const t = d.task;
+  const me = detail.project.myMembership;
+  const canDates = me.role === 'pl' || me.canEditPlan || t.responsibleUserId === me.userId;
+  const changed = async () => { await load(); await onChanged(); };
+  const comments = all ? d.comments : d.comments.slice(-3);
+  return (
+    <div className="st-panel">
+      {error && <div className="error small">{error}</div>}
+      <div className="row small" style={{ gap: 8, alignItems: 'center' }}>
+        <label className="row" style={{ gap: 4, alignItems: 'center' }}><span className="muted">Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}`, { dueDate: e.target.value || null }); await changed(); })} /></label>
+        <button className="btn sm link right" onClick={onFull}>Alle Details ↗</button>
+      </div>
+      <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => run(async () => { await api.patch(`/tasks/${t.id}`, { description: v || null }); await changed(); })} />
+      {(t.checklist?.length ?? 0) > 0 && <ul className="checklist">{t.checklist!.map((i) => <li key={i.id} className={i.done ? 'done' : ''}>
+        <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await changed(); })} /> {i.title}
+      </li>)}</ul>}
+      {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await changed(); }); }}>
+        <input type="text" placeholder="Checklistenpunkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /></form>}
+      {d.comments.length > 3 && <button className="btn sm link" onClick={() => setAll(!all)}>{all ? 'Nur die letzten' : `Alle ${d.comments.length} Log-Einträge`}</button>}
+      {comments.map((c) => <div key={c.id} className="comment small"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
+      {canEdit && <div className="row" style={{ gap: 6 }}>
+        <div style={{ flex: 1 }}><MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar zur Aufgabe … (Strg+Enter)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} /></div>
+        <button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Senden</button>
+      </div>}
+    </div>
   );
 }
 

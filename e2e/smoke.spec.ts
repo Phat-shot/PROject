@@ -40,7 +40,7 @@ test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Felder
   await login(page);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
-  await page.locator('.task-card:not(.is-sub)').first().click();
+  await page.locator('.task-card').first().click();
   await expect(page.locator('.drawer')).toContainText('Zuständig');
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
   await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();
@@ -61,15 +61,23 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   await page.getByRole('link', { name: 'Projekte', exact: true }).click();
   await expect(page.locator('table.portfolio tbody tr')).toHaveCount(1);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.locator('.task-card:not(.is-sub)', { hasText: 'CMS-Auswahl' }).click();
+  await page.locator('.task-card', { hasText: 'CMS-Auswahl' }).click();
   await expect(page.locator('.drawer')).toContainText('Aufgaben');
   const title = `E2E Aufgabe ${Date.now()}`;
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').fill(title);
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').press('Enter');
-  // Titel genügt: danach öffnet die Maske der neuen Aufgabe
-  await expect(page.locator('.drawer')).toContainText('Aufgabe im Arbeitspaket');
-  await expect(page.locator('.drawer')).toContainText(title);
+  // Titel genügt: die neue Aufgabe steht aufgeklappt im Arbeitspaket (Status und Zuständig in der Zeile)
+  const row = page.locator('.drawer .subtasks li.open', { hasText: title });
+  await expect(row).toBeVisible();
+  await expect(row.locator('.st-panel')).toContainText('Alle Details');
+  // Alle Details und zurück ins Arbeitspaket
+  await row.getByRole('button', { name: 'Alle Details ↗' }).click();
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
+  await page.locator('.drawer').getByRole('button', { name: /^← CMS-Auswahl/ }).click();
+  await expect(page.locator('.drawer .subtasks li.open', { hasText: title })).toBeVisible();
+  // Im Board: Aufgabe in der Karte des Arbeitspakets
+  await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();
+  await expect(page.locator('.task-card', { hasText: 'CMS-Auswahl' }).locator('.card-subs')).toContainText(title);
   // Teilprojekt: Kopf der Swimlane öffnet die Maske (Felder, Beschreibung, Meilensteine, Arbeitspakete)
   await page.keyboard.press('Escape');
   await page.locator('button.lane-name').first().click();
