@@ -24,7 +24,7 @@ export interface AiQuery {
   taskId?: string | null;
   /** Ansicht, auf die sich die Anfrage bezieht (derzeit ohne eigene Prüfung) */
   viewId?: string | null;
-  /** Verbindungstest eines bestimmten LLM (profile.test) */
+  /** Verbindungstest eines bestimmten LLM (profile.test); bei Agenten: dieses LLM des Mandanten statt seines eigenen (Telefon: schnelles Modell der Rufnummer) */
   profileId?: string | null;
   /** false: ohne Budgetstufe (Einschalten, Anzeige) */
   budget?: boolean;
@@ -128,8 +128,8 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
     pass('project', `${subj.name} ist aktiv und Mitglied`);
   } else pass('project', `${subj.name} ist aktiv`);
 
-  // 3 LLM des Agenten: im Projekt freigegeben, aktiv, nicht gesperrt
-  const cfg = await aiConfigForAgent(db, subj.id, project?.id ?? null);
+  // 3 LLM des Agenten: im Projekt freigegeben, aktiv, nicht gesperrt; ein vorgegebenes LLM des Mandanten (Telefon) geht vor
+  const cfg = q.profileId ? await aiConfigForProfile(db, subj.org_id, q.profileId) : await aiConfigForAgent(db, subj.id, project?.id ?? null);
   if (!cfg) {
     const u = project ? await agentUsableIn(db, subj.id, project.id) : null;
     return deny('profile', u && !u.ok ? u.reason : `Kein nutzbares LLM für ${subj.name} (Verwaltung › KI)`, true);

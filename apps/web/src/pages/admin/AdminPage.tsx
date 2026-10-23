@@ -12,11 +12,12 @@ import { AiSection } from './Ai';
 import { PoolResourcesCard, ProjectTemplatesCard, TemplatesCard } from './Templates';
 import { SsoCard } from './Security';
 import { AuditCard } from './Data';
+import { TelephonySection } from './Telephony';
 
 const BASE = '/verwaltung';
 
 /**
- * Verwaltung (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Planung und Board, Sicherheit, Daten.
+ * Verwaltung (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Planung und Board, Telefonie, Sicherheit, Daten.
  * Der Org-Admin sieht alles; die KI-Verwaltung (ai_admin) nur KI, die Gruppenverwaltung (groups_admin) und Verwalter einer Gruppe nur
  * die Gruppen unter Personen, die Ressourcenverwaltung (resources_admin) nur den Pool unter Planung und Board.
  */
@@ -40,6 +41,7 @@ export function AdminPage() {
   if (isAdmin) tabs.push({ key: 'benachrichtigungen', label: 'Benachrichtigungen', element: <OrgNotifyCard /> });
   if (aiAdmin) tabs.push({ key: 'ki', label: 'KI', element: <AiSection /> });
   if (isAdmin || resourcesAdmin) tabs.push({ key: 'planung', label: 'Planung und Board', element: <><PoolResourcesCard />{isAdmin && <ProjectTemplatesCard />}{isAdmin && <TemplatesCard />}</> });
+  if (isAdmin) tabs.push({ key: 'telefonie', label: 'Telefonie', element: <TelephonySection /> });
   if (isAdmin) tabs.push({ key: 'sicherheit', label: 'Sicherheit', element: <SsoCard /> });
   if (isAdmin) tabs.push({ key: 'daten', label: 'Daten', element: <AuditCard /> });
   return (

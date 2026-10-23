@@ -40,6 +40,7 @@ import { registerRateLimit } from './rateLimit.js';
 import { publicBase } from './docs/share.js';
 import { questionRoutes } from './routes/questions.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
+import { telephonyRoutes } from './routes/telephony.js';
 import { resourceRoutes } from './routes/resources.js';
 
 export interface AppOptions {
@@ -160,6 +161,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(questionRoutes);
       await api.register(knowledgeRoutes);
       await api.register(resourceRoutes);
+      await api.register(telephonyRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));
     },
