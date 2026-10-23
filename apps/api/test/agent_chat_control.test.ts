@@ -44,7 +44,7 @@ test('Vorbereitung: Agent als Mitglied, DMs; Kontext nennt Absenderrolle, Rechte
   const ctx = prompts.at(-1) ?? '';
   assert.match(ctx, /Absender: Petra Lenz – Projektleitung; darf: Aufträge \(order, überall im Projekt\)/);
   assert.match(ctx, /Agenten-Policy im Projekt WEB: Selbstständigkeit: Selbstständig/);
-  assert.match(ctx, /Fähigkeiten: Mails direkt \(Außenprüfung, erster Kontakt als Entwurf\); Online-Recherche nicht freigegeben/);
+  assert.match(ctx, /Fähigkeiten: Mails senden direkt \(Außenprüfung, erster Kontakt als Entwurf\); Postfächer und Mail-Eingang siehst du im Chat nicht \(zu Mails nur, was in Arbeitspaketen steht\); Online-Recherche nicht freigegeben/);
   assert.match(ctx, /Weitere offene Arbeitspakete im Thema/);
   // Gruß ohne Inhalt: kein Projektbezug (Konzept KI-Agent 6); eine Frage mit Inhalt bekommt das einzige gemeinsame Projekt
   await say(max, dmMax, 'Hi Morton');

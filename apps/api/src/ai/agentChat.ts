@@ -299,6 +299,10 @@ export function claimCheck(reply: string, noted: boolean, acted = false): { text
 
 export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string; results?: { type: string; status: string; text: string }[] }
 
+const READY_RE = /(?<!\p{L})(?:ich bin (?:bereit|da|startklar)|was (?:soll|kann) ich (?:für dich |heute )?(?:tun|erledigen|machen)|wie kann ich (?:dir )?helfen)(?!\p{L})/iu;
+/** Antwort, die nur Bereitschaft meldet („Ich bin bereit. Was soll ich erledigen?“) statt die Nachricht zu beantworten. */
+export const bareReady = (reply: string) => reply.trim().length <= 160 && READY_RE.test(reply);
+
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
   const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
@@ -470,7 +474,7 @@ Thema: ${theme}
 Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
-` : ''}Fähigkeiten: Mails ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
+` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen steht); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
 ${personalDocs}${knowledge}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
@@ -478,9 +482,16 @@ ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
 ${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${scope.how === 'status' ? `\nDie letzte Nachricht ist eine Statusfrage: Gib einen knappen Stand aus den Daten oben (deine offenen Arbeitspakete mit Fälligkeit, worauf du wartest, Blockaden; offene Bestätigungen; Kennzahlen je Projekt). Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
-Antworte auf die letzte Nachricht von ${msg.user_name}.`;
+${small ? `Antworte auf die letzte Nachricht von ${msg.user_name}.` : `Beantworte die letzte Nachricht von ${msg.user_name} inhaltlich; ein Gruß davor ist nur Anrede.`}`;
   try {
-    const r = await completeJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt, maxTokens: 1200, schema: SCHEMA });
+    type ChatJson = { reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] };
+    const ask = (p: string) => completeJson<ChatJson>(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt: p, maxTokens: 1200, schema: SCHEMA });
+    let r = await ask(prompt);
+    // Nur Bereitschaft gemeldet, obwohl die Nachricht mehr als ein Gruß ist: ein zweiter Versuch mit Hinweis
+    if (!small && bareReady(String(r.json.reply ?? ''))) {
+      const again = await ask(`${prompt}\nDeine erste Antwort „${cut(String(r.json.reply), 160)}“ war nur eine Bereitschaftsmeldung. Beantworte jetzt die Frage bzw. Bitte selbst.`);
+      r = { ...again, inputTokens: r.inputTokens + again.inputTokens, outputTokens: r.outputTokens + again.outputTokens };
+    }
     const j = r.json;
     // Befehle: prüfen und ausführen, bevor gepostet wird; die Karte zeigt das tatsächliche Ergebnis
     // Antwort auf eine Frage des Agenten (steht schon im Log eines AP): keinen neuen Auftrag anlegen, den Lauf dort setzt sie um
