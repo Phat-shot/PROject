@@ -244,10 +244,18 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.match(p, /Kennzahlen zu ERP: offen \d+[\s\S]*Kennzahlen zu WEB: offen \d+/);
   assert.ok(p.includes(`- WEB-${t4.number} „Angebot Agentur`) && p.includes(`- ERP-${erpTask.number} „Schnittstellenliste`));
 
+  // Kurze Statusfrage ohne Projekt: Überblick über alle gemeinsamen Projekte mit eigenen Arbeitspaketen und Kennzahlen, keine Rückfrage
+  await say(max, cid, 'Hi, gibts was zu tun?');
+  p = prompts.at(-1)!;
+  assert.match(p, /Thema: Projekt ERP „ERP-Einführung“, WEB „Website-Relaunch“ \(Statusfrage: alle gemeinsamen Projekte\)/);
+  assert.match(p, /Kennzahlen zu ERP: offen \d+[\s\S]*Kennzahlen zu WEB: offen \d+/);
+  assert.ok(p.includes(`- ERP-${erpTask.number} „Schnittstellenliste`), 'eigene Arbeitspakete');
+  assert.match(p, /Statusfrage: Gib einen knappen Stand/);
+
   // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit Projektnamen, keine Inhalte, kein LLM-Aufruf, kein Budget
   const plDm = (await t.api(pl).post('/chat/dm', { userId: agent.id })).json().channelId;
   let n0 = prompts.length;
-  await say(pl, plDm, 'Hallo, wie ist der Stand?');
+  await say(pl, plDm, 'Hallo, kannst du mir helfen?');
   assert.equal(prompts.length, n0, 'kein LLM-Aufruf');
   const ask = (await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1);
   assert.equal(ask.userId, agent.id);
@@ -355,6 +363,10 @@ test('Ohne Kontext: Gruß ohne Projektbezug bekommt keine Projektinfos; mit pers
   assert.match(p, /Thema: Projekt MAXP/);
   assert.ok(p.includes('Flug am 3.11.'), 'Ausschnitt aus der Suche');
   assert.ok(!p.includes('Angebot Agentur'));
+  // Statusfrage: trotz persönlichem Projekt alle gemeinsamen Projekte
+  p = await say('Was steht an?');
+  assert.match(p, /\(Statusfrage: alle gemeinsamen Projekte\)/);
+  assert.ok(p.includes('MAXP') && p.includes('Kennzahlen zu WEB') && p.includes('Kennzahlen zu ERP'));
   // Ausdrückliche Nennung holt das andere Projekt zurück
   p = await say('Was läuft gerade in der ERP-Einführung?');
   assert.match(p, /Thema: Projekt ERP „ERP-Einführung“ \(in der Nachricht genannt\)/);

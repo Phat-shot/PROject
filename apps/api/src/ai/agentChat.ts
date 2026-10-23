@@ -78,7 +78,7 @@ const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).s
  * personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (Gruß ohne persönliches Projekt),
  * matched = über Inhalte genau einem Projekt zugeordnet, open = Treffer in mehreren Projekten (das Modell ordnet zu oder fragt)
  */
-export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'ask' | 'personal' | 'general' | 'matched' | 'open';
+export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'status' | 'ask' | 'personal' | 'general' | 'matched' | 'open';
 export interface ScopeProject { id: string; key: string; name: string }
 /** Thema einer Chat-Nachricht: Projekte und Arbeitspakete, aus denen der Kontext kommt, und wie es bestimmt wurde. */
 export interface ChatScope {
@@ -101,6 +101,9 @@ export interface ChatScope {
 
 /** „über alle Projekte“, „insgesamt“: Thema sind alle gemeinsamen Projekte. */
 const ALL_RE = /über alle projekte|alle[n]? (meine[n]? |unsere[n]? |gemeinsamen )?projekte[n]?|insgesamt|projektübergreifend/i;
+/** Kurze Statusfrage ohne Projektnennung („gibt's was zu tun?“, „wie ist der Stand?“): Überblick über alle gemeinsamen Projekte statt Rückfrage. */
+const STATUS_RE = /(?<!\p{L})(?:(?:gibt'?s|gibt es)(?!\p{L}).*(?<!\p{L})(?:was|etwas|neues)|zu tun|was (?:steht|liegt|ist) (?:an|offen)|status|stand|überblick|update|was (?:machst|tust) du|woran arbeitest|was hast du(?!\p{L}).*(?<!\p{L})(?:offen|vor)|was läuft)(?!\p{L})/iu;
+export const isStatusQuestion = (body: string) => String(body ?? '').trim().split(/\s+/).filter(Boolean).length <= 8 && STATUS_RE.test(body);
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 /**
@@ -192,6 +195,7 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   const mine = await resolve(q.message.body);
   if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)) };
   if (ALL_RE.test(q.message.body)) return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
+  if (isStatusQuestion(q.message.body)) return { how: 'status', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
   // Persönliches Projekt des Absenders (er ist dort PL, der Agent Mitglied)
   const personal = common.length ? (await db.query(`select p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1 and m.role = 'pl' where ${SQL.isPersonal('p')} and p.id = any($2::uuid[])`, [q.senderId, common.map((p) => p.id)])).rows.map((r: any) => r.id as string) : [];
   const none = { taskIds: [] as string[], refs: [] as string[], hidden: [] as string[], common };
@@ -373,7 +377,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const hiddenRest = scope.hidden.filter((h) => !notIn.some((p: any) => p.key === h.split('-')[0]));
   if (scope.how === 'mentioned' && !scope.projectIds.length) return direct(notInText ? `${notInText}${hiddenRest.length ? ' Zu weiterem kann ich dir hier nichts sagen.' : ''}` : 'Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
   // Kein gemeinsames, beidseitig freies Projekt: Hilfe und Hinweis statt Schweigen (ohne LLM-Aufruf)
-  if (!project && (scope.how === 'all' || scope.how === 'general') && !scope.projects.length) {
+  if (!project && (scope.how === 'all' || scope.how === 'status' || scope.how === 'general') && !scope.projects.length) {
     return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');
   }
   // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit den Projektnamen, keine Inhalte
@@ -410,7 +414,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const figures: string[] = [];
   if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
   else if (scope.how !== 'general') for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
-  const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
+  const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', status: 'Statusfrage: alle gemeinsamen Projekte', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
   const theme = scope.how === 'general'
     ? `kein Projektbezug in der Nachricht: antworte allgemein, ohne Inhalte, Stände oder Kennzahlen aus Projekten; frag bei Bedarf, worum es geht`
     : scope.projects.length
@@ -473,7 +477,7 @@ ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Tite
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
+${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${scope.how === 'status' ? `\nDie letzte Nachricht ist eine Statusfrage: Gib einen knappen Stand aus den Daten oben (deine offenen Arbeitspakete mit Fälligkeit, worauf du wartest, Blockaden; offene Bestätigungen; Kennzahlen je Projekt). Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
 Antworte auf die letzte Nachricht von ${msg.user_name}.`;
   try {
     const r = await completeJson<{ reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] }>(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt, maxTokens: 1200, schema: SCHEMA });
