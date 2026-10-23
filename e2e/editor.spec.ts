@@ -18,14 +18,23 @@ test('Doku-Editor: Fett, Unterstrichen, Schriftgröße, Tabelle, Speichern ohne 
   await ed.click();
   await page.keyboard.press('End');
   await page.keyboard.type(' fett');
-  await page.keyboard.press('Shift+Home');
+  // Formatierung erst, wenn die Zeile ausgewählt ist (sonst setzt „Fett“ nur eine Marke an der Schreibmarke); Shift+Home greift im Headless-Browser nicht immer beim ersten Mal
+  await expect(async () => {
+    await ed.press('End');
+    await ed.press('Shift+Home');
+    expect(await page.evaluate(() => window.getSelection()?.toString())).toBe('Start fett');
+  }).toPass({ timeout: 5000 });
   await page.getByTitle('Fett (Strg+B)').click();
   await expect(page.getByTitle('Fett (Strg+B)')).toHaveClass(/on/);
   await page.getByTitle('Unterstrichen (Strg+U)').click();
   await page.getByTitle('Schriftgröße').selectOption('20px');
   await ed.locator('p').first().click();
   await expect(ed).toBeFocused();
+  // Auswahl aufheben, bevor Enter sie ersetzt (Fokus kommt aus dem Schriftgrößen-Select zurück)
+  await ed.press('ArrowRight');
   await ed.press('End');
+  await expect.poll(() => page.evaluate(() => window.getSelection()?.isCollapsed)).toBe(true);
+  await expect(ed.locator('p').first()).toContainText('Start fett');
   await ed.press('Enter');
   await page.getByTitle('Tabelle einfügen (3×3)').click();
   await expect(page.getByTitle('Spalte rechts')).toBeVisible();
