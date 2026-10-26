@@ -19,8 +19,8 @@ import { SQL } from '../projectPolicy.js';
  * mit dem tatsächlichen Ergebnis je Befehl. Aufträge legt createPlannedTask mit den Rechten des Auftraggebers an; der Agent wird
  * zuständig und läuft mit Anlass order. Freigaben führt der Agent nie selbst aus: approve zeigt die Karte mit den offenen Vorschlägen.
  */
-export type ChatCommandType = 'order' | 'note' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer';
-export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'];
+export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer';
+export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'];
 export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
@@ -65,7 +65,7 @@ export const commandsText = (role: SenderRole, a: ReturnType<typeof allowedComma
   const can: string[] = [];
   if (a.orders) can.push(`Aufträge (order${role === 'pl' ? ', überall im Projekt' : role === 'tp' ? ', im eigenen Teilprojekt' : role === 'responsible' ? ', Aufgaben unter dem eigenen AP' : ''})`);
   else if (role !== 'reader' && role !== 'none') can.push(`keine Aufträge (Policy chatOrders = ${policy?.chatOrders ?? 'pl'}: Vorschlag an die PL als order_request über refer)`);
-  if (a.control) can.push(`Steuerbefehle pause, resume, stop, priority${role === 'pl' ? ' an allen Arbeitspaketen' : ' an eigenen Arbeitspaketen'}`);
+  if (a.control) can.push(`Steuerbefehle run, pause, resume, stop, priority${role === 'pl' ? ' an allen Arbeitspaketen' : ' an eigenen Arbeitspaketen'}`);
   if (a.approve) can.push('approve/reject zeigt die Karte mit offenen Bestätigungen (Klick entscheidet)');
   if (a.policy) can.push('policy (Selbstständigkeit je AP), report (Zwischenstände)');
   else if (a.note) can.push('report (eigene Zwischenstände)');
@@ -147,11 +147,23 @@ async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null):
       queueAgentRun(task.id, 'comment');
       return { type: c.type, status: 'ok', text: `${code}: im Log vermerkt (${sender.name})`, link: lnk, taskId: task.id };
     }
-    case 'pause': case 'resume': case 'stop': case 'priority': {
+    case 'run': case 'pause': case 'resume': case 'stop': case 'priority': {
       if (!a.control) return { type: c.type, status: 'denied', text: `${code}: Steuerbefehle geben PL, Teilprojekt-Verantwortung oder Zuständige` };
       if (role !== 'pl' && role !== 'tp' && !(task.responsible_user_id === sender.id || task.requested_by === sender.id || task.parent_id && (await db.maybeOne(`select 1 from tasks where id = $1 and (responsible_user_id = $2 or requested_by = $2)`, [task.parent_id, sender.id])))) {
         const chain = await contactChain(db, task, {});
         if (chain[0]?.id !== sender.id) return { type: c.type, status: 'denied', text: `${code}: nur am eigenen Arbeitspaket` };
+      }
+      // Lauf am bestehenden Arbeitspaket (z. B. Nachfassen aus dem Wartezustand) statt einer neuen Aufgabe; hebt eine Pause auf
+      if (c.type === 'run') {
+        const wasPaused = Boolean(task.agent_paused);
+        if (wasPaused) {
+          await db.query(`update tasks set agent_paused = false where id = $1`, [task.id]);
+          await audit(db, { orgId: sender.orgId, projectId: project.id, userId: sender.id, action: 'agent.pause', objectType: 'task', objectId: task.id, details: { paused: false, via: 'chat', run: true } });
+        }
+        const text = cut(c.text, 1000);
+        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'chat')`, [task.id, sender.id, `Lauf per Chat angestoßen${wasPaused ? ' (Pause aufgehoben)' : ''}${text ? `: ${text}` : ''}`]);
+        queueAgentRun(task.id, 'manual');
+        return { type: c.type, status: 'ok', text: `${code}: Agent läuft jetzt${wasPaused ? ' (Pause aufgehoben)' : ''}`, link: lnk, taskId: task.id };
       }
       if (c.type === 'priority') {
         const lv = String(c.level ?? '').trim().toLowerCase();

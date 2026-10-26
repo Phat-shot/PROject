@@ -42,7 +42,7 @@ const SCHEMA = {
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
       items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
-        type: { type: 'string', enum: ['order', 'note', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
+        type: { type: 'string', enum: ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
         ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); für das in derselben Antwort per order angelegte: neu; sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
         title: { type: 'string', description: 'order: kurzer Titel des Arbeitspakets bzw. der Aufgabe; sonst leer' },
@@ -299,6 +299,13 @@ export function claimCheck(reply: string, noted: boolean, acted = false): { text
 
 export interface AgentChatResult { status: 'ok' | 'error' | 'skipped'; reply?: string; notes?: { taskId: string; text: string }[]; scope?: ChatScope; error?: string; results?: { type: string; status: string; text: string }[] }
 
+/** Datum dd.mm. in Europe/Berlin. */
+const dmy = (d: string | Date) => new Date(d).toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Berlin' });
+/** Fristen des Wartezustands für den Chat-Kontext. */
+const waitDates = (w: { remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean }) => {
+  const parts = [w.remindAt ? `Nachfassen ${dmy(w.remindAt)}${w.reminded ? ' (erledigt)' : ''}` : '', w.escalateAt ? `Eskalation ${dmy(w.escalateAt)}${w.escalated ? ' (erledigt)' : ''}` : ''].filter(Boolean);
+  return parts.length ? ` (${parts.join(', ')})` : '';
+};
 const READY_RE = /(?<!\p{L})(?:ich bin (?:bereit|da|startklar)|was (?:soll|kann) ich (?:für dich |heute )?(?:tun|erledigen|machen)|wie kann ich (?:dir )?helfen)(?!\p{L})/iu;
 /** Antwort, die nur Bereitschaft meldet („Ich bin bereit. Was soll ich erledigen?“) statt die Nachricht zu beantworten. */
 export const bareReady = (reply: string) => reply.trim().length <= 160 && READY_RE.test(reply);
@@ -394,7 +401,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Direktnachrichten nur Teilprojekte, die die fragende Person sieht; genannte Arbeitspakete begrenzen die Liste auf sich und ihre Aufgaben
   const taskIds = scope.taskIds.length ? scope.taskIds : null;
   const tasks = scope.projectIds.length ? await db.query(
-    `select t.id, t.project_id, t.subproject_id, t.number, t.title, t.due_date, t.agent_wait, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
+    `select t.id, t.project_id, t.subproject_id, t.number, t.title, t.due_date, t.agent_wait, t.agent_paused, t.agent_next_check_at, t.blocked, t.blocked_reason, c.name as column_name, p.key, pt.title as parent_title,
+       (select string_agg(i.title, ' | ' order by i.position) from checklist_items i where i.task_id = t.id and not i.done) as open_items,
        (select string_agg(x.body, ' | ' order by x.created_at desc) from (select body, created_at from task_comments where task_id = t.id order by created_at desc limit 3) x) as recent
      from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
      where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
@@ -476,7 +484,7 @@ ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt 
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen steht); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
 ${personalDocs}${knowledge}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
-${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}` : ''} (taskId ${t.id})${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
+${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}${waitDates(t.agent_wait)}` : ''}${t.agent_next_check_at ? ` · Wiedervorlage ${dmy(t.agent_next_check_at)}` : ''}${t.agent_paused ? ' · Agent pausiert (eine fällige Frist hebt die Pause auf; run startet sofort)' : ''} (taskId ${t.id})${t.open_items ? `\n  Offene Tasks: ${cut(t.open_items, 500)}` : ''}${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
