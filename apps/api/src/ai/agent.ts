@@ -756,6 +756,11 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const { columns, items, members, folders, pages, pls, account, canMail, viewAccount, signature, isPl, canPlan, myTps, policy } = ctx;
   const webOk = await webAvailable(db, { agentId: agent.id, agentName: agent.name, projectId: task.project_id, cfg: c, now });
   const subtasks = await db.query(`select t.number, t.title, c.name as column_name, c.is_done, u.name as responsible_name from tasks t join board_columns c on c.id = t.column_id left join users u on u.id = t.responsible_user_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null order by t.position, t.created_at`, [task.id]);
+  // Aufgabe: das Arbeitspaket darüber (Beschreibung, Tasks, Log) gehört zum Vorgang, Adressen und Absprachen stehen oft dort
+  const parentCtx = task.parent_id ? await db.one(`select t.description,
+      (select string_agg(case when i.done then '[x] ' else '[ ] ' end || i.title || coalesce(' · extern ' || i.responsible_email, ''), '; ' order by i.position) from checklist_items i where i.task_id = t.id) as items,
+      (select string_agg(x.d || ' ' || x.who || ': ' || left(x.body, 300), ' | ' order by x.created_at desc) from (select c.body, c.created_at, to_char(c.created_at at time zone 'Europe/Berlin', 'DD.MM.') as d, coalesce(u.name, 'System') as who from task_comments c left join users u on u.id = c.user_id where c.task_id = t.id order by c.created_at desc limit 5) x) as log
+    from tasks t where t.id = $1`, [task.parent_id]) : null;
   // Denktiefe (Konzept KI-Agent 3): Umfang von Log, Mails, Kandidaten, Leserunden und Zugriffen; gründlich kostet zwei Läufe
   const dl = DEPTH_LIMITS[policy.depth];
   const comments = await db.query(`select c.body, c.source, c.visibility, c.created_at, u.name from task_comments c left join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at desc limit $2`, [task.id, dl.log]);
@@ -829,7 +834,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
     { key: 'task', keep: true, text: `Heute: ${calendar}
 ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}“ im Arbeitspaket ${task.project_key}-${task.parent_number} „${task.parent_title}“` : `Arbeitspaket ${task.project_key}-${task.number} „${task.title}“`} · Status ${task.column_name}${task.due_date ? ` · fällig ${String(task.due_date).slice(0, 10)}` : ''}${task.subproject_name ? ` · Teilprojekt ${task.subproject_name}` : ''}${task.blocked ? ` · BLOCKIERT: ${task.blocked_reason ?? ''}` : ''}
 Beschreibung: ${cut(task.description, 2000) || '–'}
-${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
+${parentCtx ? `Arbeitspaket ${task.project_key}-${task.parent_number} (gehört zum Vorgang): Beschreibung: ${cut(parentCtx.description, 1500) || '–'}\n  Tasks: ${cut(parentCtx.items, 1500) || '–'}\n  Log (neueste zuerst): ${cut(parentCtx.log, 1500) || '–'}\n` : ''}${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
 ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
 ${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
     { key: 'log', text: `Log (neueste zuerst):
@@ -1288,6 +1293,10 @@ export async function fingerprintOf(db: Db, taskId: string): Promise<string> {
   return `${r.column_id}|${r.due_date ? String(r.due_date).slice(0, 10) : ''}|${r.blocked}|${r.comments}|${r.mails}|${r.done_items}|${h}`;
 }
 
+/** Anlässe aus Fristen: sie heben eine Pause am Arbeitspaket auf (andere Anlässe warten, bis jemand fortsetzt). */
+const DEADLINE_TRIGGERS = new Set(['escalation_due', 'reminder_due', 'check', 'due_soon', 'overdue']);
+const TRIGGER_LABEL: Record<string, string> = { escalation_due: 'Eskalation', reminder_due: 'Nachfassen', check: 'Wiedervorlage', due_soon: 'Termin naht', overdue: 'Termin überschritten' };
+
 /**
  * Worker: alle aktiven Agenten über ihre offenen, direkt zugewiesenen Arbeitspakete; Anlass aus Zustandsänderung, Fälligkeit
  * oder Tagesrhythmus; Tagesbudget je Agent. Vor jedem Lauf gilt aiAllowed (agent.run, je Projekt): gesperrte Läufe stehen
@@ -1300,8 +1309,8 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
     let budget = await agentBudgetLeft(db, agent, now);
     // Direkt zugewiesen oder geerbt (Aufgabe vom Arbeitspaket, Arbeitspaket vom Teilprojekt); nur in Projekten, in denen der Agent Mitglied ist
     const tasks = await db.query(
-      `select t.id, t.project_id, t.due_date, t.agent_next_check_at, t.agent_wait from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
-       where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and not t.agent_paused and p.status = 'active'
+      `select t.id, t.project_id, t.due_date, t.agent_next_check_at, t.agent_wait, t.agent_paused from tasks t join projects p on p.id = t.project_id join board_columns c on c.id = t.column_id ${EFFECTIVE_JOINS}
+       where (${EFFECTIVE_RESPONSIBLE_SQL}) = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done and p.status = 'active'
          and exists (select 1 from project_members pm where pm.project_id = t.project_id and pm.user_id = $1) order by case t.priority when 'critical' then 0 when 'high' then 1 when 'normal' then 2 else 3 end, t.due_date nulls last`, [agent.id]);
     for (const t of tasks.rows as any[]) {
       if (budget <= 0) break;
@@ -1327,6 +1336,13 @@ export async function runAgents(db: Db, mail: MailService, fetchFn: typeof fetch
       else if (due != null && due <= 2 && hours >= 24) trigger = due < 0 ? 'overdue' : 'due_soon';
       else if (hours >= 24 * 3) trigger = 'periodic';
       if (!trigger) continue;
+      // Pausiert: nur eine fällige Frist (Nachfassen, Eskalation, Wiedervorlage, Termin) hebt die Pause auf und startet den Lauf
+      if (t.agent_paused) {
+        if (!DEADLINE_TRIGGERS.has(trigger)) continue;
+        await db.query(`update tasks set agent_paused = false where id = $1`, [t.id]);
+        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [t.id, agent.id, `Agent fortgesetzt: Frist fällig (${TRIGGER_LABEL[trigger] ?? trigger})`]);
+        await audit(db, { orgId: agent.org_id, projectId: t.project_id, userId: agent.id, action: 'agent.pause', objectType: 'task', objectId: t.id, details: { paused: false, via: 'worker', trigger } });
+      }
       const gate = await aiAllowed(db, { userId: agent.id, projectId: t.project_id, feature: 'agent.run', taskId: t.id, now });
       if (!gate.allowed && gate.stage === 'budget') break;
       if (!gate.allowed) { out.push(await logSkippedRun(db, agent, t.project_id, t.id, trigger, gate.publicReason, now)); continue; }

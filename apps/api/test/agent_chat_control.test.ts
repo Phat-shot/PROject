@@ -3,9 +3,12 @@ import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
 import { claimCheck } from '../src/ai/agentChat.js';
+import { runAgents } from '../src/ai/agent.js';
 
 /** Lokales LLM: Chat-Läufe liefern reply und `nextCommands`, Arbeitspaket-Läufe keine Aktion. */
 const prompts: string[] = [];
+/** Prompts der Läufe am Arbeitspaket */
+const runPrompts: string[] = [];
 let nextCommands: any[] = [];
 let nextReply = 'Mache ich.';
 const C = (x: Record<string, unknown>) => ({ type: 'note', ref: '', text: '', title: '', parent: '', subproject: '', dueDate: '', deliverables: [], every: '', level: '', mode: '', reason: '', mail: false, ...x });
@@ -18,7 +21,7 @@ const fakeFetch: typeof fetch = async (input, init) => {
     prompts.push(String(body.messages?.[1]?.content ?? ''));
     content = JSON.stringify({ reply: nextReply, notes: [], answers: [], commands: nextCommands });
     nextCommands = []; nextReply = 'Mache ich.';
-  } else if (body.response_format) content = JSON.stringify({ note: 'nichts zu tun', actions: [{ type: 'none', reason: 'Test' }] });
+  } else if (body.response_format) { runPrompts.push(String(body.messages?.[1]?.content ?? '')); content = JSON.stringify({ note: 'nichts zu tun', actions: [{ type: 'none', reason: 'Test' }] }); }
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { status: 200 });
 };
 delete process.env.ANTHROPIC_API_KEY;
@@ -204,4 +207,44 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   const r2 = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
   assert.match(r2.body, /^Das konnte ich nicht ausführen/);
   assert.equal(claimCheck('Ich habe WEB-3 angelegt.', false, true).replaced.length, 0);
+});
+
+test('Nachfassen gehört zum Arbeitspaket: run statt neuer Aufgabe, fällige Frist hebt die Pause auf, Aufgabe sieht Tasks und Log ihres Arbeitspakets', async () => {
+  const pl = await t.login('pl@demo.local');
+  const task = await t.db.one(`select * from tasks where responsible_user_id = $1 and parent_id is null order by created_at desc limit 1`, [agent.id]);
+  const ref = `WEB-${task.number}`;
+  // Pausiert mit Wartezustand: der Chat-Kontext nennt Fristen, Pause und offene Tasks
+  const since = new Date(Date.now() - 3 * 86400_000).toISOString();
+  await t.db.query(`update tasks set agent_paused = true, agent_wait = $2 where id = $1`, [task.id, JSON.stringify({ kind: 'reply', reason: 'Sven meldet sich bis Freitag', since, remindAt: '2026-10-23T19:49:00Z', escalateAt: '2026-10-26T19:49:00Z' })]);
+  await t.db.query(`insert into checklist_items (task_id, title, position) values ($1, 'Sven (sven@airgpu.example) meldet sich bis Freitag', 99)`, [task.id]);
+  nextCommands = [C({ type: 'run', ref, text: 'Bei Sven nachfassen' })];
+  await say(pl, dmPl, `Was ist mit ${ref}?`);
+  const ctx = prompts.at(-1) ?? '';
+  assert.match(ctx, /du wartest auf: Sven meldet sich bis Freitag \(Nachfassen 23\.10\., Eskalation 26\.10\.\)/);
+  assert.match(ctx, /Agent pausiert/);
+  assert.match(ctx, /Offene Tasks: .*sven@airgpu\.example/);
+  assert.match((await lastCard(dmPl)).body, /✓ WEB-\d+: Agent läuft jetzt \(Pause aufgehoben\)/);
+  assert.equal((await t.db.one(`select agent_paused from tasks where id = $1`, [task.id])).agent_paused, false);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Lauf per Chat angestoßen (Pause aufgehoben): Bei Sven nachfassen'`, [task.id]));
+  assert.equal((await t.db.one(`select count(*)::int as n from tasks where parent_id = $1`, [task.id])).n, 0, 'keine neue Aufgabe');
+  // Worker: pausiert ohne fällige Frist bleibt pausiert; fällige Nachfass-Frist hebt die Pause auf und läuft
+  await t.db.query(`update tasks set agent_paused = true, agent_wait = $2 where id = $1`, [task.id, JSON.stringify({ kind: 'reply', reason: 'Sven meldet sich', since, remindAt: new Date(Date.now() + 86400_000).toISOString() })]);
+  let res = await runAgents(t.db, t.mail, fakeFetch, new Date());
+  assert.ok(!res.some((r) => r.taskId === task.id), 'keine Frist fällig: kein Lauf');
+  assert.equal((await t.db.one(`select agent_paused from tasks where id = $1`, [task.id])).agent_paused, true);
+  res = await runAgents(t.db, t.mail, fakeFetch, new Date(Date.now() + 2 * 86400_000));
+  assert.ok(res.some((r) => r.taskId === task.id && r.status === 'ok'), 'Lauf nach Frist');
+  assert.equal((await t.db.one(`select agent_paused from tasks where id = $1`, [task.id])).agent_paused, false);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Agent fortgesetzt: Frist fällig (Nachfassen)'`, [task.id]));
+  assert.equal((await t.db.one(`select trigger from agent_runs where task_id = $1 and status = 'ok' order by created_at desc limit 1`, [task.id])).trigger, 'reminder_due');
+  // Aufgabe darunter: der Lauf sieht Beschreibung, Tasks (mit Adresse) und Log des Arbeitspakets
+  const sub = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Nachfassen bei Sven', parentId: task.id })).json().task;
+  await t.db.query(`update tasks set responsible_user_id = $2 where id = $1`, [sub.id, agent.id]);
+  const n = runPrompts.length;
+  await t.api(pl).post(`/tasks/${sub.id}/agent-run`, {});
+  await flushAgentRuns();
+  const p = runPrompts.slice(n).join('\n');
+  assert.match(p, new RegExp(`Arbeitspaket WEB-${task.number} \\(gehört zum Vorgang\\)`));
+  assert.match(p, /Tasks: .*\[ \] Sven \(sven@airgpu\.example\) meldet sich bis Freitag/);
+  assert.match(p, /Log \(neueste zuerst\): .*Agent fortgesetzt: Frist fällig/);
 });
