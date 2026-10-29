@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 import type { MailService } from './mail/service.js';
-import { dispatch } from './notify.js';
+import { dispatch, supersedeStaleNotifications } from './notify.js';
 import { createRecurrenceInstance, dateStr, loadTasks } from './tasks/service.js';
 import { nextDueDate, shouldCreateOnDue, type Recurrence } from './tasks/recurrence.js';
 import { audit } from './audit.js';
@@ -77,7 +77,7 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
       }
       await db.query(`delete from sessions where expires_at < now()`);
       await runNotificationMails(db, mail);
-      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireWaits(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
+      if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireWaits(db); await supersedeStaleNotifications(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);
       if (lastDaily !== today) {
         await runCleanup(db);
