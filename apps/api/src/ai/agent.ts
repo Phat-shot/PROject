@@ -278,6 +278,24 @@ async function holdProposals(ctx: RunCtx, held: HeldAction[], runId: string | nu
   return r.question.id;
 }
 
+/**
+ * Überholte Entwürfe verwerfen: neuer Entwurf, geplante oder gesendete Mail des Agenten an dieselben Empfänger zum selben
+ * Arbeitspaket (bei PDF-Lieferungen zur selben Seite) ersetzt ältere, die noch auf Freigabe oder Versand warten. Log und Audit.
+ */
+export async function supersedeDrafts(db: Db, q: { taskId: string; projectId: string; orgId: string; authorId: string; to: string[]; keepId: string | null; pageId?: string | null }): Promise<number> {
+  const key = (xs: unknown) => (Array.isArray(xs) ? xs : []).map((x) => String(x).trim().toLowerCase()).sort().join(',');
+  const want = key(q.to);
+  const rows = (await db.query(`select id, subject, to_addrs from mail_drafts where task_id = $1 and user_id = $2 and status in ('pending_approval', 'scheduled') and page_id is not distinct from $3::uuid and ($4::uuid is null or id <> $4)`, [q.taskId, q.authorId, q.pageId ?? null, q.keepId])).rows
+    .filter((d: any) => key(typeof d.to_addrs === 'string' ? JSON.parse(d.to_addrs) : d.to_addrs) === want);
+  for (const d of rows) {
+    await db.query(`update outbound_checks set decided_at = now() where mail_draft_id = $1 and decided_at is null`, [d.id]);
+    await db.query(`delete from mail_drafts where id = $1`, [d.id]);
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [q.taskId, q.authorId, `Älterer Entwurf an ${q.to.join(', ')} verworfen (überholt): „${d.subject}“`]);
+    await audit(db, { orgId: q.orgId, projectId: q.projectId, userId: q.authorId, action: 'mail.draft_superseded', objectType: 'mail_draft', objectId: d.id, details: { subject: d.subject, by: q.keepId } });
+  }
+  return rows.length;
+}
+
 /** Aktionen eines Agenten ausführen (Lauf mit hold = anhalten nach Policy; Bestätigung mit approvedBy ohne Anhalten). */
 export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
   const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
@@ -293,6 +311,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     let asked = 0;
     let waited = false;
     const plan = planner(db, { agent, m, task, canPlan, myTps, now });
+    const supersede = (to: string[], keepId: string | null, pageId: string | null = null) => supersedeDrafts(db, { taskId: task.id, projectId: task.project_id, orgId: agent.org_id, authorId: agent.id, to, keepId, pageId });
     /** Tatsächlicher Versandstatus ins Log (der Agent selbst behauptet keinen Versand). */
     const logSys = (body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, body]);
     /** Entwurf wartet: persönliche Bindung → Eigentümer, sonst die PL; von der Außenprüfung angehalten mit den ersten Fundstellen. */
@@ -300,7 +319,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
       const use = await accountUseIn(db, acc.id, task.project_id);
       const targets = use?.use === 'personal' && use.user_id ? [use.user_id] : pls.map((p: any) => p.user_id);
       const held = g?.result === 'held';
-      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, taskId: task.id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben`, actorId: agent.id });
+      for (const u of targets) await notify(db, { userId: u, projectId: task.project_id, taskId: task.id, type: held ? 'outbound.review' : 'draft.review', title: held ? `Außenprüfung angehalten: ${subject}` : `Mail-Entwurf von ${agent.name} zur Freigabe`, body: held ? cut(g!.findings.map((f) => f.text).join('; '), 300) : subject, link: `/projekte/${task.project_id}/mail/freigaben`, ref: { type: 'task', id: task.id }, actorId: agent.id });
     };
     // Informationsgrenze: Mails an Nicht-Interne laufen über outbound.ts (Neuformulierung, Prüfung, Protokoll)
     const guard = async (q: { aud: Audience; subject: string; text: string; compose: boolean; keepSubject?: boolean; pageIds?: string[] }) => {
@@ -331,6 +350,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         const at = nextWindowStart(ctx.window, now);
         const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, in_reply_references, status, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,'scheduled',$10) returning id`, [account!.id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null, reply.references ?? null, at]);
         await record('mail', aud, g, d.id);
+        await supersede(to, d.id);
         await logSys(`Mail an ${to.join(', ')} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}: „${g.subject}“${outNote(aud, g, false)}`);
         return 'scheduled';
       }
@@ -338,6 +358,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         try {
           await mail.sendFromAccount(account!, { to, subject: g.subject, text: g.text, taskId: task.id, inReplyTo: reply.inReplyTo ?? null, references: reply.references ?? null, userId: agent.id, projectId: task.project_id });
           await record('mail', aud, g, null);
+          await supersede(to, null);
           await logSys(`Mail gesendet an ${to.join(', ')}: „${g.subject}“${outNote(aud, g, false)}`);
           return 'sent';
         } catch (e: any) {
@@ -350,6 +371,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
       const acc = account ?? viewAccount!;
       const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, account ? null : viewAccount!.view_id, task.id, task.project_id, agent.id, JSON.stringify(to), g.subject, g.text, reply.inReplyTo ?? null]);
       await record('mail', aud, g, d.id);
+      await supersede(to, d.id);
       await notifyDraft(acc, g.subject, g);
       await errandDraftCard(ctx, d.id, to, g.subject);
       await logSys(`Mail-Entwurf an ${to.join(', ')} wartet auf Freigabe (nicht gesendet): „${g.subject}“${outNote(aud, g, true)}${policyNote}`);
@@ -531,6 +553,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
             mailsSent++;
             const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status, page_id) values ($1,$2,$3,$4,$5,'[]',$6,$7,'pending_approval',$8) returning id`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, text, page.id]);
             await record('pdf', aud, g, d.id);
+            await supersede(to, d.id, page.id);
             await notifyDraft(account, a.subject, g);
             await logSys(`PDF „${page.title}“ an ${to.join(', ')} wartet als Entwurf auf Freigabe (nicht gesendet)${outNote(aud, g, true)}`);
             applied.push({ ...a, to, text: `[Entwurf zur Freigabe] ${text}` });
@@ -539,6 +562,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
             mailsSent++;
             const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, status, page_id, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,'scheduled',$8,$9) returning id`, [account.id, task.id, task.project_id, agent.id, JSON.stringify(to), a.subject, text, page.id, at]);
             if (g) await record('pdf', aud, g, d.id);
+            await supersede(to, d.id, page.id);
             await logSys(`PDF „${page.title}“ an ${to.join(', ')} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}${outNote(aud, g, false)}`);
             applied.push({ ...a, to, text: `[Versand im Arbeitszeitfenster geplant] ${text}` });
           } else {
@@ -548,6 +572,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
               await L.storePagePdf(db, page, pdf, agent.id);
               mailsSent++;
               if (g) await record('pdf', aud, g, null);
+              await supersede(to, null, page.id);
               await logSys(`PDF „${page.title}“ gesendet an ${to.join(', ')}${outNote(aud, g, false)}`);
               applied.push({ ...a, to });
             } catch (e: any) {
@@ -595,12 +620,14 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
             const at = nextWindowStart(ctx.window, now);
             const d = await db.one(`insert into mail_drafts (account_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, in_reply_references, status, send_at) values ($1,$2,$3,$4,$5,'[]',$6,$7,$8,$9,'scheduled',$10) returning id`, [acc.id, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null, [o.references_header, o.message_id].filter(Boolean).join(' ') || null, at]);
             if (g) await record('reply_origin', aud, g, d.id);
+            await supersede([o.from_addr], d.id);
             await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet auf das Arbeitszeitfenster (${windowText(ctx.window)}): Versand geplant ${fmtWhen(at)}: „${subject}“${outNote(aud, g, false)}`);
             applied.push({ type: 'reply_origin', text: `[Versand im Arbeitszeitfenster geplant] ${body}` } as any);
           } else if (direct) {
             try {
               await mail.sendFromAccount(acc, { to: [o.from_addr], subject, text: body, taskId: task.id, inReplyTo: o.message_id, references: [o.references_header, o.message_id].filter(Boolean).join(' ') || null, userId: agent.id, projectId: task.project_id });
               if (g) await record('reply_origin', aud, g, null);
+              await supersede([o.from_addr], null);
               await logSys(`Antwort auf die Ursprungsmail gesendet an ${o.from_addr}: „${subject}“${outNote(aud, g, false)}`);
               applied.push({ type: 'reply_origin', text: body } as any);
             } catch (e: any) { errors.push(`Antwort an ${o.from_addr} nicht gesendet: ${String(e?.message ?? e).slice(0, 200)}`); }
@@ -608,6 +635,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
           else {
             const d = await db.one(`insert into mail_drafts (account_id, view_id, task_id, project_id, user_id, to_addrs, cc_addrs, subject, body, in_reply_to, status) values ($1,$2,$3,$4,$5,$6,'[]',$7,$8,$9,'pending_approval') returning id`, [acc.id, view?.id ?? null, task.id, task.project_id, agent.id, JSON.stringify([o.from_addr]), subject, body, o.message_id ?? null]);
             if (g) await record('reply_origin', aud, g, d.id);
+            await supersede([o.from_addr], d.id);
             await notifyDraft(acc, subject, g);
             await errandDraftCard(ctx, d.id, [o.from_addr], subject);
             await logSys(`Antwort auf die Ursprungsmail an ${o.from_addr} wartet als Entwurf auf Freigabe (nicht gesendet): „${subject}“${outNote(aud, g, true)}${policyNote}`);

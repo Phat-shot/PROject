@@ -34,6 +34,20 @@ export interface NotifyInput {
   progress?: { milestone: boolean; done: boolean };
 }
 
+/** Meldungsarten, bei denen nur die neueste ungelesene je Arbeitspaket zählt. */
+const SUPERSEDING_TYPES = new Set(['task.progress', 'escalation', 'draft.review', 'outbound.review', 'task.wait_expired']);
+
+/**
+ * Worker: überholte ungelesene Meldungen ausblenden. Eskalation und abgelaufene Frist eines erledigten, archivierten oder
+ * gelöschten Arbeitspakets; Entwurf zur Freigabe, wenn zum Arbeitspaket kein Entwurf mehr wartet.
+ */
+export async function supersedeStaleNotifications(db: Db): Promise<number> {
+  const r = await db.query(`update notifications n set read_at = now(), superseded_at = now() where n.read_at is null and n.ref_type = 'task' and (
+      (n.type in ('escalation', 'task.wait_expired') and exists (select 1 from tasks t join board_columns c on c.id = t.column_id where t.id = n.ref_id and (c.is_done or t.archived_at is not null or t.deleted_at is not null)))
+      or (n.type in ('draft.review', 'outbound.review') and not exists (select 1 from mail_drafts d where d.task_id = n.ref_id and d.status in ('pending_approval', 'failed'))))`);
+  return r.rowCount ?? 0;
+}
+
 /**
  * Einziger Weg in die Meldungen. Löst je Person Regel N auf (Mail-Modus wird in die Meldung geschrieben, Chat „thread“) und
  * setzt Klasse und Bezug. KI-Agenten, deaktivierte Benutzer und der Auslöser bekommen keine Meldung. In-App gibt es immer.
@@ -61,6 +75,10 @@ export async function notify(db: Db, n: NotifyInput): Promise<string | null> {
     [u.id, projectId, n.type, n.title, n.body ?? null, n.link ?? null, dedupe, event, n.ref?.type ?? null, n.ref?.id ?? null, rule.value.mail, Boolean(n.attach)]
   );
   if (!row) return null;
+  // Neuere Meldung derselben Art zum selben Arbeitspaket ersetzt ältere ungelesene (Zwischenstand, Eskalationsstufe, Entwurf zur Freigabe)
+  if (n.ref?.type === 'task' && SUPERSEDING_TYPES.has(n.type)) {
+    await db.query(`update notifications set read_at = now(), superseded_at = now() where user_id = $1 and type = $2 and ref_type = 'task' and ref_id = $3 and read_at is null and id <> $4`, [u.id, n.type, n.ref.id, row.id]);
+  }
   // Chat „thread“ ohne eigenen Thread: Systembeitrag in der Direktnachricht des auslösenden Agenten an die Person
   if (rule.value.chat === 'thread' && !n.chatted && !n.thread && n.actorId) {
     const actor = await db.maybeOne(`select id, kind from users where id = $1 and kind = 'agent' and active`, [n.actorId]);

@@ -143,7 +143,7 @@ export async function notifyRuleRoutes(app: FastifyInstance) {
     if (q.projectId && !UUID.test(q.projectId)) throw badRequest('Ungültige Projekt-ID');
     const rows = await db.query(
       `select * from notifications where user_id = $1 and ($2::text is null or event = $2) and ($3::uuid is null or project_id = $3)
-         and (not $4 or read_at is null) and (not $5 or resolved_at is null)
+         and superseded_at is null and (not $4 or read_at is null) and (not $5 or resolved_at is null)
        order by read_at nulls first, created_at desc limit 60`,
       [user.id, q.event ?? null, q.projectId || null, q.unread === '1', q.open === '1']
     );
