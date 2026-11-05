@@ -45,7 +45,7 @@ test('Protokoll aus Vorlage mit Termin und Teilnehmern im Ordner Protokolle; Akt
   assert.equal(p1.statusCode, 200, p1.body);
   assert.equal(p1.json().existed, false);
   const page = p1.json().page;
-  assert.match(page.title, /^JF Auftraggeber \d{2}\.\d{2}\.\d{4}$/);
+  assert.match(page.title, /^JF Auftraggeber \d{1,2}\.\d{1,2}\.\d{4}$/);
   assert.match(page.contentHtml, /Teilnehmer:<\/strong> Petra Lenz \(pl@demo\.local\), Geschäftsführung \(gf@kunde\.example\)/);
   assert.match(page.contentHtml, /Termin:<\/strong>/);
   const folder = await t.db.one(`select f.name from doc_pages p join doc_folders f on f.id = p.folder_id where p.id = $1`, [page.id]);

@@ -8,6 +8,7 @@ import { Tour, tourDone } from './Tour';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useMailUnread } from '../lib/useMailUnread';
 import { refreshOpenForMe, useOpenForMe } from '../lib/useOpenForMe';
+import { useRefresh } from '../lib/useRefresh';
 import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
 import { OpenForMeList } from './OpenForMe';
@@ -43,6 +44,8 @@ export function Layout({ children }: { children: ReactNode }) {
   const unread = useChatUnread();
   const mailUnread = useMailUnread();
   const open = useOpenForMe();
+  // Aufgeklappte Liste „Offen für dich“ unter einem Projekt der Leiste
+  const [expanded, setExpanded] = useState<string | null>(null);
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
   useEffect(() => { if (user && !tourDone(user.id)) setTour(true); }, [user?.id]);
   const currentId = loc.pathname.match(/^\/projekte\/([0-9a-f-]{36})/)?.[1] ?? null;
@@ -79,10 +82,12 @@ export function Layout({ children }: { children: ReactNode }) {
       <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
         <div className="proj-row">
           <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId} title={`${p.name}: Board öffnen`}>
-            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>{(open.byProject[p.id] ?? 0) > 0 && <span className="badge warn nav-count" title="Offen für dich in diesem Projekt (Dashboard)">{open.byProject[p.id]}</span>}
+            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
           </NavLink>
+          {(open.byProject[p.id] ?? 0) > 0 && <button className={`badge warn nav-count ${expanded === p.id ? 'on' : ''}`} title="Offen für dich in diesem Projekt: aufklappen" aria-expanded={expanded === p.id} onClick={() => setExpanded(expanded === p.id ? null : p.id)}>{open.byProject[p.id]}</button>}
           <button className={`pin ${pin ? 'on' : ''}`} disabled={!pin && pinnedIds.length >= MAX_PINNED} title={pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften'} aria-label={pin ? 'Nicht mehr anheften' : 'Anheften'} onClick={() => void togglePin(p.id)}>{pin ? '★' : '☆'}</button>
         </div>
+        {expanded === p.id && (open.byProject[p.id] ?? 0) > 0 && <div className="proj-open"><OpenForMeList questions={open.questions.filter((q) => q.projectId === p.id)} waiting={open.waiting} projectId={p.id} bare onNavigate={() => setMenu(false)} /></div>}
       </div>
     );
   };
@@ -174,7 +179,8 @@ function Bell() {
   const load = () => Promise.all([
     api.get<{ notifications: Notification[]; unread: number }>(`/notifications${query ? `?${query}` : ''}`).then(setData)
   ]).catch(() => undefined);
-  useEffect(() => { void load(); const h = setInterval(load, 60_000); return () => clearInterval(h); }, [query]);
+  useEffect(() => { void load(); }, [query]);
+  useRefresh(load);
   useEffect(() => { if (open && !projects.length) api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined); }, [open]);
   const go = async (n: Notification) => {
     setOpen(false);

@@ -8,7 +8,7 @@ import { queueAgentRun } from '../ai/agentEvents.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 
 import { canSeeSubproject, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
-import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, completeParentIfDone, resolveProjectLead, touchTask } from '../tasks/service.js';
 import { mailAccess } from '../mail/access.js';
 import { linkMailToTask } from '../mail/link.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
@@ -42,6 +42,8 @@ interface TaskBody {
   parentId?: string | null;
   /** Außenbeschreibung: was Externe zu diesem AP erfahren dürfen (PL bzw. „Projektplan ändern“) */
   externalBrief?: string | null;
+  /** Arbeitspaket automatisch erledigen, wenn alle Aufgaben erledigt sind; null = Vorgabe des Projekts */
+  autoComplete?: boolean | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -338,6 +340,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if (b.labelIds) await setLabels(req.params.id, existing.project_id, b.labelIds);
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
     if ('estimateMinutes' in b) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [req.params.id, b.estimateMinutes && b.estimateMinutes > 0 ? Math.round(b.estimateMinutes) : null]);
+    if ('autoComplete' in b) await db.query(`update tasks set auto_complete = $2 where id = $1`, [req.params.id, b.autoComplete == null ? null : Boolean(b.autoComplete)]);
     if ('externalBrief' in b) await db.query(`update tasks set external_brief = $2 where id = $1`, [req.params.id, String(b.externalBrief ?? '').trim().slice(0, 4000) || null]);
     if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
       await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
@@ -580,6 +583,12 @@ export async function taskRoutes(app: FastifyInstance) {
   /** W6: Wiederholung „nach Erledigung“ erzeugt die nächste Instanz. */
   async function onTaskDone(existing: any, user: { id: string; orgId: string }) {
     await cancelQuestions(db, { taskId: existing.id }, `${existing.title} ist erledigt`, user.id);
+    // Letzte offene Aufgabe erledigt: Arbeitspaket mit (Folgen wie von Hand: Fragen, Workflow, Wiederholung)
+    const parent = existing.parent_id ? await completeParentIfDone(db, existing.id, user.id) : null;
+    if (parent) {
+      await audit(db, { orgId: user.orgId, projectId: parent.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: parent.id, details: { auto: 'all_subtasks_done' } });
+      await onTaskDone(parent, user);
+    }
     if (existing.workflow_run_id) await onWorkflowTaskDone(db, app.mail, existing.id);
     const r: Recurrence | null = existing.recurrence ?? null;
     if (!r || r.mode !== 'after_done' || !existing.due_date) return;

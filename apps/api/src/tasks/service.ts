@@ -163,6 +163,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     deletedAt: r.deleted_at ?? null,
     externalBrief: r.external_brief ?? null,
     agentPaused: Boolean(r.agent_paused),
+    autoComplete: r.auto_complete ?? null,
     agentRunning: agentRunActive(r.id),
     agentWait: r.agent_wait ?? null,
     wait: r.wait_reason ? { reason: r.wait_reason, until: r.wait_until ? new Date(r.wait_until).toISOString() : null, expiredAt: r.wait_expired_at ? new Date(r.wait_expired_at).toISOString() : null } : null,
@@ -222,6 +223,24 @@ export async function moveTask(db: Db, taskId: string, columnId: string, index: 
   for (const [i, id] of ids.entries()) {
     await db.query(`update tasks set position = $2, column_id = $3, updated_at = case when id = $4 then now() else updated_at end where id = $1`, [id, i, columnId, taskId]);
   }
+}
+
+/**
+ * Aufgabe erledigt: sind alle Aufgaben des Arbeitspakets erledigt, wird es selbst erledigt (Vorgabe je Projekt, je Arbeitspaket
+ * übersteuerbar). Liefert das Arbeitspaket (Zeile vor dem Verschieben), damit der Aufrufer die Folgen von „erledigt“ auslöst.
+ */
+export async function completeParentIfDone(db: Db, childId: string, actorId: string | null): Promise<any | null> {
+  const p = await db.maybeOne(`select pt.*, pc.is_done, pr.auto_complete_parent from tasks t join tasks pt on pt.id = t.parent_id join board_columns pc on pc.id = pt.column_id join projects pr on pr.id = pt.project_id
+    where t.id = $1 and pt.deleted_at is null and pt.archived_at is null`, [childId]);
+  if (!p || p.is_done || !(p.auto_complete ?? p.auto_complete_parent)) return null;
+  const open = await db.one(`select count(*)::int as n from tasks t join board_columns c on c.id = t.column_id where t.parent_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done`, [p.id]);
+  if (open.n > 0) return null;
+  const done = await db.maybeOne(`select id, name from board_columns where project_id = $1 and is_done order by position limit 1`, [p.project_id]);
+  if (!done) return null;
+  await moveTask(db, p.id, done.id, null);
+  const author = actorId ?? p.responsible_user_id ?? p.created_by;
+  if (author) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [p.id, author, `Automatisch erledigt: alle Aufgaben sind erledigt (Status → ${done.name})`]);
+  return p;
 }
 
 /** Kopiert ein Arbeitspaket als nächste Instanz einer Wiederholung (Checkliste offen, Labels gleich). */

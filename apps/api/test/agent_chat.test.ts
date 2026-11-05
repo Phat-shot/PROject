@@ -327,6 +327,10 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(Projekt dieses Kanals\\)`));
   assert.ok(!p.includes('Schnittstellenliste'));
   assert.ok((await t.api(pl).get(`/chat/channels/${ch}/messages?thread=${root.id}`)).json().messages.at(-1).body.startsWith(`Zu ERP-${erpTask.number} kann ich dir hier nichts sagen. `));
+  // Anderes Projekt nur mit Kürzel: die Antwort sagt, dass es hier nichts dazu gibt, und der Prompt weiß das
+  const root2 = await say(pl, ch, `@Chatty wie weit ist ERP, und was ist mit WEB-${t4.number}?`);
+  assert.match(prompts.at(-1)!, /Zu ERP schreibt das System selbst vor deine Antwort/);
+  assert.ok((await t.api(pl).get(`/chat/channels/${ch}/messages?thread=${root2.id}`)).json().messages.at(-1).body.startsWith('Zu ERP kann ich dir hier nichts sagen. '));
   await say(pl, ch, 'Und die Lizenzen?', root.id);
   p = prompts.at(-1)!;
   assert.match(p, new RegExp(`Thema: Arbeitspaket WEB-${t4.number} in Projekt WEB „Website-Relaunch“ \\(Projekt dieses Kanals\\)`));

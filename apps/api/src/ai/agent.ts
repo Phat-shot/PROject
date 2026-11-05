@@ -2,8 +2,10 @@ import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { audit } from '../audit.js';
+import { supersedeDrafts } from '../mail/supersede.js';
+export { supersedeDrafts } from '../mail/supersede.js';
 import { dispatch, dmChannel, notify, systemMessage, usersWithRight } from '../notify.js';
-import { contactChain, dateStr, touchTask } from '../tasks/service.js';
+import { completeParentIfDone, contactChain, dateStr, touchTask } from '../tasks/service.js';
 import { aiConfigFor, completeJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -278,24 +280,6 @@ async function holdProposals(ctx: RunCtx, held: HeldAction[], runId: string | nu
   return r.question.id;
 }
 
-/**
- * Überholte Entwürfe verwerfen: neuer Entwurf, geplante oder gesendete Mail des Agenten an dieselben Empfänger zum selben
- * Arbeitspaket (bei PDF-Lieferungen zur selben Seite) ersetzt ältere, die noch auf Freigabe oder Versand warten. Log und Audit.
- */
-export async function supersedeDrafts(db: Db, q: { taskId: string; projectId: string; orgId: string; authorId: string; to: string[]; keepId: string | null; pageId?: string | null }): Promise<number> {
-  const key = (xs: unknown) => (Array.isArray(xs) ? xs : []).map((x) => String(x).trim().toLowerCase()).sort().join(',');
-  const want = key(q.to);
-  const rows = (await db.query(`select id, subject, to_addrs from mail_drafts where task_id = $1 and user_id = $2 and status in ('pending_approval', 'scheduled') and page_id is not distinct from $3::uuid and ($4::uuid is null or id <> $4)`, [q.taskId, q.authorId, q.pageId ?? null, q.keepId])).rows
-    .filter((d: any) => key(typeof d.to_addrs === 'string' ? JSON.parse(d.to_addrs) : d.to_addrs) === want);
-  for (const d of rows) {
-    await db.query(`update outbound_checks set decided_at = now() where mail_draft_id = $1 and decided_at is null`, [d.id]);
-    await db.query(`delete from mail_drafts where id = $1`, [d.id]);
-    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [q.taskId, q.authorId, `Älterer Entwurf an ${q.to.join(', ')} verworfen (überholt): „${d.subject}“`]);
-    await audit(db, { orgId: q.orgId, projectId: q.projectId, userId: q.authorId, action: 'mail.draft_superseded', objectType: 'mail_draft', objectId: d.id, details: { subject: d.subject, by: q.keepId } });
-  }
-  return rows.length;
-}
-
 /** Aktionen eines Agenten ausführen (Lauf mit hold = anhalten nach Policy; Bestätigung mit approvedBy ohne Anhalten). */
 export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
   const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
@@ -411,7 +395,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and (lower(name) = lower($2) or ($3 and is_done)) order by (lower(name) = lower($2)) desc, position limit 1`, [task.project_id, a.column, doneWord]);
         if (!col) errors.push(`Status „${a.column}“ gibt es nicht (Spalten: ${ctx.columns.rows.map((c: any) => c.name).join(', ')})`);
         else if ((await db.one(`select kind from board_columns where id = $1`, [col.id])).kind === 'waiting') errors.push(`Status „${col.name}“ setzt das System: gib wait (worauf, Frist) bzw. ask an`);
-        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
+        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); if (task.parent_id && (await db.one(`select is_done from board_columns where id = $1`, [col.id])).is_done) await completeParentIfDone(db, task.id, agent.id); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
       } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
         if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);

@@ -81,6 +81,8 @@ export interface Project {
   /** workflow = Mini-Projekt eines isolierten Workflow-Laufs (nicht in Projektlisten) */
   kind?: 'project' | 'workflow';
   timeTrackingEnabled: boolean;
+  /** Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind (Vorgabe, je AP übersteuerbar) */
+  autoCompleteParent?: boolean;
   budgetHours: number | null;
   escalation?: EscalationPolicy;
   reporting?: ReportingPolicy;
@@ -423,6 +425,8 @@ export interface Task {
   externalBrief?: string | null;
   /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
   agentPaused?: boolean;
+  /** Automatisch erledigt, wenn alle Aufgaben erledigt sind; null = Vorgabe des Projekts */
+  autoComplete?: boolean | null;
   /** Lauf des Agenten steht an oder läuft gerade */
   agentRunning?: boolean;
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
