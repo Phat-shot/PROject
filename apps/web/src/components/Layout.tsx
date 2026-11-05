@@ -144,7 +144,7 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 /**
- * Doku als Untermenü des geöffneten Projekts: Besprechungen, die Ordner (öffnen ihre Ordnerseite) und die fünf zuletzt
+ * Doku als Untermenü des geöffneten Projekts (ohne eigene Überschrift): Besprechungen, die Ordner (öffnen ihre Ordnerseite) und die fünf zuletzt
  * geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
  */
 function ProjectDocsNav({ projectId }: { projectId: string }) {
@@ -163,7 +163,6 @@ function ProjectDocsNav({ projectId }: { projectId: string }) {
   const recent = d.pages.filter((p) => !folderPages.has(p.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
   return (
     <div className="proj-docs">
-      <NavLink to={base} end className="proj-sub head">Doku</NavLink>
       <NavLink to={`${base}/besprechungen`} className="proj-sub">Besprechungen</NavLink>
       {d.folders.filter((f) => !f.parentId).map((f) => <NavLink key={f.id} to={f.pageId ? `${base}/${f.pageId}` : base} end className="proj-sub" onClick={(e) => { e.preventDefault(); void openFolder(f); }}>▸ {f.name}</NavLink>)}
       {recent.length > 0 && <div className="proj-sub-h">Zuletzt geändert</div>}

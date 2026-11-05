@@ -56,7 +56,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     try { setQuestion((await api.get<{ question: Question | null }>(`/chat/messages/${id}`)).question); } catch { setQuestion(null); }
   };
   useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (threadRef.current) void loadThread(threadRef.current); }, 5000); return () => clearInterval(h); }, [channelId]);
-  useEffect(() => { threadRef.current = thread; setReplies([]); setQuestion(null); if (thread) void loadThread(thread).then(() => document.getElementById(`thread-${thread}`)?.scrollIntoView({ block: 'nearest' })); onThreadChange?.(thread); }, [thread]);
+  useEffect(() => { threadRef.current = thread; setReplies([]); setQuestion(null); if (thread) void loadThread(thread).then(() => document.getElementById(`thread-${thread}`)?.scrollIntoView?.({ block: 'nearest' })); onThreadChange?.(thread); }, [thread]);
   // Deep-Link: zur Nachricht scrollen, hervorheben, Fokus ins Antwortfeld des Threads
   useEffect(() => { setHighlight(highlightId ?? null); }, [highlightId]);
   useEffect(() => {

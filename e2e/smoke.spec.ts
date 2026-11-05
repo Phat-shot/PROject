@@ -165,7 +165,7 @@ test('Projekt: Doku als Untermenü in der Leiste, Besprechungen in der Doku, Kal
   const web = projects.find((p: any) => p.key === 'WEB');
   await page.goto(`/projekte/${web.id}/board`);
   const docs = page.locator('.sidebar .proj-docs');
-  await expect(docs.getByRole('link', { name: 'Doku' })).toBeVisible();
+  await expect(docs.getByRole('link', { name: 'Doku' })).toHaveCount(0);
   await docs.getByRole('link', { name: 'Besprechungen' }).click();
   await expect(page).toHaveURL(new RegExp(`/projekte/${web.id}/doku/besprechungen$`));
   await expect(page.getByRole('button', { name: 'Besprechung anlegen' })).toBeVisible();
