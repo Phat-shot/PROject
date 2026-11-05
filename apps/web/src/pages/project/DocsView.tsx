@@ -7,6 +7,7 @@ import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
+import { MeetingsView } from './MeetingsView';
 
 interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTemplate[] }
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
@@ -14,14 +15,15 @@ interface PageData { page: DocPage; versions: DocPageVersion[]; attachments: { i
 
 const KIND_LABEL: Record<string, string> = { series: 'Besprechungsreihe', subproject: 'Teilprojekt', report: 'Berichte', custom: 'Sammlung', folder: 'Ordner' };
 
-export function DocsView() {
+/** Doku; mit meetings rechts die Besprechungen (Termin, Teilnehmer, Protokoll), links weiter der Seitenbaum. */
+export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
   const { detail } = useProject();
   const { pageId } = useParams();
   const nav = useNavigate();
   const docs = useData<DocsData>(`/projects/${detail.project.id}/docs`);
   const mobile = useIsMobile();
   const [treeOpen, setTreeOpen] = useState(false);
-  const showTree = !mobile || !pageId || treeOpen;
+  const showTree = !mobile || (!pageId && !meetings) || treeOpen;
   const [newPage, setNewPage] = useState<{ folderId: string | null; parentPageId: string | null; inherited?: string | null } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [editFolder, setEditFolder] = useState<DocFolder | null>(null);
@@ -62,9 +64,10 @@ export function DocsView() {
   };
   return (
     <div className="docs-layout">
-      {mobile && pageId && <button className="btn sm tree-toggle" onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? '▾ Seitenbaum ausblenden' : '▸ Seitenbaum'}</button>}
+      {mobile && (pageId || meetings) && <button className="btn sm tree-toggle" onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? '▾ Seitenbaum ausblenden' : '▸ Seitenbaum'}</button>}
       {showTree && <div className="doc-tree" onClick={() => { if (mobile) setTreeOpen(false); }}>
         <div className="row between"><strong>Doku</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewPage({ folderId: docs.data?.folders[0]?.id ?? null, parentPageId: null })}>+ Seite</button>}</div>
+        <div className={`folder meetings-link ${meetings ? 'active' : ''}`}><span className="t" title="Besprechungen: Termine, Teilnehmer, Protokolle" onClick={() => nav(`${base}/besprechungen`)}>Besprechungen</span></div>
         {docs.data?.folders.filter((f) => !f.parentId).map((f) => (
           <div key={f.id}>
             <div className={`folder ${f.pageId && pageId === f.pageId ? 'active' : ''}`}>
@@ -81,7 +84,7 @@ export function DocsView() {
         {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}
         {me.role === 'pl' && <button className="btn sm link mt" onClick={(e) => { e.stopPropagation(); setNewFolder(true); }}>+ Ordner</button>}
       </div>}
-      {pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
+      {meetings ? <MeetingsView /> : pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
         <div className="doc-view">
           <h1>Dokumentation</h1>
           <p className="muted">Seiten mit Unterseiten, WYSIWYG-Editor, Versionen, Status Entwurf → In Prüfung → Final. Eine Oberseite (z. B. „JF Auftraggeber“ oder ein Teilprojekt) trägt Zusammenfassung und Teilnehmer, legt die Vorlage für ihre Unterseiten fest und das PDF-Layout.</p>

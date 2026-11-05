@@ -278,12 +278,12 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
         {essAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
         <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite</button>
         {sumAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`, { agentId: sumAgent.agentId }); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
-        <Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Offene Vorschläge</Link>
+        <Link className="btn sm link" to={`/projekte/${detail.project.id}/einstellungen/ki-laeufe`}>Offene Vorschläge</Link>
         {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
       </div>
       <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} data={aiRuns} />
       {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
-      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`/projekte/${detail.project.id}/ki`}>Offene Vorschläge</Link></div>}
+      {aiMsg && <div className="success mb small">{aiMsg} <Link to={`/projekte/${detail.project.id}/einstellungen/ki-laeufe`}>Offene Vorschläge</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
           {d.data.links.length > 0 && <>{d.data.links.some((l) => l.origin) ? 'Daraus entstanden / verknüpft' : 'Verknüpft'}: {d.data.links.map((l) => l.projectId === detail.project.id

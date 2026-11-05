@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { Notification, NotifyEvent, Project } from '@projekttool/shared';
+import type { DocFolder, DocPage, Notification, NotifyEvent, Project } from '@projekttool/shared';
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -87,6 +87,7 @@ export function Layout({ children }: { children: ReactNode }) {
           {(open.byProject[p.id] ?? 0) > 0 && <button className={`badge warn nav-count ${expanded === p.id ? 'on' : ''}`} title="Offen für dich in diesem Projekt: aufklappen" aria-expanded={expanded === p.id} onClick={() => setExpanded(expanded === p.id ? null : p.id)}>{open.byProject[p.id]}</button>}
           <button className={`pin ${pin ? 'on' : ''}`} disabled={!pin && pinnedIds.length >= MAX_PINNED} title={pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften'} aria-label={pin ? 'Nicht mehr anheften' : 'Anheften'} onClick={() => void togglePin(p.id)}>{pin ? '★' : '☆'}</button>
         </div>
+        {sel && <ProjectDocsNav projectId={p.id} />}
         {expanded === p.id && (open.byProject[p.id] ?? 0) > 0 && <div className="proj-open"><OpenForMeList questions={open.questions.filter((q) => q.projectId === p.id)} waiting={open.waiting} projectId={p.id} bare onNavigate={() => setMenu(false)} /></div>}
       </div>
     );
@@ -139,6 +140,35 @@ export function Layout({ children }: { children: ReactNode }) {
       {tour && user && <Tour userId={user.id} isAdmin={user.globalRole === 'org_admin'} projects={pinned.length ? pinned : projects} onDone={() => setTour(false)} />}
     </div>
     </MessengerCtx.Provider>
+  );
+}
+
+/**
+ * Doku als Untermenü des geöffneten Projekts: Besprechungen, die Ordner (öffnen ihre Ordnerseite) und die fünf zuletzt
+ * geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
+ */
+function ProjectDocsNav({ projectId }: { projectId: string }) {
+  const nav = useNavigate();
+  const [d, setD] = useState<{ folders: DocFolder[]; pages: DocPage[] } | null>(null);
+  const load = () => api.get<{ folders: DocFolder[]; pages: DocPage[] }>(`/projects/${projectId}/docs`).then(setD).catch(() => undefined);
+  useEffect(() => { setD(null); void load(); }, [projectId]);
+  useRefresh(load, 120_000);
+  const base = `/projekte/${projectId}/doku`;
+  const openFolder = async (f: DocFolder) => {
+    if (f.pageId) { nav(`${base}/${f.pageId}`); return; }
+    try { const r = await api.post<{ page: DocPage }>(`/projects/${projectId}/docs/folders/${f.id}/page`); nav(`${base}/${r.page.id}`); } catch { nav(base); }
+  };
+  if (!d) return null;
+  const folderPages = new Set(d.folders.map((f) => f.pageId).filter(Boolean));
+  const recent = d.pages.filter((p) => !folderPages.has(p.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
+  return (
+    <div className="proj-docs">
+      <NavLink to={base} end className="proj-sub head">Doku</NavLink>
+      <NavLink to={`${base}/besprechungen`} className="proj-sub">Besprechungen</NavLink>
+      {d.folders.filter((f) => !f.parentId).map((f) => <NavLink key={f.id} to={f.pageId ? `${base}/${f.pageId}` : base} end className="proj-sub" onClick={(e) => { e.preventDefault(); void openFolder(f); }}>▸ {f.name}</NavLink>)}
+      {recent.length > 0 && <div className="proj-sub-h">Zuletzt geändert</div>}
+      {recent.map((p) => <NavLink key={p.id} to={`${base}/${p.id}`} className="proj-sub recent" title={p.title}>{p.title}</NavLink>)}
+    </div>
   );
 }
 

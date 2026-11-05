@@ -10,6 +10,7 @@ import { AiTab } from './Ai';
 import { DeadlinesTab } from './Deadlines';
 import { PlanningTab } from './Planning';
 import { DataTab } from './Data';
+import { AiView } from '../AiView';
 
 /**
  * Projekt › Einstellungen (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Fristen und Berichte,
@@ -22,7 +23,9 @@ export const PROJECT_SETTINGS_TABS: { key: string; label: string }[] = [
 
 export function ProjectSettingsPage() {
   const elements: Record<string, ReactNode> = { allgemein: <GeneralTab />, personen: <PeopleTab />, mail: <MailTab />, benachrichtigungen: <NotifyTab />, ki: <AiTab />, fristen: <DeadlinesTab />, planung: <PlanningTab />, daten: <DataTab /> };
-  return <SettingsRoutes tabs={PROJECT_SETTINGS_TABS.map((t) => ({ ...t, element: elements[t.key] }))} />;
+  // KI-Läufe und offene KI-Vorschläge (früher eigener Reiter): Route immer, der Unterreiter nur bei aktiver KI (Kopfzeile)
+  const tabs = [...PROJECT_SETTINGS_TABS.map((t) => ({ ...t, element: elements[t.key] })), { key: 'ki-laeufe', label: 'KI-Läufe', element: <AiView /> }];
+  return <SettingsRoutes tabs={tabs} />;
 }
 
 /** Personen: Mitglieder (Personen, Gruppen, Agenten) mit Einladung, dazu Kontakte und Stakeholder. */
