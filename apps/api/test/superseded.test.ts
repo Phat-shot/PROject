@@ -54,3 +54,58 @@ test('Überholtes wird verworfen: neuere Meldung zum selben AP, Entwurf an diese
   await supersedeStaleNotifications(t.db);
   assert.ok((await t.db.one(`select superseded_at from notifications where id = $1`, [esc])).superseded_at, 'AP erledigt');
 });
+
+test('Höhere Eskalation und überfällig ersetzen die ältere Meldung zum selben AP; blockiert bleibt eigene Klasse', async () => {
+  const web = t.ids.projects.web;
+  const uid = t.ids.users.pl;
+  const task = await t.db.one(`select t.id from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.parent_id is null and t.deleted_at is null and not c.is_done order by t.number desc limit 1`, [web]);
+  const ref = { type: 'task' as const, id: task.id };
+  const blocked = await notify(t.db, { userId: uid, projectId: web, type: 'escalation', event: 'blocked', title: 'Blockiert', ref });
+  const e1 = await notify(t.db, { userId: uid, projectId: web, type: 'escalation', title: 'Eskalation Stufe 1', ref });
+  const w = await notify(t.db, { userId: uid, projectId: web, type: 'task.wait_expired', event: 'escalation', title: 'Frist abgelaufen', ref });
+  const e2 = await notify(t.db, { userId: uid, projectId: web, type: 'escalation', title: 'Eskalation Stufe 2', ref });
+  const sup = async (id: string | null) => Boolean((await t.db.one(`select superseded_at from notifications where id = $1`, [id])).superseded_at);
+  assert.equal(await sup(e1), true);
+  assert.equal(await sup(w), true);
+  assert.equal(await sup(e2), false);
+  assert.equal(await sup(blocked), false, 'blockiert ist eine eigene Klasse');
+  const soon = await notify(t.db, { userId: uid, projectId: web, type: 'task.due_soon', event: 'due', title: 'Bald fällig', ref });
+  const over = await notify(t.db, { userId: uid, projectId: web, type: 'task.overdue', event: 'due', title: 'Überfällig', ref });
+  assert.equal(await sup(soon), true);
+  assert.equal(await sup(over), false);
+});
+
+test('Arbeitspaket automatisch erledigt, wenn die letzte Aufgabe erledigt ist; je AP und je Projekt abschaltbar', async () => {
+  const pl = await t.login('pl@demo.local');
+  const web = t.ids.projects.web;
+  const done = await t.db.one(`select id from board_columns where project_id = $1 and is_done order by position limit 1`, [web]);
+  const isDone = async (id: string) => (await t.db.one(`select c.is_done from tasks t join board_columns c on c.id = t.column_id where t.id = $1`, [id])).is_done as boolean;
+  const mk = async (title: string, parentId?: string) => { const r = await t.api(pl).post(`/projects/${web}/tasks`, { title, ...(parentId ? { parentId } : {}) }); assert.equal(r.statusCode, 200, r.body); return r.json().task.id as string; };
+  const ap = await mk('Auto-AP');
+  const a = await mk('Teil A', ap);
+  const b = await mk('Teil B', ap);
+  assert.equal((await t.api(pl).get(`/tasks/${ap}`)).json().task.autoComplete, null);
+  assert.equal((await t.api(pl).post(`/tasks/${a}/move`, { columnId: done.id })).statusCode, 200);
+  assert.equal(await isDone(ap), false, 'B noch offen');
+  assert.equal((await t.api(pl).post(`/tasks/${b}/move`, { columnId: done.id })).statusCode, 200);
+  assert.equal(await isDone(ap), true, 'alle erledigt → AP erledigt');
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Automatisch erledigt:%'`, [ap]));
+  // Je AP abgeschaltet
+  const ap2 = await mk('Manuell-AP');
+  const c = await mk('Teil C', ap2);
+  assert.equal((await t.api(pl).patch(`/tasks/${ap2}`, { autoComplete: false })).statusCode, 200);
+  await t.api(pl).post(`/tasks/${c}/move`, { columnId: done.id });
+  assert.equal(await isDone(ap2), false, 'AP-Schalter aus');
+  // Projekt aus, AP ausdrücklich an
+  assert.equal((await t.api(pl).patch(`/projects/${web}`, { autoCompleteParent: false })).json().project.autoCompleteParent, false);
+  const ap3 = await mk('Projekt-aus-AP');
+  const d = await mk('Teil D', ap3);
+  await t.api(pl).post(`/tasks/${d}/move`, { columnId: done.id });
+  assert.equal(await isDone(ap3), false, 'Projekt-Vorgabe aus');
+  const ap4 = await mk('AP-an');
+  const e = await mk('Teil E', ap4);
+  await t.api(pl).patch(`/tasks/${ap4}`, { autoComplete: true });
+  await t.api(pl).post(`/tasks/${e}/move`, { columnId: done.id });
+  assert.equal(await isDone(ap4), true, 'AP übersteuert Projekt');
+  await t.api(pl).patch(`/projects/${web}`, { autoCompleteParent: true });
+});

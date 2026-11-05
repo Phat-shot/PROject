@@ -4,6 +4,7 @@ import { audit } from '../audit.js';
 import { dispatch, notify } from '../notify.js';
 import { dateStr, loadTasks, resolveProjectLead } from './service.js';
 import { projectAccount } from '../mail/accounts.js';
+import { supersedeDrafts } from '../mail/supersede.js';
 
 /**
  * Eskalationsregelwerk (Regel vor KI). Die KI liefert später nur Text und Einschätzung aus Mailinhalten;
@@ -159,6 +160,8 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
         `insert into mail_drafts (account_id, project_id, task_id, user_id, to_addrs, subject, body, status) values ($1,$2,$3,$4,$5,$6,$7,$8) returning id`,
         [account.id, pr.id, row.taskId, lead.userId, JSON.stringify([p.contactEmail]), `Eskalation ${pr.key}: ${row.title}`, text, p.externalMode === 'direct' ? 'draft' : 'pending_approval']
       );
+      // Höhere Stufe ersetzt die ältere, noch nicht freigegebene Eskalationsmail an dieselbe Adresse
+      if (lead.userId) await supersedeDrafts(db, { taskId: row.taskId, projectId: pr.id, orgId: pr.org_id, authorId: lead.userId, to: [p.contactEmail], keepId: d.id });
       if (p.externalMode === 'direct') {
         const { MailService } = await import('../mail/service.js');
         const svc = new MailService(db);
@@ -169,7 +172,7 @@ async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow
           await db.query(`update mail_drafts set status = 'failed', error = $2 where id = $1`, [d.id, String(e?.message ?? e)]);
         }
       } else if (lead.userId) {
-        await notify(db, { userId: lead.userId, projectId: pr.id, taskId: row.taskId, event: 'escalation', type: 'mail.approval', title: `Freigabe: Eskalationsmail an ${p.contactEmail}`, body: row.title, link: `/projekte/${pr.id}/mail/freigaben`, dedupeKey: `escmail:${row.taskId}` });
+        await notify(db, { userId: lead.userId, projectId: pr.id, taskId: row.taskId, event: 'escalation', type: 'mail.approval', ref: { type: 'task', id: row.taskId }, title: `Freigabe: Eskalationsmail an ${p.contactEmail}`, body: row.title, link: `/projekte/${pr.id}/mail/freigaben`, dedupeKey: `escmail:${row.taskId}` });
       }
     }
   }

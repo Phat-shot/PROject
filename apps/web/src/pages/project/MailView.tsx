@@ -5,6 +5,7 @@ import type { AiFeature, MailAiRun, MailDetail, MailDraft, MailView as MailViewT
 import { AUDIENCE_LABEL } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
+import { useRefresh } from '../../lib/useRefresh';
 import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { ProjectScope, useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
@@ -64,6 +65,7 @@ export function MailView() {
   const accounts = accountIds.map((id) => readable.find((v) => v.accountId === id)!);
   const folders = useFolders(accountIds.filter((id) => !accountId || id === accountId));
   const drafts = useData<{ drafts: MailDraft[] }>(`/mail/drafts${projectId ? `?projectId=${projectId}` : ''}`, [loc.pathname]);
+  useRefresh(drafts.reload);
   const pending = (drafts.data?.drafts ?? []).filter((d) => d.status === 'pending_approval');
   const canWrite = readable.some((v) => v.myRights.canDraft || v.myRights.canSend);
   const manage = projectId && (views.data?.views ?? []).some((v) => v.projectId === projectId && v.canManage);

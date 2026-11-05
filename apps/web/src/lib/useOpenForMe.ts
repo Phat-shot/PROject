@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { Question } from '@projekttool/shared';
 import { api } from './api';
+import { CHANGED } from './events';
 
 /** Was auf die Person wartet (GET /my/waiting), ohne offene Fragen. */
 export interface Waiting {
@@ -34,12 +35,18 @@ const load = () => { last = Date.now(); return Promise.all([api.get<{ questions:
   listeners.forEach((l) => l(cache));
 }).catch(() => undefined); };
 
-/** „Offen für dich“ für Dashboard und Leiste aus einer Quelle; alle 60 s und beim Fokus neu, refreshOpenForMe() nach Änderungen. */
+/** „Offen für dich“ für Dashboard und Leiste aus einer Quelle; alle 30 s, beim Fokus und nach jeder Änderung über die API neu. */
 export function useOpenForMe(): OpenForMe {
   const [o, setO] = useState<OpenForMe>(cache);
   useEffect(() => {
     listeners.add(setO);
-    if (!timer) { void load(); timer = setInterval(load, 60_000); window.addEventListener('focus', () => void load()); }
+    if (!timer) {
+      void load();
+      timer = setInterval(() => { if (document.visibilityState !== 'hidden') void load(); }, 30_000);
+      window.addEventListener('focus', () => void load());
+      let t: ReturnType<typeof setTimeout> | null = null;
+      window.addEventListener(CHANGED, () => { if (t) clearTimeout(t); t = setTimeout(() => void load(), 400); });
+    }
     return () => { listeners.delete(setO); };
   }, []);
   return o;

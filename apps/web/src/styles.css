@@ -930,3 +930,12 @@ button.lane-name.link:hover { color: var(--primary, inherit); }
 .quick-add.add-lane { margin-top: 12px; }
 .col-add { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
 .lane-config { margin-left: auto; font-weight: 500; }
+/* Leiste: Zähler „Offen für dich“ klappt die Liste des Projekts auf */
+.sidebar button.nav-count { border: 0; cursor: pointer; line-height: 18px; flex: none; }
+.sidebar button.nav-count.on { box-shadow: 0 0 0 2px var(--primary); }
+.sidebar .proj-open { margin: 2px 6px 6px 16px; font-size: 12px; }
+.sidebar .proj-open .open-for-me .ofm { gap: 6px; padding: 5px 2px; }
+.sidebar .proj-open .open-for-me .ofm .k { min-width: 0; font-size: 11px; }
+.sidebar .proj-open .open-for-me .ofm { flex-wrap: wrap; color: #d6dcea; border-top-color: rgba(255, 255, 255, 0.1); }
+.sidebar .proj-open .open-for-me .ofm:hover { background: rgba(255, 255, 255, 0.07); }
+.sidebar .proj-open .open-for-me .ofm .x { flex-basis: 100%; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

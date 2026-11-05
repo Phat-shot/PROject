@@ -34,17 +34,21 @@ export interface NotifyInput {
   progress?: { milestone: boolean; done: boolean };
 }
 
-/** Meldungsarten, bei denen nur die neueste ungelesene je Arbeitspaket zählt. */
-const SUPERSEDING_TYPES = new Set(['task.progress', 'escalation', 'draft.review', 'outbound.review', 'task.wait_expired']);
+/**
+ * Nur die neueste ungelesene Meldung je Person und Bezug zählt: Klassen, deren neuere Meldung die ältere überholt (höhere
+ * Eskalationsstufe, überfällig nach bald fällig, neuer Zwischenstand), und Arten, die je Bezug nur einmal offen sein sollen.
+ */
+const SUPERSEDING_EVENTS = new Set(['escalation', 'due', 'progress']);
+const SUPERSEDING_TYPES = new Set(['draft.review', 'outbound.review', 'mail.approval', 'question.remind']);
 
 /**
- * Worker: überholte ungelesene Meldungen ausblenden. Eskalation und abgelaufene Frist eines erledigten, archivierten oder
- * gelöschten Arbeitspakets; Entwurf zur Freigabe, wenn zum Arbeitspaket kein Entwurf mehr wartet.
+ * Worker: überholte ungelesene Meldungen ausblenden. Eskalation, abgelaufene Frist und Fälligkeit eines erledigten,
+ * archivierten oder gelöschten Arbeitspakets; Entwurf zur Freigabe, wenn zum Arbeitspaket kein Entwurf mehr wartet.
  */
 export async function supersedeStaleNotifications(db: Db): Promise<number> {
   const r = await db.query(`update notifications n set read_at = now(), superseded_at = now() where n.read_at is null and n.ref_type = 'task' and (
-      (n.type in ('escalation', 'task.wait_expired') and exists (select 1 from tasks t join board_columns c on c.id = t.column_id where t.id = n.ref_id and (c.is_done or t.archived_at is not null or t.deleted_at is not null)))
-      or (n.type in ('draft.review', 'outbound.review') and not exists (select 1 from mail_drafts d where d.task_id = n.ref_id and d.status in ('pending_approval', 'failed'))))`);
+      (n.event in ('escalation', 'due') and exists (select 1 from tasks t join board_columns c on c.id = t.column_id where t.id = n.ref_id and (c.is_done or t.archived_at is not null or t.deleted_at is not null)))
+      or (n.type in ('draft.review', 'outbound.review', 'mail.approval') and not exists (select 1 from mail_drafts d where d.task_id = n.ref_id and d.status in ('pending_approval', 'failed'))))`);
   return r.rowCount ?? 0;
 }
 
@@ -76,8 +80,9 @@ export async function notify(db: Db, n: NotifyInput): Promise<string | null> {
   );
   if (!row) return null;
   // Neuere Meldung derselben Art zum selben Arbeitspaket ersetzt ältere ungelesene (Zwischenstand, Eskalationsstufe, Entwurf zur Freigabe)
-  if (n.ref?.type === 'task' && SUPERSEDING_TYPES.has(n.type)) {
-    await db.query(`update notifications set read_at = now(), superseded_at = now() where user_id = $1 and type = $2 and ref_type = 'task' and ref_id = $3 and read_at is null and id <> $4`, [u.id, n.type, n.ref.id, row.id]);
+  if (n.ref && (SUPERSEDING_EVENTS.has(event) || SUPERSEDING_TYPES.has(n.type))) {
+    const byEvent = SUPERSEDING_EVENTS.has(event);
+    await db.query(`update notifications set read_at = now(), superseded_at = now() where user_id = $1 and ${byEvent ? 'event' : 'type'} = $2 and ref_type = $3 and ref_id = $4 and read_at is null and id <> $5`, [u.id, byEvent ? event : n.type, n.ref.type, n.ref.id, row.id]);
   }
   // Chat „thread“ ohne eigenen Thread: Systembeitrag in der Direktnachricht des auslösenden Agenten an die Person
   if (rule.value.chat === 'thread' && !n.chatted && !n.thread && n.actorId) {

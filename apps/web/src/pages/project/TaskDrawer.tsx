@@ -169,6 +169,10 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
         <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
         <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
+        {!t.parentId && <label className="field"><span>Automatisch erledigt</span>
+          <select value={t.autoComplete == null ? '' : t.autoComplete ? 'on' : 'off'} disabled={!canEdit} title="Wenn alle Aufgaben erledigt sind" onChange={(e) => void patch({ autoComplete: e.target.value === '' ? null : e.target.value === 'on' })}>
+            <option value="">wie im Projekt ({detail.project.autoCompleteParent !== false ? 'an' : 'aus'})</option><option value="on">an</option><option value="off">aus</option>
+          </select></label>}
         {timeTracking && (detail.project.timeTrackingEnabled || t.estimateMinutes) ? <>
           <TextField label="Geschätzter Aufwand (Stunden)" type="number" value={t.estimateMinutes ? String(Math.round((t.estimateMinutes / 60) * 100) / 100) : ''} canEdit={canEdit} onSave={(v) => patch({ estimateMinutes: v ? Math.round(Number(v) * 60) : null })} />
           <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>

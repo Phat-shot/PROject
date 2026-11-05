@@ -18,14 +18,14 @@ export function GeneralTab() {
   const p = detail.project;
   const isPl = p.myMembership.role === 'pl';
   const policy = useProjectPolicy(p);
-  const [f, setF] = useState({ name: p.name, description: p.description ?? '', visibility: p.visibility, timeTrackingEnabled: p.timeTrackingEnabled, budgetHours: p.budgetHours == null ? '' : String(p.budgetHours) });
+  const [f, setF] = useState({ name: p.name, description: p.description ?? '', visibility: p.visibility, timeTrackingEnabled: p.timeTrackingEnabled, budgetHours: p.budgetHours == null ? '' : String(p.budgetHours), autoCompleteParent: p.autoCompleteParent !== false });
   const [health, setHealth] = useState(false);
   const [asTemplate, setAsTemplate] = useState(false);
   const { busy, error, run } = useAsync();
   const { msg, flash } = useFlash();
   const dialog = useDialog();
   const nav = useNavigate();
-  const dirty = f.name !== p.name || f.description !== (p.description ?? '') || f.visibility !== p.visibility || f.timeTrackingEnabled !== p.timeTrackingEnabled || f.budgetHours !== (p.budgetHours == null ? '' : String(p.budgetHours));
+  const dirty = f.name !== p.name || f.description !== (p.description ?? '') || f.visibility !== p.visibility || f.timeTrackingEnabled !== p.timeTrackingEnabled || f.budgetHours !== (p.budgetHours == null ? '' : String(p.budgetHours)) || f.autoCompleteParent !== (p.autoCompleteParent !== false);
   const healthText = p.health?.color ? `${{ green: 'grün', yellow: 'gelb', red: 'rot' }[p.health.color]}${p.health.note ? ` · ${p.health.note}` : ''}` : 'automatisch';
   return (
     <>
@@ -51,8 +51,9 @@ export function GeneralTab() {
             <label className="check"><input type="checkbox" checked={f.timeTrackingEnabled} disabled={!isPl} onChange={(e) => setF({ ...f, timeTrackingEnabled: e.target.checked })} /> Zeiterfassung aktiv (optionales Modul)</label>
             {(f.timeTrackingEnabled || f.budgetHours) && <label className="field"><span>Budget (Stunden)</span><input type="number" min={0} value={f.budgetHours} disabled={!isPl} onChange={(e) => setF({ ...f, budgetHours: e.target.value })} style={{ width: 120 }} /></label>}
           </div> : <p className="muted small">Zeiterfassung ist mandantenweit deaktiviert (<Link to="/verwaltung/allgemein">Verwaltung › Allgemein</Link>).</p>}
+          <label className="check"><input type="checkbox" checked={f.autoCompleteParent} disabled={!isPl} onChange={(e) => setF({ ...f, autoCompleteParent: e.target.checked })} /> Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind <span className="muted small">(je Arbeitspaket unter „Einstellungen“ änderbar)</span></label>
           {error && <div className="error">{error}</div>}
-          {isPl && <div className="row"><button className="btn primary sm" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility, timeTrackingEnabled: f.timeTrackingEnabled, budgetHours: f.budgetHours ? Number(f.budgetHours) : null }); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>}
+          {isPl && <div className="row"><button className="btn primary sm" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility, timeTrackingEnabled: f.timeTrackingEnabled, budgetHours: f.budgetHours ? Number(f.budgetHours) : null, autoCompleteParent: f.autoCompleteParent }); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>}
         </div>
       </SettingsCard>
       {isPl && p.status === 'active' && <SettingsCard title="Aktionen">

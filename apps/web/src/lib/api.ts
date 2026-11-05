@@ -1,3 +1,5 @@
+import { CHANGED } from './events';
+
 export class ApiError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
     super(message);
@@ -14,6 +16,8 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
   const text = await res.text();
   const data = text ? JSON.parse(text) : null;
   if (!res.ok) throw new ApiError(res.status, data?.error ?? res.statusText, data?.details);
+  // Erfolgreiche Änderung: Zähler, Glocke und Listen frischen sich auf (useRefresh)
+  if (method !== 'GET' && typeof window !== 'undefined') window.dispatchEvent(new Event(CHANGED));
   return data as T;
 }
 
