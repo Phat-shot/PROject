@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@projekttool/shared": "*",
-    "@tiptap/core": "^",
+    "@tiptap/core": "^3.32.0",
     "@tiptap/extension-image": "^3.32.0",
     "@tiptap/extension-table": "^3.32.0",
     "@tiptap/extension-text-style": "^3.32.0",
