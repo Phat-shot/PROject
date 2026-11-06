@@ -252,21 +252,30 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   assert.ok(p.includes(`- ERP-${erpTask.number} „Schnittstellenliste`), 'eigene Arbeitspakete');
   assert.match(p, /Statusfrage: Gib einen knappen Stand/);
 
-  // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit Projektnamen, keine Inhalte, kein LLM-Aufruf, kein Budget
+  // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit Projektnamen und Knöpfen (Karte choices), keine Inhalte, kein LLM-Aufruf, kein Budget
   const plDm = (await t.api(pl).post('/chat/dm', { userId: agent.id })).json().channelId;
   let n0 = prompts.length;
-  await say(pl, plDm, 'Hallo, kannst du mir helfen?');
+  const asked = await say(pl, plDm, 'Hallo, kannst du mir helfen?');
   assert.equal(prompts.length, n0, 'kein LLM-Aufruf');
-  const ask = (await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1);
+  const plMsgs = (await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages;
+  const ask = plMsgs.at(-2);
   assert.equal(ask.userId, agent.id);
-  assert.equal(ask.body, 'Zu welchem Projekt? ERP-Einführung (ERP) oder Website-Relaunch (WEB)?');
+  assert.equal(ask.body, 'Zu welchem Projekt? ERP-Einführung (ERP), Website-Relaunch (WEB) oder allgemein (kein Projekt)? Klick unten oder antworte mit Kürzel oder „allgemein“.');
+  const card = plMsgs.at(-1);
+  assert.equal(card.kind, 'system');
+  assert.equal(card.meta.card, 'choices');
+  assert.equal(card.meta.forMessageId, asked.id);
+  assert.deepEqual(card.meta.choices.map((c: any) => c.value), ['Projekt ERP', 'Projekt WEB', 'allgemein']);
+  assert.equal(card.meta.chosen, undefined);
   run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
   assert.equal(run.status, 'skipped');
-  assert.equal(run.error, 'Rückfrage: Projekt nicht eindeutig');
-  // Kürzel als Antwort genügt
+  assert.equal(run.error, 'Rückfrage: Thema nicht eindeutig');
+  // Kürzel als Antwort genügt: die Karte ist gewählt, die Ursprungsfrage wird mit festem Thema beantwortet (ein Lauf, nicht zwei)
   await say(pl, plDm, 'WEB');
   assert.equal(prompts.length, n0 + 1);
-  assert.match(prompts.at(-1)!, /Thema: Projekt WEB „Website-Relaunch“ \(in der Nachricht genannt\)/);
+  assert.match(prompts.at(-1)!, /Thema: Projekt WEB „Website-Relaunch“ \(auf deine Rückfrage gewählt\)/);
+  assert.match(prompts.at(-1)!, /Hallo, kannst du mir helfen\?[\s\S]*Die letzte Nachricht „WEB“ beantwortet nur deine Rückfrage/, 'Ursprungsfrage im Verlauf');
+  assert.equal((await t.db.one(`select meta->>'chosen' as c from chat_messages where id = $1`, [card.id])).c, 'Projekt WEB');
 
   // Kennung aus einem Projekt, das Max nicht sieht: feste Absage ohne Titel, kein LLM-Aufruf
   const geh = (await t.api(pl).post('/projects', { key: 'GEH', name: 'Geheimprojekt' })).json().project;
@@ -308,7 +317,8 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   // claimCheck: Behauptung ohne Notiz wird ersetzt und im Lauf vermerkt; mit Notiz bleibt „vermerkt“ stehen
   nextReply = 'Ich habe die Mail an Müller gesendet. Das Angebot liegt vor.';
   await say(pl, plDm, 'Hast du die Mail an Müller geschickt?');
-  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1).body, 'Das konnte ich nicht ausführen: „Ich habe die Mail an Müller gesendet“. Das Angebot liegt vor.');
+  // Thema über Inhalte zugeordnet (Annahme): der Hinweis auf die Annahme steht einmal hinter der Antwort
+  assert.equal((await t.api(pl).get(`/chat/channels/${plDm}/messages`)).json().messages.at(-1).body, 'Das konnte ich nicht ausführen: „Ich habe die Mail an Müller gesendet“. Das Angebot liegt vor. (Ich nehme Projekt WEB – sag „allgemein“ oder nenn ein anderes Projekt, wenn ich falsch liege.)');
   run = await t.db.one(`select * from agent_runs where agent_user_id = $1 and trigger = 'chat' order by created_at desc limit 1`, [agent.id]);
   assert.deepEqual(run.actions.find((x: any) => x.type === 'claim_check'), { type: 'claim_check', replaced: 1, text: 'Ich habe die Mail an Müller gesendet.' });
   nextReply = 'Ich habe das im Log vermerkt.';
@@ -345,7 +355,7 @@ test('Ohne Kontext: Gruß ohne Projektbezug bekommt keine Projektinfos; mit pers
   const say = async (body: string) => { const r = await t.api(max).post(`/chat/channels/${cid}/messages`, { body }); assert.equal(r.statusCode, 200, r.body); await flushAgentRuns(); return prompts.at(-1)!; };
   // Max hat zwei gemeinsame Projekte (WEB, ERP) und noch kein persönliches: „hi“ → kein Projektbezug, keine Kennzahlen, keine Arbeitspakete
   let p = await say('hi Chatty');
-  assert.match(p, /Thema: kein Projektbezug in der Nachricht/);
+  assert.match(p, /Thema: allgemeine Anfrage ohne Projektbezug/);
   assert.ok(!p.includes('Kennzahlen zu') && !p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste'), 'keine Projektinfos');
   assert.match(p, /nur ein Gruß oder eine Kurzmeldung/);
   // Persönliches Projekt von Max mit Chatty als Mitglied und einer Doku-Seite
@@ -362,9 +372,10 @@ test('Ohne Kontext: Gruß ohne Projektbezug bekommt keine Projektinfos; mit pers
   assert.match(p, /Thema: Projekt MAXP „Max Assistent“ \(persönliches Projekt des Absenders/);
   assert.ok(p.includes('Doku im persönlichen Projekt') && p.includes('„Notizen Urlaub“'), 'Doku des persönlichen Projekts');
   assert.ok(!p.includes('Angebot Agentur') && !p.includes('Schnittstellenliste') && !p.includes('stammt aus dem Verlauf'), 'nichts aus anderen Projekten, kein Verlauf');
-  // Frage ohne Nennung: trotz Verlauf (WEB, ERP) bleibt das persönliche Projekt das Thema, mit passender Seite und Ausschnitt
-  p = await say('Wann geht mein Flug?');
+  // Frage in Ich-Form mit Aufgabenbezug („morgen“, „mein“): persönliches Projekt (Annahme), mit passender Seite und Ausschnitt
+  p = await say('Wann geht morgen mein Flug?');
   assert.match(p, /Thema: Projekt MAXP/);
+  assert.match(p, /Rolle: Du bist hier persönlicher Assistent von Max Keller/);
   assert.ok(p.includes('Flug am 3.11.'), 'Ausschnitt aus der Suche');
   assert.ok(!p.includes('Angebot Agentur'));
   // Statusfrage: trotz persönlichem Projekt alle gemeinsamen Projekte

@@ -51,7 +51,7 @@ test('Vorbereitung: Agent als Mitglied, DMs; Kontext nennt Absenderrolle, Rechte
   assert.match(ctx, /Weitere offene Arbeitspakete im Thema/);
   // Gruß ohne Inhalt: kein Projektbezug (Konzept KI-Agent 6); eine Frage mit Inhalt bekommt das einzige gemeinsame Projekt
   await say(max, dmMax, 'Hi Morton');
-  assert.match(prompts.at(-1) ?? '', /Thema: kein Projektbezug in der Nachricht/);
+  assert.match(prompts.at(-1) ?? '', /Thema: allgemeine Anfrage ohne Projektbezug/);
   await say(max, dmMax, 'Wie ist der Stand?');
   assert.match(prompts.at(-1) ?? '', /Absender: Max Keller – Mitglied; darf: keine Aufträge \(Policy chatOrders = pl/);
 });

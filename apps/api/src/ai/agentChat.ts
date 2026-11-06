@@ -17,13 +17,19 @@ import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
 import { webAvailable } from './web.js';
 import { recordFeedback } from './feedback.js';
+import { systemMessage } from '../notify.js';
+import type { ChatChoice, ChatIntent } from '@projekttool/shared';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
  * schon geantwortet hat. Jede Antwort hat genau ein Thema, das das System bestimmt (resolveChatScope), nicht das Modell:
  * im Projektkanal das Projekt des Kanals (im Thread dazu das Arbeitspaket der Thread-Wurzel), in Direktnachrichten die
  * genannten Kennungen bzw. Projekte, sonst das zuletzt im Verlauf genannte, ausdrücklich „über alle Projekte“ alle
- * gemeinsamen; ohne Anhaltspunkt fragt er bei mehreren gemeinsamen Projekten nach (ohne LLM-Aufruf). Der Prompt enthält
+ * gemeinsamen. Dazu die Absicht (intent): allgemein (kein Projektbezug: Wissensfrage, Formulierungshilfe, Frage zum Tool),
+ * ein Projekt oder persönlicher Assistent (persönliches Projekt des Absenders), regelbasiert mit Sicherheit sure/guess/unsure.
+ * Ist sie unsicher, fragt er ohne LLM-Aufruf nach: Agentennachricht plus Systemkarte „choices“ mit Knöpfen (Projekte,
+ * persönlich, allgemein); die Antwort (Knopf oder Markerwort) markiert die Karte als chosen und beantwortet die
+ * Ursprungsnachricht mit festem Thema. Bei einer Annahme (guess) nennt er sie einmal je Thread im Halbsatz. Der Prompt enthält
  * nur Arbeitspakete des Themas, dazu Kennzahlen, die das System per SQL berechnet. Auskunft gibt er nur über seine eigenen
  * Arbeitspakete und nur aus Projekten, die die fragende Person sehen darf. Enthält die Nachricht etwas für eines seiner
  * Arbeitspakete, hält er es dort im Log fest (danach prüft er das Arbeitspaket wie bei einem Kommentar neu). Behauptet die
@@ -75,14 +81,24 @@ const hhmm = (d: string | Date) => new Date(d).toLocaleString('de-DE', { day: '2
 const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
 
 /**
- * personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (Gruß ohne persönliches Projekt),
- * matched = über Inhalte genau einem Projekt zugeordnet, open = Treffer in mehreren Projekten (das Modell ordnet zu oder fragt)
+ * personal = persönliches Projekt des Absenders (ohne Kontext), general = kein Projektbezug (allgemeine Anfrage, Gruß ohne
+ * persönliches Projekt), matched = über Inhalte genau einem Projekt zugeordnet, open = Treffer in mehreren Projekten
+ * (Rückfrage), ask = kein Anhaltspunkt bei mehreren Kandidaten (Rückfrage), chosen = per Rückfrage (Knopf oder Markerwort) gewählt
  */
-export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'status' | 'ask' | 'personal' | 'general' | 'matched' | 'open';
+export type ChatScopeHow = 'channel' | 'mentioned' | 'history' | 'all' | 'status' | 'ask' | 'personal' | 'general' | 'matched' | 'open' | 'chosen';
+export type ChatConfidence = 'sure' | 'guess' | 'unsure';
 export interface ScopeProject { id: string; key: string; name: string }
+/** Absicht, die eine Antwort auf die Rückfrage (Knopf oder Markerwort) festlegt. */
+export type ForcedIntent = { intent: 'general' } | { intent: 'personal' } | { intent: 'project'; projectId: string };
 /** Thema einer Chat-Nachricht: Projekte und Arbeitspakete, aus denen der Kontext kommt, und wie es bestimmt wurde. */
 export interface ChatScope {
   how: ChatScopeHow;
+  /** Absicht: allgemein (kein Projektkontext), Projekt oder persönlicher Assistent */
+  intent: ChatIntent;
+  /** sure: Kanal, Nennung, Marker; guess: Heuristik oder einziger Kandidat (Antwort mit Hinweis auf die Annahme); unsure: Rückfrage mit Knöpfen */
+  confidence: ChatConfidence;
+  /** persönliches Projekt des Absenders (Direktnachricht), wenn der Agent dort Mitglied ist */
+  personalId?: string | null;
   /** Projekte des Themas; bei ask leer (Auswahl steht in projects) */
   projectIds: string[];
   /** Arbeitspakete des Themas (Kennungen aus Nachricht, Thread-Wurzel oder Verlauf); leer = das ganze Projekt */
@@ -105,6 +121,45 @@ const ALL_RE = /über alle projekte|alle[n]? (meine[n]? |unsere[n]? |gemeinsamen
 const STATUS_RE = /(?<!\p{L})(?:(?:gibt'?s|gibt es)(?!\p{L}).*(?<!\p{L})(?:was|etwas|neues)|zu tun|was (?:steht|liegt|ist) (?:an|offen)|status|stand|überblick|update|was (?:machst|tust) du|woran arbeitest|was hast du(?!\p{L}).*(?<!\p{L})(?:offen|vor)|was läuft)(?!\p{L})/iu;
 export const isStatusQuestion = (body: string) => String(body ?? '').trim().split(/\s+/).filter(Boolean).length <= 8 && STATUS_RE.test(body);
 const escRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Nachricht für Marker: klein, ohne Satzzeichen am Rand, Leerraum vereinheitlicht. */
+const norm = (s: string) => String(s ?? '').toLowerCase().replace(/\s+/g, ' ').replace(/^[\s„"“'»«(]+|[\s.!?,;:“"'»«)]+$/g, '').trim();
+/** Marker am Anfang („allgemein: …“, „persönlich, …“) oder als ganze Nachricht; „für mich“ und „mein projekt“ nur ganz oder mit Doppelpunkt (sonst normale Satzanfänge). */
+const marked = (body: string, words: string[], loose: boolean) => {
+  const n = norm(body);
+  return words.some((w) => n === w || n.startsWith(`${w}:`) || n.startsWith(`${w} –`) || n.startsWith(`${w} -`) || (loose && (n.startsWith(`${w},`) || n.startsWith(`${w} `))));
+};
+export const GENERAL_MARKERS = ['allgemein', 'ohne projekt', 'kein projekt'];
+export const PERSONAL_MARKERS = ['persönlich', 'privat', 'für mich', 'mein projekt'];
+/** Ausdrückliche Marker (Knopfwerte der Rückfrage und Wörter dafür): Absicht sicher. */
+export function intentMarker(body: string, projects: ScopeProject[]): { intent: 'general' } | { intent: 'personal' } | { intent: 'project'; project: ScopeProject } | null {
+  if (marked(body, ['allgemein', 'ohne projekt', 'kein projekt'], true)) return { intent: 'general' };
+  if (marked(body, ['persönlich', 'privat'], true) || marked(body, ['für mich', 'mein projekt'], false)) return { intent: 'personal' };
+  const n = norm(body);
+  const m = n.match(/^projekt\s+([a-z0-9-]{2,12})(?:[:,]|\s[–-]|$)/) ?? n.match(/^([a-z0-9-]{2,12})$/);
+  const p = m ? projects.find((x) => x.key.toLowerCase() === m[1]) ?? null : null;
+  return p ? { intent: 'project', project: p } : null;
+}
+/** Frage zum Tool: wie man etwas anlegt oder findet, was etwas bedeutet, was der Agent kann. */
+const TOOL_RE = /(?<!\p{L})(?:wie (?:lege|leg|erstelle|erstell|richte|richt|finde|find|öffne|ändere|änder|lösche|lösch|kann|kannst) (?:ich|man)|wo (?:finde|find|stelle|stell|sehe|seh) (?:ich|man)|was (?:bedeutet|heißt|heisst|ist (?:ein|eine|der|die|das) \p{L}+ im tool|kannst du)|wie funktioniert|wozu (?:dient|ist)|gibt es (?:im tool |hier )?(?:eine|einen|ein) (?:funktion|möglichkeit|einstellung))(?!\p{L})/iu;
+/** Formulierungs- oder Wissensanfrage ohne Projektbezug. */
+const KNOW_RE = /(?<!\p{L})(?:formulier\w*|übersetz\w*|erklär\w*|erkläre|was ist (?:ein|eine|der|die|das)|was heißt|wie schreibt man|wie heißt .* auf|korrigier\w*|fasse .* zusammen|witz|rechtschreib\w*|synonym\w*|definition)(?!\p{L})/iu;
+/** Arbeitsworte (Vorgänge, Personen, Aktionen): damit ist eine Tool-Frage keine allgemeine Anfrage mehr, sondern betrifft Arbeit. */
+const ACTION_RE = /(?<!\p{L})(?:status|stand|mail\w*|schick\w*|send\w*|frag\w*|recherch\w*|erinner\w*|notier\w*|angebot\w*|kunde\w*|lieferant\w*|rechnung\w*|vertrag\w*)(?!\p{L})|\b[A-Za-z][A-Za-z0-9]{1,9}-\d{1,6}\b/iu;
+/** Projekt- bzw. Strukturworte dazu: damit ist eine Wissens- oder Formulierungsanfrage keine allgemeine Anfrage mehr. */
+const WORK_RE = new RegExp(`${ACTION_RE.source}|(?<!\\p{L})(?:arbeitspaket\\w*|aufgabe\\w*|projekt\\w*|auftrag\\w*|termin\\w*|frist\\w*|fällig\\w*|log|doku\\w*|teilprojekt\\w*|meilenstein\\w*|anleg\\w*)(?!\\p{L})`, 'iu');
+/** Ich-/mein-Form mit Aufgabenbezug: persönlicher Assistent. */
+const ME_RE = /(?<!\p{L})(?:ich|mir|mich|mein|meine|meinen|meinem|meiner)(?!\p{L})/iu;
+const PERSONAL_TASK_RE = /(?<!\p{L})(?:erinner\w*|notier\w*|notiz\w*|merk\w*|aufgabe\w*|auftrag\w*|to-?dos?|liste|termin\w*|heute|morgen|übermorgen|diese woche|nächste woche|einkauf\w*|urlaub\w*)(?!\p{L})/iu;
+/** Absicht aus der Nachricht ohne Projektnennung: general (Tool- oder Wissensfrage ohne Arbeitsworte), personal (Ich-Form mit Aufgabenbezug) oder null. */
+export function intentHeuristic(body: string): 'general' | 'personal' | null {
+  const b = String(body ?? '');
+  // Tool-Frage: Strukturworte (Arbeitspaket, Termin) gehören zur Frage, nur Vorgänge oder Aktionen machen sie zur Arbeit; Wissensfrage: beides
+  if (TOOL_RE.test(b) && !ACTION_RE.test(b.replace(TOOL_RE, ' '))) return 'general';
+  if (KNOW_RE.test(b) && !WORK_RE.test(b)) return 'general';
+  if (ME_RE.test(b) && PERSONAL_TASK_RE.test(b)) return 'personal';
+  return null;
+}
 
 /**
  * Kennungen (KEY-12, auch klein geschrieben) und Projekte (Kürzel als Wort in Großschreibung oder Projektname) in einem
@@ -135,9 +190,10 @@ function findMentions(text: string, projects: ScopeProject[]): { refs: { project
  * Recht agent.chat frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
  * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
  */
-export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string; created_at?: string | Date; uid?: string | null }[]; senderId: string; agent: { id: string; org_id: string; name?: string } }, now = new Date()): Promise<ChatScope> {
+export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string; created_at?: string | Date; uid?: string | null }[]; senderId: string; agent: { id: string; org_id: string; name?: string }; /** Antwort auf die Rückfrage: Absicht steht fest */ forced?: ForcedIntent | null }, now = new Date()): Promise<ChatScope> {
   const all: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1 order by key`, [q.agent.org_id])).rows;
   const channelProject = q.channel.kind === 'project' ? all.find((p) => p.id === q.channel.project_id) ?? null : null;
+  const sure = { intent: 'project' as ChatIntent, confidence: 'sure' as ChatConfidence };
   /** Arbeitspaket zu einer Kennung; null, wenn es fehlt oder einer von beiden es nicht sieht (eingeschränktes Teilprojekt). */
   const taskOf = async (r: { project: ScopeProject; number: number }): Promise<{ id: string; project_id: string } | null | undefined> => {
     const t = await db.maybeOne(`select t.id, t.project_id, t.subproject_id from tasks t where t.project_id = $1 and t.number = $2 and t.deleted_at is null`, [r.project.id, r.number]);
@@ -148,7 +204,7 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   const ref = (r: { project: ScopeProject; number: number }) => `${r.project.key}-${r.number}`;
 
   if (channelProject) {
-    const scope: ChatScope = { how: 'channel', projectIds: [channelProject.id], taskIds: [], refs: [], hidden: [], projects: [channelProject] };
+    const scope: ChatScope = { how: 'channel', ...sure, projectIds: [channelProject.id], taskIds: [], refs: [], hidden: [], projects: [channelProject] };
     const texts = [q.message.body];
     // Thread: die Kennung der Thread-Wurzel (höchstens 14 Tage alt) bestimmt das Arbeitspaket mit
     if (q.message.thread_id) {
@@ -195,38 +251,66 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
     for (const p of m.projects) { if (isCommon(p.id)) add(out.projectIds, p.id); else if (!m.refs.some((r) => r.project.id === p.id)) add(out.hidden, p.key); }
     return out;
   };
-  const mine = await resolve(q.message.body);
-  if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)) };
-  if (ALL_RE.test(q.message.body)) return { how: 'all', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
-  if (isStatusQuestion(q.message.body)) return { how: 'status', projectIds: common.map((p) => p.id), taskIds: [], refs: [], hidden: [], projects: common };
   // Persönliches Projekt des Absenders (er ist dort PL, der Agent Mitglied)
   const personal = common.length ? (await db.query(`select p.id from projects p join project_members m on m.project_id = p.id and m.user_id = $1 and m.role = 'pl' where ${SQL.isPersonal('p')} and p.id = any($2::uuid[])`, [q.senderId, common.map((p) => p.id)])).rows.map((r: any) => r.id as string) : [];
-  const none = { taskIds: [] as string[], refs: [] as string[], hidden: [] as string[], common };
-  const personalScope = (): ChatScope => ({ how: 'personal', projectIds: personal, ...none, projects: common.filter((p) => personal.includes(p.id)) });
+  const personalId = personal[0] ?? null;
+  const none = { taskIds: [] as string[], refs: [] as string[], hidden: [] as string[], common, personalId };
+  /** Absicht eines Projektthemas: das persönliche Projekt allein heißt persönlicher Assistent, sonst Projekt. */
+  const intentOf = (ids: string[]): ChatIntent => (ids.length === 1 && ids[0] === personalId ? 'personal' : 'project');
+  const personalScope = (confidence: ChatConfidence): ChatScope => ({ how: 'personal', intent: 'personal', confidence, projectIds: personal, ...none, projects: common.filter((p) => personal.includes(p.id)) });
+  const generalScope = (confidence: ChatConfidence): ChatScope => ({ how: 'general', intent: 'general', confidence, projectIds: [], ...none, projects: common });
+  const projectScope = (how: ChatScopeHow, ids: string[], confidence: ChatConfidence, extra: Partial<ChatScope> = {}): ChatScope => ({ how, intent: intentOf(ids), confidence, projectIds: ids, ...none, projects: common.filter((p) => ids.includes(p.id)), ...extra });
+  const body = q.message.body;
+
+  // Antwort auf die Rückfrage (Knopf oder Markerwort): das Thema steht fest, die Ursprungsnachricht wird damit beantwortet
+  if (q.forced) {
+    if (q.forced.intent === 'general') return generalScope('sure');
+    if (q.forced.intent === 'personal') return personal.length ? personalScope('sure') : generalScope('sure');
+    const id = q.forced.projectId;
+    // Gewähltes Projekt ohne gemeinsame Freigabe: wie eine genannte Kennung ohne Freigabe (feste Absage)
+    return isCommon(id) ? projectScope('chosen', [id], 'sure', { common: undefined }) : { how: 'mentioned', ...sure, projectIds: [], taskIds: [], refs: [], hidden: [all.find((p) => p.id === id)?.key ?? '?'], projects: [], personalId };
+  }
+  // Ausdrückliche Marker am Anfang oder als ganze Nachricht: „allgemein“, „persönlich“, „Projekt WEB“ bzw. nur ein Kürzel
+  const marker = intentMarker(body, common);
+  if (marker?.intent === 'general') return generalScope('sure');
+  if (marker?.intent === 'personal') return personal.length ? personalScope('sure') : generalScope('sure');
+  if (marker?.intent === 'project') return projectScope('mentioned', [marker.project.id], 'sure');
+  const mine = await resolve(body);
+  if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', intent: intentOf(mine.projectIds), confidence: 'sure', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)), personalId };
+  if (ALL_RE.test(body)) return projectScope('all', common.map((p) => p.id), 'sure');
+  if (isStatusQuestion(body)) return projectScope('status', common.map((p) => p.id), 'sure');
   // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug
-  if (isSmallTalk(q.message.body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope() : { how: 'general', projectIds: [], ...none, projects: common };
+  if (isSmallTalk(body, q.agent.name ? [q.agent.name] : [])) return personal.length ? personalScope('sure') : generalScope('sure');
+  // Heuristik: Frage zum Tool, Formulierungs- oder Wissensanfrage ohne Arbeitsworte ist allgemein (Annahme)
+  const guess = intentHeuristic(body);
+  if (guess === 'general') return generalScope('guess');
   // Dialog im Thread: das zuletzt im Thread genannte Arbeitspaket bzw. Projekt (der Verlauf enthält nur den Thread und noch
   // unbeantwortete Nachrichten; ein Gedächtnis über Gespräche hinweg gibt es nicht)
   for (const h of q.history) {
     if (h.id === q.message.id) continue;
     const r = await resolve(String(h.body ?? ''));
-    if (r.projectIds.length) return { how: 'history', projectIds: r.projectIds, taskIds: r.taskIds, refs: r.refs, hidden: [], projects: common.filter((p) => r.projectIds.includes(p.id)), common };
+    if (r.projectIds.length) return projectScope('history', r.projectIds, 'sure', { taskIds: r.taskIds, refs: r.refs });
   }
+  // Heuristik: Ich-/mein-Form mit Aufgabenbezug („erinnere mich“, „meine Aufgaben“, „notier mir … morgen“) ist der persönliche Assistent (Annahme)
+  if (guess === 'personal' && personal.length) return personalScope('guess');
   // Zuordnung über Inhalte: Treffer in Doku und Arbeitspaketen der gemeinsamen Projekte, nur was Agent und Absender sehen
   // Ein Projekt zählt erst, wenn ein Treffer mindestens zwei Suchbegriffe enthält (bei nur einem Begriff diesen): ein einzelnes
   // häufiges Wort oder ein Vorname ordnet nichts zu
   const hits = new Map<string, { pages: SearchHit[]; tasks: SearchHit[] }>();
-  const need = Math.min(2, tokens(q.message.body).slice(0, 8).length);
+  const need = Math.min(2, tokens(body).slice(0, 8).length);
   if (need) for (const p of common.slice(0, 12)) {
-    const r = await knowledgeSearch(db, { projectId: p.id, agentId: q.agent.id, query: q.message.body, viewerId: q.senderId, maxTitles: 5, maxExcerpts: 2 });
+    const r = await knowledgeSearch(db, { projectId: p.id, agentId: q.agent.id, query: body, viewerId: q.senderId, maxTitles: 5, maxExcerpts: 2 });
     if ([...r.pages, ...r.tasks].some((h) => (h.score ?? 0) >= need)) hits.set(p.id, r);
   }
   const hitProjects = common.filter((p) => hits.has(p.id));
-  if (hitProjects.length === 1) return { how: 'matched', projectIds: [hitProjects[0].id], ...none, projects: hitProjects, hits };
-  if (hitProjects.length > 1) return { how: 'open', projectIds: hitProjects.map((p) => p.id), ...none, projects: hitProjects, hits };
-  if (personal.length) return personalScope();
-  if (common.length > 1) return { how: 'ask', projectIds: [], ...none, projects: common };
-  return { how: 'all', projectIds: common.map((p) => p.id), ...none, projects: common };
+  if (hitProjects.length === 1) return projectScope('matched', [hitProjects[0].id], 'guess', { hits });
+  if (hitProjects.length > 1) return { how: 'open', intent: 'project', confidence: 'unsure', projectIds: [], ...none, projects: common, hits };
+  // Ohne Anhaltspunkt: genau ein gemeinsames Projekt (Annahme), nur das persönliche (Annahme), sonst Rückfrage
+  const shared = common.filter((p) => !personal.includes(p.id));
+  if (shared.length === 1 && !personal.length) return projectScope('all', [shared[0].id], 'guess');
+  if (personal.length && !shared.length) return personalScope('guess');
+  if (common.length > 1) return { how: 'ask', intent: 'project', confidence: 'unsure', projectIds: [], ...none, projects: common };
+  return projectScope('all', common.map((p) => p.id), common.length ? 'guess' : 'sure');
 }
 
 /** Heutiges Datum in Europe/Berlin (YYYY-MM-DD) und der Sonntag dieser Woche, für „fällig diese Woche“. */
@@ -313,12 +397,65 @@ const READY_RE = /(?<!\p{L})(?:ich bin (?:bereit|da|startklar)|was (?:soll|kann)
 /** Antwort, die nur Bereitschaft meldet („Ich bin bereit. Was soll ich erledigen?“) statt die Nachricht zu beantworten. */
 export const bareReady = (reply: string) => reply.trim().length <= 160 && READY_RE.test(reply);
 
+/** Ganze Nachricht ist ein Markerwort bzw. Knopfwert („allgemein“, „persönlich“, „Projekt WEB“, „WEB“). */
+const bareMarker = (body: string) => { const n = norm(body); return GENERAL_MARKERS.includes(n) || PERSONAL_MARKERS.includes(n) || /^(?:projekt )?[a-z0-9-]{2,12}$/.test(n); };
+/**
+ * Antwort auf eine Rückfrage des Agenten (Direktnachricht): Die Nachricht ist nur ein Knopfwert oder Markerwort, und im selben
+ * Thread bzw. DM-Verlauf steht eine offene choices-Karte (ohne chosen, höchstens 1 Tag alt, keine Antwort des Agenten danach),
+ * oder die letzte Antwort des Agenten trug eine Annahme (meta.assumed). Ergebnis: feste Absicht und die Ursprungsnachricht.
+ */
+export async function choiceAnswer(db: Db, q: { channelId: string; threadId: string | null; agentId: string; orgId: string; body: string; at: string | Date }): Promise<{ forced: ForcedIntent; forMessageId: string; cardId: string | null; value: string } | null> {
+  if (!bareMarker(q.body)) return null;
+  const projects: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1`, [q.orgId])).rows;
+  const marker = intentMarker(q.body, projects);
+  if (!marker) return null;
+  const forced: ForcedIntent = marker.intent === 'project' ? { intent: 'project', projectId: marker.project.id } : { intent: marker.intent };
+  const value = marker.intent === 'project' ? `Projekt ${marker.project.key}` : marker.intent === 'personal' ? 'persönlich' : 'allgemein';
+  const noReplyAfter = `not exists (select 1 from chat_messages a where a.channel_id = m.channel_id and a.thread_id is not distinct from m.thread_id and a.user_id = $4 and a.kind = 'user' and a.deleted_at is null and a.created_at > m.created_at)`;
+  const card = await db.maybeOne(
+    `select m.id, m.meta from chat_messages m where m.channel_id = $1 and m.thread_id is not distinct from $2 and m.kind = 'system' and m.meta->>'card' = 'choices' and m.meta->>'chosen' is null
+       and m.deleted_at is null and m.created_at < $3::timestamptz and m.created_at > $3::timestamptz - interval '1 day' and ${noReplyAfter} order by m.created_at desc limit 1`, [q.channelId, q.threadId, q.at, q.agentId]);
+  if (card) {
+    const meta = (typeof card.meta === 'string' ? JSON.parse(card.meta) : card.meta) ?? {};
+    const choices: ChatChoice[] = Array.isArray(meta.choices) ? meta.choices : [];
+    // Projekt auch ohne Knopf (bei vielen Projekten „Kürzel nennen“); persönlich/allgemein nur, wenn die Karte den Knopf hat
+    if (marker.intent === 'project' || choices.some((c) => c.value === value)) return { forced, forMessageId: String(meta.forMessageId ?? ''), cardId: card.id, value };
+  }
+  const assumed = await db.maybeOne(
+    `select m.meta from chat_messages m where m.channel_id = $1 and m.thread_id is not distinct from $2 and m.user_id = $4 and m.kind = 'user' and m.meta->>'assumed' is not null and m.meta->>'forMessageId' is not null
+       and m.deleted_at is null and m.created_at < $3::timestamptz and m.created_at > $3::timestamptz - interval '1 day' and ${noReplyAfter} order by m.created_at desc limit 1`, [q.channelId, q.threadId, q.at, q.agentId]);
+  if (!assumed) return null;
+  const meta = (typeof assumed.meta === 'string' ? JSON.parse(assumed.meta) : assumed.meta) ?? {};
+  return { forced, forMessageId: String(meta.forMessageId), cardId: null, value };
+}
+
+/** Halbsatz zur Annahme der Absicht (guess), einmal je Thread. */
+export function assumptionHint(scope: ChatScope): string {
+  const alt = scope.personalId ? ' oder „persönlich“' : '';
+  if (scope.intent === 'general') return `(Ich antworte allgemein, ohne Projektbezug – nenn ein Projekt${alt}, wenn es um etwas Konkretes geht.)`;
+  if (scope.intent === 'personal') return `(Ich nehme dein persönliches Projekt – sag „allgemein“ oder nenn ein Projekt, wenn ich falsch liege.)`;
+  return `(Ich nehme Projekt ${scope.projects.map((p) => p.key).join(', ')} – sag „allgemein“${alt} oder nenn ein anderes Projekt, wenn ich falsch liege.)`;
+}
+
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
   const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
   const channel = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, agent.org_id]);
-  const msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.kind = 'user' and m.deleted_at is null`, [messageId, channelId]);
+  let msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.kind = 'user' and m.deleted_at is null`, [messageId, channelId]);
   if (!channel || !msg || msg.user_id === agent.id) return { status: 'skipped' };
+  /** Die eingegangene Nachricht; msg ist bei einer Antwort auf die Rückfrage die Ursprungsnachricht, die damit beantwortet wird. */
+  const trigger = msg;
+  let forced: ForcedIntent | null = null;
+  if (channel.kind !== 'project') {
+    const picked = await choiceAnswer(db, { channelId: channel.id, threadId: msg.thread_id ?? null, agentId: agent.id, orgId: agent.org_id, body: msg.body, at: msg.created_at });
+    if (picked) {
+      const orig = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.user_id = $3 and m.kind = 'user' and m.deleted_at is null`, [picked.forMessageId, channel.id, msg.user_id]);
+      if (orig) {
+        msg = orig; forced = picked.forced;
+        if (picked.cardId) await db.query(`update chat_messages set meta = coalesce(meta, '{}'::jsonb) || $2::jsonb where id = $1`, [picked.cardId, JSON.stringify({ chosen: picked.value })]);
+      }
+    }
+  }
   let project: any = null;
   if (channel.kind === 'project') {
     project = await db.maybeOne(`select p.id, p.key, p.name from projects p join project_members m on m.project_id = p.id and m.user_id = $2 where p.id = $1`, [channel.project_id, agent.id]);
@@ -329,7 +466,8 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
 
   /** Antwort im Chat; die Meldung an den Absender trägt note statt des Texts (volle Begründung, die der Kanal nicht zeigt). */
   // meta.projectId: Thema der Antwort (eindeutiges Projekt), damit Bewertungen in Direktnachrichten einem Projekt zugeordnet sind
-  const post = async (body: string, note = body, meta: { projectId: string } | null = null) => {
+  // meta.assumed/forMessageId: Antwort mit Annahme der Absicht (ein Markerwort danach beantwortet forMessageId mit fester Absicht)
+  const post = async (body: string, note = body, meta: Record<string, unknown> | null = null) => {
     await db.query(`insert into chat_messages (channel_id, user_id, thread_id, body, meta) values ($1,$2,$3,$4,$5)`, [channel.id, agent.id, threadId, body.slice(0, 8000), meta ? JSON.stringify(meta) : null]);
     await db.query(`insert into chat_channel_members (channel_id, user_id, last_read_at) values ($1,$2,now()) on conflict (channel_id, user_id) do update set last_read_at = now()`, [channel.id, agent.id]);
     const link = threadId ? `/chat/${channel.id}?thread=${threadId}` : `/chat/${channel.id}`;
@@ -364,7 +502,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     ? await db.query(`select ${COLS} from chat_messages m left join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.deleted_at is null order by m.created_at desc limit 20`, [threadId])
     : await db.query(`select ${COLS} from chat_messages m left join users u on u.id = m.user_id where m.channel_id = $1 and m.thread_id is null and m.deleted_at is null and m.kind = 'user'
         and m.created_at > coalesce((select max(x.created_at) from chat_messages x where x.channel_id = $1 and x.thread_id is null and x.user_id = $2 and x.created_at <= $3::timestamptz), '-infinity'::timestamptz)
-        and m.created_at <= $3::timestamptz order by m.created_at desc limit 8`, [channel.id, agent.id, msg.created_at]);
+        and m.created_at <= $3::timestamptz order by m.created_at desc limit 8`, [channel.id, agent.id, trigger.created_at]);
   if (threadId && history.rows.length) {
     const root = history.rows[history.rows.length - 1];
     if (root.uid === agent.id) {
@@ -372,8 +510,10 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
       if (before) history.rows.push(before);
     }
   }
+  // Antwort auf die Rückfrage: die Ursprungsfrage liegt vor der Rückfrage des Agenten, sie gehört in den Verlauf
+  if (msg.id !== trigger.id && !history.rows.some((h: any) => h.id === msg.id)) history.rows.push({ id: msg.id, body: msg.body, created_at: msg.created_at, kind: 'user', name: msg.user_name, uid: msg.user_id });
   // Thema der Nachricht (Abschnitt 6 des Agenten-Konzepts): bestimmt das System, nicht das Modell
-  const scope = await resolveChatScope(db, { channel, message: msg, history: history.rows, senderId: msg.user_id, agent }, now);
+  const scope = await resolveChatScope(db, { channel, message: msg, history: history.rows, senderId: msg.user_id, agent, forced }, now);
   // Gruß oder Kurzmeldung ohne Inhalt: keine Rückmeldung auf offene Fragen, keine Notizen, keine Bezugszeile
   const small = isSmallTalk(msg.body, [agent.name]);
   const scopeText = `${scope.refs.length ? scope.refs.join(', ') : scope.projects.map((p) => p.key).join(', ') || '–'} (${scope.how})`;
@@ -394,10 +534,24 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   if (!project && (scope.how === 'all' || scope.how === 'status' || scope.how === 'general') && !scope.projects.length) {
     return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');
   }
-  // Mehrere gemeinsame Projekte ohne Anhaltspunkt: Rückfrage mit den Projektnamen, keine Inhalte
-  if (scope.how === 'ask') {
-    const names = scope.projects.map((p) => `${p.name} (${p.key})`);
-    return direct(`Zu welchem Projekt? ${names.slice(0, -1).join(', ')} oder ${names.at(-1)}?`, 'Rückfrage: Projekt nicht eindeutig');
+  // Absicht unsicher (mehrere Kandidaten ohne Anhaltspunkt oder Treffer in mehreren Projekten): Rückfrage mit Knöpfen
+  // (Systemkarte choices), keine Inhalte, kein LLM-Aufruf. Höchstens 6 Projektknöpfe; bei mehr die 5 mit den meisten Treffern.
+  if (scope.confidence === 'unsure') {
+    const personalId = scope.personalId ?? null;
+    const count = (p: ScopeProject) => { const h = scope.hits?.get(p.id); return h ? h.pages.length + h.tasks.length : 0; };
+    const shared = (scope.common ?? scope.projects).filter((p) => p.id !== personalId).sort((a, b) => count(b) - count(a) || a.key.localeCompare(b.key));
+    const more = shared.length > 6;
+    const shown = more ? shared.slice(0, 5) : shared;
+    const choices: ChatChoice[] = [
+      ...shown.map((p) => ({ label: `Projekt ${p.key} – ${p.name}`, value: `Projekt ${p.key}`, ...(count(p) ? { hint: `${count(p)} Treffer zur Nachricht` } : {}) })),
+      ...(personalId ? [{ label: 'Persönlich (mein Projekt)', value: 'persönlich', hint: 'eigene Aufgaben, Erinnerungen, Notizen' }] : []),
+      { label: 'Allgemein (kein Projekt)', value: 'allgemein', hint: 'Wissensfrage, Formulierungshilfe, Frage zum Tool' }
+    ];
+    const names = shown.map((p) => `${p.name} (${p.key})`);
+    const reply = `Zu welchem Projekt? ${names.join(', ')}${more ? ' oder ein anderes (Kürzel nennen)' : ''}${personalId ? ', persönlich (dein Projekt)' : ''} oder allgemein (kein Projekt)? Klick unten oder antworte mit Kürzel${personalId ? ', „persönlich“' : ''} oder „allgemein“.`;
+    const r = await direct(reply, 'Rückfrage: Thema nicht eindeutig');
+    await systemMessage(db, { channelId: channel.id, threadId, body: 'Thema wählen:', meta: { card: 'choices', choices, forMessageId: msg.id } });
+    return r;
   }
 
   // Eigene offene Arbeitspakete zum Thema: im Projektkanal ohne eingeschränkte Teilprojekte (alle Mitglieder lesen mit), in
@@ -429,15 +583,15 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const figures: string[] = [];
   if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
   else if (scope.how !== 'general') for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
-  const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', status: 'Statusfrage: alle gemeinsamen Projekte', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '' };
+  const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', status: 'Statusfrage: alle gemeinsamen Projekte', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '', chosen: 'auf deine Rückfrage gewählt' };
   const theme = scope.how === 'general'
-    ? `kein Projektbezug in der Nachricht: antworte allgemein, ohne Inhalte, Stände oder Kennzahlen aus Projekten; frag bei Bedarf, worum es geht`
+    ? `allgemeine Anfrage ohne Projektbezug (kein Projektkontext): antworte nur allgemein, ohne Inhalte, Stände oder Kennzahlen aus Projekten und ohne Befehle oder Notizen. Braucht die Person etwas aus einem Projekt oder von dir als Assistent, verweise darauf (Projekt nennen bzw. „persönlich“ schreiben). Fragen zum Tool beantwortest du kurz und verweist auf die Hilfe (Kurzanleitung und Handbuch) mit dem Link /hilfe`
     : scope.projects.length
       ? `${scope.refs.length ? `Arbeitspaket ${scope.refs.join(', ')} in ` : ''}Projekt ${scope.projects.map((p) => `${p.key} „${p.name}“`).join(', ')} (${HOW[scope.how]})`
       : `kein gemeinsames Projekt mit ${msg.user_name}; du kannst nur allgemein antworten`;
   // Persönliches Projekt ohne weiteren Kontext: passende Doku-Seiten (Suche nach der Nachricht, sonst die neuesten) als Wissensquelle
   let personalDocs = '';
-  if (scope.how === 'personal' && scope.projectIds.length) {
+  if (scope.intent === 'personal' && scope.projectIds.length === 1) {
     const found = await knowledgeSearch(db, { projectId: scope.projectIds[0], agentId: agent.id, query: msg.body, viewerId: msg.user_id, maxTitles: 8, maxExcerpts: 3 });
     const pages = found.pages.length ? found.pages : (await db.query(`select p.id, p.title, p.status, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 8`, [scope.projectIds[0]])).rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null as string | null }));
     personalDocs = pages.length ? `Doku im persönlichen Projekt (${found.pages.length ? 'passend zur Nachricht' : 'neueste Seiten'}; Auskunft nur daraus und aus den Arbeitspaketen unten):\n${pages.map((p) => `- „${p.title}“ (${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 600)}` : ''}`).join('\n')}\n` : '';
@@ -482,7 +636,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   const prompt = `Jetzt: ${hhmm(now)} · Heute: ${calendarText(now, 10)}
 Gespräch: ${project ? `Projektkanal ${project.key} „${project.name}“${threadId ? ' (Thread)' : ''}` : `Direktnachricht mit ${msg.user_name}`}
 Thema: ${theme}
-Absender: ${msg.user_name} – ${commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
+${scope.intent === 'personal' ? `Rolle: Du bist hier persönlicher Assistent von ${msg.user_name}.\n` : ''}Absender: ${msg.user_name} – ${scope.how === 'general' ? 'allgemeine Anfrage: keine Befehle, keine Notizen' : commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject || scope.how === 'general' ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen steht); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
@@ -493,7 +647,7 @@ ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
 ${small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${scope.how === 'status' ? `\nDie letzte Nachricht ist eine Statusfrage: Gib einen knappen Stand aus den Daten oben (deine offenen Arbeitspakete mit Fälligkeit, worauf du wartest, Blockaden; offene Bestätigungen; Kennzahlen je Projekt). Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${scope.hidden.length ? `\nZu ${scope.hidden.join(', ')} schreibt das System selbst vor deine Antwort, dass du dazu hier nichts sagen kannst; geh darauf nicht ein.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
-${small ? `Antworte auf die letzte Nachricht von ${msg.user_name}.` : `Beantworte die letzte Nachricht von ${msg.user_name} inhaltlich; ein Gruß davor ist nur Anrede.`}`;
+${msg.id !== trigger.id ? `Die letzte Nachricht „${cut(trigger.body, 80)}“ beantwortet nur deine Rückfrage nach dem Thema (es steht jetzt fest, siehe Thema). Beantworte damit die Nachricht davor von ${msg.user_name} inhaltlich: „${cut(msg.body, 400)}“.` : small ? `Antworte auf die letzte Nachricht von ${msg.user_name}.` : `Beantworte die letzte Nachricht von ${msg.user_name} inhaltlich; ein Gruß davor ist nur Anrede.`}`;
   try {
     type ChatJson = { reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] };
     const ask = (p: string) => completeJson<ChatJson>(cfg, fetchFn, { meta: { feature: 'agent.chat', projectId: scope.projects.length === 1 ? scope.projects[0].id : null }, system, prompt: p, maxTokens: 1200, schema: SCHEMA });
@@ -526,8 +680,16 @@ ${small ? `Antworte auf die letzte Nachricht von ${msg.user_name}.` : `Beantwort
     // Bezugszeile setzt das System: nur bei einem Thema aus dem Verlauf und nur, wenn die Antwort es betrifft (onTopic; fehlt das Feld, gilt ja)
     const onTopic = (j as any).onTopic !== false && !small;
     const refLine = scope.how === 'history' && onTopic && scope.refs[0] && !/^Zu\s/.test(checked.text) ? `Zu ${scope.refs[0]}: ` : '';
-    const reply = `${notInText ? `${notInText} ` : ''}${hiddenRest.length ? `Zu ${hiddenRest.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}`;
-    await post(reply, reply, scope.projectIds.length === 1 ? { projectId: scope.projectIds[0] } : null);
+    // Annahme (guess): im Halbsatz nennen, einmal je Thread (ohne Thread: einmal je 12 Stunden); die Antwort merkt sich die
+    // Annahme (meta.assumed, forMessageId), damit ein Markerwort danach („allgemein“, „persönlich“, Kürzel) die Frage neu beantwortet
+    let hint = '';
+    if (scope.confidence === 'guess' && !small) {
+      const prior = await db.maybeOne(`select 1 from chat_messages where channel_id = $1 and thread_id is not distinct from $2 and user_id = $3 and kind = 'user' and deleted_at is null and meta->>'assumed' is not null and created_at < $4::timestamptz ${threadId ? '' : `and created_at > $4::timestamptz - interval '12 hours'`} limit 1`, [channel.id, threadId, agent.id, now]);
+      if (!prior) hint = ` ${assumptionHint(scope)}`;
+    }
+    const reply = `${notInText ? `${notInText} ` : ''}${hiddenRest.length ? `Zu ${hiddenRest.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}${hint}`;
+    const meta: Record<string, unknown> = { ...(scope.projectIds.length === 1 ? { projectId: scope.projectIds[0] } : {}), ...(scope.confidence === 'guess' ? { assumed: scope.intent, forMessageId: msg.id } : {}) };
+    await post(reply, reply, Object.keys(meta).length ? meta : null);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
       queueAgentRun(n.taskId, 'comment');

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { MailDraft, Question } from '@projekttool/shared';
+import type { ChatChoice, MailDraft, Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
@@ -9,7 +9,7 @@ import { IconChevronDown, IconChevronRight, IconPencil, IconX } from './icons';
 import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
-export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe */ card?: 'results'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null } | null }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe; choices: Rückfrage des Agenten nach dem Thema (Knöpfe) */ card?: 'results' | 'choices'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null; /** choices: Auswahl (value wird als Nachricht gesendet), Ursprungsnachricht, gewählter Wert */ choices?: ChatChoice[]; forMessageId?: string | null; chosen?: string | null } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean; /** Agenten, deren Antwort noch aussteht */ busy?: { id: string; name: string }[] }
 interface Member { userId: string; name: string }
 
@@ -127,6 +127,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {!m.deleted && m.meta?.link && (system(m) || !('question' in m.meta)) && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
+      {system(m) && !m.deleted && m.meta?.card === 'choices' && <ChoicesCard m={m} onChoose={(v) => void send(v, m.threadId)} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
         <button className={`btn sm link chat-thread-btn ${thread === m.id ? 'open' : ''}`} aria-expanded={thread === m.id} onClick={() => setThread(thread === m.id ? null : m.id)}>{thread === m.id ? <><IconChevronDown size={12} /> </> : m.replyCount > 0 ? <><IconChevronRight size={12} /> </> : ''}{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt && thread !== m.id ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}
@@ -182,6 +183,21 @@ function ResultsCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }
     {q && <ApprovalCard q={q} onChanged={() => { void api.get<{ question: Question }>(`/questions/${q.id}`).then((r) => setQ(r.question)); onChanged(); }} />}
     {error && <div className="error small">{error}</div>}
   </div>;
+}
+
+/**
+ * Rückfrage des Agenten nach dem Thema (Projekt, persönlich, allgemein): Knöpfe senden den Wert als normale Nachricht in
+ * denselben Thread bzw. Kanal; der Agent beantwortet damit die Ursprungsfrage. Gewählt: der gewählte Knopf bleibt hervorgehoben, alle gesperrt.
+ */
+function ChoicesCard({ m, onChoose }: { m: ChatMessage; onChoose: (value: string) => void }) {
+  const choices = m.meta?.choices ?? [];
+  const chosen = m.meta?.chosen ?? null;
+  if (!choices.length) return null;
+  return (
+    <div className="choices-card" role="group" aria-label="Rückfrage: Thema wählen">
+      {choices.map((c) => <button key={c.value} type="button" className={`btn sm ${chosen === c.value ? 'primary' : ''}`} disabled={Boolean(chosen)} title={c.hint} aria-pressed={chosen ? chosen === c.value : undefined} onClick={() => onChoose(c.value)}>{c.label}</button>)}
+    </div>
+  );
 }
 
 /**

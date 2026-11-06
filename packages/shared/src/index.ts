@@ -43,6 +43,15 @@ export interface UserSettings {
   chatCards?: 'needed' | 'all';
 }
 /** Schlüssel, die PATCH /me in settings annimmt (null löscht den Schlüssel) */
+/**
+ * Rückfrage des KI-Agenten im Chat (Systemkarte meta.card = 'choices'): Thema wählen, wenn das System die Absicht einer
+ * Nachricht nicht sicher erkennt. value ist zugleich das Markerwort, das die Person als Antwort schicken kann
+ * („Projekt WEB“, „persönlich“, „allgemein“); meta.chosen hält den gewählten Wert, meta.forMessageId die Ursprungsnachricht.
+ */
+export interface ChatChoice { label: string; value: string; hint?: string }
+/** Absicht einer Chat-Nachricht an einen Agenten: allgemein (kein Projektbezug), ein Projekt, persönlicher Assistent */
+export type ChatIntent = 'general' | 'project' | 'personal';
+
 export const USER_SETTING_KEYS = ['theme', 'pinnedProjects', 'chatCards'] as const satisfies readonly (keyof UserSettings)[];
 
 export interface Membership {
@@ -62,6 +71,16 @@ export interface Membership {
   origin?: 'direct' | 'group';
 }
 
+/**
+ * Planungstiefe eines Projekts: auto = Regel (Aufgabe bei eigener Zuständigkeit, eigenem Termin oder eigenem Status/Log, sonst
+ * Checklistenpunkt), aufgaben = Schritte immer als Aufgaben, checkliste = Schritte immer als Checklistenpunkte (Aufgaben nur auf Wunsch).
+ */
+export type PlanningDepth = 'auto' | 'aufgaben' | 'checkliste';
+export const PLANNING_DEPTHS: { key: PlanningDepth; label: string; hint: string }[] = [
+  { key: 'auto', label: 'Automatisch (Regel)', hint: 'Aufgabe, wenn ein Schritt eine eigene Zuständigkeit, einen eigenen Termin oder eigenen Status und Log braucht (delegierbar, nachverfolgbar); sonst Checklistenpunkt, den die zuständige Person selbst abhakt.' },
+  { key: 'aufgaben', label: 'Immer Aufgaben', hint: 'Jeder Schritt wird eine Aufgabe mit eigenem Status, Termin und Log; Checklistenpunkte nur an Aufgaben.' },
+  { key: 'checkliste', label: 'Immer Checklistenpunkte', hint: 'Schritte werden Checklistenpunkte am Arbeitspaket; Aufgaben nur auf ausdrücklichen Wunsch (mit Termin oder eigener Zuständigkeit).' }
+];
 export interface Project {
   id: string;
   key: string;
@@ -83,6 +102,8 @@ export interface Project {
   timeTrackingEnabled: boolean;
   /** Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind (Vorgabe, je AP übersteuerbar) */
   autoCompleteParent?: boolean;
+  /** Planungstiefe: wie Schritte eines Arbeitspakets angelegt werden (auto = Regel Aufgabe vs. Checklistenpunkt, aufgaben, checkliste) */
+  planningDepth?: PlanningDepth;
   budgetHours: number | null;
   escalation?: EscalationPolicy;
   reporting?: ReportingPolicy;

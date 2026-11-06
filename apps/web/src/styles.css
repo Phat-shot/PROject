@@ -1149,3 +1149,6 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .report-fieldset { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px 8px; margin: 0; display: grid; gap: 4px; }
 .report-fieldset legend { color: var(--muted); padding: 0 4px; }
 .report-choice { display: flex; flex-wrap: wrap; gap: 4px 14px; }
+/* Rückfrage des Agenten im Chat: Knöpfe zur Wahl des Themas (Projekt, persönlich, allgemein) */
+.choices-card { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.choices-card .btn:disabled:not(.primary) { opacity: 0.55; }
