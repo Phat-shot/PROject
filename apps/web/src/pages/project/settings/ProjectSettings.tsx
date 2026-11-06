@@ -14,6 +14,7 @@ import { PlanningTab } from './Planning';
 import { DataTab } from './Data';
 import { FilesTab } from './Files';
 import { AiView } from '../AiView';
+import { projectPolicy } from '../../../lib/useProjectPolicy';
 
 /**
  * Projekt › Einstellungen (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Fristen und Berichte,
@@ -38,8 +39,14 @@ const INTRO: Record<string, { text: ReactNode; chapter: string }> = {
   'ki-laeufe': { text: <>Offene KI-Vorschläge zur Freigabe (<Term k="essenz">Essenz</Term> aus Mails, Agenten-Aktionen), Fragen ans Projekt, Agenten-Läufe und der Statusbericht-Entwurf.</>, chapter: 'Kapitel 11' }
 };
 
+/** Persönliches Projekt: eigene Einleitung, wo der Reiter dort anders wirkt */
+const INTRO_PERSONAL: Record<string, { text: ReactNode; chapter: string }> = {
+  ki: { text: <>Dein Assistent: anlegen, LLM wählen, Selbstständigkeit und eigenes LLM. Die <Term k="grundmenge">Grundmenge</Term> bleibt immer frei; der <Term k="notaus">Notaus</Term> der Verwaltung geht vor.</>, chapter: 'Kapitel 14' }
+};
+
 function SettingsIntro({ tab }: { tab: string }) {
-  const i = INTRO[tab];
+  const { detail } = useProject();
+  const i = (projectPolicy(detail.project).assistant ? INTRO_PERSONAL[tab] : undefined) ?? INTRO[tab];
   if (!i) return null;
   return <p className="settings-intro"><span>{i.text}</span><Link className="help-link" to="/hilfe/handbuch" title={`Handbuch, ${i.chapter}`}>Hilfe: Handbuch {i.chapter} ↗</Link></p>;
 }
