@@ -6,7 +6,7 @@ import { HttpError } from '../errors.js';
 import { pinnedFetch } from '../netGuard.js';
 import { unseal } from '../secrets.js';
 import { checkAi, type AiQuery } from './policy.js';
-import { projectLabelSql, SQL } from '../projectPolicy.js';
+import { projectLabelSql, SQL, TEXT } from '../projectPolicy.js';
 
 /**
  * Modellanbindung je Mandant (Verwaltung › KI): Anthropic über das offizielle SDK oder ein lokales LLM mit
@@ -17,14 +17,14 @@ export const DEFAULT_MODEL = 'claude-opus-5-5';
 export const MODELS = ['claude-opus-5-5', 'claude-sonnet-5-5', 'claude-haiku-5-5'];
 export type AiProvider = 'anthropic' | 'local';
 
-export interface AiProfileRow { id: string; org_id: string; name: string; provider: AiProvider; base_url: string | null; model: string; api_key: string | null; active: boolean; thinking_off?: boolean; admin_blocked?: boolean; project_id?: string | null; project_scope?: 'all' | 'selected' | 'none'; personal_scope?: boolean }
+export interface AiProfileRow { id: string; org_id: string; name: string; provider: AiProvider; base_url: string | null; model: string; api_key: string | null; active: boolean; thinking_off?: boolean; admin_blocked?: boolean; project_id?: string | null; project_scope?: 'all' | 'selected' | 'none'; personal_use?: 'none' | 'all' | 'users' }
 /**
  * enableThinking (nur lokal): false = Denkmodus aus, true = ausdrücklich an, undefined = Standard von Modell/Server;
  * gesendet als chat_template_kwargs.enable_thinking (ausgewertet von vLLM und llama.cpp).
  */
 export interface AiConfig { profileId: string; name: string; provider: AiProvider; apiKey: string | null; model: string; baseUrl: string | null; enableThinking?: boolean; /** Kontextfenster des Modells in Token (Standard 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number; /** Agent, der mit diesem LLM arbeitet */ agentUserId?: string; /** Zeitlimit je Anfrage in Sekunden (lokal, Standard 600) */ timeoutS?: number }
 export type OwnLlmMode = 'off' | 'personal' | 'all';
-export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[] }[]; agentDailyBudget: number; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
+export interface AiStatus { enabled: boolean; /** Notaus aktiv: alle KI-Funktionen aus */ killswitch: boolean; profiles: { id: string; name: string; provider: AiProvider; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; thinkingOff: boolean; projectScope: 'all' | 'selected' | 'none'; projectIds: string[]; /** Freigabe für persönliche Projekte (B): none, all, users (personalUserIds); personalScope = all (lesend, ältere Oberflächen) */ personalUse: 'none' | 'all' | 'users'; personalUserIds: string[]; personalScope: boolean }[]; agentDailyBudget: number; ownLlm: OwnLlmMode; /** Außenprüfung für Agenten-Mails an Nicht-Interne */ externalGuard: 'strict' | 'check'; /** Online-Recherche (ohne Schlüssel) */ web: WebSearchSettings; /** Arbeitszeitfenster für Mails nach außen */ externalWindow: ExternalWindow }
 
 /** Konfiguration aus einem Profil; der Anthropic-Schlüssel darf nur bei Profilen des Mandanten aus ANTHROPIC_API_KEY kommen, eigene LLMs eines Projekts brauchen einen eigenen. */
 export function profileConfig(r: AiProfileRow | null | undefined): AiConfig | null {
@@ -50,10 +50,13 @@ export async function orgAiSettings(db: Db, orgId: string): Promise<{ enabled: b
 /**
  * Im Projekt verfügbare LLMs (Aliase a = ai_profiles, p = projects, o = orgs): Profile des Mandanten, die der Org-Admin
  * für alle oder dieses Projekt freigegeben hat, und eigene LLMs des Projekts, soweit der Mandant sie für diese Projektart
- * erlaubt (aus / nur persönliche / alle); gesperrte und inaktive nie.
+ * erlaubt (aus / nur persönliche / alle); gesperrte und inaktive nie. Persönliche Projekte sehen Mandanten-Profile nur mit
+ * Freigabe für persönliche Projekte (personal_use: all für alle, users nur für den Eigentümer in ai_profile_personal_users)
+ * oder ausdrücklicher Auswahl des Projekts; standardmäßig (none) gar nicht.
  */
+export const PERSONAL_RELEASE_SQL = `(a.personal_use = 'all' or (a.personal_use = 'users' and exists (select 1 from ai_profile_personal_users pu where pu.profile_id = a.id and pu.user_id = p.created_by)))`;
 export const PROJECT_PROFILE_SQL = `a.org_id = p.org_id and a.active and not a.admin_blocked and (
-    (a.project_id is null and ((a.project_scope = 'all' and (${SQL.notPersonal('p')} or a.personal_scope)) or exists (select 1 from ai_profile_projects x where x.profile_id = a.id and x.project_id = p.id and a.project_scope in ('all', 'selected'))))
+    (a.project_id is null and ((a.project_scope = 'all' and (${SQL.notPersonal('p')} or ${PERSONAL_RELEASE_SQL})) or (a.project_scope = 'selected' and ${SQL.isPersonal('p')} and ${PERSONAL_RELEASE_SQL}) or exists (select 1 from ai_profile_projects x where x.profile_id = a.id and x.project_id = p.id and a.project_scope in ('all', 'selected'))))
     or (a.project_id = p.id and (case coalesce(o.settings->'ai'->>'ownLlm', 'personal') when 'all' then true when 'personal' then ${SQL.isPersonal('p')} else false end)))`;
 
 export async function projectProfiles(db: Db, projectId: string): Promise<{ id: string; name: string; provider: AiProvider; model: string; own: boolean }[]> {
@@ -82,10 +85,12 @@ async function webStatus(db: Db, orgId: string): Promise<WebSearchSettings> {
 
 export async function aiStatus(db: Db, orgId: string): Promise<AiStatus> {
   // Profile des Mandanten (eigene LLMs der Projekte stehen getrennt unter /ai/project-llms)
-  const rows = await db.query(`select a.*, coalesce((select json_agg(x.project_id) from ai_profile_projects x where x.profile_id = a.id), '[]'::json) as project_ids from ai_profiles a where a.org_id = $1 and a.project_id is null order by a.created_at`, [orgId]);
+  const rows = await db.query(`select a.*, coalesce((select json_agg(x.project_id) from ai_profile_projects x where x.profile_id = a.id), '[]'::json) as project_ids,
+      coalesce((select json_agg(pu.user_id) from ai_profile_personal_users pu where pu.profile_id = a.id), '[]'::json) as personal_user_ids
+    from ai_profiles a where a.org_id = $1 and a.project_id is null order by a.created_at`, [orgId]);
   const own = await db.maybeOne(`select 1 from ai_profiles where org_id = $1 and project_id is not null and active and not admin_blocked limit 1`, [orgId]);
   const s = await orgAiSettings(db, orgId);
-  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, timeoutS: r.timeout_s ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalScope: Boolean(r.personal_scope) }));
+  const profiles = (rows.rows as any[]).map((r) => ({ id: r.id, name: r.name, provider: r.provider, model: r.model, baseUrl: r.base_url, hasKey: Boolean(unseal(r.api_key) || (r.provider === 'anthropic' && process.env.ANTHROPIC_API_KEY)), active: r.active, tokensIn: Number(r.tokens_in ?? 0), tokensOut: Number(r.tokens_out ?? 0), lastUsedAt: r.last_used_at ?? null, thinkingOff: Boolean(r.thinking_off), contextTokens: r.context_tokens ?? null, timeoutS: r.timeout_s ?? null, webSearch: Boolean(r.web_search), projectScope: r.project_scope ?? 'all', projectIds: r.project_ids ?? [], personalUse: (['all', 'users'].includes(r.personal_use) ? r.personal_use : 'none') as 'none' | 'all' | 'users', personalUserIds: r.personal_user_ids ?? [], personalScope: r.personal_use === 'all' }));
   return { enabled: s.enabled && ((rows.rows as AiProfileRow[]).some((r) => profileConfig(r)) || Boolean(own)), killswitch: !s.enabled, profiles, agentDailyBudget: s.agentDailyBudget, ownLlm: s.ownLlm, externalGuard: s.externalGuard, web: await webStatus(db, orgId), externalWindow: await externalWindow(db, orgId) };
 }
 
@@ -121,9 +126,10 @@ export async function aiConfigForAgent(db: Db, agentUserId: string, projectId?: 
  * dort verfügbar. Dieselbe Prüfung beim Aufnehmen, beim Setzen als Projektagent und bei jedem Lauf; der Grund ist für die PL lesbar.
  */
 export async function agentUsableIn(db: Db, agentUserId: string, projectId: string): Promise<{ ok: true; profile: string } | { ok: false; reason: string }> {
-  const u = await db.maybeOne(`select u.id, u.name, u.active, u.agent_project_id, u.agent_scope, u.ai_profile_id as profile_id from users u where u.id = $1 and u.kind = 'agent'`, [agentUserId]);
+  const u = await db.maybeOne(`select u.id, u.name, u.active, u.agent_project_id, u.agent_role, u.agent_scope, u.ai_profile_id as profile_id from users u where u.id = $1 and u.kind = 'agent'`, [agentUserId]);
   if (!u) return { ok: false, reason: 'Kein KI-Agent' };
   if (!u.active) return { ok: false, reason: `${u.name} ist deaktiviert` };
+  if (u.agent_role === 'assistant' && u.agent_project_id !== projectId) return { ok: false, reason: TEXT.assistantBound };
   if (u.agent_project_id && u.agent_project_id !== projectId) return { ok: false, reason: `${u.name} gehört zu einem anderen Projekt` };
   if (!u.agent_project_id && u.agent_scope === 'selected' && !(await db.maybeOne(`select 1 from agent_projects where agent_user_id = $1 and project_id = $2`, [u.id, projectId]))) return { ok: false, reason: `${u.name} ist nicht für dieses Projekt vorgesehen (Verwaltung › KI › Agenten: Einsatz)` };
   if (!u.profile_id) return { ok: false, reason: `${u.name} hat kein LLM (Verwaltung › KI)` };

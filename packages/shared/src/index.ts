@@ -31,6 +31,10 @@ export interface User {
   kind?: 'person' | 'agent';
   /** Agent einer PL: nur in diesem Projekt einsetzbar */
   agentProjectId?: string;
+  /** Agentenrolle: project = Projektagent (einladbar), assistant = persönlicher Assistent einer Person (nur ihr persönliches Projekt, nur Direktnachrichten) */
+  agentRole?: AgentRole;
+  /** Persönliches Projekt je Person: null = Mandantenschalter „Persönliche Projekte“ gilt, true = freigegeben (auch ohne Schalter), false = gesperrt (KI im persönlichen Projekt aus) */
+  personalProjectAllowed?: boolean | null;
   /** Verwalter mindestens einer Gruppe (pflegt deren Mitglieder unter Verwaltung); nur in /auth/me und bei der Anmeldung */
   managesGroups?: boolean;
 }
@@ -51,6 +55,25 @@ export interface UserSettings {
 export interface ChatChoice { label: string; value: string; hint?: string }
 /** Absicht einer Chat-Nachricht an einen Agenten: allgemein (kein Projektbezug), ein Projekt, persönlicher Assistent */
 export type ChatIntent = 'general' | 'project' | 'personal';
+/** Rolle eines KI-Agenten (users.agent_role) */
+export type AgentRole = 'project' | 'assistant';
+/** Freigabe eines Mandanten-LLM für persönliche Projekte: none (Standard), all, users (nur personalUserIds) */
+export type PersonalUse = 'none' | 'all' | 'users';
+export const PERSONAL_USES: { key: PersonalUse; label: string }[] = [
+  { key: 'none', label: 'nicht in persönlichen Projekten' },
+  { key: 'all', label: 'alle persönlichen Projekte' },
+  { key: 'users', label: 'nur ausgewählte Personen' }
+];
+/** Zustand des persönlichen Assistenten (GET /projects/:id/assistant) */
+export interface AssistantState {
+  /** vorhandener Assistent (Agent mit agentRole assistant) */
+  assistant: { id: string; name: string; persona: string | null; active: boolean; aiProfileId: string | null; profileName: string | null; dailyBudget: number | null; channelId: string } | null;
+  /** wählbare LLM-Profile: freigegebene Mandanten-Profile für diese Person und eigene LLMs des Projekts */
+  profiles: { id: string; name: string; provider: 'anthropic' | 'local'; model: string; own: boolean }[];
+  /** Sperrgründe (leer = Assistent anlegbar bzw. nutzbar) */
+  blocked: string[];
+  canCreate: boolean;
+}
 
 export const USER_SETTING_KEYS = ['theme', 'pinnedProjects', 'chatCards'] as const satisfies readonly (keyof UserSettings)[];
 
@@ -91,6 +114,10 @@ export interface Project {
   visibility: 'members' | 'org';
   /** Persönliches Projekt: nur der Ersteller (PL) und KI-Agenten */
   personal?: boolean;
+  /** Schlanke Oberfläche (persönliches Projekt ohne showAllTabs): Reiter Plan, Risiken, Zeiten und Auswertung ausblenden; Datenmodell und Routen bleiben vollständig */
+  slim?: boolean;
+  /** Persönliches Projekt: alle Reiter zeigen (Projekteinstellung, PATCH /projects/:id) */
+  showAllTabs?: boolean;
   /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung; agentMail: off = nur Rolle, process = bearbeitet neue Mails der Projektkonten direkt, triage = schlägt nur vor */
   agentUserId?: string | null;
   agentMail?: AgentMailMode;
@@ -463,6 +490,8 @@ export interface Invitation {
   /** Einladung direkt in ein Projekt (durch den PL): Annahme macht die Person zum Mitglied mit dieser Rolle */
   projectId?: string | null;
   projectRole?: 'member' | 'reader' | null;
+  /** Einladung ohne Projekt: persönliches Projekt bei Annahme anlegen und freigeben (Opt-out, Standard an) */
+  personalProject?: boolean;
   createdAt: string;
   expiresAt: string;
   sentAt: string | null;
@@ -1222,7 +1251,7 @@ export interface Meeting {
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
-export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** bei „alle“: auch in persönlichen Projekten (sonst dort nur per Auswahl) */ personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
+export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** Freigabe für persönliche Projekte: none (Standard), all, users (personalUserIds); personalScope = (personalUse === 'all') bleibt lesend für ältere Oberflächen */ personalUse?: PersonalUse; personalUserIds?: string[]; personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
 export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }

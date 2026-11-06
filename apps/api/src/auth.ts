@@ -56,8 +56,14 @@ export function mapUser(row: any): User {
     settings: row.settings ?? {},
     totpEnabled: Boolean(row.totp_enabled),
     kind: row.kind === 'agent' ? 'agent' : 'person',
-    ...(row.kind === 'agent' && row.agent_project_id ? { agentProjectId: row.agent_project_id } : {})
+    ...(row.kind === 'agent' && row.agent_project_id ? { agentProjectId: row.agent_project_id } : {}),
+    ...(row.kind === 'agent' ? { agentRole: row.agent_role === 'assistant' ? 'assistant' : 'project' } : { personalProjectAllowed: typeof row.personal_project_allowed === 'boolean' ? row.personal_project_allowed : null })
   };
+}
+
+/** Mandantenschalter „Persönliche Projekte“: alle dürfen sich selbst eins anlegen (Freigabe je Person geht vor, projectPolicy.personalAllowed). */
+export async function orgAllowsPersonal(db: Db, orgId: string): Promise<boolean> {
+  return Boolean((await db.one(`select settings from orgs where id = $1`, [orgId])).settings?.personalProjects);
 }
 
 /** Verwaltet die Person mindestens eine Gruppe (group_members.is_manager)? Für den Menüpunkt Verwaltung. */

@@ -131,8 +131,9 @@ test('Persönliche Projekte: Org-LLMs nur mit „auch in persönlichen Projekten
   const names = async () => (await t.api(pl).get(`/projects/${pers}/llms`)).json().available.map((x: any) => x.name);
   assert.ok(!(await names()).includes('Qwen'), 'ohne Flag nicht im persönlichen Projekt');
   assert.ok((await t.api(pl).get(`/projects/${t.ids.projects.web}/llms`)).json().available.some((x: any) => x.name === 'Qwen'), 'normales Projekt unverändert');
-  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { projectScope: 'selected', projectIds: [], personalScope: true })).statusCode, 400, 'Flag nur bei „alle“');
-  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: true })).statusCode, 200);
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: 'ja' })).statusCode, 400, 'personalScope nur als boolean');
+  assert.equal((await t.api(admin).patch(`/ai/profiles/${orgLlm}`, { personalScope: true })).statusCode, 200, 'altes Flag = personalUse all');
+  assert.equal((await t.api(admin).get('/ai/status')).json().profiles.find((p: any) => p.id === orgLlm).personalUse, 'all');
   assert.ok((await names()).includes('Qwen'), 'mit Flag');
   assert.equal((await t.api(admin).get('/ai/status')).json().profiles.find((p: any) => p.id === orgLlm).personalScope, true);
   // Auswahl statt Flag

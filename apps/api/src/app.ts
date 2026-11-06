@@ -27,6 +27,7 @@ import { aiPolicyRoutes } from './routes/aiPolicy.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { agentRoutes } from './routes/agents.js';
+import { assistantRoutes } from './routes/assistant.js';
 import { copyRoutes } from './routes/copy.js';
 import { chatRoutes } from './routes/chat.js';
 import { workflowRoutes } from './routes/workflows.js';
@@ -160,6 +161,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(analyticsRoutes);
       await api.register(meetingRoutes);
       await api.register(agentRoutes);
+      await api.register(assistantRoutes);
       await api.register(copyRoutes);
       await api.register(chatRoutes);
       await api.register(workflowRoutes);

@@ -2,7 +2,7 @@ import type { Membership, OrgRight, ProjectRole, User, MailViewRights } from '@p
 import { ROLE_RANK } from '@projekttool/shared';
 import type { Db } from './db.js';
 import { badRequest, forbidden, HttpError, notFound } from './errors.js';
-import { SQL } from './projectPolicy.js';
+import { SQL, TEXT } from './projectPolicy.js';
 
 export function mapMembership(row: any): Membership {
   return {
@@ -37,6 +37,8 @@ export async function getMembership(db: Db, projectId: string, userId: string): 
 export async function requireProject(db: Db, user: User, projectId: string, min: ProjectRole = 'reader'): Promise<Membership> {
   const project = await db.maybeOne(`select id, org_id, status, visibility from projects where id = $1`, [projectId]);
   if (!project || project.org_id !== user.orgId) throw notFound('Projekt nicht gefunden');
+  // Assistent einer Person: nur ihr persönliches Projekt
+  if (user.kind === 'agent' && user.agentRole === 'assistant' && user.agentProjectId !== projectId) throw forbidden(TEXT.assistantBound);
   const m = await effectiveMembership(db, user, projectId, project.visibility);
   if (!m) throw forbidden('Kein Mitglied dieses Projekts');
   if (ROLE_RANK[m.role] < ROLE_RANK[min]) throw forbidden(`Rolle ${min} erforderlich`);

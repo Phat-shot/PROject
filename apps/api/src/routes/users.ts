@@ -13,6 +13,7 @@ import { newSecret, otpauthUrl, totpStep } from '../totp.js';
 import { seal, unseal } from '../secrets.js';
 import { normNumber } from '../telephony/phone.js';
 import { projectPolicy, SQL, TEXT } from '../projectPolicy.js';
+import { ensurePersonalProject, personalProjectOf } from '../personalProject.js';
 import { orgAccount as orgAccountOf, releaseUserAccounts } from '../mail/accounts.js';
 
 export async function userRoutes(app: FastifyInstance) {
@@ -75,12 +76,14 @@ export async function userRoutes(app: FastifyInstance) {
   };
 
   // Org-Admin: globale Rolle, Org-Rechte (ai_admin, groups_admin, resources_admin) und Aktiv-Status (auch reaktivieren); KI-Agenten haben keine Org-Rechte
-  app.patch<{ Params: { id: string }; Body: { globalRole?: string; orgRights?: string[]; active?: boolean } }>('/users/:id', async (req) => {
+  // personalProjectAllowed (A): true = persönliches Projekt freigegeben (wird angelegt, falls keines da ist), false = gesperrt (Projekt bleibt, KI darin aus), null = Mandantenschalter
+  app.patch<{ Params: { id: string }; Body: { globalRole?: string; orgRights?: string[]; active?: boolean; personalProjectAllowed?: boolean | null } }>('/users/:id', async (req) => {
     const user = requireUser(req);
     if (user.globalRole !== 'org_admin') throw forbidden('Nur Org-Admin');
     const b = req.body ?? {};
     const keys = Object.keys(b);
-    if (!keys.length || keys.some((k) => !['globalRole', 'orgRights', 'active'].includes(k))) throw badRequest('Änderbar: globalRole, orgRights, active');
+    if (!keys.length || keys.some((k) => !['globalRole', 'orgRights', 'active', 'personalProjectAllowed'].includes(k))) throw badRequest('Änderbar: globalRole, orgRights, active, personalProjectAllowed');
+    if ('personalProjectAllowed' in b && b.personalProjectAllowed !== null && typeof b.personalProjectAllowed !== 'boolean') throw badRequest('personalProjectAllowed: true, false oder null (Mandantenschalter)');
     const target = await app.db.maybeOne(`select * from users where id = $1 and org_id = $2`, [req.params.id, user.orgId]);
     if (!target) throw notFound('Benutzer nicht gefunden');
     let rights: string[] | null = null;
@@ -92,7 +95,7 @@ export async function userRoutes(app: FastifyInstance) {
     }
     if ('globalRole' in b && !['org_admin', 'project_creator', 'user'].includes(String(b.globalRole))) throw badRequest('Globale Rolle: org_admin, project_creator oder user');
     if ('active' in b && typeof b.active !== 'boolean') throw badRequest('active: true oder false');
-    if (target.kind === 'agent' && ('globalRole' in b || 'active' in b)) throw badRequest('KI-Agenten verwaltet man unter KI-Agenten');
+    if (target.kind === 'agent' && ('globalRole' in b || 'active' in b || 'personalProjectAllowed' in b)) throw badRequest('KI-Agenten verwaltet man unter KI-Agenten');
     const next = { globalRole: String(b.globalRole ?? target.global_role), active: b.active ?? target.active };
     await assertKeepsAccess(user, target, next);
     let releasedTasks: unknown[] = [];
@@ -107,7 +110,17 @@ export async function userRoutes(app: FastifyInstance) {
       await app.db.query(`update users set global_role = $2, org_rights = coalesce($3::text[], org_rights) where id = $1`, [target.id, next.globalRole, rights]);
       await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.role', objectType: 'user', objectId: target.id, details: { globalRole: next.globalRole, orgRights: rights ?? target.org_rights ?? [], before: { globalRole: target.global_role, orgRights: target.org_rights ?? [] } } });
     }
-    return { user: mapUser(await app.db.one(`select * from users where id = $1`, [target.id])), releasedTasks };
+    let personalProject: { id: string; key: string; name: string } | null = null;
+    let notice: string | null = null;
+    if ('personalProjectAllowed' in b) {
+      const allowed = b.personalProjectAllowed ?? null;
+      await app.db.query(`update users set personal_project_allowed = $2 where id = $1`, [target.id, allowed]);
+      await audit(app.db, { orgId: user.orgId, userId: user.id, action: 'user.personal_project', objectType: 'user', objectId: target.id, details: { allowed } });
+      const existing = await personalProjectOf(app.db, target.id);
+      if (allowed === true && next.active) personalProject = await ensurePersonalProject(app.db, { id: target.id, org_id: target.org_id, name: target.name }, user.id, 'admin');
+      else if (allowed === false && existing) { personalProject = existing; notice = 'Das persönliche Projekt bleibt bestehen; die KI (Assistent, Agenten) ist darin gesperrt, bis die Freigabe wieder gesetzt wird.'; }
+    }
+    return { user: mapUser(await app.db.one(`select * from users where id = $1`, [target.id])), releasedTasks, ...(personalProject ? { personalProject: { id: personalProject.id, key: personalProject.key, name: personalProject.name } } : {}), ...(notice ? { notice } : {}) };
   });
 
   // Eigene Einstellungen: Name, Theme, Chat-Karten, angeheftete Projekte, Passwort. Nur bekannte Schlüssel werden gespeichert.
@@ -194,7 +207,7 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   // ---- Einladungen per Mail über das Org-Postfach; manuelles Anlegen (POST /users) bleibt als Fallback
-  const mapInvitation = (r: any): Invitation => ({ id: r.id, email: r.email, name: r.name, globalRole: r.global_role, projectId: r.project_id ?? null, projectRole: r.project_role ?? null, createdAt: r.created_at, expiresAt: r.expires_at, sentAt: r.sent_at, sendError: r.send_error, acceptedAt: r.accepted_at, link: `${publicBase()}/einladung/${r.token}` });
+  const mapInvitation = (r: any): Invitation => ({ id: r.id, email: r.email, name: r.name, globalRole: r.global_role, projectId: r.project_id ?? null, projectRole: r.project_role ?? null, personalProject: Boolean(r.personal_project), createdAt: r.created_at, expiresAt: r.expires_at, sentAt: r.sent_at, sendError: r.send_error, acceptedAt: r.accepted_at, link: `${publicBase()}/einladung/${r.token}` });
   /** Org-Admin darf alles; ein PL darf Einladungen seines Projekts anlegen, erneut senden und löschen. */
   const mayManage = async (user: any, inv: { project_id: string | null }) => {
     if (user.globalRole === 'org_admin') return true;
@@ -239,7 +252,8 @@ export async function userRoutes(app: FastifyInstance) {
   });
 
   // Org-Admin lädt mit globaler Rolle ein; ein PL lädt in sein Projekt ein (globale Rolle „Benutzer“, Projektrolle Mitglied oder Leser)
-  app.post<{ Body: { email: string; name: string; globalRole?: string; projectId?: string | null; projectRole?: 'member' | 'reader' | null } }>('/invitations', async (req) => {
+  // personalProject (A): Einladung ohne Projekt legt bei Annahme ein persönliches Projekt an und gibt es frei (Opt-out-Haken, Standard an)
+  app.post<{ Body: { email: string; name: string; globalRole?: string; projectId?: string | null; projectRole?: 'member' | 'reader' | null; personalProject?: boolean } }>('/invitations', async (req) => {
     const user = requireUser(req);
     const b = req.body ?? ({} as any);
     const projectId: string | null = b.projectId || null;
@@ -257,12 +271,14 @@ export async function userRoutes(app: FastifyInstance) {
     const addr = email.trim().toLowerCase();
     if (await app.db.maybeOne(`select 1 from users where lower(email) = $1`, [addr])) throw badRequest('Für diese E-Mail existiert bereits ein Benutzer');
     await app.db.query(`delete from invitations where org_id = $1 and email = $2 and accepted_at is null`, [user.orgId, addr]);
+    if (b.personalProject !== undefined && typeof b.personalProject !== 'boolean') throw badRequest('personalProject: true oder false');
+    const personalProject = !projectId && b.personalProject !== false;
     const inv = await app.db.one(
-      `insert into invitations (org_id, email, name, global_role, token, invited_by, expires_at, project_id, project_role) values ($1,$2,$3,$4,$5,$6, now() + interval '14 days', $7, $8) returning *`,
-      [user.orgId, addr, name.trim(), globalRole, randomBytes(24).toString('base64url'), user.id, projectId, projectRole]
+      `insert into invitations (org_id, email, name, global_role, token, invited_by, expires_at, project_id, project_role, personal_project) values ($1,$2,$3,$4,$5,$6, now() + interval '14 days', $7, $8, $9) returning *`,
+      [user.orgId, addr, name.trim(), globalRole, randomBytes(24).toString('base64url'), user.id, projectId, projectRole, personalProject]
     );
     const r = await sendInvitation(inv, user);
-    await audit(app.db, { orgId: user.orgId, projectId, userId: user.id, action: 'user.invite', objectType: 'invitation', objectId: inv.id, details: { email: addr, globalRole, projectRole, sent: r.sent } });
+    await audit(app.db, { orgId: user.orgId, projectId, userId: user.id, action: 'user.invite', objectType: 'invitation', objectId: inv.id, details: { email: addr, globalRole, projectRole, personalProject, sent: r.sent } });
     return { invitation: mapInvitation(await app.db.one(`select * from invitations where id = $1`, [inv.id])), ...r };
   });
 
@@ -289,7 +305,7 @@ export async function userRoutes(app: FastifyInstance) {
   app.get<{ Params: { token: string } }>('/invitations/accept/:token', async (req) => {
     const inv = await openInvitation(req.params.token);
     if (!inv) throw notFound('Einladung ungültig oder abgelaufen');
-    return { email: inv.email, name: inv.name, orgName: inv.org_name };
+    return { email: inv.email, name: inv.name, orgName: inv.org_name, personalProject: Boolean(inv.personal_project) };
   });
   app.post<{ Params: { token: string }; Body: { name?: string; password: string } }>('/invitations/accept/:token', async (req, reply) => {
     const inv = await openInvitation(req.params.token);
@@ -298,10 +314,12 @@ export async function userRoutes(app: FastifyInstance) {
     if (!b.password || b.password.length < 10) throw badRequest('Passwort mit mindestens 10 Zeichen');
     if (await app.db.maybeOne(`select 1 from users where lower(email) = $1`, [inv.email])) throw badRequest('Benutzer existiert bereits, bitte anmelden');
     const row = await app.db.one(
-      `insert into users (org_id, email, name, password_hash, global_role) values ($1,$2,$3,$4,$5) returning *`,
-      [inv.org_id, inv.email, (b.name ?? inv.name).trim() || inv.name, hashPassword(b.password), inv.global_role]
+      `insert into users (org_id, email, name, password_hash, global_role, personal_project_allowed) values ($1,$2,$3,$4,$5,$6) returning *`,
+      [inv.org_id, inv.email, (b.name ?? inv.name).trim() || inv.name, hashPassword(b.password), inv.global_role, inv.personal_project ? true : null]
     );
     await app.db.query(`update invitations set accepted_at = now(), user_id = $2 where id = $1`, [inv.id, row.id]);
+    // Persönliches Projekt (A): freigegeben und gleich angelegt, auch wenn der Mandantenschalter aus ist
+    const personalProject = inv.personal_project ? await ensurePersonalProject(app.db, { id: row.id, org_id: row.org_id, name: row.name }, row.id, 'invitation') : null;
     if (inv.project_id) {
       await app.db.query(
         `insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,$3,false,false,false,false,$4) on conflict (project_id, user_id) do nothing`,
@@ -312,7 +330,7 @@ export async function userRoutes(app: FastifyInstance) {
     await audit(app.db, { orgId: inv.org_id, userId: row.id, action: 'user.invite_accepted', objectType: 'user', objectId: row.id, details: { invitation: inv.id } });
     const token = await createSession(app.db, row.id);
     setSessionCookie(reply, token);
-    return { user: mapUser(row) };
+    return { user: mapUser(row), personalProjectId: personalProject?.id ?? null };
   });
 
   // ---- Berechtigungsgruppen des Mandanten

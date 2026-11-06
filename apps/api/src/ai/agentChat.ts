@@ -191,7 +191,7 @@ function findMentions(text: string, projects: ScopeProject[]): { refs: { project
  * Recht agent.chat frei. Kennungen aus anderen Projekten oder aus Teilprojekten, die einer von beiden nicht sieht,
  * landen in hidden; der Agent sagt dazu nichts, auch keinen Titel.
  */
-export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string; created_at?: string | Date; uid?: string | null }[]; senderId: string; agent: { id: string; org_id: string; name?: string }; /** Antwort auf die Rückfrage: Absicht steht fest */ forced?: ForcedIntent | null }, now = new Date()): Promise<ChatScope> {
+export async function resolveChatScope(db: Db, q: { channel: any; message: { id: string; body: string; thread_id?: string | null }; history: { id: string; body: string; created_at?: string | Date; uid?: string | null }[]; senderId: string; agent: { id: string; org_id: string; name?: string; /** assistant: persönlicher Assistent (E): „persönlich“ ist der sichere Standard, Rückfrage nur bei ausdrücklichem Projektbezug */ agent_role?: string | null }; /** Antwort auf die Rückfrage: Absicht steht fest */ forced?: ForcedIntent | null }, now = new Date()): Promise<ChatScope> {
   const all: ScopeProject[] = (await db.query(`select id, key, name from projects where org_id = $1 order by key`, [q.agent.org_id])).rows;
   const channelProject = q.channel.kind === 'project' ? all.find((p) => p.id === q.channel.project_id) ?? null : null;
   const sure = { intent: 'project' as ChatIntent, confidence: 'sure' as ChatConfidence };
@@ -278,6 +278,12 @@ export async function resolveChatScope(db: Db, q: { channel: any; message: { id:
   if (marker?.intent === 'project') return projectScope('mentioned', [marker.project.id], 'sure');
   const mine = await resolve(body);
   if (mine.projectIds.length || mine.hidden.length) return { how: 'mentioned', intent: intentOf(mine.projectIds), confidence: 'sure', ...mine, projects: common.filter((p) => mine.projectIds.includes(p.id)), personalId };
+  // Persönlicher Assistent (E): ohne Marker und Nennung ist „persönlich“ sicher (kein Raten, keine Rückfrage); nur eine Tool- oder
+  // Wissensfrage ohne Arbeitsworte bleibt allgemein (Annahme). Genannte fremde Projekte landen oben in hidden (nicht Mitglied).
+  if (q.agent.agent_role === 'assistant') {
+    if (intentHeuristic(body) === 'general' && !isSmallTalk(body, q.agent.name ? [q.agent.name] : [])) return generalScope('guess');
+    return personal.length ? personalScope('sure') : generalScope('sure');
+  }
   if (ALL_RE.test(body)) return projectScope('all', common.map((p) => p.id), 'sure');
   if (isStatusQuestion(body)) return projectScope('status', common.map((p) => p.id), 'sure');
   // Gruß oder Kurzmeldung ohne Inhalt: kein Projektbezug
@@ -439,9 +445,12 @@ export function assumptionHint(scope: ChatScope): string {
 }
 
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
-  const agent = await db.maybeOne(`select id, name, org_id, persona from users where id = $1 and kind = 'agent' and active`, [agentId]);
+  const agent = await db.maybeOne(`select id, name, org_id, persona, agent_role, agent_project_id from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
   const channel = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, agent.org_id]);
+  // Assistent (D): antwortet nur auf Direktnachrichten, Erwähnungen im Projektkanal ignoriert er
+  if (channel && channel.kind === 'project' && agent.agent_role === 'assistant') return { status: 'skipped', error: 'Assistent antwortet nur auf Direktnachrichten' };
+  const isAssistant = agent.agent_role === 'assistant';
   let msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.kind = 'user' and m.deleted_at is null`, [messageId, channelId]);
   if (!channel || !msg || msg.user_id === agent.id) return { status: 'skipped' };
   /** Die eingegangene Nachricht; msg ist bei einer Antwort auf die Rückfrage die Ursprungsnachricht, die damit beantwortet wird. */
@@ -528,9 +537,14 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Kennungen oder Projekte, die der Absender nicht sieht oder in denen einer gesperrt ist: nichts dazu, auch kein Titel
   // Genanntes Projekt, in dem die Person Mitglied ist, der Agent aber nicht: sagen, wie er dazukommt (statt nur „nichts sagen“)
   const notIn = scope.hidden.length ? (await db.query(`select p.key, p.name from projects p join project_members m on m.project_id = p.id and m.user_id = $1 where p.org_id = $2 and p.key = any($3::text[]) and not exists (select 1 from project_members a where a.project_id = p.id and a.user_id = $4)`, [msg.user_id, agent.org_id, scope.hidden.map((h) => h.split('-')[0]), agent.id])).rows : [];
-  const notInText = notIn.length ? `In ${notIn.map((p: any) => `${p.key} „${p.name}“`).join(', ')} bin ich nicht Mitglied, dort kann ich nichts nachsehen oder anlegen; die PL lädt mich unter Projekt › Einstellungen › KI ein.` : '';
+  const notInText = notIn.length ? `In ${notIn.map((p: any) => `${p.key} „${p.name}“`).join(', ')} bin ich nicht Mitglied, dort kann ich nichts nachsehen oder anlegen; ${isAssistant ? 'als dein Assistent arbeite ich nur in deinem persönlichen Projekt' : 'die PL lädt mich unter Projekt › Einstellungen › KI ein'}.` : '';
   const hiddenRest = scope.hidden.filter((h) => !notIn.some((p: any) => p.key === h.split('-')[0]));
   if (scope.how === 'mentioned' && !scope.projectIds.length) return direct(notInText ? `${notInText}${hiddenRest.length ? ' Zu weiterem kann ich dir hier nichts sagen.' : ''}` : 'Dazu kann ich dir hier nichts sagen.', `Thema ohne gemeinsame Freigabe: ${scope.hidden.join(', ')}`);
+  // Assistent ohne nutzbares persönliches Projekt (Freigabe der Person entzogen, Notaus): Grund statt Hilfe zum Projektbeitritt
+  if (!project && isAssistant && !scope.personalId && agent.agent_project_id) {
+    const why = await aiAllowed(db, { userId: msg.user_id, projectId: agent.agent_project_id, feature: 'agent.chat' });
+    return direct(`Ich kann gerade nicht für dich arbeiten: ${why.allowed ? 'mein Einsatz in deinem persönlichen Projekt ist gesperrt' : why.reason}.`, `Assistent gesperrt: ${why.allowed ? 'Agent im persönlichen Projekt gesperrt' : why.reason}`);
+  }
   // Kein gemeinsames, beidseitig freies Projekt: Hilfe und Hinweis statt Schweigen (ohne LLM-Aufruf)
   if (!project && (scope.how === 'all' || scope.how === 'status' || scope.how === 'general') && !scope.projects.length) {
     return direct(`Hallo ${msg.user_name.split(' ')[0]}, wir haben noch kein gemeinsames Projekt, in dem ich für dich arbeiten darf. Ich kann Arbeitspakete vorantreiben, Rückfragen klären, Termine vorschlagen, Mails zu Aufgaben beantworten und Doku pflegen. Dafür nimmt mich die Projektleitung als Mitglied oder Projektagent ins Projekt auf und gibt dir dort „KI nutzen“; danach frag mich einfach hier oder im Projektkanal mit @${agent.name}.`, 'kein gemeinsames Projekt: Hilfe und Hinweis');

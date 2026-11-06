@@ -188,12 +188,13 @@ export async function chatRoutes(app: FastifyInstance) {
     const recipients = new Set<string>();
     const agents = new Set<string>();
     if (channel.kind === 'project') {
-      const members = await db.query(`select m.user_id, u.name, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active`, [channel.project_id]);
+      const members = await db.query(`select m.user_id, u.name, u.kind, u.agent_role from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.active`, [channel.project_id]);
       mentions = extractMentions(body, members.rows.map((r: any) => ({ userId: r.user_id, name: r.name })));
-      for (const r of members.rows) if (r.kind === 'agent' && mentions.includes(r.user_id)) agents.add(r.user_id);
+      // Assistenten (agent_role assistant) antworten nur auf Direktnachrichten: Erwähnung im Projektkanal löst keinen Lauf aus
+      for (const r of members.rows) if (r.kind === 'agent' && r.agent_role !== 'assistant' && mentions.includes(r.user_id)) agents.add(r.user_id);
       // Antwort in einem Thread, in dem ein Agent schon geantwortet hat: der Agent bleibt im Gespräch
       if (threadId) {
-        const inThread = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.kind = 'user' and u.kind = 'agent' and u.active and m.deleted_at is null`, [threadId]);
+        const inThread = await db.query(`select distinct m.user_id from chat_messages m join users u on u.id = m.user_id where (m.id = $1 or m.thread_id = $1) and m.kind = 'user' and u.kind = 'agent' and u.agent_role <> 'assistant' and u.active and m.deleted_at is null`, [threadId]);
         for (const a of inThread.rows) if (members.rows.some((x: any) => x.user_id === a.user_id)) agents.add(a.user_id);
       }
     } else {

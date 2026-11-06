@@ -4,6 +4,7 @@ Zielgruppe: alle, die wissen wollen, was sich wann geändert hat (Administratore
 
 ## 2026-11-06
 
+- Persönlicher Assistent je Benutzer (API; Web folgt): Einladung ohne Projekt mit Haken „persönliches Projekt freigeben“ (Standard an) legt das persönliche Projekt beim Annehmen an; Freigabe je Person `personalProjectAllowed` (Verwaltung › Personen; false sperrt die KI im persönlichen Projekt mit Grund). LLM-Freigabe für persönliche Projekte je Mandanten-LLM (`personalUse` none/all/users, Migration 075 aus „auch in persönlichen Projekten“). Neuer Agententyp Assistent (`agent_role = 'assistant'`): die Person legt ihn im persönlichen Projekt selbst an (`GET/POST /projects/:id/assistant`), er ist dort gebunden, nicht in andere Projekte einladbar, antwortet nur auf Direktnachrichten, „persönlich“ ist sein sicheres Thema ohne Rückfrage. Persönliche Projekte starten schlank (zwei Spalten, Ordner „Notizen“, Checkliste, ohne Eskalation/Reporting) mit `policy.slim` und `showAllTabs`.
 - Dokumentation neu geordnet: README als Einstieg, Funktionsübersicht in `docs/Funktionen.md`, Betriebshandbuch `docs/Betrieb.md` (Installation, Variablen, Update, Backup/Restore, Monitoring, SSO, Sicherheit), Glossar in der Kurzanleitung erweitert, Handbuch und Kurzanleitung auf die aktuellen Reiter gebracht.
 - Demodaten nur noch mit `SEED=true`, in Produktion (`NODE_ENV=production`) verweigert.
 - SSO: `OIDC_ORG_ID` legt bei automatischer Anlage den Mandanten fest.
