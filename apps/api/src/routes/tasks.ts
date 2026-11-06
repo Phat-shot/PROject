@@ -5,17 +5,17 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { queueAgentRun } from '../ai/agentEvents.js';
-import { onWorkflowTaskDone } from '../workflows/engine.js';
 
 import { canSeeSubproject, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
-import { assertResponsible, createRecurrenceInstance, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, completeParentIfDone, resolveProjectLead, touchTask } from '../tasks/service.js';
+import { assertResponsible, dateStr, loadTask, loadTasks, mapSubproject, insertTask, moveTask, onTaskDone as finishTask, resolveProjectLead, syncChecklistDone, touchTask } from '../tasks/service.js';
 import { mailAccess } from '../mail/access.js';
 import { linkMailToTask } from '../mail/link.js';
 import { LEVEL_LABEL } from '../tasks/escalation.js';
-import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
+import type { Recurrence } from '../tasks/recurrence.js';
 import { dispatch } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
+import { convertApChecklist, demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -42,8 +42,10 @@ interface TaskBody {
   parentId?: string | null;
   /** Außenbeschreibung: was Externe zu diesem AP erfahren dürfen (PL bzw. „Projektplan ändern“) */
   externalBrief?: string | null;
-  /** Arbeitspaket automatisch erledigen, wenn alle Aufgaben erledigt sind; null = Vorgabe des Projekts */
+  /** Automatik, null = Vorgabe des Projekts: Arbeitspaket erledigt, wenn alle Aufgaben erledigt sind; Aufgabe erledigt, wenn alle Checklistenpunkte erledigt sind */
   autoComplete?: boolean | null;
+  /** Alias für autoComplete an Aufgaben */
+  autoDone?: boolean | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -294,6 +296,8 @@ export async function taskRoutes(app: FastifyInstance) {
     const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
     const b = req.body ?? {};
     if (existing.parent_id) delete b.subprojectId;
+    if ('autoDone' in b && !('autoComplete' in b)) b.autoComplete = b.autoDone;
+    delete b.autoDone;
     if ('responsibleUserId' in b) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
     // Mail als Beleg: nur eine Mail, die man selbst lesen darf
     if (b.sourceMailId && !(await mailAccess(db, user, b.sourceMailId)).ok) throw forbidden('Kein Leserecht an dieser Mail');
@@ -341,6 +345,8 @@ export async function taskRoutes(app: FastifyInstance) {
     if ('recurrence' in b) await db.query(`update tasks set recurrence = $2 where id = $1`, [req.params.id, b.recurrence ? JSON.stringify(b.recurrence) : null]);
     if ('estimateMinutes' in b) await db.query(`update tasks set estimate_minutes = $2 where id = $1`, [req.params.id, b.estimateMinutes && b.estimateMinutes > 0 ? Math.round(b.estimateMinutes) : null]);
     if ('autoComplete' in b) await db.query(`update tasks set auto_complete = $2 where id = $1`, [req.params.id, b.autoComplete == null ? null : Boolean(b.autoComplete)]);
+    // Statuswechsel von Hand: nicht mehr „von der Automatik erledigt“
+    if (b.columnId && b.columnId !== existing.column_id) await db.query(`update tasks set auto_done_at = null, auto_done_from_column_id = null where id = $1`, [req.params.id]);
     if ('externalBrief' in b) await db.query(`update tasks set external_brief = $2 where id = $1`, [req.params.id, String(b.externalBrief ?? '').trim().slice(0, 4000) || null]);
     if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
       await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
@@ -378,6 +384,8 @@ export async function taskRoutes(app: FastifyInstance) {
     await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.update', objectType: 'task', objectId: req.params.id, details: changed });
     if (b.responsibleUserId && b.responsibleUserId !== existing.responsible_user_id) queueAgentRun(req.params.id, 'assigned');
     else if (user.kind !== 'agent' && ['title', 'description', 'dueDate', 'startDate', 'columnId', 'blocked', 'externalBrief'].some((k) => k in b)) queueAgentRun(req.params.id, 'task_changed');
+    // Automatik an einer Aufgabe eingeschaltet: sind schon alle Punkte erledigt, gleich erledigen
+    if ('autoComplete' in b && existing.parent_id && !b.columnId) await syncChecklistDone(db, app.mail, existing.id, user);
     return { task: await loadTask(db, req.params.id) };
   });
 
@@ -492,15 +500,28 @@ export async function taskRoutes(app: FastifyInstance) {
     return { task: await loadTask(db, existing.id) };
   });
 
-  // Checkliste (Tasks)
+  // Checkliste (Tasks): gehört zu Aufgaben. Punkte am Arbeitspaket (Altbestand) bleiben lesbar, abhakbar und löschbar und lassen
+  // sich per convert, promote oder move in Aufgaben überführen; neue legt man an einer Aufgabe an.
   app.post<{ Params: { id: string }; Body: { title: string; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist', async (req) => {
     const user = requireUser(req);
     const { task: t } = await requireTask(db, user, req.params.id, 'member');
+    if (!t.parent_id) throw badRequest('Checklistenpunkte gehören zu Aufgaben. Lege eine Aufgabe an oder wandle vorhandene Punkte um.');
     if (!req.body?.title?.trim()) throw badRequest('Titel erforderlich');
     const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [req.params.id]);
     await db.query(`insert into checklist_items (task_id, title, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5)`, [req.params.id, req.body.title.trim(), req.body.responsibleUserId ?? null, req.body.responsibleEmail?.trim().toLowerCase() || null, pos.p]);
+    // Neuer offener Punkt an einer automatisch erledigten Aufgabe: wieder offen
+    await syncChecklistDone(db, app.mail, t.id, user, { itemTitle: req.body.title.trim() });
     if (user.kind !== 'agent') queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
+  });
+
+  // Altbestand am Arbeitspaket: alle Punkte in eine neue Aufgabe (Titel aus dem Body, sonst „Checkliste“) überführen
+  app.post<{ Params: { id: string }; Body: { title?: string | null } }>('/tasks/:id/checklist/convert', async (req) => {
+    const user = requireUser(req);
+    const { task: t } = await requireTask(db, user, req.params.id, 'member');
+    const r = await convertApChecklist(db, actorOf(user), t.id, req.body?.title ?? null);
+    if (user.kind !== 'agent') queueAgentRun(t.id, 'task_changed');
+    return { task: await loadTask(db, t.id), aufgabe: await loadTask(db, r.id) };
   });
 
   app.patch<{ Params: { id: string; itemId: string }; Body: { title?: string; done?: boolean; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist/:itemId', async (req) => {
@@ -515,6 +536,10 @@ export async function taskRoutes(app: FastifyInstance) {
       [req.params.itemId, req.params.id, b.title ?? null, b.done ?? null, 'responsibleUserId' in b, b.responsibleUserId ?? null, 'responsibleEmail' in b, b.responsibleEmail?.trim().toLowerCase() || null]
     );
     await touchTask(db, req.params.id);
+    if (b.done !== undefined) {
+      const item = await db.maybeOne(`select title from checklist_items where id = $1 and task_id = $2`, [req.params.itemId, req.params.id]);
+      if (item) await syncChecklistDone(db, app.mail, t.id, user, { itemTitle: item.title });
+    }
     if (user.kind !== 'agent' && (b.title !== undefined || b.done !== undefined)) queueAgentRun(req.params.id, 'task_changed');
     return { task: await loadTask(db, req.params.id) };
   });
@@ -523,7 +548,65 @@ export async function taskRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const { task: t } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`delete from checklist_items where id = $1 and task_id = $2`, [req.params.itemId, req.params.id]);
+    await syncChecklistDone(db, app.mail, t.id, user);
     return { task: await loadTask(db, req.params.id) };
+  });
+
+  // Struktur: Aufgabe umhängen oder zum Arbeitspaket machen, Arbeitspaket einem Teilprojekt zuordnen (Rechte wie PATCH: Mitglied)
+  const actorOf = (user: { id: string; name: string; orgId: string; kind?: string }): StructureActor => ({ id: user.id, name: user.name, orgId: user.orgId, kind: user.kind === 'agent' ? 'agent' : 'person' });
+  app.post<{ Params: { id: string }; Body: { parentId?: string | null; subprojectId?: string | null } }>('/tasks/:id/reparent', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    const b = req.body ?? {};
+    if (b.parentId) {
+      const parent = await db.maybeOne(`select id, project_id, subproject_id from tasks where id = $1 and deleted_at is null`, [b.parentId]);
+      if (!parent || parent.project_id !== existing.project_id) throw badRequest('Ziel-Arbeitspaket gehört nicht zum Projekt');
+      if (!(await canSeeSubproject(db, user.id, parent.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    }
+    if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const r = await reparentTask(db, actorOf(user), existing.id, { parentId: b.parentId ?? null, ...('subprojectId' in b ? { subprojectId: b.subprojectId ?? null } : {}) });
+    if (r.changed && user.kind !== 'agent') queueAgentRun(existing.id, 'task_changed');
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  // Checklistenpunkt → Aufgabe (am Arbeitspaket; bei der Checkliste einer Aufgabe am Arbeitspaket darüber)
+  app.post<{ Params: { id: string; itemId: string }; Body: { title?: string | null; dueDate?: string | null; startDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist/:itemId/promote', async (req) => {
+    const user = requireUser(req);
+    const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
+    const b = req.body ?? {};
+    if (b.responsibleUserId) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
+    const r = await promoteItem(db, actorOf(user), existing.id, req.params.itemId, b);
+    if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
+    await syncChecklistDone(db, app.mail, existing.id, user);
+    return { task: await loadTask(db, r.id), source: await loadTask(db, existing.id) };
+  });
+
+  // Aufgabe → Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets (toTaskId; ohne: die einzige andere offene Aufgabe);
+  // nur ohne eigene Aufgaben, Zeiten, Mails, offene Fragen; Log wird an der Ziel-Aufgabe zusammengefasst
+  app.post<{ Params: { id: string }; Body: { toTaskId?: string | null } }>('/tasks/:id/demote', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    const why = await demoteBlocker(db, existing.id);
+    if (why) throw badRequest(why);
+    if (req.body?.toTaskId) await requireTask(db, user, req.body.toTaskId, 'member');
+    const r = await demoteTask(db, actorOf(user), existing.id, req.body?.toTaskId ?? null);
+    await syncChecklistDone(db, app.mail, r.targetId, user);
+    if (user.kind !== 'agent') queueAgentRun(r.apId, 'task_changed');
+    return { task: await loadTask(db, r.targetId), ap: await loadTask(db, r.apId), itemId: r.itemId };
+  });
+
+  // Checklistenpunkt an ein anderes Arbeitspaket oder eine andere Aufgabe
+  app.post<{ Params: { id: string; itemId: string }; Body: { toTaskId: string } }>('/tasks/:id/checklist/:itemId/move', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    if (!req.body?.toTaskId) throw badRequest('Ziel fehlt');
+    const { task: to } = await requireTask(db, user, req.body.toTaskId, 'member');
+    if (to.project_id !== existing.project_id) throw badRequest('Ziel gehört nicht zum Projekt');
+    const item = await db.maybeOne(`select title from checklist_items where id = $1`, [req.params.itemId]);
+    await moveItem(db, actorOf(user), existing.id, req.params.itemId, to.id);
+    await syncChecklistDone(db, app.mail, existing.id, user);
+    await syncChecklistDone(db, app.mail, to.id, user, { itemTitle: item?.title });
+    return { task: await loadTask(db, existing.id), target: await loadTask(db, to.id) };
   });
 
   // Kommentare
@@ -580,23 +663,8 @@ export async function taskRoutes(app: FastifyInstance) {
     }
   }
 
-  /** W6: Wiederholung „nach Erledigung“ erzeugt die nächste Instanz. */
-  async function onTaskDone(existing: any, user: { id: string; orgId: string }) {
-    await cancelQuestions(db, { taskId: existing.id }, `${existing.title} ist erledigt`, user.id);
-    // Letzte offene Aufgabe erledigt: Arbeitspaket mit (Folgen wie von Hand: Fragen, Workflow, Wiederholung)
-    const parent = existing.parent_id ? await completeParentIfDone(db, existing.id, user.id) : null;
-    if (parent) {
-      await audit(db, { orgId: user.orgId, projectId: parent.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: parent.id, details: { auto: 'all_subtasks_done' } });
-      await onTaskDone(parent, user);
-    }
-    if (existing.workflow_run_id) await onWorkflowTaskDone(db, app.mail, existing.id);
-    const r: Recurrence | null = existing.recurrence ?? null;
-    if (!r || r.mode !== 'after_done' || !existing.due_date) return;
-    const next = nextDueDate(dateStr(existing.due_date)!, r);
-    const id = await createRecurrenceInstance(db, existing, next, true);
-    await db.query(`update tasks set recurrence = null where id = $1`, [existing.id]);
-    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: null, action: 'task.recurrence_created', objectType: 'task', objectId: id, details: { from: existing.id, due: next, trigger: 'after_done' } });
-  }
+  /** Folgen von „erledigt“ (Fragen, AP-Automatik, Workflow, Wiederholung W6): tasks/service.ts */
+  const onTaskDone = (existing: any, user: { id: string; orgId: string }) => finishTask(db, app.mail, existing, user);
 
   async function setPredecessors(taskId: string, projectId: string, ids: string[]) {
     await db.query(`delete from task_dependencies where successor_id = $1`, [taskId]);

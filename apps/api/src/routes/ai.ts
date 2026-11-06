@@ -121,6 +121,8 @@ export async function aiRoutes(app: FastifyInstance) {
       if (allowed?.length && blocked?.length) throw badRequest('Online-Recherche: entweder erlaubte oder gesperrte Domains, nicht beides');
       const url = w.url === undefined ? curW.url : w.url ? String(w.url).trim().replace(/\/+$/, '') : null;
       if (url && !/^https?:\/\//.test(url)) throw badRequest('Online-Recherche: Adresse mit http(s)://');
+      // SearXNG läuft meist intern: Freigabe über OUTBOUND_ALLOW_HOSTS, sonst SSRF auf interne Dienste
+      if (url && url !== curW.url) await assertOutboundUrl(url);
       web = { provider: w.provider ?? curW.provider ?? 'none', url, apiKey: w.apiKey === null ? null : typeof w.apiKey === 'string' && w.apiKey.trim() ? seal(w.apiKey.trim()) : curW.apiKey ?? null,
         maxPerRun: w.maxPerRun !== undefined ? Math.max(1, Math.min(20, Number(w.maxPerRun) || 5)) : curW.maxPerRun ?? 5, dailyPerAgent: w.dailyPerAgent !== undefined ? Math.max(0, Math.min(500, Number(w.dailyPerAgent) || 0)) : curW.dailyPerAgent ?? 20,
         allowedDomains: allowed ?? (blocked?.length ? [] : curW.allowedDomains ?? []), blockedDomains: blocked ?? (allowed?.length ? [] : curW.blockedDomains ?? []) };
@@ -157,6 +159,17 @@ export async function aiRoutes(app: FastifyInstance) {
   app.get('/ai/profiles', async (req) => { const user = requireUser(req); return { profiles: (await aiStatus(db, user.orgId)).profiles }; });
   const validScope = (v: unknown) => { if (v !== 'all' && v !== 'selected' && v !== 'none') throw badRequest('Freigabe: all, selected oder none'); return v; };
   /** Freigabe für ausgewählte Projekte: nur Projekte des Mandanten. */
+  /** Freigabe für persönliche Projekte (B): personalUse none/all/users; das ältere personalScope (true/false) heißt all/none. */
+  const validPersonalUse = (b: any): 'none' | 'all' | 'users' | null => {
+    if (b.personalUse !== undefined) { if (!['none', 'all', 'users'].includes(b.personalUse)) throw badRequest('personalUse: none, all oder users'); return b.personalUse; }
+    if (b.personalScope !== undefined) { if (typeof b.personalScope !== 'boolean') throw badRequest('personalScope: true oder false'); return b.personalScope ? 'all' : 'none'; }
+    return null;
+  };
+  /** Personen, für deren persönliche Projekte das LLM frei ist (personalUse users): nur aktive Personen des Mandanten. */
+  async function setPersonalUsers(orgId: string, profileId: string, ids: unknown[]) {
+    await db.query(`delete from ai_profile_personal_users where profile_id = $1`, [profileId]);
+    for (const id of [...new Set(ids.map(String))]) if (await db.maybeOne(`select 1 from users where id = $1 and org_id = $2 and kind = 'person'`, [id, orgId])) await db.query(`insert into ai_profile_personal_users (profile_id, user_id) values ($1,$2) on conflict do nothing`, [profileId, id]);
+  }
   async function setReleasedProjects(orgId: string, profileId: string, ids: unknown[]) {
     await db.query(`delete from ai_profile_projects where profile_id = $1`, [profileId]);
     for (const id of ids.map(String)) if (await db.maybeOne(`select 1 from projects where id = $1 and org_id = $2`, [id, orgId])) await db.query(`insert into ai_profile_projects (profile_id, project_id) values ($1,$2) on conflict do nothing`, [profileId, id]);
@@ -254,10 +267,11 @@ export async function aiRoutes(app: FastifyInstance) {
     const b: any = req.body ?? {};
     const v = validProfile(b);
     const scope = validScope(b.projectScope ?? 'all');
-    if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scope !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
+    const personalUse = validPersonalUse(b) ?? 'none';
     const contextTokens = validContext(b.contextTokens);
-    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_scope, web_search, context_tokens) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, b.personalScope === true, b.webSearch === true, contextTokens]);
+    const r = await db.one(`insert into ai_profiles (org_id, name, provider, base_url, model, api_key, thinking_off, project_scope, personal_use, web_search, context_tokens) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id`, [user.orgId, v.name, v.provider, v.baseUrl, v.model, b.apiKey?.trim() ? seal(b.apiKey.trim()) : null, b.thinkingOff === true, scope, personalUse, b.webSearch === true, contextTokens]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, r.id, b.projectIds);
+    if (Array.isArray(b.personalUserIds)) await setPersonalUsers(user.orgId, r.id, b.personalUserIds);
     await setTimeoutS(r.id, b);
     await audit(db, { orgId: user.orgId, userId: user.id, action: 'ai.profile.create', objectType: 'ai_profile', objectId: r.id, details: { name: v.name, provider: v.provider, model: v.model, baseUrl: v.baseUrl, thinkingOff: b.thinkingOff === true } });
     return { profile: (await aiStatus(db, user.orgId)).profiles.find((p) => p.id === r.id) };
@@ -277,11 +291,11 @@ export async function aiRoutes(app: FastifyInstance) {
     }
     const v = validProfile(b, cur);
     const scopeNow = b.projectScope !== undefined ? validScope(b.projectScope) : cur.project_scope;
-    if (b.personalScope !== undefined && (typeof b.personalScope !== 'boolean' || (b.personalScope && scopeNow !== 'all'))) throw badRequest('„Auch in persönlichen Projekten“ gibt es nur bei „alle Projekte“; bei „ausgewählte“ persönliche Projekte einzeln auswählen');
+    const personalUse = validPersonalUse(b);
     if (b.projectScope !== undefined) await db.query(`update ai_profiles set project_scope = $2 where id = $1`, [cur.id, scopeNow]);
-    if (b.personalScope !== undefined) await db.query(`update ai_profiles set personal_scope = $2 where id = $1`, [cur.id, b.personalScope]);
-    else if (scopeNow !== 'all' && cur.personal_scope) await db.query(`update ai_profiles set personal_scope = false where id = $1`, [cur.id]);
+    if (personalUse) await db.query(`update ai_profiles set personal_use = $2 where id = $1`, [cur.id, personalUse]);
     if (Array.isArray(b.projectIds)) await setReleasedProjects(user.orgId, cur.id, b.projectIds);
+    if (Array.isArray(b.personalUserIds)) await setPersonalUsers(user.orgId, cur.id, b.personalUserIds);
     const key = b.apiKey === null ? null : b.apiKey?.trim() ? seal(b.apiKey.trim()) : cur.api_key;
     const thinkingOff = typeof b.thinkingOff === 'boolean' ? b.thinkingOff : Boolean(cur.thinking_off);
     const contextTokens = b.contextTokens === undefined ? cur.context_tokens ?? null : validContext(b.contextTokens);

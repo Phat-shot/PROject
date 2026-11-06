@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { complete, registerAiCallLog, type AiCallEnd, type AiConfig } from '../src/ai/client.js';
 
+// Ohne DNS: unbekannte Hosts gelten im Testlauf als extern (netGuard)
+process.env.NODE_ENV = 'test';
+
 const cfg = (x: Partial<AiConfig> = {}): AiConfig => ({ profileId: 'p1', name: 'Lokal', provider: 'local', apiKey: null, model: 'qwen', baseUrl: 'http://llm/v1', ...x });
 const sse = (chunks: unknown[]) => new Response(chunks.map((c) => `data: ${JSON.stringify(c)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
 const delta = (d: Record<string, string>, finish: string | null = null) => ({ model: 'qwen-9b', choices: [{ delta: d, finish_reason: finish }] });

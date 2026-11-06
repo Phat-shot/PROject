@@ -372,7 +372,8 @@ test('Reporting: Policy, Fälligkeit, Bericht aus Vorlage mit Kennzahlen, Versan
   assert.ok(out.msg.attachments![0].content.subarray(0, 4).toString() === '%PDF');
   const page = (await t.api(pl).get(`/docs/pages/${r1.pageId}`)).json();
   assert.equal(page.page.status, 'final');
-  assert.ok(page.page.contentHtml.includes('Kennzahlen'));
+  assert.ok(page.page.contentHtml.includes('Gesamtstand'), 'Standardblöcke des Management-Reports');
+  assert.ok(page.page.contentHtml.includes('<svg'), 'grafisch (Standard)');
   assert.ok(page.page.contentHtml.includes('Nächste Meilensteine'));
   assert.equal(page.attachments.length, 1);
   assert.deepEqual(page.page.settings.recipients, ['gf@kunde.de', 'lenkung@kunde.de']);
@@ -540,6 +541,27 @@ test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalt
   assert.ok(!rows.some((r) => r.taskId === task.id && r.staleDays > 0), 'zurückgestellt ist kein Stillstand');
 });
 
+test('Spaltengruppen: Standard gruppiert Geplant, Wartet und Zurückgestellt als „Nicht in Arbeit“; PUT /columns nimmt group entgegen (leer → null)', async () => {
+  const pl = await t.login('pl@demo.local');
+  // Demoprojekt und neues Projekt ohne Vorlage: Gruppe „Nicht in Arbeit“ an den drei Arten, sonst keine
+  for (const id of [t.ids.projects.web, (await t.api(pl).post('/projects', { key: 'GRP', name: 'Gruppen' })).json().project.id]) {
+    const cols = (await t.api(pl).get(`/projects/${id}`)).json().columns;
+    assert.deepEqual(cols.map((c: any) => [c.kind, c.group]), [['backlog', 'Nicht in Arbeit'], ['active', null], ['active', null], ['active', null], ['waiting', 'Nicht in Arbeit'], ['parked', 'Nicht in Arbeit'], ['done', null]]);
+  }
+  const p = (await t.api(pl).post('/projects', { key: 'GRP2', name: 'Gruppen 2' })).json().project;
+  const cols = (await t.api(pl).get(`/projects/${p.id}`)).json().columns;
+  const body = cols.map((c: any) => ({ id: c.id, name: c.name, kind: c.kind, wipLimit: c.wipLimit, group: c.kind === 'active' ? ' Arbeit ' : c.kind === 'done' ? '' : null }));
+  body.push({ name: 'Später', kind: 'backlog', wipLimit: null, group: 'Nicht in Arbeit' });
+  const r = await t.api(pl).put(`/projects/${p.id}/columns`, { columns: body });
+  assert.equal(r.statusCode, 200, r.body);
+  const after = r.json().columns;
+  assert.deepEqual(after.map((c: any) => c.group), [null, 'Arbeit', 'Arbeit', 'Arbeit', null, null, null, 'Nicht in Arbeit']);
+  assert.equal((await t.api(pl).get(`/projects/${p.id}`)).json().columns.at(-1).group, 'Nicht in Arbeit');
+  // Mitglied ohne PL darf nicht
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).put(`/projects/${p.id}/columns`, { columns: body })).statusCode, 403);
+});
+
 test('Mail: Ordner, Archivieren, Papierkorb, Verschieben in Unterordner mit Rechten und Audit', async () => {
   const pl = await t.login('pl@demo.local');
   const leser = await t.login('leser@demo.local');
@@ -591,7 +613,8 @@ test('Benutzereinstellungen: Theme, Name, Passwort; Org-Admin verwaltet Projekt-
 
 test('Tasks mit externer Zuständigkeit', async () => {
   const pl = await t.login('pl@demo.local');
-  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit externem Task' })).json().task;
+  const ap = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit externem Task' })).json().task;
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'Angebot einholen', parentId: ap.id })).json().task;
   const r = await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot liefern', responsibleEmail: 'Lieferant@Extern.de' });
   assert.equal(r.statusCode, 200, r.body);
   const item = r.json().task.checklist[0];
@@ -612,7 +635,8 @@ test('Globales Postfach: Ansichten über alle Projekte, Zeiterfassung mandantenw
 
 test('Mails zu Tasks: Nachfrage wird dem Task zugeordnet, Antwort erbt die Zuordnung', async () => {
   const pl = await t.login('pl@demo.local');
-  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit Nachfrage' })).json().task;
+  const ap = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit Nachfrage' })).json().task;
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'Angebot nachfragen', parentId: ap.id })).json().task;
   const item = (await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot', responsibleEmail: 'lieferant@extern.de' })).json().task.checklist[0];
   const r = await t.api(pl).post('/mail/drafts', { viewId: t.ids.views.project, projectId: t.ids.projects.web, taskId: task.id, checklistItemId: item.id, to: ['lieferant@extern.de'], subject: 'Stand zu Angebot', body: 'Wie ist der Stand?', send: true });
   assert.equal(r.statusCode, 200, r.body);

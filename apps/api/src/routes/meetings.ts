@@ -12,7 +12,7 @@ import { publicBase } from '../docs/share.js';
 import { newMailCode, loadTask } from '../tasks/service.js';
 import type { AccountRow } from '../mail/types.js';
 import { seal, unseal } from '../secrets.js';
-import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent } from '../calendar/push.js';
+import { pushCaldav, pushGoogle, pushGraph, testCaldav, type PushEvent, caldavProviderHint } from '../calendar/push.js';
 import type { CalendarTarget } from '@projekttool/shared';
 import { projectAccount } from '../mail/accounts.js';
 import { cancelQuestions } from '../questions.js';
@@ -40,7 +40,7 @@ export async function sendMeetingInvite(db: any, mail: any, meetingId: string, b
   const rooms = await db.query(`select r.name, r.email, r.kind from resource_bookings b join resources r on r.id = b.resource_id where b.meeting_id = $1 and r.kind <> 'person' order by r.name`, [cur.id]);
   const ics = meetingIcs(cur, { email: account.address, name: `${project.key} ${project.name}` }, seq, rooms.rows);
   const starts = new Date(cur.starts_at);
-  const text = `${extraText?.trim() ? extraText.trim() + '\n\n' : ''}Einladung: ${cur.title}\nTermin: ${fmtDe(starts)} – ${new Date(cur.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}${cur.location ? `\nOrt: ${cur.location}` : ''}${cur.description ? `\n\n${cur.description}` : ''}\n\nProjekt ${project.key} ${project.name}. Der Termin liegt als Kalendereintrag bei.`;
+  const text = `${extraText?.trim() ? extraText.trim() + '\n\n' : ''}Einladung: ${cur.title}\nTermin: ${fmtDe(starts)} – ${new Date(cur.ends_at).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })}${cur.location ? `\nOrt: ${cur.location}` : ''}${cur.description ? `\n\n${cur.description}` : ''}\n\nProjekt ${project.key} ${project.name}. Der Termin liegt als Kalendereintrag bei.\n\nBitte gib kurz Bescheid, ob du teilnimmst: über die Zusage im Kalendereintrag oder mit einer Antwort auf diese Mail.`;
   const r = await mail.sendFromAccount(account, { to: attendees.map((a) => a.email), subject: `Einladung: ${cur.title} · ${fmtDe(starts)}`, text, userId: by.id, projectId: cur.project_id, attachments: [{ filename: 'einladung.ics', content: Buffer.from(ics, 'utf8'), contentType: 'text/calendar; charset=utf-8; method=REQUEST' }] });
   await db.query(`update meetings set invite_sent_at = now(), external = external || $2::jsonb, updated_at = now() where id = $1`, [cur.id, JSON.stringify({ sequence: seq + 1 })]);
   await audit(db, { orgId: by.orgId, projectId: cur.project_id, userId: by.id, action: 'meeting.invite', objectType: 'meeting', objectId: cur.id, details: { to: attendees.map((a) => a.email) } });
@@ -268,6 +268,9 @@ export async function meetingRoutes(app: FastifyInstance) {
     const b = req.body ?? {};
     if (!b.url?.trim() || !/^https?:\/\//.test(b.url.trim())) throw badRequest('Kalender-Adresse (https://…) erforderlich');
     if (!b.user?.trim()) throw badRequest('Benutzername erforderlich');
+    // Google/Microsoft: kein CalDAV mit App-Passwort, Hinweis statt Speichern und Netzaufruf
+    const hint = caldavProviderHint(b.url.trim());
+    if (hint) throw badRequest(hint);
     await assertOutboundUrl(b.url.trim());
     const cur = await db.one(`select caldav_password from users where id = $1`, [user.id]);
     const pw = b.password?.trim() ? seal(b.password.trim()) : cur.caldav_password;

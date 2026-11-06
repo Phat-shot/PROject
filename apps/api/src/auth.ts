@@ -7,18 +7,41 @@ import { unauthorized } from './errors.js';
 export const SESSION_COOKIE = 'pt_session';
 const SESSION_DAYS = 14;
 
+/**
+ * Passwort-Hashes: „scrypt2$N$salt$hash“ mit N=2^17, r=8, p=1 (Parameter im Hash, 256 MiB maxmem); Bestand „scrypt$salt$hash“
+ * (Node-Standard N=2^14) wird weiter geprüft und bei erfolgreicher Anmeldung neu gehasht (needsRehash).
+ */
+export const SCRYPT_N = 131072;
+const SCRYPT_OPTS = { r: 8, p: 1, maxmem: 256 * 1024 * 1024 };
+/** Arbeitsfaktor; PASSWORD_SCRYPT_N (Zweierpotenz ≥ 2^14) senkt ihn nur für Tests oder sehr schwache Hardware. */
+export function scryptN(): number {
+  const n = Number(process.env.PASSWORD_SCRYPT_N);
+  return Number.isInteger(n) && n >= 16384 && n <= 1 << 20 && (n & (n - 1)) === 0 ? n : SCRYPT_N;
+}
+
 export function hashPassword(password: string): string {
   const salt = randomBytes(16).toString('hex');
-  const hash = scryptSync(password, salt, 64).toString('hex');
-  return `scrypt$${salt}$${hash}`;
+  const N = scryptN();
+  const hash = scryptSync(password, salt, 64, { N, ...SCRYPT_OPTS }).toString('hex');
+  return `scrypt2$${N}$${salt}$${hash}`;
 }
 
 export function verifyPassword(password: string, stored: string): boolean {
-  const [algo, salt, hash] = stored.split('$');
-  if (algo !== 'scrypt' || !salt || !hash) return false;
-  const calc = scryptSync(password, salt, 64);
+  const parts = String(stored ?? '').split('$');
+  let salt: string, hash: string, N: number;
+  if (parts[0] === 'scrypt2' && parts.length === 4) { N = Number(parts[1]); salt = parts[2]; hash = parts[3]; }
+  else if (parts[0] === 'scrypt' && parts.length === 3) { N = 16384; salt = parts[1]; hash = parts[2]; }
+  else return false;
+  if (!salt || !hash || !Number.isInteger(N) || N < 1024 || N > 1 << 20) return false;
+  const calc = scryptSync(password, salt, 64, { N, ...SCRYPT_OPTS });
   const given = Buffer.from(hash, 'hex');
   return calc.length === given.length && timingSafeEqual(calc, given);
+}
+
+/** Hash im Altformat oder mit schwächeren Parametern: nach erfolgreicher Anmeldung neu hashen. */
+export function needsRehash(stored: string): boolean {
+  const parts = String(stored ?? '').split('$');
+  return !(parts[0] === 'scrypt2' && Number(parts[1]) >= scryptN());
 }
 
 export function mapUser(row: any): User {
@@ -33,8 +56,14 @@ export function mapUser(row: any): User {
     settings: row.settings ?? {},
     totpEnabled: Boolean(row.totp_enabled),
     kind: row.kind === 'agent' ? 'agent' : 'person',
-    ...(row.kind === 'agent' && row.agent_project_id ? { agentProjectId: row.agent_project_id } : {})
+    ...(row.kind === 'agent' && row.agent_project_id ? { agentProjectId: row.agent_project_id } : {}),
+    ...(row.kind === 'agent' ? { agentRole: row.agent_role === 'assistant' ? 'assistant' : 'project' } : { personalProjectAllowed: typeof row.personal_project_allowed === 'boolean' ? row.personal_project_allowed : null })
   };
+}
+
+/** Mandantenschalter „Persönliche Projekte“: alle dürfen sich selbst eins anlegen (Freigabe je Person geht vor, projectPolicy.personalAllowed). */
+export async function orgAllowsPersonal(db: Db, orgId: string): Promise<boolean> {
+  return Boolean((await db.one(`select settings from orgs where id = $1`, [orgId])).settings?.personalProjects);
 }
 
 /** Verwaltet die Person mindestens eine Gruppe (group_members.is_manager)? Für den Menüpunkt Verwaltung. */

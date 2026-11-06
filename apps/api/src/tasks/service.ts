@@ -4,6 +4,12 @@ import type { Db } from '../db.js';
 import { badRequest, forbidden } from '../errors.js';
 import { canSeeSubproject } from '../rights.js';
 import { agentRunActive } from '../ai/agentEvents.js';
+import type { MailService } from '../mail/service.js';
+import { audit } from '../audit.js';
+import { cancelQuestions } from '../questions.js';
+import { dispatch } from '../notify.js';
+import { onWorkflowTaskDone } from '../workflows/engine.js';
+import { nextDueDate, type Recurrence } from './recurrence.js';
 
 /** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
 export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
@@ -164,6 +170,7 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     externalBrief: r.external_brief ?? null,
     agentPaused: Boolean(r.agent_paused),
     autoComplete: r.auto_complete ?? null,
+    autoDoneAt: r.auto_done_at ? new Date(r.auto_done_at).toISOString() : null,
     agentRunning: agentRunActive(r.id),
     agentWait: r.agent_wait ?? null,
     wait: r.wait_reason ? { reason: r.wait_reason, until: r.wait_until ? new Date(r.wait_until).toISOString() : null, expiredAt: r.wait_expired_at ? new Date(r.wait_expired_at).toISOString() : null } : null,
@@ -220,6 +227,8 @@ export async function moveTask(db: Db, taskId: string, columnId: string, index: 
   const ids = others.rows.map((r: any) => r.id as string);
   const at = index === null || index < 0 || index > ids.length ? ids.length : index;
   ids.splice(at, 0, taskId);
+  // Statuswechsel löscht die Markierung „von der Automatik erledigt“ (die Automatik setzt sie danach selbst wieder)
+  await db.query(`update tasks set auto_done_at = null, auto_done_from_column_id = null where id = $1 and column_id <> $2 and auto_done_at is not null`, [taskId, columnId]);
   for (const [i, id] of ids.entries()) {
     await db.query(`update tasks set position = $2, column_id = $3, updated_at = case when id = $4 then now() else updated_at end where id = $1`, [id, i, columnId, taskId]);
   }
@@ -243,6 +252,70 @@ export async function completeParentIfDone(db: Db, childId: string, actorId: str
   return p;
 }
 
+export interface DoneActor { id: string; orgId: string }
+
+/**
+ * Folgen von „erledigt“ (manuell, per Agent oder Automatik gleich): offene Fragen schließen, Arbeitspaket-Automatik (letzte
+ * offene Aufgabe), nächster Workflow-Schritt, Wiederholung „nach Erledigung“. existing = Zeile vor dem Verschieben.
+ */
+export async function onTaskDone(db: Db, mail: MailService, existing: any, user: DoneActor): Promise<void> {
+  await cancelQuestions(db, { taskId: existing.id }, `${existing.title} ist erledigt`, user.id);
+  // Letzte offene Aufgabe erledigt: Arbeitspaket mit (Folgen wie von Hand: Fragen, Workflow, Wiederholung)
+  const parent = existing.parent_id ? await completeParentIfDone(db, existing.id, user.id) : null;
+  if (parent) {
+    await audit(db, { orgId: user.orgId, projectId: parent.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: parent.id, details: { auto: 'all_subtasks_done' } });
+    await onTaskDone(db, mail, parent, user);
+  }
+  if (existing.workflow_run_id) await onWorkflowTaskDone(db, mail, existing.id);
+  const r: Recurrence | null = existing.recurrence ?? null;
+  if (!r || r.mode !== 'after_done' || !existing.due_date) return;
+  const next = nextDueDate(dateStr(existing.due_date)!, r);
+  const id = await createRecurrenceInstance(db, existing, next, true);
+  await db.query(`update tasks set recurrence = null where id = $1`, [existing.id]);
+  await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: null, action: 'task.recurrence_created', objectType: 'task', objectId: id, details: { from: existing.id, due: next, trigger: 'after_done' } });
+}
+
+/**
+ * Checkliste einer Aufgabe geändert (Punkt abgehakt, wieder geöffnet, angelegt, gelöscht, verschoben): Aufgaben-Automatik.
+ * - Alle Punkte erledigt, Automatik wirksam (tasks.auto_complete ?? projects.auto_done_aufgabe): Aufgabe in die erste
+ *   Erledigt-Spalte, Herkunftsspalte merken, Log, Meldung an die Zuständigen, Folgen wie von Hand (onTaskDone, AP-Automatik).
+ * - Von der Automatik erledigt und wieder ein Punkt offen: zurück in die gemerkte Spalte (ohne: erste aktive Spalte), Log.
+ * - Von Hand erledigt (auch mit offenen Punkten) oder Arbeitspaket (Altbestand am AP): nichts.
+ */
+export async function syncChecklistDone(db: Db, mail: MailService, taskId: string, actor: DoneActor & { kind?: string }, opts: { itemTitle?: string } = {}): Promise<'done' | 'reopened' | null> {
+  const t = await db.maybeOne(`select t.*, c.is_done, c.kind as column_kind, p.auto_done_aufgabe,
+      (select count(*)::int from checklist_items i where i.task_id = t.id) as total,
+      (select count(*)::int from checklist_items i where i.task_id = t.id and not i.done) as open
+    from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id
+    where t.id = $1 and t.deleted_at is null and t.archived_at is null`, [taskId]);
+  if (!t || !t.parent_id) return null;
+  const src = actor.kind === 'agent' ? 'ai' : 'system';
+  if (!t.is_done) {
+    if (!(t.auto_complete ?? t.auto_done_aufgabe) || t.total === 0 || t.open > 0 || t.column_kind === 'waiting') return null;
+    const done = await db.maybeOne(`select id, name from board_columns where project_id = $1 and is_done order by position limit 1`, [t.project_id]);
+    if (!done) return null;
+    await moveTask(db, t.id, done.id, null);
+    await db.query(`update tasks set auto_done_at = now(), auto_done_from_column_id = $2 where id = $1`, [t.id, t.column_id]);
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,$4)`, [t.id, actor.id, `Automatisch erledigt: alle Checklistenpunkte erledigt (Status → ${done.name})`, src]);
+    await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.move', objectType: 'task', objectId: t.id, details: { auto: 'all_items_done', to: done.name } });
+    const parentResp = (await db.maybeOne(`select responsible_user_id from tasks where id = $1`, [t.parent_id]))?.responsible_user_id ?? null;
+    const users = [t.responsible_user_id ?? (t.responsible_email ? null : parentResp), t.requested_by].filter(Boolean) as string[];
+    if (users.length) await dispatch(db, { event: 'info', projectId: t.project_id, taskId: t.id, users, type: 'task.auto_done', title: `Erledigt: ${t.title}`, body: 'Alle Checklistenpunkte sind erledigt; die Aufgabe wurde automatisch erledigt.', link: `/projekte/${t.project_id}/board?task=${t.id}`, ref: { type: 'task', id: t.id }, actorId: actor.id });
+    await touchTask(db, t.id);
+    await onTaskDone(db, mail, t, actor);
+    return 'done';
+  }
+  if (!t.auto_done_at || t.open === 0) return null;
+  const back = (t.auto_done_from_column_id ? await db.maybeOne(`select id, name from board_columns where id = $1 and project_id = $2 and not is_done and kind <> 'waiting'`, [t.auto_done_from_column_id, t.project_id]) : null)
+    ?? await db.maybeOne(`select id, name from board_columns where project_id = $1 and not is_done and kind not in ('waiting', 'parked') order by (kind = 'active') desc, position limit 1`, [t.project_id]);
+  if (!back) return null;
+  await moveTask(db, t.id, back.id, null);
+  await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,$4)`, [t.id, actor.id, `Wieder offen: ${opts.itemTitle ? `Checklistenpunkt „${opts.itemTitle}“` : 'ein Checklistenpunkt'} ist offen (Status → ${back.name})`, src]);
+  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.move', objectType: 'task', objectId: t.id, details: { auto: 'item_reopened', to: back.name } });
+  await touchTask(db, t.id);
+  return 'reopened';
+}
+
 /** Kopiert ein Arbeitspaket als nächste Instanz einer Wiederholung (Checkliste offen, Labels gleich). */
 export async function createRecurrenceInstance(db: Db, source: any, nextDue: string, keepRecurrence: boolean): Promise<string> {
   const firstCol = await db.one(`select id from board_columns where project_id = $1 order by position limit 1`, [source.project_id]);
@@ -253,10 +326,10 @@ export async function createRecurrenceInstance(db: Db, source: any, nextDue: str
     const d = new Date(nextDue + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - span); start = d.toISOString().slice(0, 10);
   }
   const r = await db.one(
-    `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, recurrence, recurrence_parent_id)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) returning id`,
+    `insert into tasks (project_id, subproject_id, column_id, title, description, priority, start_date, due_date, responsible_user_id, responsible_email, position, mail_code, created_by, recurrence, recurrence_parent_id, parent_id)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16) returning id`,
     [source.project_id, source.subproject_id, firstCol.id, source.title, source.description, source.priority, start, nextDue, source.responsible_user_id, source.responsible_email, pos.p, newMailCode(), source.created_by,
-      keepRecurrence ? JSON.stringify(source.recurrence) : null, source.recurrence_parent_id ?? source.id]
+      keepRecurrence ? JSON.stringify(source.recurrence) : null, source.recurrence_parent_id ?? source.id, source.parent_id ?? null]
   );
   await db.query(`insert into task_labels (task_id, label_id) select $1, label_id from task_labels where task_id = $2`, [r.id, source.id]);
   await db.query(`insert into checklist_items (task_id, title, responsible_user_id, position) select $1, title, responsible_user_id, position from checklist_items where task_id = $2`, [r.id, source.id]);

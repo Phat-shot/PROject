@@ -8,11 +8,11 @@ import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { hasOrgRight, requireProject, requireTask, visibleSubprojectSql } from '../rights.js';
-import { agentUsableIn, orgAiSettings } from '../ai/client.js';
+import { agentUsableIn, orgAiSettings, profileAvailableInProject } from '../ai/client.js';
 import { aiAllowed, aiError, ownLlmAllowed, rightsOf } from '../ai/policy.js';
 import { agentForTask, runAgentOnTask } from '../ai/agent.js';
 import { agentRunActive, queueAgentRun } from '../ai/agentEvents.js';
-import { projectLabelSql, SQL } from '../projectPolicy.js';
+import { projectLabelSql, SQL, TEXT } from '../projectPolicy.js';
 import { clearRating, myRatings, recordFeedback } from '../ai/feedback.js';
 
 const slug = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[^\w]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
@@ -43,6 +43,7 @@ function cleanSignature(v: unknown): string | null {
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
   const mapAgent = (r: any, canManage = false) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, profileProjectId: r.profile_project_id ?? null, persona: r.persona ?? null, signature: r.signature ?? null, thinkingMode: r.thinking_mode ?? null,
+    role: r.agent_role === 'assistant' ? 'assistant' : 'project',
     projectBound: r.agent_project_id ? { id: r.agent_project_id, label: r.bound_label ?? '' } : null, scope: r.agent_project_id ? 'project' : r.agent_scope ?? 'all', projectIds: r.scope_project_ids ?? [],
     rights: rightsOf(r), policy: (r.agent_policy ?? {}) as AgentPolicy,
     dailyBudget: r.agent_daily_budget ?? null, createdAt: r.created_at, projects: r.projects ?? [], runs: r.runs ?? 0, lastRunAt: r.last_run_at ?? null, canManage });
@@ -88,7 +89,7 @@ export async function agentRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const rows = await db.query(`${AGENT_SELECT} where u.org_id = $1 and u.kind = 'agent' order by u.name`, [user.orgId]);
     const out = [];
-    for (const r of rows.rows) out.push(mapAgent(r, await canManageProfile(user, { project_id: r.profile_project_id ?? null })));
+    for (const r of rows.rows) out.push(mapAgent(r, r.agent_role === 'assistant' ? r.agent_created_by === user.id : await canManageProfile(user, { project_id: r.profile_project_id ?? null })));
     return { agents: await withUsable(out) };
   });
 
@@ -122,14 +123,23 @@ export async function agentRoutes(app: FastifyInstance) {
     const a = await db.maybeOne(`select u.*, p.project_id as profile_project_id from users u left join ai_profiles p on p.id = u.ai_profile_id where u.id = $1 and u.org_id = $2 and u.kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
     const b = req.body ?? {};
-    const manages = await canManageProfile(user, { project_id: a.profile_project_id ?? a.agent_project_id ?? null });
+    // Assistent einer Person: sie verwaltet ihn selbst (Eigentümerin des persönlichen Projekts), Einsatz bleibt fest
+    const assistant = a.agent_role === 'assistant';
+    const manages = assistant
+      ? Boolean(a.agent_project_id && (await db.maybeOne(`select 1 from projects where id = $1 and created_by = $2`, [a.agent_project_id, user.id])))
+      : await canManageProfile(user, { project_id: a.profile_project_id ?? a.agent_project_id ?? null });
     // Die KI-Verwaltung darf jeden Agenten (de)aktivieren; alles andere nur, wer sein LLM verwaltet
     const onlyActive = Object.keys(b).every((k) => k === 'active');
-    if (!manages && !(onlyActive && hasOrgRight(user, 'ai_admin'))) throw forbidden('Diesen Agenten verwaltet, wer sein LLM verwaltet');
+    if (!manages && !(onlyActive && hasOrgRight(user, 'ai_admin'))) throw forbidden(assistant ? 'Den Assistenten verwaltet seine Person' : 'Diesen Agenten verwaltet, wer sein LLM verwaltet');
     if (b.aiProfileId !== undefined && b.aiProfileId !== a.ai_profile_id) {
       const np = await profileOf(user.orgId, b.aiProfileId);
-      if (!np || !(await canManageProfile(user, np))) throw badRequest('LLM nicht gefunden oder nicht von dir verwaltet');
-      if ((np.project_id ?? null) !== (a.agent_project_id ?? null)) throw badRequest('Ein Agent wechselt nur zwischen LLMs derselben Ebene (Mandant bzw. dasselbe Projekt)');
+      if (assistant) {
+        // Nur LLMs, die im persönlichen Projekt verfügbar sind (freigegebene Mandanten-Profile für diese Person, eigene LLMs)
+        if (!np || !(await profileAvailableInProject(db, a.agent_project_id, np.id))) throw badRequest(TEXT.assistantProfileNotReleased);
+      } else {
+        if (!np || !(await canManageProfile(user, np))) throw badRequest('LLM nicht gefunden oder nicht von dir verwaltet');
+        if ((np.project_id ?? null) !== (a.agent_project_id ?? null)) throw badRequest('Ein Agent wechselt nur zwischen LLMs derselben Ebene (Mandant bzw. dasselbe Projekt)');
+      }
       await db.query(`update users set ai_profile_id = $2 where id = $1`, [a.id, np.id]);
     }
     if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, thinking(b.thinkingMode)]);

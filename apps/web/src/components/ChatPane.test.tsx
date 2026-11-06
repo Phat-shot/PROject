@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 
 const get = vi.fn();
-vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: vi.fn(), patch: vi.fn(), del: vi.fn() }, fmtDateTime: (d: string) => d }));
+const post = vi.fn();
+vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: vi.fn(), del: vi.fn() }, fmtDateTime: (d: string) => d }));
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: 'u1' } }) }));
 import { ChatPane } from './ChatPane';
 
@@ -16,7 +17,7 @@ describe('ChatPane', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     canWrite = true;
-    get.mockReset();
+    get.mockReset(); post.mockReset(); post.mockResolvedValue({});
     get.mockImplementation(async (url: string) => (url.includes('?thread=') ? { messages: [msg('r1', 'Antwort im Thread', 'm1')], hasMore: false } : { messages: [msg('m1', 'Stand zum Angebot?')], hasMore: false, canWrite }));
   });
   afterEach(() => { vi.useRealTimers(); });
@@ -47,5 +48,27 @@ describe('ChatPane', () => {
     await flush();
     expect(screen.getByText(/schreiben nur Mitglieder des Projekts; du liest mit/)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Senden' })).not.toBeInTheDocument();
+  });
+
+  it('Rückfrage-Karte (choices): Knöpfe als Gruppe, Klick sendet den Wert als Nachricht; gewählt bleibt sichtbar und gesperrt', async () => {
+    const choices = [{ label: 'Projekt WEB – Website-Relaunch', value: 'Projekt WEB' }, { label: 'Allgemein (kein Projekt)', value: 'allgemein', hint: 'Wissensfrage' }];
+    const card = (chosen?: string) => ({ ...msg('s1', 'Thema wählen:'), userId: null, userName: 'System', kind: 'system' as const, meta: { card: 'choices' as const, choices, forMessageId: 'm1', ...(chosen ? { chosen } : {}) } });
+    get.mockImplementation(async () => ({ messages: [msg('m1', 'Was meinst du dazu?'), card()], hasMore: false }));
+    render(<ChatPane channelId="c1" members={[]} />);
+    await flush();
+    const group = screen.getByRole('group', { name: 'Rückfrage: Thema wählen' });
+    expect(group).toBeInTheDocument();
+    const btn = screen.getByRole('button', { name: 'Projekt WEB – Website-Relaunch' });
+    expect(btn).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Allgemein (kein Projekt)' })).toHaveAttribute('title', 'Wissensfrage');
+    // Klick sendet den Wert über den normalen Sendepfad in den Kanal (kein Thread) und lädt neu
+    get.mockImplementation(async () => ({ messages: [msg('m1', 'Was meinst du dazu?'), card('Projekt WEB')], hasMore: false }));
+    fireEvent.click(btn);
+    await flush();
+    expect(post).toHaveBeenCalledWith(base, { body: 'Projekt WEB', threadId: null });
+    const chosenBtn = screen.getByRole('button', { name: 'Projekt WEB – Website-Relaunch' });
+    expect(chosenBtn).toBeDisabled();
+    expect(chosenBtn.className).toContain('primary');
+    expect(screen.getByRole('button', { name: 'Allgemein (kein Projekt)' })).toBeDisabled();
   });
 });

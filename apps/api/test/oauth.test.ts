@@ -2,6 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import type { AccountRow } from '../src/mail/types.js';
+import { createSign, generateKeyPairSync } from 'node:crypto';
+import { resetOidcCaches } from '../src/oauth.js';
+
+/** Schlüsselpaar des gefälschten IdP: ID-Tokens mit RS256, öffentlicher Teil über jwks_uri */
+const idpKeys = generateKeyPairSync('rsa', { modulusLength: 2048 });
+const idpJwk = { ...(idpKeys.publicKey.export({ format: 'jwk' }) as Record<string, unknown>), kid: 'k1', use: 'sig', alg: 'RS256' };
+const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url');
+function signIdToken(claims: Record<string, unknown>, header: Record<string, unknown> = { alg: 'RS256', kid: 'k1', typ: 'JWT' }): string {
+  const data = `${b64(header)}.${b64(claims)}`;
+  const sig = createSign('RSA-SHA256').update(data).sign(idpKeys.privateKey).toString('base64url');
+  return `${data}.${sig}`;
+}
+/** Nonce des letzten Starts (steht in der Autorisierungs-URL); Überschreibungen für Prüfungen des ID-Tokens */
+let currentNonce = '';
+let idTokenClaims: Record<string, unknown> | null = null;
+let discoveryIssuer = 'https://idp.example';
 
 /** Gefälschter HTTP-Client: Microsoft-Token-Endpunkt, Graph und ein OIDC-Anbieter. */
 const calls: { url: string; init?: RequestInit }[] = [];
@@ -25,8 +41,9 @@ const fakeFetch: typeof fetch = async (input, init) => {
   if (url.includes('/messages/m1?')) return json({ body: { contentType: 'html', content: '<p>Hallo</p>' } });
   if (url.endsWith('/sendMail')) return new Response(null, { status: 202 });
   if (url.endsWith('/messages/m1/move')) return json({ id: 'm1-moved' });
-  if (url === 'https://idp.example/.well-known/openid-configuration') return json({ authorization_endpoint: 'https://idp.example/auth', token_endpoint: 'https://idp.example/token', userinfo_endpoint: 'https://idp.example/userinfo' });
-  if (url === 'https://idp.example/token') return json({ access_token: 'idp-at' });
+  if (url === 'https://idp.example/.well-known/openid-configuration') return json({ issuer: discoveryIssuer, authorization_endpoint: 'https://idp.example/auth', token_endpoint: 'https://idp.example/token', userinfo_endpoint: 'https://idp.example/userinfo', jwks_uri: 'https://idp.example/jwks' });
+  if (url === 'https://idp.example/jwks') return json({ keys: [idpJwk] });
+  if (url === 'https://idp.example/token') return json({ access_token: 'idp-at', id_token: signIdToken({ iss: 'https://idp.example', aud: 'pt', sub: currentUserinfo.sub, exp: Math.floor(Date.now() / 1000) + 300, iat: Math.floor(Date.now() / 1000), nonce: currentNonce, ...(idTokenClaims ?? {}) }) });
   if (url === 'https://idp.example/userinfo') return json(currentUserinfo);
   return json({ error: `unbekannt: ${url}` }, 404);
 };
@@ -38,6 +55,13 @@ process.env.PUBLIC_URL = 'https://project.example';
 const t = await testApp({ fetchFn: fakeFetch });
 test.after(() => t.close());
 /** Rückruf im Browser, der den Ablauf gestartet hat: State-Cookie (und ggf. Sitzung) wird mitgeschickt */
+/** SSO starten: liefert den State und merkt sich die Nonce aus der Autorisierungs-URL */
+async function startSso(query = ''): Promise<string> {
+  const r = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/start${query}` });
+  const u = new URL(r.headers.location as string);
+  currentNonce = u.searchParams.get('nonce') ?? '';
+  return u.searchParams.get('state')!;
+}
 const callback = (url: string, state: string, cookies: Record<string, string> = {}) => t.app.inject({ method: 'GET', url: `${url}&state=${state}`, cookies: { ...cookies, pt_oauth: state } });
 
 test('OAuth2 Microsoft: Start prüft Rechte und leitet mit State weiter, Rückruf legt Graph-Konto an', async () => {
@@ -155,6 +179,8 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.equal(u.origin + u.pathname, 'https://idp.example/auth');
   assert.equal(u.searchParams.get('redirect_uri'), 'https://project.example/api/auth/oidc/callback');
   const state = u.searchParams.get('state')!;
+  currentNonce = u.searchParams.get('nonce') ?? '';
+  assert.ok(currentNonce.length >= 16, 'Nonce in der Autorisierungs-URL');
 
   // Ohne State-Cookie (Link aus fremdem Browser): keine Anmeldung
   const foreign = await t.app.inject({ method: 'GET', url: `/api/auth/oidc/callback?code=c&state=${state}` });
@@ -162,11 +188,11 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   assert.equal(foreign.cookies.find((c) => c.name === 'pt_session'), undefined);
   // Adresse nicht bestätigt: keine Zuordnung per E-Mail
   currentUserinfo = { ...currentUserinfo, email_verified: false };
-  const sv = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
+  const sv = await startSso('');
   const unverified = await callback('/api/auth/oidc/callback?code=c', sv);
   assert.match(unverified.headers.location as string, /oauthError=.*Kein%20Benutzer/);
   currentUserinfo = { ...currentUserinfo, email_verified: true };
-  const s1 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start?next=//evil.example' })).headers.location as string).searchParams.get('state')!;
+  const s1 = await startSso('?next=//evil.example');
   const tokenCalls = calls.length;
   const cb = await callback('/api/auth/oidc/callback?code=c', s1);
   assert.ok(new URLSearchParams(String(calls.slice(tokenCalls).find((c) => c.url === 'https://idp.example/token')!.init?.body)).get('code_verifier'), 'PKCE-Verifier');
@@ -194,7 +220,7 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   const membership = (pid: string) => t.db.maybeOne(`select role, origin from project_members where project_id = $1 and user_id = $2`, [pid, t.ids.users.max]);
   assert.deepEqual(await membership(ctlProject), { role: 'member', origin: 'group' });
   assert.equal(await membership(ssoProject), null);
-  const s1b = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
+  const s1b = await startSso('');
   await callback('/api/auth/oidc/callback?code=c', s1b);
   assert.deepEqual(await membership(ssoProject), { role: 'reader', origin: 'group' }, 'über die SSO-Gruppe Leser im Projekt');
   assert.equal(await membership(ctlProject), null, 'aus der Gruppe entfernt → Projektzugang über die Gruppe entfällt');
@@ -206,14 +232,14 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
 
   // Unbekannte Person ohne Auto-Anlage: Hinweis statt Konto
   currentUserinfo = { sub: 'sub-neu', email: 'neu@example.com', email_verified: true, name: 'Neu Nutzer' };
-  const s2 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' })).headers.location as string).searchParams.get('state')!;
+  const s2 = await startSso('');
   const cb2 = await callback('/api/auth/oidc/callback?code=c', s2);
   assert.match(cb2.headers.location as string, /\/login\?oauthError=.*Kein%20Benutzer/);
   assert.equal(await t.db.maybeOne(`select 1 from users where email = 'neu@example.com'`), null);
 
   // Mit Auto-Anlage: Mitglied ohne Passwort, Anmeldung nur per SSO
   process.env.OIDC_AUTO_CREATE = 'true';
-  const s3 = new URL((await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start?next=/portfolio' })).headers.location as string).searchParams.get('state')!;
+  const s3 = await startSso('?next=/portfolio');
   const cb3 = await callback('/api/auth/oidc/callback?code=c', s3);
   assert.equal(cb3.headers.location, 'https://project.example/portfolio');
   const created = await t.db.one(`select * from users where email = 'neu@example.com'`);
@@ -222,4 +248,45 @@ test('OIDC: Status zeigt Anbieter, Start leitet zum IdP, Rückruf meldet bekannt
   const pw = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'neu@example.com', password: 'irgendwas' } });
   assert.equal(pw.statusCode, 401);
   delete process.env.OIDC_ISSUER; delete process.env.OIDC_AUTO_CREATE;
+});
+
+test('OIDC: ID-Token wird geprüft (Signatur, Aussteller, Client, Ablauf, Nonce); Auto-Anlage nur mit eindeutiger Org', async () => {
+  process.env.OIDC_ISSUER = 'https://idp.example';
+  process.env.OIDC_CLIENT_ID = 'pt';
+  process.env.OIDC_CLIENT_SECRET = 's';
+  currentUserinfo = { sub: 'sub-max', email: 'max@demo.local', email_verified: true, name: 'Max Keller' };
+  const attempt = async () => { const st = await startSso(); const cb = await callback('/api/auth/oidc/callback?code=c', st); return { ok: Boolean(cb.cookies.find((c) => c.name === 'pt_session')), location: String(cb.headers.location) }; };
+  assert.equal((await attempt()).ok, true, 'gültiges ID-Token');
+  for (const [label, claims] of [['falsche nonce', { nonce: 'fremd' }], ['fremder Aussteller', { iss: 'https://evil.example' }], ['fremder Client', { aud: 'other' }], ['abgelaufen', { exp: Math.floor(Date.now() / 1000) - 3600 }]] as const) {
+    idTokenClaims = claims as Record<string, unknown>;
+    const r = await attempt();
+    assert.equal(r.ok, false, label);
+    assert.match(r.location, /oauthError=.*ID-Token/, label);
+  }
+  idTokenClaims = null;
+  // Subject im ID-Token ≠ Userinfo: keine Anmeldung
+  idTokenClaims = { sub: 'jemand-anders' };
+  assert.equal((await attempt()).ok, false, 'Userinfo passt nicht zum ID-Token');
+  idTokenClaims = null;
+  // Discovery mit fremdem issuer wird nicht akzeptiert
+  discoveryIssuer = 'https://evil.example';
+  resetOidcCaches();
+  const bad = await t.app.inject({ method: 'GET', url: '/api/auth/oidc/start' });
+  assert.equal(bad.statusCode, 500, 'Discovery abgelehnt');
+  discoveryIssuer = 'https://idp.example';
+
+  // Auto-Anlage bei mehreren Orgs nur mit OIDC_ORG_ID
+  process.env.OIDC_AUTO_CREATE = 'true';
+  const org2 = await t.db.one(`insert into orgs (name) values ('Zweite GmbH') returning id`);
+  currentUserinfo = { sub: 'sub-zwei', email: 'zwei@example.com', email_verified: true, name: 'Zwei Nutzer' };
+  const multi = await attempt();
+  assert.equal(multi.ok, false);
+  assert.match(multi.location, /OIDC_ORG_ID/);
+  process.env.OIDC_ORG_ID = org2.id;
+  assert.equal((await attempt()).ok, true, 'mit OIDC_ORG_ID angelegt');
+  assert.equal((await t.db.one(`select org_id from users where email = 'zwei@example.com'`)).org_id, org2.id);
+  process.env.OIDC_ORG_ID = '00000000-0000-0000-0000-000000000000';
+  currentUserinfo = { sub: 'sub-drei', email: 'drei@example.com', email_verified: true, name: 'Drei' };
+  assert.match(decodeURIComponent((await attempt()).location), /keine bekannte Organisation/);
+  delete process.env.OIDC_ORG_ID; delete process.env.OIDC_ISSUER; delete process.env.OIDC_AUTO_CREATE;
 });

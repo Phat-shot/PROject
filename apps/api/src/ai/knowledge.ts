@@ -3,13 +3,17 @@ import type { Db } from '../db.js';
 import type { MailService } from '../mail/service.js';
 import { audit } from '../audit.js';
 import { notify } from '../notify.js';
-import { canSeeSubproject, getMembership, visibleSubprojectSql } from '../rights.js';
+import { canSeeSubproject, getMembership, getViewRights, visibleSubprojectSql } from '../rights.js';
 import { contactChain } from '../tasks/service.js';
 import { askQuestion, cancelQuestions, type AnswerInput, type Asker, type QuestionRow } from '../questions.js';
 import { aiConfigFor, complete, parseJson } from './client.js';
 import { effectiveAgentPolicy, folderAccessMap } from './agentPolicy.js';
 import { findTaskByRef } from './plan.js';
-import { AGENT_SHEET, PROJECT_RULES } from './sheet.js';
+import { AGENT_SHEET, DATA_RULE, PROJECT_RULES, fileData, mailData } from './sheet.js';
+import { accountAllowedInProject } from '../mail/access.js';
+import { htmlToText } from '../docs/html.js';
+import { publicBase } from '../docs/share.js';
+import { changedFiles, displayPath, fileInProjects, fileScopes, searchCounters, searchFiles } from '../files/service.js';
 
 /**
  * Projektwissen (Konzept 6.6–6.8, P9): Suche im Projekt nur soweit berechtigt, Kandidaten für Überschneidungen ohne Token
@@ -33,29 +37,182 @@ export async function agentVisibility(db: Db, q: { agentId: string; projectId: s
   return { folderAccess, subprojectIds: sps, key: createHash('sha1').update(JSON.stringify({ sps, none })).digest('hex').slice(0, 16) };
 }
 
-export interface SearchHit { kind: 'page' | 'task'; id: string; title: string; ref?: string; excerpt?: string | null; status?: string; folder?: string | null; /** Zahl der getroffenen Suchbegriffe */ score?: number }
-/** Suche im Projekt (Titel und Inhalt, Stichwörter): bis 10 Seitentitel mit 3 Ausschnitten à 800 Zeichen und 5 Arbeitspakete; nur, was Agent (und ggf. Absender) sehen dürfen. */
-export async function search(db: Db, q: { projectId: string; agentId: string; query: string; viewerId?: string | null; maxTitles?: number; maxExcerpts?: number }): Promise<{ pages: SearchHit[]; tasks: SearchHit[] }> {
+export interface SearchHit { kind: 'page' | 'task' | 'mail' | 'file'; id: string; title: string; ref?: string; excerpt?: string | null; status?: string; folder?: string | null; /** Mail: Absender; Datei: Anzeigepfad */ from?: string | null; date?: string | null; /** Zahl der getroffenen Suchbegriffe */ score?: number }
+export type SearchSource = 'all' | 'docs' | 'tasks' | 'mails' | 'files';
+export const SEARCH_SOURCES: SearchSource[] = ['all', 'docs', 'tasks', 'mails', 'files'];
+/** Filter der Suche: Quelle(n), Absender (nur Mails; gesetzt = nur Mails), Zeitraum YYYY-MM-DD (Mails: Datum, Dateien: Änderung, Seiten/APs: letzte Änderung). */
+export interface SearchOpts { source?: SearchSource | SearchSource[] | null; from?: string | null; since?: string | null; until?: string | null }
+export interface SearchResult { pages: SearchHit[]; tasks: SearchHit[]; /** undefined = nicht durchsucht */ mails?: SearchHit[]; files?: SearchHit[] }
+const ymdOrNull = (v: unknown) => { const s = String(v ?? '').trim().slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(new Date(s).getTime()) ? s : null; };
+/** Welche Quellen eine Suche abdeckt (from gesetzt = nur Mails). */
+export function searchKinds(o: SearchOpts): Set<'docs' | 'tasks' | 'mails' | 'files'> {
+  const list = (Array.isArray(o.source) ? o.source : [o.source ?? 'all']).map((x) => (SEARCH_SOURCES.includes(x as SearchSource) ? x : 'all'));
+  const out = new Set<'docs' | 'tasks' | 'mails' | 'files'>();
+  for (const x of list) { if (x === 'all') ['docs', 'tasks', 'mails', 'files'].forEach((k) => out.add(k as any)); else out.add(x as any); }
+  if (String(o.from ?? '').trim()) { out.delete('docs'); out.delete('tasks'); out.delete('files'); out.add('mails'); }
+  return out;
+}
+/** Schlüssel für den Laufcache: normalisierter Text (Stichwörter sortiert) + Quelle + Filter. */
+export function searchKey(text: string, o: SearchOpts): string {
+  return JSON.stringify([[...tokens(text)].sort(), [...searchKinds(o)].sort(), String(o.from ?? '').trim().toLowerCase(), ymdOrNull(o.since), ymdOrNull(o.until)]);
+}
+/** Laufcache: identische Suchanfragen innerhalb eines Agentenlaufs werden nicht erneut ausgeführt. */
+export class SearchCache {
+  private seen = new Set<string>();
+  /** true = neu (ausführen), false = schon gesucht */
+  claim(text: string, o: SearchOpts): boolean { const k = searchKey(text, o); if (this.seen.has(k)) return false; this.seen.add(k); return true; }
+}
+const excerptOf = (text: string, terms: string[], n = 800) => { const low = text.toLowerCase(); const idx = terms.map((t) => low.indexOf(t)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0; const start = Math.max(0, idx - 200); return `${start ? '… ' : ''}${text.slice(start, start + n).replace(/\s+/g, ' ').trim()}${start + n < text.length ? ' …' : ''}`; };
+
+/**
+ * Mail-Ansichten, die eine Suche lesen darf: Ansichten der Projekte, in denen der Agent Mitglied ist und die er lesen darf
+ * (Agent der Ansicht, Projektagent für Projektkonten oder Recht der Ansicht mit Lesen und KI); persönliche Konten nur, wenn
+ * die fragende Person der Eigentümer ist oder nur der Eigentümer Mensch im Projekt ist; persönliche Projekte nur eigene
+ * Postfächer (mail.ownOnly). Mit viewerId zusätzlich nur Ansichten, die diese Person lesen darf; allMembers (Projektkanal: alle
+ * Mitglieder lesen mit) nur Ansichten, die die Rollen Mitglied und Leser lesen dürfen, ohne persönliche Konten.
+ */
+export async function mailViewScope(db: Db, q: { projectIds: string[]; agentId: string; viewerId?: string | null; allMembers?: boolean }): Promise<string[]> {
+  if (!q.projectIds.length) return [];
+  const views = (await db.query(`select v.id, v.project_id, v.account_id, v.agent_user_id, u.use, u.user_id as use_user_id, p.agent_user_id as project_agent, p.agent_mail from mail_views v join mail_account_uses u on u.id = v.use_id join projects p on p.id = v.project_id where v.project_id = any($1::uuid[]) and p.status = 'active'`, [q.projectIds])).rows as any[];
+  const out: string[] = [];
+  const memo = new Map<string, any>();
+  const member = async (projectId: string, userId: string) => { const k = `${projectId}|${userId}`; if (!memo.has(k)) memo.set(k, await getMembership(db, projectId, userId)); return memo.get(k); };
+  const humans = new Map<string, string[]>();
+  for (const v of views) {
+    const am = await member(v.project_id, q.agentId);
+    if (!am) continue;
+    const assigned = v.agent_user_id === q.agentId || (v.project_agent === q.agentId && ['process', 'triage'].includes(v.agent_mail) && v.use === 'project');
+    if (!assigned) { const r = await getViewRights(db, v.id, { id: q.agentId } as any, am); if (!r.canRead || !r.canAi) continue; }
+    if (v.use === 'personal' && v.use_user_id !== q.viewerId) {
+      if (!humans.has(v.project_id)) humans.set(v.project_id, (await db.query(`select m.user_id from project_members m join users u on u.id = m.user_id where m.project_id = $1 and u.kind <> 'agent'`, [v.project_id])).rows.map((r: any) => r.user_id));
+      if (!humans.get(v.project_id)!.every((h) => h === v.use_user_id)) continue;
+    }
+    if (!(await accountAllowedInProject(db, { id: v.account_id }, v.project_id))) continue;
+    if (q.allMembers) {
+      if (v.use === 'personal') continue;
+      const nobody = { id: '00000000-0000-0000-0000-000000000000' } as any;
+      const roleOk = async (role: string) => (await getViewRights(db, v.id, nobody, { projectId: v.project_id, userId: nobody.id, role, isDeputy: false, canEditPlan: false, canApprove: false, canFinalize: false, canUseAi: false } as any)).canRead;
+      if (!(await roleOk('member')) || !(await roleOk('reader'))) continue;
+    }
+    if (q.viewerId) { const vm = await member(v.project_id, q.viewerId); if (!(await getViewRights(db, v.id, { id: q.viewerId } as any, vm)).canRead) continue; }
+    out.push(v.id);
+  }
+  return out;
+}
+
+/** Mailsuche als EINE Abfrage über alle erlaubten Ansichten; jede Mail (mails.id) höchstens einmal. */
+async function searchMails(db: Db, q: { viewIds: string[]; terms: string[]; from?: string | null; since?: string | null; until?: string | null; limit: number }): Promise<SearchHit[]> {
+  const from = String(q.from ?? '').trim().toLowerCase();
+  if (!q.viewIds.length || (!q.terms.length && !from && !q.since && !q.until)) return [];
+  const like = q.terms.map((t) => `%${t.replace(/[%_\\]/g, '')}%`);
+  searchCounters.mails++;
+  const r = await db.query(
+    `select m.id, m.subject, m.from_addr, m.from_name, m.date, m.snippet, left(coalesce(m.text_body, m.snippet), 20000) as body,
+       (select count(*) from unnest($2::text[]) t where m.subject ilike t or m.text_body ilike t or m.from_addr ilike t or m.from_name ilike t) as score
+     from mails m where exists (select 1 from mail_view_matches x where x.mail_id = m.id and x.view_id = any($1::uuid[]))
+       and (cardinality($2::text[]) = 0 or exists (select 1 from unnest($2::text[]) t where m.subject ilike t or m.text_body ilike t or m.from_addr ilike t or m.from_name ilike t))
+       and ($3::text = '' or lower(m.from_addr) like '%' || $3 || '%' or lower(coalesce(m.from_name, '')) like '%' || $3 || '%')
+       and ($4::date is null or m.date >= $4::date) and ($5::date is null or m.date < $5::date + 1)
+     order by score desc, m.date desc limit $6`, [q.viewIds, like, from.replace(/[%_\\]/g, ''), q.since ?? null, q.until ?? null, q.limit]);
+  return r.rows.map((m: any) => ({ kind: 'mail' as const, id: m.id, ref: `mail:${m.id}`, title: m.subject || '(kein Betreff)', from: m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr, date: d10(m.date), excerpt: excerptOf(String(m.body ?? ''), q.terms, 400), score: Number(m.score) }));
+}
+
+/**
+ * Mails und Dateien über mehrere Projekte als je EINE Abfrage (Vereinigung der erlaubten Ansichten bzw. (Quelle, Unterordner)-
+ * Paare): jede Mail und jede Datei höchstens einmal, egal in wie vielen Projekten oder Ansichten sie liegt. projectIds müssen
+ * Projekte sein, in denen Agent (und ggf. viewer) Mitglied sind; Dateien prüft fileScopes, Mails mailViewScope.
+ */
+export async function searchSources(db: Db, q: { projectIds: string[]; agentId: string; viewerId?: string | null; allMembers?: boolean; query: string; max?: number } & SearchOpts): Promise<{ mails?: SearchHit[]; files?: SearchHit[] }> {
+  const kinds = searchKinds(q);
   const terms = tokens(q.query).slice(0, 8);
-  if (!terms.length) return { pages: [], tasks: [] };
+  const since = ymdOrNull(q.since); const until = ymdOrNull(q.until);
+  const out: { mails?: SearchHit[]; files?: SearchHit[] } = {};
+  let projectIds = [...new Set(q.projectIds)];
+  if (q.viewerId && (kinds.has('files'))) {
+    // Dateien: nur Projekte, in denen auch die fragende Person Mitglied ist
+    const ok = (await db.query(`select project_id from project_members where user_id = $1 and project_id = any($2::uuid[])`, [q.viewerId, projectIds])).rows.map((r: any) => r.project_id as string);
+    projectIds = projectIds.filter((p) => ok.includes(p));
+  }
+  if (kinds.has('mails')) out.mails = await searchMails(db, { viewIds: await mailViewScope(db, { projectIds: [...new Set(q.projectIds)], agentId: q.agentId, viewerId: q.viewerId, allMembers: q.allMembers }), terms, from: q.from, since, until, limit: q.max ?? 8 });
+  if (kinds.has('files')) {
+    const agentProjects = (await db.query(`select project_id from project_members where user_id = $1 and project_id = any($2::uuid[])`, [q.agentId, projectIds])).rows.map((r: any) => r.project_id as string);
+    const scopes = await fileScopes(db, agentProjects);
+    const rows = await searchFiles(db, { scopes, terms, since, until, limit: q.max ?? 8 });
+    out.files = rows.map((f: any) => ({ kind: 'file' as const, id: f.id, ref: `file:${f.id}`, title: f.name, from: displayPath(scopes, f.source_id, f.path), date: d10(f.modified_at), excerpt: f.text_head ? excerptOf(String(f.text_head), terms, 400) : null, score: Number(f.score) }));
+  }
+  return out;
+}
+
+/**
+ * Suche im Projekt (Titel und Inhalt, Stichwörter): bis 10 Seitentitel mit 3 Ausschnitten à 800 Zeichen, 5 Arbeitspakete,
+ * Mails der lesbaren Ansichten und Dateien der Dateiquellen; nur, was Agent (und ggf. Absender) sehen dürfen. source/from/
+ * since/until filtern (siehe SearchOpts); Rangfolge nach Zahl der Treffer, dann Aktualität.
+ */
+export async function search(db: Db, q: { projectId: string; agentId: string; query: string; viewerId?: string | null; maxTitles?: number; maxExcerpts?: number } & SearchOpts): Promise<SearchResult> {
+  const kinds = searchKinds({ source: q.source ?? ['docs', 'tasks'], from: q.from });
+  const terms = tokens(q.query).slice(0, 8);
+  const since = ymdOrNull(q.since); const until = ymdOrNull(q.until);
+  const out: SearchResult = { pages: [], tasks: [] };
+  if (kinds.has('mails') || kinds.has('files')) Object.assign(out, await searchSources(db, { projectIds: [q.projectId], agentId: q.agentId, viewerId: q.viewerId, query: q.query, source: [...kinds].filter((k) => k === 'mails' || k === 'files') as SearchSource[], from: q.from, since, until }));
+  if (!terms.length) return out;
   const vis = await agentVisibility(db, { agentId: q.agentId, projectId: q.projectId });
   const like = terms.map((t) => `%${t.replace(/[%_]/g, '')}%`);
-  const pages = await db.query(
-    `select p.id, p.title, p.status, p.content_md, p.folder_id, f.name as folder, (select count(*) from unnest($2::text[]) t where p.title ilike t or p.content_md ilike t) as score
-     from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null and exists (select 1 from unnest($2::text[]) t where p.title ilike t or p.content_md ilike t)
-     order by score desc, p.updated_at desc limit $3`, [q.projectId, like, (q.maxTitles ?? 10) * 2]);
-  const okPages = pages.rows.filter((p: any) => !p.folder_id || vis.folderAccess.get(p.folder_id) !== 'none').slice(0, q.maxTitles ?? 10);
-  const excerpt = (md: string) => { const low = md.toLowerCase(); const idx = terms.map((t) => low.indexOf(t)).filter((i) => i >= 0).sort((a, b) => a - b)[0] ?? 0; const start = Math.max(0, idx - 200); return `${start ? '… ' : ''}${md.slice(start, start + 800).replace(/\s+/g, ' ').trim()}${start + 800 < md.length ? ' …' : ''}`; };
-  const outPages: SearchHit[] = okPages.map((p: any, i: number) => ({ kind: 'page', id: p.id, title: p.title, status: p.status, folder: p.folder, excerpt: i < (q.maxExcerpts ?? 3) ? excerpt(String(p.content_md ?? '')) : null, score: Number(p.score) }));
-  const params: any[] = [q.projectId, like, q.agentId];
-  if (q.viewerId) params.push(q.viewerId);
-  const tasks = await db.query(
-    `select t.id, t.number, t.title, c.name as column_name, p.key, (select count(*) from unnest($2::text[]) x where t.title ilike x or t.description ilike x) as score from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id
-     where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and exists (select 1 from unnest($2::text[]) x where t.title ilike x or t.description ilike x)
-       and ${visibleSubprojectSql(3)}${q.viewerId ? ` and ${visibleSubprojectSql(4)}` : ''} order by score desc, t.updated_at desc nulls last limit 5`, params);
-  return { pages: outPages, tasks: tasks.rows.map((t: any) => ({ kind: 'task', id: t.id, ref: `${t.key}-${t.number}`, title: t.title, status: t.column_name, score: Number(t.score) })) };
+  if (kinds.has('docs')) {
+    const pages = await db.query(
+      `select p.id, p.title, p.status, p.content_md, p.folder_id, f.name as folder, (select count(*) from unnest($2::text[]) t where p.title ilike t or p.content_md ilike t) as score
+       from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null and exists (select 1 from unnest($2::text[]) t where p.title ilike t or p.content_md ilike t)
+         and ($4::date is null or p.updated_at >= $4::date) and ($5::date is null or p.updated_at < $5::date + 1)
+       order by score desc, p.updated_at desc limit $3`, [q.projectId, like, (q.maxTitles ?? 10) * 2, since, until]);
+    const okPages = pages.rows.filter((p: any) => !p.folder_id || vis.folderAccess.get(p.folder_id) !== 'none').slice(0, q.maxTitles ?? 10);
+    out.pages = okPages.map((p: any, i: number) => ({ kind: 'page', id: p.id, title: p.title, status: p.status, folder: p.folder, excerpt: i < (q.maxExcerpts ?? 3) ? excerptOf(String(p.content_md ?? ''), terms) : null, score: Number(p.score) }));
+  }
+  if (kinds.has('tasks')) {
+    const params: any[] = [q.projectId, like, q.agentId, since, until];
+    if (q.viewerId) params.push(q.viewerId);
+    const tasks = await db.query(
+      `select t.id, t.number, t.title, c.name as column_name, p.key, (select count(*) from unnest($2::text[]) x where t.title ilike x or t.description ilike x) as score from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id
+       where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and exists (select 1 from unnest($2::text[]) x where t.title ilike x or t.description ilike x)
+         and ($4::date is null or t.updated_at >= $4::date) and ($5::date is null or t.updated_at < $5::date + 1)
+         and ${visibleSubprojectSql(3)}${q.viewerId ? ` and ${visibleSubprojectSql(6)}` : ''} order by score desc, t.updated_at desc nulls last limit 5`, params);
+    out.tasks = tasks.rows.map((t: any) => ({ kind: 'task', id: t.id, ref: `${t.key}-${t.number}`, title: t.title, status: t.column_name, score: Number(t.score) }));
+  }
+  return out;
 }
-export const searchText = (r: { pages: SearchHit[]; tasks: SearchHit[] }) => `${r.pages.length ? `Seiten:\n${r.pages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${p.excerpt}` : ''}`).join('\n')}` : 'Seiten: keine Treffer'}\n${r.tasks.length ? `Arbeitspakete:\n${r.tasks.map((t) => `- ${t.ref} „${t.title}“ · ${t.status}`).join('\n')}` : 'Arbeitspakete: keine Treffer'}`;
+/** Treffer als Prompt-Text; Mail- und Dateiausschnitte zwischen den Datenmarkern (neutralisiert). */
+export const mailHitsText = (mails: SearchHit[]) => mails.length ? `Mails:\n${mails.map((m) => `- ${m.ref} „${mailData(m.title)}“ von ${mailData(m.from ?? '')}, ${m.date}${m.excerpt ? `\n  <<<MAIL ${mailData(m.excerpt)} MAIL>>>` : ''}`).join('\n')}` : 'Mails: keine Treffer';
+export const fileHitsText = (files: SearchHit[]) => files.length ? `Dateien:\n${files.map((f) => `- ${f.ref} „${fileData(f.title)}“ (${fileData(f.from ?? '')}${f.date ? `, geändert ${f.date}` : ''})${f.excerpt ? `\n  <<<FILE ${fileData(f.excerpt)} FILE>>>` : ''}`).join('\n')}` : 'Dateien: keine Treffer';
+export const searchText = (r: SearchResult, kinds?: Set<string>) => [
+  ...(!kinds || kinds.has('docs') ? [r.pages.length ? `Seiten:\n${r.pages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${p.excerpt}` : ''}`).join('\n')}` : 'Seiten: keine Treffer'] : []),
+  ...(!kinds || kinds.has('tasks') ? [r.tasks.length ? `Arbeitspakete:\n${r.tasks.map((t) => `- ${t.ref} „${t.title}“ · ${t.status}`).join('\n')}` : 'Arbeitspakete: keine Treffer'] : []),
+  ...(r.mails ? [mailHitsText(r.mails)] : []),
+  ...(r.files ? [fileHitsText(r.files)] : [])
+].join('\n');
+
+/** Kennung aus „mail:<uuid>“, „file:<uuid>“ oder der UUID selbst. */
+export const idOf = (v: unknown, prefix: 'mail' | 'file'): string | null => { const s = String(v ?? '').trim().replace(new RegExp(`^${prefix}:`, 'i'), ''); return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(s) ? s.toLowerCase() : null; };
+
+/** read_mail: Mail lesen, wenn sie in einer für Agent (und ggf. viewer) lesbaren Ansicht der Projekte liegt. */
+export async function readMailText(db: Db, q: { projectIds: string[]; agentId: string; viewerId?: string | null; id: unknown; max?: number }): Promise<{ ok: boolean; text: string }> {
+  const id = idOf(q.id, 'mail');
+  if (!id) return { ok: false, text: `read_mail ${cut(q.id, 60) || '?'}: Kennung ungültig (mail:<id> aus den Suchtreffern)` };
+  const views = await mailViewScope(db, { projectIds: q.projectIds, agentId: q.agentId, viewerId: q.viewerId });
+  const m = views.length ? await db.maybeOne(`select m.* from mails m where m.id = $1 and exists (select 1 from mail_view_matches x where x.mail_id = m.id and x.view_id = any($2::uuid[]))`, [id, views]) : null;
+  if (!m) return { ok: false, text: `read_mail mail:${id}: nicht gefunden oder nicht lesbar` };
+  const body = m.text_body ?? (m.html_body ? htmlToText(m.html_body) : m.snippet) ?? '';
+  return { ok: true, text: `### Mail mail:${m.id}\n<<<MAIL\nBetreff: ${mailData(m.subject)}\nVon: ${mailData(m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr)}\nAn: ${mailData((m.to_json ?? []).join(', '))}\nDatum: ${new Date(m.date).toLocaleString('de-DE', { timeZone: 'Europe/Berlin' })}\n\n${mailData(cut(body, q.max ?? 6000))}\nMAIL>>>` };
+}
+
+/** read_file: Textauszug einer Datei, wenn sie unter einer Einbindung der Projekte liegt (Quelle, Pfad, Link). */
+export async function readFileText(db: Db, q: { projectIds: string[]; agentId: string; id: unknown; max?: number }): Promise<{ ok: boolean; text: string }> {
+  const id = idOf(q.id, 'file');
+  if (!id) return { ok: false, text: `read_file ${cut(q.id, 60) || '?'}: Kennung ungültig (file:<id> aus den Suchtreffern)` };
+  const projects = (await db.query(`select project_id from project_members where user_id = $1 and project_id = any($2::uuid[])`, [q.agentId, q.projectIds])).rows.map((r: any) => r.project_id as string);
+  const hit = await fileInProjects(db, id, projects);
+  if (!hit) return { ok: false, text: `read_file file:${id}: nicht gefunden oder nicht in einer Dateiquelle des Projekts` };
+  const f = hit.file;
+  const body = f.text_status === 'ok' ? fileData(cut(f.text_content, q.max ?? 8000)) : `(kein Textauszug: ${f.text_note ?? f.text_status ?? 'noch nicht indiziert'})`;
+  return { ok: true, text: `### Datei file:${f.id} „${fileData(f.name)}“\nQuelle: ${fileData(f.source_name)} · Pfad: ${fileData(displayPath(hit.scopes, f.source_id, f.path))}${f.modified_at ? ` · geändert ${d10(f.modified_at)}` : ''} · Link: ${publicBase()}/api/files/${f.id}/download\n<<<FILE\n${body}\nFILE>>>` };
+}
 
 export interface Candidate { taskId: string; ref: string; title: string; signals: { type: string; detail: string }[] }
 /**
@@ -326,7 +483,10 @@ export async function runProjectReview(db: Db, _mail: MailService, fetchFn: type
   const skip = async (error: string) => { const r = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, error, scope) values ($1,$2,$3,null,'project_review','skipped',$4,'project') returning id`, [project.org_id, agent.id, projectId, error.slice(0, 500)]); return { runId: r.id as string, status: 'skipped' as const, error, actions: [] }; };
   if (!cfg) return skip(decision.publicReason);
   const digest = await projectDigest(db, { projectId, agentId: agent.id });
-  if (!digest.changed && !opts.force) return skip('Projekt unverändert seit dem letzten Durchlauf (kein LLM-Aufruf)');
+  // Ereignis „neue/geänderte Datei“ (Dateiquellen): Dateien seit dem letzten Durchlauf stehen im Prompt und lösen den Durchlauf aus
+  const lastRun = await db.maybeOne(`select max(created_at) as at from agent_runs where project_id = $1 and agent_user_id = $2 and scope = 'project' and status in ('ok', 'error')`, [projectId, agent.id]);
+  const newFiles = await changedFiles(db, projectId, lastRun?.at ? new Date(lastRun.at) : null);
+  if (!digest.changed && !opts.force && !newFiles.length) return skip('Projekt unverändert seit dem letzten Durchlauf (kein LLM-Aufruf)');
   // Kandidatenpaare: je offenem AP bis 1 Kandidat, höchstens 10 Paare
   const aps = await db.query(`select t.id, t.number, t.title, c.name as column_name, s.name as sp, coalesce(u.name, t.responsible_email) as resp, t.due_date from tasks t join board_columns c on c.id = t.column_id left join subprojects s on s.id = t.subproject_id left join users u on u.id = t.responsible_user_id where t.project_id = $1 and t.parent_id is null and t.deleted_at is null and t.archived_at is null and not c.is_done and ${visibleSubprojectSql(2)} order by t.position limit 60`, [projectId, agent.id]);
   const pairs: { a: string; b: Candidate }[] = []; const seen = new Set<string>();
@@ -336,13 +496,13 @@ export async function runProjectReview(db: Db, _mail: MailService, fetchFn: type
   }
   const openQs = await db.query(`select q.body, q.created_at, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id where q.project_id = $1 and q.status = 'open' order by q.created_at limit 15`, [projectId]);
   const recent = await db.query(`select t.number, t.title, c.body, c.created_at from task_comments c join tasks t on t.id = c.task_id where t.project_id = $1 and c.created_at > $2::timestamptz - interval '24 hours' and c.source <> 'ai' order by c.created_at desc limit 20`, [projectId, now]);
-  const system = `${AGENT_SHEET}\n\n${PROJECT_RULES}\n\n# Du\nDu bist „${agent.name}“, Projektagent von ${project.key} „${project.name}“.`;
+  const system = `${AGENT_SHEET}\n\n${PROJECT_RULES}\n\n${DATA_RULE}\n\n# Du\nDu bist „${agent.name}“, Projektagent von ${project.key} „${project.name}“.`;
   const prompt = `Heute: ${now.toISOString().slice(0, 10)}
 ${digestText(digest)}
 
 Offene Arbeitspakete (Kennung · Titel · Status · Teilprojekt · zuständig · fällig):
 ${aps.rows.map((t: any) => `- ${project.key}-${t.number} · ${cut(t.title, 70)} · ${t.column_name}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}${t.due_date ? ` · ${d10(t.due_date)}` : ''}`).join('\n') || '–'}
-${pairs.length ? `Mögliche Überschneidungen (prüfen, bei Bedarf relate):\n${pairs.map((p) => `- ${p.a} ↔ ${p.b.ref} „${cut(p.b.title, 60)}“ · ${p.b.signals.map((s) => s.detail).join('; ')}`).join('\n')}\n` : ''}${openQs.rows.length ? `Offene Fragen im Projekt:\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 160)}`).join('\n')}\n` : ''}${recent.rows.length ? `Änderungen der letzten 24 Stunden:\n${recent.rows.map((c: any) => `- ${project.key}-${c.number} „${cut(c.title, 50)}“: ${cut(c.body, 200)}`).join('\n')}\n` : ''}
+${pairs.length ? `Mögliche Überschneidungen (prüfen, bei Bedarf relate):\n${pairs.map((p) => `- ${p.a} ↔ ${p.b.ref} „${cut(p.b.title, 60)}“ · ${p.b.signals.map((s) => s.detail).join('; ')}`).join('\n')}\n` : ''}${openQs.rows.length ? `Offene Fragen im Projekt:\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 160)}`).join('\n')}\n` : ''}${recent.rows.length ? `Änderungen der letzten 24 Stunden:\n${recent.rows.map((c: any) => `- ${project.key}-${c.number} „${cut(c.title, 50)}“: ${cut(c.body, 200)}`).join('\n')}\n` : ''}${newFiles.length ? `Neue Dateien seit letztem Lauf: ${newFiles.map((f) => `${fileData(f.label)}${f.modifiedAt ? ` (${d10(f.modifiedAt)})` : ''} [file:${f.id}]`).join('; ')}\n` : ''}
 Finde Doppelarbeit, Synergien, Widersprüche und offene Punkte; schreibe den Steckbrief neu, wenn sich Wesentliches geändert hat.`;
   try {
     const r = await complete(cfg, fetchFn, { meta: { feature: 'agent.project', projectId }, system, prompt, maxTokens: 2500, schema: REVIEW_SCHEMA });

@@ -1,35 +1,45 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
-import { useAsync } from '../components/ui';
+import { Button, FieldError, Loading, useAsync } from '../components/ui';
 
-/** Öffentliche Seite: Einladung annehmen, Passwort setzen, danach direkt angemeldet. */
-export function AcceptInvitePage({ token }: { token: string }) {
-  const [inv, setInv] = useState<{ email: string; name: string; orgName: string } | null>(null);
+const MIN_PW = 10;
+
+type InviteInfo = { email: string; name: string; orgName: string; /** Einladung ohne Projekt mit persönlichem Projekt (Assistent) bei Annahme */ personalProject?: boolean };
+
+/** Ziel nach der Annahme: das persönliche Projekt, wenn die Einladung eines anlegt, sonst die Startseite. */
+export const acceptTarget = (r: { personalProjectId?: string | null }) => (r.personalProjectId ? `/projekte/${r.personalProjectId}/board` : '/');
+
+/** Öffentliche Seite: Einladung annehmen, Passwort setzen, danach direkt angemeldet (persönliches Projekt öffnet sich gleich). */
+export function AcceptInvitePage({ token, navigate = (url) => { window.location.href = url; } }: { token: string; navigate?: (url: string) => void }) {
+  const [inv, setInv] = useState<InviteInfo | null>(null);
   const [notFound, setNotFound] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [pw, setPw] = useState('');
   const [pw2, setPw2] = useState('');
-  const { busy, error, run } = useAsync();
+  const { busy, error, fieldErrors, run } = useAsync();
   useEffect(() => {
-    api.get<{ email: string; name: string; orgName: string }>(`/invitations/accept/${token}`).then((r) => { setInv(r); setName(r.name); }).catch((e) => setNotFound(e.message));
+    api.get<InviteInfo>(`/invitations/accept/${token}`).then((r) => { setInv(r); setName(r.name); }).catch((e) => setNotFound(e.message));
   }, [token]);
-  if (notFound) return <div className="login"><div className="card"><h1>PROject</h1><div className="error">{notFound}</div><p className="muted small">Bitte beim Org-Admin eine neue Einladung anfordern.</p><a className="btn" href="/">Zur Anmeldung</a></div></div>;
-  if (!inv) return <div className="login"><div className="card muted">Lade …</div></div>;
-  const ok = pw.length >= 10 && pw === pw2 && name.trim();
+  if (notFound) return <div className="login"><div className="card"><h1>PROject</h1><div className="error" role="alert">{notFound}</div><p className="muted small">Bitte beim Org-Admin eine neue Einladung anfordern.</p><a className="btn" href="/">Zur Anmeldung</a></div></div>;
+  if (!inv) return <div className="login"><div className="card"><Loading /></div></div>;
+  const mismatch = pw2.length > 0 && pw !== pw2;
+  const tooShort = pw.length > 0 && pw.length < MIN_PW;
+  const ok = pw.length >= MIN_PW && pw === pw2 && name.trim();
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!ok) return; void run(async () => { const r = await api.post<{ personalProjectId?: string | null }>(`/invitations/accept/${token}`, { name, password: pw }); navigate(acceptTarget(r)); }); };
   return (
     <div className="login">
-      <div className="card" style={{ width: 420 }}>
+      <form className="card setup-card" onSubmit={submit} noValidate>
         <h1>PROject</h1>
         <p className="muted">{inv.orgName} · Einladung für <strong>{inv.email}</strong></p>
+        {inv.personalProject && <div className="notice ok small mb">Du bekommst ein persönliches Projekt mit Assistent-Möglichkeit: ein Bereich nur für dich, in dem du einen KI-Assistenten einrichten kannst. Nach der Anmeldung öffnet es sich direkt.</div>}
         <div className="form">
-          <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
-          <label className="field"><span>Passwort (mindestens 10 Zeichen)</span><input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoFocus /></label>
-          <label className="field"><span>Passwort wiederholen</span><input type="password" value={pw2} onChange={(e) => setPw2(e.target.value)} /></label>
-          {pw2 && pw !== pw2 && <div className="small" style={{ color: 'var(--danger)' }}>Passwörter stimmen nicht überein.</div>}
-          {error && <div className="error">{error}</div>}
-          <div><button className="btn primary" disabled={busy || !ok} onClick={() => void run(async () => { await api.post(`/invitations/accept/${token}`, { name, password: pw }); window.location.href = '/'; })}>Konto anlegen und anmelden</button></div>
+          <label className="field"><span className="req">Name</span><input type="text" value={name} required aria-required="true" aria-invalid={Boolean(fieldErrors.name) || undefined} onChange={(e) => setName(e.target.value)} /><FieldError error={fieldErrors.name} /></label>
+          <label className="field"><span className="req">Passwort (mindestens {MIN_PW} Zeichen)</span><input type="password" value={pw} required aria-required="true" minLength={MIN_PW} autoComplete="new-password" aria-invalid={tooShort || Boolean(fieldErrors.password) || undefined} onChange={(e) => setPw(e.target.value)} autoFocus /><FieldError error={fieldErrors.password ?? (tooShort ? `Noch ${MIN_PW - pw.length} Zeichen` : null)} /></label>
+          <label className="field"><span className="req">Passwort wiederholen</span><input type="password" value={pw2} required aria-required="true" autoComplete="new-password" aria-invalid={mismatch || undefined} onChange={(e) => setPw2(e.target.value)} /><FieldError error={mismatch ? 'Passwörter stimmen nicht überein.' : null} /></label>
+          {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}
+          <div><Button type="submit" variant="primary" loading={busy} disabled={!ok}>Konto anlegen und anmelden</Button></div>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

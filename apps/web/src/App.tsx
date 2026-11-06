@@ -1,5 +1,5 @@
-import { Navigate, Route, Routes } from 'react-router-dom';
-import { useAuth } from './lib/auth';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { takeReturnUrl, useAuth } from './lib/auth';
 import { Layout } from './components/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { ProjectsPage } from './pages/ProjectsPage';
@@ -16,9 +16,10 @@ import { SharePage } from './pages/SharePage';
 import { SetupPage } from './pages/SetupPage';
 import { AcceptInvitePage } from './pages/AcceptInvitePage';
 import { ResetPasswordPage } from './pages/ResetPasswordPage';
+import { NotFoundPage } from './pages/NotFoundPage';
 import { useEffect, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import { api } from './lib/api';
+import { Loading } from './components/ui';
 
 /** Weiterleitung mit Erhalt der Filter (?…), z. B. alte Links auf „Alle Arbeitspakete“. */
 function KeepQuery({ to }: { to: string }) {
@@ -28,6 +29,19 @@ function KeepQuery({ to }: { to: string }) {
 
 export default function App() {
   const { user, loading } = useAuth();
+  const nav = useNavigate();
+  const loc = useLocation();
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (user) { setNeedsSetup(false); return; }
+    api.get<{ needsSetup: boolean }>('/setup/status').then((r) => setNeedsSetup(r.needsSetup)).catch(() => setNeedsSetup(false));
+  }, [user]);
+  // Nach erneuter Anmeldung (Sitzung war abgelaufen) zurück dorthin, wo die Arbeit unterbrochen wurde
+  useEffect(() => {
+    if (!user) return;
+    const back = takeReturnUrl();
+    if (back && back !== `${loc.pathname}${loc.search}`) nav(back, { replace: true });
+  }, [user?.id]);
   if (window.location.pathname.startsWith('/s/')) {
     return <Routes><Route path="/s/:token" element={<SharePage />} /></Routes>;
   }
@@ -37,12 +51,7 @@ export default function App() {
   if (window.location.pathname.startsWith('/passwort/')) {
     return <ResetPasswordPage token={window.location.pathname.split('/')[2] ?? ''} />;
   }
-  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
-  useEffect(() => {
-    if (user) { setNeedsSetup(false); return; }
-    api.get<{ needsSetup: boolean }>('/setup/status').then((r) => setNeedsSetup(r.needsSetup)).catch(() => setNeedsSetup(false));
-  }, [user]);
-  if (loading || (!user && needsSetup === null)) return <div className="content muted">Lade …</div>;
+  if (loading || (!user && needsSetup === null)) return <div className="content"><Loading /></div>;
   if (!user && needsSetup) return <SetupPage onDone={() => window.location.reload()} />;
   if (!user) return <LoginPage />;
   return (
@@ -68,7 +77,7 @@ export default function App() {
         <Route path="/mail-konten" element={<Navigate to="/einstellungen/mail" replace />} />
         <Route path="/verwaltung/*" element={<AdminPage />} />
         <Route path="/projekte/:id/*" element={<ProjectPage />} />
-        <Route path="*" element={<Navigate to="/dashboard" replace />} />
+        <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </Layout>
   );

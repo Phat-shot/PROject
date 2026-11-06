@@ -323,6 +323,9 @@ test('Portfolio: Ampel berechnet und manuell, Auslastung; Projektvorlage aus Pro
   assert.equal(created.statusCode, 200, created.body);
   const detail = (await t.api(pl).get(`/projects/${created.json().project.id}`)).json();
   assert.equal(detail.columns.map((c: any) => c.name).join(','), spec.columns.map((c: any) => c.name).join(','));
+  // Spaltengruppe wandert mit der Vorlage (Geplant/Wartet/Zurückgestellt des Demoprojekts: „Nicht in Arbeit“)
+  assert.deepEqual(spec.columns.map((c: any) => c.group), ['Nicht in Arbeit', null, null, null, 'Nicht in Arbeit', 'Nicht in Arbeit', null]);
+  assert.deepEqual(detail.columns.map((c: any) => c.group), spec.columns.map((c: any) => c.group));
   assert.equal(detail.subprojects.length, spec.subprojects.length);
   assert.equal(detail.milestones.length, spec.milestones.length);
   assert.equal(detail.labels.length, spec.labels.length);

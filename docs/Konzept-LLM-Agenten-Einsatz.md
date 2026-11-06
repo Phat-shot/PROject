@@ -1,6 +1,10 @@
 # Konzept: LLMs und Agenten – Verwalter und Einsatz
 
-Stand 20.10.2026 (Migration 060). Ergänzt Konzept-KI-Agent.md (Kapitel 8) und Konzept-Rechte-KI-Kommunikation.md (Kapitel 3, 17.3). Vorbild sind die Mail-Konten (Migration 058): ein Konto hat einen **Verwalter** und **Verwendungen**. LLMs und Agenten bekommen dasselbe Muster: einen **Verwalter** (Organisation oder ein Projekt) und einen **Einsatz** (alle Projekte, ausgewählte Projekte, nur das eigene Projekt).
+> **Zielgruppe:** Entwickler. Verwalter und Einsatz von LLMs und Agenten.
+> **Stand der Umsetzung (06.11.2026):** vollständig umgesetzt (Migration 060: `users.agent_scope`, `agent_projects`; Prüfung beim Aufnehmen, als Projektagent und bei jedem Lauf; Oberfläche Verwaltung › KI und Projekt › Einstellungen › KI). Ergänzt durch Migration 063 (Rechte und Obergrenze am Agenten, Einschränkung im Projekt; die in Kapitel 6 genannten KI-Freigaben gibt es nicht mehr) und das eigene LLM je Projekt (Mandantenschalter aus / nur persönliche / alle).
+> **Offen:** nichts; Abschnitt 3.1 nennt vier Karten, umgesetzt sind drei (Ablauf, LLMs und ihre Agenten, Grenzen und Vorgaben).
+
+Stand 20.10.2026 (Migration 060). Ergänzt Konzept-KI-Agent.md (Kapitel 8) und Konzept-Rechte-KI-Kommunikation.md (Kapitel 3, 17.2b). Vorbild sind die Mail-Konten (Migration 058): ein Konto hat einen **Verwalter** und **Verwendungen**. LLMs und Agenten bekommen dasselbe Muster: einen **Verwalter** (Organisation oder ein Projekt) und einen **Einsatz** (alle Projekte, ausgewählte Projekte, nur das eigene Projekt).
 
 ## 1. Leitsätze
 

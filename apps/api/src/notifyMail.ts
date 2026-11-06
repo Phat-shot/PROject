@@ -23,7 +23,7 @@ export const digestHourOf = (settings: any): number => {
  */
 export async function runNotificationMails(db: Db, mail: MailService, now = new Date()): Promise<{ sent: number }> {
   const users = await db.query(
-    `select u.id, u.org_id, u.email, u.name, o.settings as org_settings,
+    `select u.id, u.org_id, u.email, u.name, o.settings as org_settings, o.name as org_name,
        (select max(mailed_at) from notifications n where n.user_id = u.id and n.mail = 'digest') as last_digest
      from users u join orgs o on o.id = u.org_id where u.active and u.kind = 'person'
        and exists (select 1 from notifications n where n.user_id = u.id and n.mailed_at is null and n.read_at is null and n.mail <> 'off' and n.created_at > $1::timestamptz - interval '7 days')`,
@@ -63,7 +63,8 @@ async function send(db: Db, mail: MailService, account: any, u: any, rows: any[]
   const base = publicBase();
   const lines = rows.map((n: any) => `• ${n.project_key ? `[${n.project_key}] ` : ''}${n.title}${n.body ? ` – ${n.body}` : ''}${n.link ? `\n  ${base}${n.link}` : ''}`);
   const subject = rows.length === 1 ? `PROject: ${rows[0].title}` : `PROject: ${rows.length} neue Meldungen`;
-  const text = `Guten Tag ${u.name},\n\n${isDigest ? 'Ihre Meldungen aus PROject seit dem letzten Digest:' : 'Neue Meldungen aus PROject:'}\n\n${lines.join('\n\n')}\n\nEinstellung ändern: ${base}/einstellungen/benachrichtigungen\n`;
+  // Du-Form wie in der Oberfläche; Absender ist das Tool im Namen der Org
+  const text = `Hallo ${u.name},\n\n${isDigest ? 'deine Meldungen aus PROject seit dem letzten Digest:' : 'neue Meldungen aus PROject:'}\n\n${lines.join('\n\n')}\n\nBenachrichtigungen ändern: ${base}/einstellungen/benachrichtigungen\n\nViele Grüße\nPROject${u.org_name ? ` (${u.org_name})` : ''}\n`;
   try {
     const attachments = [];
     for (const n of rows.filter((x: any) => x.attach && x.ref_type === 'page' && x.ref_id)) {

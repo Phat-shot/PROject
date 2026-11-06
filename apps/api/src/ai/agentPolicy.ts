@@ -133,6 +133,11 @@ export function classifyAction(a: any, c: ClassifyCtx): AgentActionClass[] {
     case 'create_aufgabe': if (third(a.responsible)) out.add('assign'); if (!own(a.ref)) out.add('foreign'); break;
     case 'assign': out.add('assign'); if (!own(a.ref)) out.add('foreign'); break;
     case 'set_dates': out.add('schedule'); if (!own(a.ref)) out.add('foreign'); break;
+    case 'move_aufgabe': out.add('restructure'); if (!own(a.ref) || !own(a.target)) out.add('foreign'); break;
+    case 'move_ap': out.add('restructure'); if (!own(a.ref)) out.add('foreign'); break;
+    case 'demote_aufgabe': out.add('restructure'); if (!own(a.ref)) out.add('foreign'); break;
+    case 'move_item': out.add('restructure'); if (!own(a.target)) out.add('foreign'); break;
+    case 'promote_item': out.add('restructure'); if (third(a.responsible)) out.add('assign'); break;
     default: break;
   }
   return [...out];
@@ -157,6 +162,11 @@ export function actionLabel(a: any, c?: { pageTitle?: (id: string) => string | n
     case 'update_event': return `Termin verschieben${a.startsAt ? ` auf ${a.startsAt}` : ''}${a.location ? `, Ort ${cut(a.location, 40)}` : ''}`;
     case 'cancel_event': return `Termin absagen${a.reason ? `: ${cut(a.reason, 60)}` : ''}`;
     case 'send_invite': return 'Einladung mit Kalendereintrag an alle Teilnehmer';
+    case 'move_aufgabe': return `Aufgabe ${a.ref ?? '?'} unter ${a.target ?? '?'} verschieben`;
+    case 'move_ap': return `Arbeitspaket ${a.ref ?? '?'} ${a.subproject ? `dem Teilprojekt „${cut(a.subproject, 40)}“ zuordnen` : 'aus dem Teilprojekt herausnehmen'}`;
+    case 'promote_item': return `Task „${cut(a.title || a.itemId, 60)}“ zur Aufgabe machen${a.responsible ? ` für ${a.responsible}` : ''}${a.dueDate ? ` bis ${a.dueDate}` : ''}`;
+    case 'demote_aufgabe': return `Aufgabe ${a.ref ?? '?'} zum Task machen`;
+    case 'move_item': return `Task „${cut(a.itemId, 40)}“ nach ${a.target ?? '?'} verschieben`;
     default: return `${a?.type ?? '?'}${a?.title ? ` „${cut(a.title, 60)}“` : a?.text ? `: ${cut(a.text, 60)}` : ''}`;
   }
 }

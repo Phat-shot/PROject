@@ -7,6 +7,7 @@ import { useAsync, useDialog } from '../components/ui';
 import { TopBar } from '../components/Layout';
 import { ProjectScope } from './ProjectPage';
 import { RunDetail, RunRow, StartRunDialog, WorkflowEditor, STEP_LABEL, stepSummary, type WorkflowDef, type WorkflowRun } from './project/WorkflowsView';
+import { IconX } from '../components/icons';
 
 /**
  * Bereich „Workflows“ (nur global): Vorlagen (Schrittfolgen) werden hier gebaut und gelten mandantenweit.
@@ -37,7 +38,7 @@ export function WorkflowsPage() {
     <>
       <TopBar title="Workflows" />
       <div className="content">
-        <p className="muted small" style={{ marginTop: 0 }}>Vorlagen für feste Abläufe: Arbeitspaket → Timer → Arbeitspaket → Warten auf Ereignis → Abschlussmail. Der Start ist der definierte Punkt, danach löst jeder Schritt den nächsten aus. Eine Instanz läuft isoliert als eigenes Mini-Projekt (hier starten) oder in einem Projekt statt eines Arbeitspakets (im Board „+ Workflow“).</p>
+        <p className="muted small mt-0">Vorlagen für feste Abläufe: Arbeitspaket → Timer → Arbeitspaket → Warten auf Ereignis → Abschlussmail. Der Start ist der definierte Punkt, danach löst jeder Schritt den nächsten aus. Eine Instanz läuft isoliert als eigenes Mini-Projekt (hier starten) oder in einem Projekt statt eines Arbeitspakets (im Board „+ Workflow“).</p>
         {error && <div className="error mb">{error}</div>}
         <div className="filterbar mb">
           <select value={pf} onChange={(e) => { const n = new URLSearchParams(params); if (e.target.value) n.set('projekt', e.target.value); else n.delete('projekt'); setParams(n, { replace: true }); }} aria-label="Projektfilter">
@@ -46,18 +47,18 @@ export function WorkflowsPage() {
           </select>
           {project && <span className="muted small">Läufe in {project.key}; Vorlagen lassen sich direkt in diesem Projekt starten.</span>}
         </div>
-        <div className="row between mb"><h2 style={{ margin: 0 }}>Vorlagen</h2>{d.data.canBuild && <button className="btn primary" onClick={() => setEdit('new')}>+ Workflow</button>}</div>
+        <div className="row between mb"><h2 className="m-0">Vorlagen</h2>{d.data.canBuild && <button className="btn primary" onClick={() => setEdit('new')}>+ Workflow</button>}</div>
         {d.data.definitions.length === 0 && <div className="card muted small">Noch keine Vorlagen. {d.data.canBuild ? 'Lege die erste mit „+ Workflow“ an.' : 'Org-Admins und Projektersteller legen sie an.'}</div>}
         {d.data.definitions.map((w) => (
           <div key={w.id} className={`card ${w.active ? '' : 'muted'}`}>
             <div className="row between">
-              <div><strong>{w.name}</strong>{!w.active && <span className="badge" style={{ marginLeft: 6 }}>inaktiv</span>}{w.description && <div className="muted small">{w.description}</div>}</div>
-              <div className="row" style={{ gap: 6 }}>
+              <div><strong>{w.name}</strong>{!w.active && <span className="badge ml-2">inaktiv</span>}{w.description && <div className="muted small">{w.description}</div>}</div>
+              <div className="row gap-2">
                 <span className="muted small">{w.runCount} Läufe{w.activeRuns > 0 ? `, ${w.activeRuns} aktiv` : ''}</span>
                 {w.active && project && project.myRole !== 'reader' && <button className="btn sm primary" title={`Im Projekt ${project.key} starten: Arbeitspakete landen im Board`} onClick={() => setStartIn(w)}>In {project.key} starten</button>}
                 {w.active && <button className={`btn sm ${project ? '' : 'primary'}`} title="Isoliert starten: eigener Lauf mit eigenem Mini-Projekt" onClick={() => setStart(w)}>Instanz starten</button>}
                 {d.data!.canBuild && <button className="btn sm" onClick={() => setEdit(w)}>Bearbeiten</button>}
-                {d.data!.canBuild && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Workflow löschen', text: `„${w.name}“ löschen? Bisherige Läufe bleiben als Historie.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/workflows/${w.id}`); await d.reload(); }); })}>✕</button>}
+                {d.data!.canBuild && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Workflow löschen', text: `„${w.name}“ löschen? Bisherige Läufe bleiben als Historie.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/workflows/${w.id}`); await d.reload(); }); })} aria-label="Löschen"><IconX /></button>}
               </div>
             </div>
             <ol className="wf-steps small">{w.steps.map((s, i) => <li key={s.key}><strong>{i + 1}.</strong> {STEP_LABEL[s.type]}: {stepSummary(s)}</li>)}</ol>
@@ -89,7 +90,7 @@ export function WorkflowRunPage() {
   const r = d.data.run;
   return (
     <ProjectScope projectId={r.projectId} openTask={(tid) => { if (tid) nav(`/projekte/${r.projectId}/board?task=${tid}`); }}>
-      <TopBar title={<><Link to="/workflows" style={{ color: 'inherit' }}>Workflows</Link><span className="muted" style={{ fontWeight: 400, marginLeft: 10 }}>› {r.name}</span></>} />
+      <TopBar title={<><Link className="" to="/workflows">Workflows</Link><span className="muted fw-400 ml-2">› {r.name}</span></>} />
       <RunDetail runId={r.id} backTo="/workflows" />
     </ProjectScope>
   );

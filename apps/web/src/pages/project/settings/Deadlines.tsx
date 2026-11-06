@@ -1,9 +1,10 @@
-import { DEFAULT_ESCALATION, DEFAULT_REPORTING } from '@projekttool/shared';
+import { DEFAULT_ESCALATION, DEFAULT_REPORTING, DEFAULT_REPORT_BLOCKS } from '@projekttool/shared';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmtDate } from '../../../lib/api';
 import { useAsync } from '../../../components/ui';
-import type { DocPage, DocTemplate, ReportingPolicy } from '@projekttool/shared';
+import { ReportBlocksEditor, ReportPreviewModal, describeReport, reportQuery } from '../../../components/ReportBlocks';
+import type { DocPage, DocTemplate, ReportBlock, ReportingPolicy } from '@projekttool/shared';
 import { useProject } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
 import { SettingsCard, ReadOnlyNote } from '../../../components/settings/Settings';
@@ -44,7 +45,8 @@ function ReportingForm() {
   const { detail, reload } = useProject();
   const me = detail.project.myMembership;
   const p = detail.project.reporting!;
-  const [f, setF] = useState({ ...p, recipientsText: p.recipients.join(', ') });
+  const [f, setF] = useState({ ...p, recipientsText: p.recipients.join(', '), blocks: (p.blocks?.length ? p.blocks : DEFAULT_REPORT_BLOCKS) as ReportBlock[], textSource: p.textSource ?? 'rules', graphic: p.graphic !== false });
+  const [preview, setPreview] = useState<{ html: string; title: string; textSource: 'rules' | 'ai' } | null>(null);
   const templates = useData<{ templates: DocTemplate[] }>('/docs/templates');
   const docs = useData<{ pages: DocPage[] }>(`/projects/${detail.project.id}/docs`);
   const { busy, error, run } = useAsync();
@@ -53,12 +55,13 @@ function ReportingForm() {
   const rhythm = p.interval === 'monthly' ? `monatlich am ${p.dayOfMonth}.` : `${p.interval === 'weekly' ? 'wöchentlich' : 'alle zwei Wochen'} am ${WEEKDAYS[p.weekday - 1]}`;
   const tplName = templates.data?.templates.find((t) => t.key === p.templateKey)?.name ?? p.templateKey;
   if (me.role !== 'pl') {
-    return <p className="small muted">{p.enabled ? `„${tplName}“ ${rhythm} an ${p.recipients.join(', ') || 'niemanden'} (${p.mode === 'direct' ? 'direkt als PDF' : 'nach Prüfung durch PL'}).` : 'Kein automatisches Reporting.'}{p.lastRunOn && <> Zuletzt: {fmtDate(p.lastRunOn)}{p.lastPageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${p.lastPageId}`}>Bericht</Link></>}.</>}</p>;
+    return <p className="small muted">{p.enabled ? `„${tplName}“ ${rhythm} an ${p.recipients.join(', ') || 'niemanden'} (${p.mode === 'direct' ? 'direkt als PDF' : 'nach Prüfung durch PL'}).` : 'Kein automatisches Reporting.'}{p.lastRunOn && <> Zuletzt: {fmtDate(p.lastRunOn)}{p.lastPageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${p.lastPageId}`}>Bericht</Link></>}.</>} {describeReport(p.blocks, p.textSource, p.graphic)}</p>;
   }
-  const save = (): Partial<ReportingPolicy> => ({ enabled: f.enabled, templateKey: f.templateKey, interval: f.interval, weekday: Number(f.weekday), dayOfMonth: Number(f.dayOfMonth), recipients: f.recipientsText.split(/[,;\s]+/).filter(Boolean), mode: f.mode, parentPageId: f.parentPageId || null });
+  const save = (): Partial<ReportingPolicy> => ({ enabled: f.enabled, templateKey: f.templateKey, interval: f.interval, weekday: Number(f.weekday), dayOfMonth: Number(f.dayOfMonth), recipients: f.recipientsText.split(/[,;\s]+/).filter(Boolean), mode: f.mode, parentPageId: f.parentPageId || null, blocks: f.blocks, textSource: f.textSource, graphic: f.graphic });
+  const pdfUrl = `/api/projects/${detail.project.id}/reporting/preview.pdf?${reportQuery({ blocks: f.blocks, textSource: f.textSource, graphic: f.graphic })}`;
   return (
     <div className="form">
-      <p className="muted small">Im Rhythmus entsteht eine Seite aus der Vorlage mit Kennzahlen (Fortschritt, Verzug, Blockaden, Eskalationen, Meilensteine) und geht als PDF über das Projektkonto an den Empfängerkreis.</p>
+      <p className="muted small">Im Rhythmus entsteht eine Seite aus der Vorlage mit den unten gewählten Blöcken (Kennzahlen, Änderungen, Meilensteine, Risiken, Ausblick) und geht als PDF über das Projektkonto an den Empfängerkreis.</p>
       <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Reporting aktiv</label>
       <div className="grid cols-2">
         <label className="field"><span>Vorlage</span><select value={f.templateKey} onChange={(e) => setF({ ...f, templateKey: e.target.value })}>{(templates.data?.templates ?? []).map((t) => <option key={t.key} value={t.key}>{t.name}</option>)}</select></label>
@@ -71,13 +74,21 @@ function ReportingForm() {
       <label className="field"><span>Empfängerkreis (Mail-Adressen, durch Komma getrennt)</span><input type="text" value={f.recipientsText} onChange={(e) => setF({ ...f, recipientsText: e.target.value })} placeholder="gf@kunde.de, lenkungskreis@firma.de" /></label>
       <label className="field"><span>Versand</span><select value={f.mode} onChange={(e) => setF({ ...f, mode: e.target.value as ReportingPolicy['mode'] })}><option value="proposal">als Entwurf, PL prüft und versendet</option><option value="direct">direkt final setzen und als PDF senden</option></select></label>
       {!detail.project.mailAddress && <p className="small" style={{ color: 'var(--warn)' }}>Kein Projektkonto angebunden, Versand ist erst danach möglich.</p>}
+      <div className="row small report-globals">
+        <label className="row gap-1"><span>Texte</span>
+          <select aria-label="Texte" value={f.textSource} onChange={(e) => setF({ ...f, textSource: e.target.value as 'rules' | 'ai' })}><option value="rules">regelbasiert</option><option value="ai">KI (Projekt-KI)</option></select></label>
+        <label className="check"><input type="checkbox" checked={f.graphic} onChange={(e) => setF({ ...f, graphic: e.target.checked })} /> Grafisch ausarbeiten (Diagramme)</label>
+      </div>
+      <ReportBlocksEditor blocks={f.blocks} onChange={(blocks) => setF({ ...f, blocks })} graphic={f.graphic} disabled={busy} />
       {error && <div className="error">{error}</div>}
       {last && <div className="muted small">{last}</div>}
       <div className="row">
+        <button className="btn sm" disabled={busy || f.blocks.length === 0} onClick={() => void run(async () => { setPreview(await api.post<{ html: string; title: string; textSource: 'rules' | 'ai' }>(`/projects/${detail.project.id}/reporting/preview`, { blocks: f.blocks, textSource: f.textSource, graphic: f.graphic })); })}>Vorschau</button>
         <button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reporting: save() }); await reload(); setLast('Gespeichert.'); })}>Speichern</button>
         <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reporting: save() }); const r = await api.post<{ result: { pageId: string; title: string; sent: boolean; to: string[]; error?: string } }>(`/projects/${detail.project.id}/reporting/run`); await reload(); setLast(r.result.sent ? `„${r.result.title}“ versendet an ${r.result.to.join(', ')}.` : `„${r.result.title}“ angelegt${r.result.error ? `, nicht versendet: ${r.result.error}` : ' (Entwurf zur Prüfung)'}.`); })}>Jetzt erzeugen</button>
         {p.lastRunOn && <span className="muted small">Zuletzt {fmtDate(p.lastRunOn)}{p.lastPageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${p.lastPageId}`}>Bericht öffnen</Link></>}</span>}
       </div>
+      {preview && <ReportPreviewModal title={preview.title} html={preview.html} hint={`Entwurf, nicht gespeichert · Texte: ${preview.textSource === 'ai' ? 'KI' : 'regelbasiert'}`} pdfUrl={pdfUrl} onClose={() => setPreview(null)} />}
     </div>
   );
 }

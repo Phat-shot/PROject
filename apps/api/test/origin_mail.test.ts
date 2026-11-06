@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeEcho, testApp } from './helpers.js';
+import { composeEcho, legacyItem, testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM: Arbeitspaket-Läufe liefern `next`, freie Texte (finale Antwort) einen festen Text. */
@@ -55,9 +55,9 @@ test('Ursprungsmail: beim Anlegen markiert, Sprung Mail ↔ Arbeitspaket, Links 
 test('Finale Antwort: aufbereitetes Ergebnis statt Log, an den Absender, als Antwort im Thread; kein Log-Eintrag', async () => {
   const pl = await t.login('pl@demo.local');
   const leser = await t.login('leser@demo.local');
-  await t.api(pl).post(`/tasks/${taskId}/checklist`, { title: 'Preise verglichen' });
-  const item = (await t.api(pl).get(`/tasks/${taskId}`)).json().task.checklist[0];
-  await t.api(pl).patch(`/tasks/${taskId}/checklist/${item.id}`, { done: true });
+  // Altbestand am AP (abhaken geht weiter)
+  const itemId = await legacyItem(t.db, taskId, 'Preise verglichen');
+  await t.api(pl).patch(`/tasks/${taskId}/checklist/${itemId}`, { done: true });
   await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'Rückfrage Lieferzeit', parentId: taskId });
   const done = (await t.api(pl).get(`/projects/${t.ids.projects.web}`)).json().columns.find((c: any) => c.isDone);
   await t.api(pl).patch(`/tasks/${taskId}`, { columnId: done.id });

@@ -5,14 +5,16 @@ import { audit } from '../audit.js';
 import { supersedeDrafts } from '../mail/supersede.js';
 export { supersedeDrafts } from '../mail/supersede.js';
 import { dispatch, dmChannel, notify, systemMessage, usersWithRight } from '../notify.js';
-import { completeParentIfDone, contactChain, dateStr, touchTask } from '../tasks/service.js';
+import { completeParentIfDone, contactChain, dateStr, syncChecklistDone, touchTask } from '../tasks/service.js';
 import { aiConfigFor, completeJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
 import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
-import { AGENT_SHEET, TASK_RULES } from './sheet.js';
+import { AGENT_SHEET, DATA_RULE, SOURCES_RULES, TASK_RULES, mailData } from './sheet.js';
+import { STRUCTURE_RULES, applyPlanningDepth, planningDepthText } from './structure.js';
+import { demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { syncAgentWaiting } from '../tasks/waiting.js';
@@ -26,7 +28,8 @@ import { DEPTH_LIMITS, actionFingerprint, actionLabel, classLabel, classifyActio
 import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
 import type { ExternalWindow } from '@projekttool/shared';
 import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
-import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
+import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchKinds, searchText, withdrawRelation, mailViewScope, readFileText, readMailText, SearchCache, type RelationKind, type SearchSource } from './knowledge.js';
+import { fileScopes } from '../files/service.js';
 import { recordFeedback } from './feedback.js';
 import { SQL } from '../projectPolicy.js';
 
@@ -52,7 +55,7 @@ export type AgentAction =
   | { type: 'resolve'; questionId: string; text?: string | null; reason?: string | null }
   | { type: 'refer'; text: string; subject?: string | null; to?: string[] | null }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
-  | { type: 'add_item'; text: string }
+  | { type: 'add_item'; text: string; /** Kennung einer Aufgabe oder eines Arbeitspakets (dort: einzige offene Aufgabe oder neue Aufgabe); leer = dieses */ ref?: string | null }
   | { type: 'update_item'; itemId: string; text: string }
   | { type: 'doc_create'; title: string; folder?: string | null; text: string }
   | { type: 'doc_append'; pageId: string; text: string }
@@ -74,12 +77,19 @@ export type AgentAction =
   | { type: 'send_invite'; meetingId: string; text?: string | null }
   | { type: 'book_resource'; resource: string; startsAt?: string | null; endsAt?: string | null; startDate?: string | null; dueDate?: string | null; text?: string | null }
   | { type: 'research'; text: string }
-  | { type: 'search'; text: string }
+  | { type: 'search'; text: string; source?: SearchSource | null; from?: string | null; since?: string | null; until?: string | null }
+  | { type: 'read_mail'; id: string }
+  | { type: 'read_file'; id: string }
   | { type: 'read_task'; ref: string }
   | { type: 'relate'; ref: string; kind?: RelationKind | null; text?: string | null }
   | { type: 'withdraw'; ref: string }
+  | { type: 'move_aufgabe'; ref: string; target: string }
+  | { type: 'move_ap'; ref: string; subproject?: string | null }
+  | { type: 'promote_item'; itemId: string; title?: string | null; dueDate?: string | null; responsible?: string | null }
+  | { type: 'demote_aufgabe'; ref: string }
+  | { type: 'move_item'; itemId: string; target: string }
   | { type: 'none'; reason?: string };
-const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task']);
+const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task', 'read_mail', 'read_file']);
 /** Leserunden und Zugriffe je Denktiefe: DEPTH_LIMITS (Standard zwei Runden, sechs Zugriffe; research zählt gegen das Recherche-Budget) */
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
@@ -112,21 +122,22 @@ const SCHEMA = {
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId', 'target'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'read_mail', 'read_file', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten, Arbeitspakete, Mails, Dateien); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
-        itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
+        itemId: { type: 'string', description: 'check_item/update_item/promote_item/move_item: itemId aus der Task-Liste; sonst leer' },
+        target: { type: 'string', description: 'move_aufgabe: Kennung des Ziel-Arbeitspakets; move_item: Kennung der Ziel-Aufgabe; demote_aufgabe: Kennung der Aufgabe, deren Task sie wird (leer = die einzige andere offene Aufgabe des AP); sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
         status: { type: 'string', description: 'doc_status: draft, review oder final; sonst leer' },
-        title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; sonst leer' },
-        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; sonst leer' },
-        responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
+        title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; promote_item: Titel der neuen Aufgabe (leer = Text des Tasks); sonst leer' },
+        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; add_item: Kennung der Aufgabe, leer = diese bzw. dieses AP (am AP hängt das System den Task an die einzige offene Aufgabe oder legt eine Aufgabe an); read_task/relate/withdraw: Kennung des anderen Arbeitspakets; move_aufgabe/demote_aufgabe: Kennung der Aufgabe; move_ap: Kennung des Arbeitspakets; sonst leer' },
+        responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign/promote_item: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
         startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; book_resource ganztägig: erster Tag; sonst leer' },
         dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; book_resource ganztägig: letzter Tag; sonst leer' },
-        subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; sonst leer' },
-        items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe/create_ap: Tasks (Checkliste); sonst leer' },
+        subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; move_ap: Name des Ziel-Teilprojekts, leer = aus dem Teilprojekt heraus; sonst leer' },
+        items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe: Tasks (Checkliste der Aufgabe); create_ap: Schritte (werden Aufgaben bzw. Checkliste der Aufgabe „Schritte“); sonst leer' },
         startsAt: { type: 'string', description: 'create_event/book_resource: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); book_resource ganztägig stattdessen startDate/dueDate; sonst leer' },
         endsAt: { type: 'string', description: 'create_event/book_resource: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         resource: { type: 'string', description: 'book_resource: Name der Ressource aus der Liste „Ressourcen“; sonst leer' },
@@ -140,7 +151,11 @@ const SCHEMA = {
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
         kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; ask: question (Information, Termin, Zusage) oder decision (Entscheidung außerhalb deiner Zuständigkeit); relate: related, sync, duplicate oder dependency; sonst leer' },
         checkAfterHours: { type: 'number', description: 'wait: Stunden bis zur nächsten Prüfung; sonst leer' },
-        until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); sonst leer' },
+        until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); search: Ende des Zeitraums YYYY-MM-DD; sonst leer' },
+        source: { type: 'string', description: 'search: all (Standard), docs, tasks, mails oder files; sonst leer' },
+        from: { type: 'string', description: 'search: Absender (Name oder Adresse), sucht dann nur Mails; sonst leer' },
+        since: { type: 'string', description: 'search: Beginn des Zeitraums YYYY-MM-DD; sonst leer' },
+        id: { type: 'string', description: 'read_mail: mail:<id> aus den Suchtreffern; read_file: file:<id>; sonst leer' },
         remindAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zum Nachfassen; ask: gewünschte Frist in Stunden (verkürzt nur den Standard); sonst leer' },
         escalateAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst leer' },
         questionId: { type: 'string', description: 'resolve: questionId der offenen Frage aus „Offene Fragen“; sonst leer' }
@@ -176,11 +191,11 @@ export interface RunCtx {
   errand: { ownerId: string } | null;
 }
 export interface HeldAction { action: AgentAction; classes: AgentActionClass[]; label: string; base: Record<string, unknown> }
-export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean }
+export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean; /** Umsetzungen der Struktur-Regel (Aufgabe ↔ Task), für Log und Lauf-Protokoll */ notes: string[] }
 
 /** Arbeitspaket mit Spalte, Projekt, Teilprojekt und Über-AP, wie es Lauf und Bestätigung brauchen. */
 export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
-  return db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
+  return db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, p.planning_depth, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
 }
 
 /**
@@ -189,7 +204,9 @@ export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
  */
 export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, task: any, m: any, cfg: AiConfig, trigger: string, now: Date): Promise<RunCtx> {
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 and kind <> 'waiting' order by position`, [task.project_id]);
-  const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
+  // Tasks: eigene Checkliste; am Arbeitspaket dazu die Checklisten seiner Aufgaben (Checklistenpunkte gehören zu Aufgaben)
+  const items = await db.query(`select i.id, i.title, i.done, i.responsible_email, i.task_id, x.number as task_number from checklist_items i join tasks x on x.id = i.task_id
+    where i.task_id = $1 or (x.parent_id = $1 and x.deleted_at is null and x.archived_at is null) order by (i.task_id = $1) desc, x.position, x.created_at, i.position`, [task.id]);
   const members = await db.query(`select m.user_id, u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
   const folderAccess = await folderAccessMap(db, task.project_id);
   const foldersAll = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
@@ -248,6 +265,11 @@ export async function baseOf(ctx: RunCtx, a: any): Promise<Record<string, unknow
   switch (a?.type) {
     case 'doc_status': case 'doc_send_pdf': { const p = await db.maybeOne(`select version, status from doc_pages where id = $1`, [a.pageId]); return p ? { pageVersion: p.version, pageStatus: p.status } : {}; }
     case 'set_status': return { columnId: task.column_id };
+    case 'move_aufgabe': case 'demote_aufgabe': case 'move_ap': {
+      const n = Number(String(a.ref ?? '').split('-').pop()) || 0;
+      const t = n ? await db.maybeOne(`select parent_id, subproject_id from tasks where project_id = $1 and number = $2`, [task.project_id, n]) : null;
+      return t ? { parentId: t.parent_id, subprojectId: t.subproject_id } : {};
+    }
     case 'assign': case 'set_dates': {
       const n = Number(String(a.ref ?? '').split('-').pop()) || (a.type === 'set_dates' ? task.number : 0);
       const t = n ? await db.maybeOne(`select responsible_user_id, responsible_email, start_date, due_date from tasks where project_id = $1 and number = $2`, [task.project_id, n]) : null;
@@ -281,9 +303,15 @@ async function holdProposals(ctx: RunCtx, held: HeldAction[], runId: string | nu
 }
 
 /** Aktionen eines Agenten ausführen (Lauf mit hold = anhalten nach Policy; Bestätigung mit approvedBy ohne Anhalten). */
-export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
+export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
   const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
   const errors: string[] = [];
+  // Struktur-Regel des Projekts (Planungstiefe): Aufgabe ↔ Task umsetzen, bevor Rechte und Policy greifen; jede Umsetzung steht im Log
+  const sole = task.parent_id ? null : await db.query(`select x.number from tasks x join board_columns c on c.id = x.column_id where x.parent_id = $1 and x.deleted_at is null and x.archived_at is null and not c.is_done`, [task.id]);
+  const depth = applyPlanningDepth(actions0, { depth: task.planning_depth, isAp: !task.parent_id, soleAufgabe: sole?.rows.length === 1 ? `${task.project_key}-${sole.rows[0].number}` : null, ownRef: task.number });
+  const actions = depth.actions;
+  const notes = depth.notes;
+  for (const n of notes) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, `Struktur-Regel: ${n}`]);
   const held: HeldAction[] = [];
   let forceDraft = false; let policyNote = '';
   const pageTitle = (id: string) => pages.rows.find((p: any) => p.id === id)?.title ?? null;
@@ -294,7 +322,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     let chats = 0;
     let asked = 0;
     let waited = false;
-    const plan = planner(db, { agent, m, task, canPlan, myTps, now });
+    const plan = planner(db, { agent, m, task, canPlan, myTps, now, items: items.rows });
     const supersede = (to: string[], keepId: string | null, pageId: string | null = null) => supersedeDrafts(db, { taskId: task.id, projectId: task.project_id, orgId: agent.org_id, authorId: agent.id, to, keepId, pageId });
     /** Tatsächlicher Versandstatus ins Log (der Agent selbst behauptet keinen Versand). */
     const logSys = (body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, body]);
@@ -395,18 +423,59 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and (lower(name) = lower($2) or ($3 and is_done)) order by (lower(name) = lower($2)) desc, position limit 1`, [task.project_id, a.column, doneWord]);
         if (!col) errors.push(`Status „${a.column}“ gibt es nicht (Spalten: ${ctx.columns.rows.map((c: any) => c.name).join(', ')})`);
         else if ((await db.one(`select kind from board_columns where id = $1`, [col.id])).kind === 'waiting') errors.push(`Status „${col.name}“ setzt das System: gib wait (worauf, Frist) bzw. ask an`);
-        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); if (task.parent_id && (await db.one(`select is_done from board_columns where id = $1`, [col.id])).is_done) await completeParentIfDone(db, task.id, agent.id); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
+        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2, auto_done_at = null, auto_done_from_column_id = null where id = $1`, [task.id, col.id]); if (task.parent_id && (await db.one(`select is_done from board_columns where id = $1`, [col.id])).is_done) await completeParentIfDone(db, task.id, agent.id); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
       } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
         if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);
-        if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
+        if (it) {
+          await db.query(`update checklist_items set done = true where id = $1`, [it.id]); it.done = true;
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [it.task_id, agent.id, `Task erledigt: ${it.title}`]);
+          // Letzter offener Punkt einer Aufgabe: Aufgaben-Automatik (und danach die des Arbeitspakets)
+          if ((await syncChecklistDone(db, mail, it.task_id, { id: agent.id, orgId: agent.org_id, kind: 'agent' })) === 'done' && it.task_id === task.id) task.column_id = (await db.one(`select column_id from tasks where id = $1`, [task.id])).column_id;
+          applied.push(a);
+        }
       } else if (a.type === 'add_item') {
         if (!a.text?.trim()) errors.push('Task ohne Text verworfen');
-        else { const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [task.id]); await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [task.id, a.text.trim().slice(0, 300), pos.p]); applied.push(a); }
+        else {
+          // Ziel: dieses Arbeitspaket; mit ref (Struktur-Regel aus create_aufgabe) ein anderes im eigenen Bereich
+          let target: any = task;
+          if (a.ref && String(a.ref).trim() && Number(String(a.ref).split('-').pop()) !== task.number) {
+            const t = await findTaskByRef(db, task.project_id, a.ref);
+            if (!t) { errors.push(`add_item: ${a.ref} nicht gefunden`); continue; }
+            if (!(canPlan || t.id === task.parent_id || t.parent_id === task.id || t.eff_responsible === agent.id || (t.subproject_id && myTps.includes(t.subproject_id)))) { errors.push(`add_item: ${code.split('-')[0]}-${t.number} liegt außerhalb deines Bereichs`); continue; }
+            target = t;
+          }
+          const text = a.text.trim().slice(0, 300);
+          // Checklistenpunkte gehören zu Aufgaben: am Arbeitspaket an die einzige offene Aufgabe, sonst neue Aufgabe mit dem Titel des Punkts
+          if (!target.parent_id) {
+            const open = await db.query(`select x.id, x.number, x.title from tasks x join board_columns c on c.id = x.column_id where x.parent_id = $1 and x.deleted_at is null and x.archived_at is null and not c.is_done order by x.position, x.created_at`, [target.id]);
+            const apCode = `${task.project_key}-${target.number}`;
+            if (open.rows.length === 1) {
+              const one = open.rows[0];
+              target = { ...one, parent_id: target.id };
+              notes.push(`„${text.slice(0, 80)}“ als Checklistenpunkt der einzigen offenen Aufgabe ${task.project_key}-${one.number} „${one.title}“ von ${apCode} angelegt (Checklistenpunkte gehören zu Aufgaben)`);
+            } else {
+              const r = await plan({ type: 'create_aufgabe', title: text.slice(0, 200), ref: apCode, text: '', startDate: '', dueDate: '', responsible: '', items: [] });
+              if ('error' in r) { errors.push(`add_item „${text.slice(0, 80)}“: ${r.error}`); continue; }
+              notes.push(`„${text.slice(0, 80)}“ als Aufgabe ${r.applied?.ref ?? ''} an ${apCode} angelegt, weil Checklistenpunkte zu Aufgaben gehören`);
+              await logSys(`Struktur-Regel: ${notes[notes.length - 1]}`);
+              applied.push({ type: 'create_aufgabe', title: text.slice(0, 200), ref: apCode } as any);
+              continue;
+            }
+            await logSys(`Struktur-Regel: ${notes[notes.length - 1]}`);
+          }
+          const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [target.id]);
+          const ins = await db.one(`insert into checklist_items (task_id, title, position) values ($1,$2,$3) returning id`, [target.id, text, pos.p]);
+          if (target.id !== task.id) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [target.id, agent.id, `Task ergänzt: ${text}`]);
+          items.rows.push({ id: ins.id, title: text, done: false, responsible_email: null, task_id: target.id, task_number: target.number });
+          // Neuer offener Punkt an einer automatisch erledigten Aufgabe: wieder offen
+          await syncChecklistDone(db, mail, target.id, { id: agent.id, orgId: agent.org_id, kind: 'agent' }, { itemTitle: text });
+          applied.push(a);
+        }
       } else if (a.type === 'update_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId);
         if (!it || !a.text?.trim()) errors.push(`Task-Änderung verworfen: ${!it ? 'itemId unbekannt' : 'kein Text'}`);
-        else { await db.query(`update checklist_items set title = $2 where id = $1`, [it.id, a.text.trim().slice(0, 300)]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task umformuliert: „${it.title}“ → „${a.text.trim().slice(0, 300)}“`]); applied.push(a); }
+        else { await db.query(`update checklist_items set title = $2 where id = $1`, [it.id, a.text.trim().slice(0, 300)]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [it.task_id, agent.id, `Task umformuliert: „${it.title}“ → „${a.text.trim().slice(0, 300)}“`]); applied.push(a); }
       } else if (a.type === 'doc_create') {
         if (!a.title?.trim() || !a.text?.trim()) errors.push('Seite verworfen: Titel oder Inhalt fehlt');
         else {
@@ -424,6 +493,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
       else if (a.type === 'research') errors.push('research ohne weitere Aktionen verworfen');
       else if (a.type === 'search') errors.push('search ohne weitere Aktionen verworfen');
       else if (a.type === 'read_task') errors.push('read_task ohne weitere Aktionen verworfen');
+      else if (a.type === 'read_mail' || a.type === 'read_file') errors.push(`${a.type} ohne weitere Aktionen verworfen`);
       else if (a.type === 'relate') {
         // Synergie (Konzept 6.7): Beziehung zwischen den Arbeitspaketen; nach Policy synergies fragen (ask) oder Querverweis (use, nur related/sync)
         const other = await findTaskByRef(db, task.project_id, a.ref);
@@ -749,7 +819,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     if (!waited && !(await db.maybeOne(`select 1 from questions where task_id = $1 and asked_by = $2 and status = 'open'`, [task.id, agent.id]))) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
     // Spalte „Wartet“ folgt dem Wartezustand (wartet → Wartet, fertig gewartet → zurück)
     await syncAgentWaiting(db, task.id, { enter: waited });
-  return { applied, errors, held, waited };
+  return { applied, errors, held, waited, notes };
 }
 
 /**
@@ -829,6 +899,9 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const found = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: `${task.title} ${cut(task.description, 400)}`, maxTitles: 10, maxExcerpts: 3 });
   const foundPages = found.pages.length ? found.pages : pages.rows.slice(0, 10).map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null }));
   const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
+  // Weitere Quellen der Suche: Mail-Ansichten mit KI-Recht und Dateiquellen des Projekts (nur Hinweis, Inhalte per search/read_mail/read_file)
+  const mailViewsN = (await mailViewScope(db, { projectIds: [task.project_id], agentId: agent.id })).length;
+  const fileRoots = [...new Set((await fileScopes(db, [task.project_id])).map((x) => x.label))];
   const candidates = policy.synergies === 'off' || !dl.candidates ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: dl.candidates });
   const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
   const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };
@@ -836,7 +909,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Systemblöcke (Konzept 6.8): fest (KI-Sheet und Regeln, für alle Läufe gleich), je Agent und Projekt (Name, Rolle, Stil), je Projekt und Sichtbarkeit (Überblick); Anthropic cacht die Blöcke
-  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}`;
+  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${STRUCTURE_RULES}\n\n${DATA_RULE}\n\n${SOURCES_RULES}`;
   const sysAgent = `# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
   let systemBlocks = [sysFixed, sysAgent, digestText(digest)];
   let system = systemBlocks.join('\n\n');
@@ -848,15 +921,16 @@ ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}�
 Beschreibung: ${cut(task.description, 2000) || '–'}
 ${parentCtx ? `Arbeitspaket ${task.project_key}-${task.parent_number} (gehört zum Vorgang): Beschreibung: ${cut(parentCtx.description, 1500) || '–'}\n  Tasks: ${cut(parentCtx.items, 1500) || '–'}\n  Log (neueste zuerst): ${cut(parentCtx.log, 1500) || '–'}\n` : ''}${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
 ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
-${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
+${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.task_id !== task.id ? ` · Aufgabe ${task.project_key}-${i.task_number}` : ''}${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
     { key: 'log', text: `Log (neueste zuerst):
 ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}` },
     { key: 'chat', keep: true, text: dms.rows.length ? `Chat (deine Direktnachrichten zu ${code}, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}` : '' },
     { key: 'mails', text: `Mails zum Arbeitspaket:
-${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
+${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${mailData(x.subject ?? '')}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? `<<<MAIL ${mailData(cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500))} MAIL>>>` : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
     { key: 'pages', text: `Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (${found.pages.length ? 'passend zum Arbeitspaket; weitere per search' : 'neueste; passende per search'}):
-${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}` },
+${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}
+Weitere Quellen per search: ${mailViewsN ? `Mails aus ${mailViewsN} Ansicht${mailViewsN === 1 ? '' : 'en'} (source mails, read_mail)` : 'keine Mail-Ansicht mit KI-Recht'}; ${fileRoots.length ? `Dateiquellen ${fileRoots.map((l) => `„${l}“`).join(', ')} (source files, read_file)` : 'keine Dateiquellen'}` },
     { key: 'similar', text: `${similar.length ? `Ähnliche Arbeitspakete (per read_task lesbar): ${similar.map((x) => `${x.ref} „${cut(x.title, 60)}“ · ${x.status}`).join('; ')}\n` : ''}${candidates.length ? `Mögliche Überschneidungen (prüfen, ggf. read_task; bei echtem Zusammenhang relate, sonst nichts):\n${candidatesText(candidates)}\n` : ''}${relations.rows.length ? `Beziehungen dieses Arbeitspakets (nicht erneut melden): ${relations.rows.map(relText).join('; ')}\n` : ''}`.replace(/\n$/, '') },
     { key: 'members', keep: true, text: `Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
 Deine Zuständigkeit: ${basis}${requester ? `; übertragen von ${requester.name} per Chat-Auftrag. Das ist die verbindliche Zuweisung; ein Arbeitspaket braucht kein Teilprojekt. Frag nicht nach Struktur oder Zuweisung, erledige die Arbeit` : ''}.
@@ -868,7 +942,8 @@ ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ �
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (${contact.name}: Termine, Belegungen, Abwesenheiten, ohne Details): ${busy.rows.map((x: any) => `${x.kind === 'absence' ? 'abwesend ' : ''}${fmtSpan(x.starts_at, x.ends_at)}${x.tentative ? ' (vorläufig)' : ''}`).join(', ')}` : ''}
 Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis eine Person bestätigt): ${resources.rows.map((r: any) => `${r.name} (${{ room: 'Raum', equipment: 'Gerät', scaffold: 'Gerüst', vehicle: 'Fahrzeug', person: 'Person', other: 'Sonstiges' }[String(r.kind)] ?? r.kind}${r.location ? `, ${r.location}` : ''})${Array.isArray(r.busy) && r.busy.length ? ` belegt: ${r.busy.map((b: any) => `${fmtSpan(b.s, b.e, b.a)}${b.t ? ' (vorläufig)' : ''}`).join('; ')}` : ' frei'}`).join('\n  ') || '–'}${apBookings.rows.length ? `\nBelegungen dieses Arbeitspakets: ${apBookings.rows.map((b: any) => `${b.resource_name ?? b.user_name} ${fmtSpan(b.starts_at, b.ends_at, b.all_day)}${b.tentative ? ' (vorläufig)' : ''}`).join('; ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
-Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
+${planningDepthText(task.planning_depth)}
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event); Struktur ändern (move_aufgabe, move_ap, promote_item, demote_aufgabe, move_item) ${canPlan ? 'im ganzen Projekt' : 'in deinem Bereich, sonst als Vorschlag an die PL'}. Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
 Agenten-Policy: ${policyText(policy)}
 ${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${lastErr ? `Im letzten Lauf (${new Date(lastErr.created_at).toLocaleDateString('de-DE')}) nicht ausgeführt: ${cut(lastErr.error, 600)}. Mach es diesmal richtig oder wähle einen anderen Weg; wiederhole den Fehler nicht.\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
 
@@ -887,8 +962,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let inputTokens = 0; let outputTokens = 0; let model = '';
     let j: any = {};
     let actions: AgentAction[] = [];
-    // Leserunden: read_page, search und read_task liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
+    // Leserunden: read_page, search, read_task, read_mail und read_file liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
     let accesses = 0;
+    const searchCache = new SearchCache();
     for (let round = 0; round <= dl.rounds; round++) {
       // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum; gründlich bekommt mehr Platz
       const r = await completeJson(cRun, fetchFn, { meta: { feature: 'agent.run', projectId: task.project_id, taskId: task.id }, system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: 2500 + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
@@ -897,7 +973,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
       const searches = actions.filter((a) => a.type === 'research');
-      const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task');
+      const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task' || a.type === 'read_mail' || a.type === 'read_file');
       if (!reads.length && !searches.length && !lookups.length) break;
       if (round === dl.rounds) { errors.push(`Lesen abgebrochen: mehr als ${dl.rounds === 1 ? 'eine Leserunde' : `${dl.rounds} Leserunden`} (Denktiefe ${policy.depth})`); actions = actions.filter((a) => !READ_TYPES.has(a.type)); break; }
       const texts: string[] = [];
@@ -908,8 +984,16 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         accesses++;
         if (a.type === 'search') {
           const q = cut((a as any).text, 200);
-          const r2 = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: q, maxTitles: 10, maxExcerpts: 3 });
-          texts.push(`### Suche „${q}“\n${searchText(r2)}`);
+          const opts = { source: ((a as any).source || 'all') as SearchSource, from: (a as any).from || null, since: (a as any).since || null, until: (a as any).until || null };
+          const label = `### Suche „${q}“${opts.source !== 'all' ? ` in ${opts.source}` : ''}${opts.from ? ` von ${cut(opts.from, 80)}` : ''}${opts.since || opts.until ? ` (${opts.since ?? '…'} – ${opts.until ?? '…'})` : ''}`;
+          // Laufcache: dieselbe Suche (normalisierter Text, Quelle, Filter) nur einmal je Lauf; zählt nicht gegen das Zugriffslimit
+          if (!searchCache.claim(q, opts)) { accesses--; texts.push(`${label}: bereits gesucht, siehe oben`); continue; }
+          const r2 = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: q, maxTitles: 10, maxExcerpts: 3, ...opts });
+          texts.push(`${label}\n${searchText(r2, searchKinds(opts))}`);
+        } else if (a.type === 'read_mail') {
+          texts.push((await readMailText(db, { projectIds: [task.project_id], agentId: agent.id, id: (a as any).id })).text);
+        } else if (a.type === 'read_file') {
+          texts.push((await readFileText(db, { projectIds: [task.project_id], agentId: agent.id, id: (a as any).id })).text);
         } else {
           const ref = String((a as any).ref ?? '').trim();
           const other = await findTaskByRef(db, task.project_id, ref);
@@ -946,7 +1030,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
       }
       const others = actions.filter((a) => !READ_TYPES.has(a.type));
-      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page, search oder read_task für bereits Gelesenes, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
+      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page, search, read_task, read_mail oder read_file für bereits Gelesenes, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
       actions = [];
     }
     const res = await applyAgentActions(ctx, actions, { hold: true });
@@ -961,7 +1045,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, 'Auftrag erledigt und archiviert (persönlicher Assistent)']);
     }
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut([String(j.note ?? j.reasoning ?? ''), ...res.notes.map((n) => `Struktur-Regel: ${n}`)].filter(Boolean).join(' · '), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
     if (errors.length) { await reportRunErrors(db, agent, task, errors, run.id); await recordFeedback(db, { orgId: agent.org_id, projectId: task.project_id, agentId: agent.id, kind: 'run_error', sourceType: 'agent_run', sourceId: run.id, context: { detail: `${code} „${task.title}“ · Anlass ${trigger}`, reason: errors.join(' | '), output: { note: j.note, actions } } }); }
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
@@ -970,7 +1054,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     // Angehaltene Aktionen: Vorschläge an einer Frage approval (Karte im Chat, Meldung, Log, Warten des Agenten)
     if (res.held.length) await holdProposals(ctx, res.held, run.id);
     // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen
-    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'search', 'read_task', 'chat'].includes(x.type));
+    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'search', 'read_task', 'read_mail', 'read_file', 'chat'].includes(x.type));
     if (content.length) {
       const doneCols = new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => x.name));
       const done = content.some((x: any) => x.type === 'set_status' && doneCols.has(x.column));
@@ -1008,7 +1092,8 @@ const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
   blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
-  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen'
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen',
+  move_aufgabe: 'Aufgabe verschoben', move_ap: 'Arbeitspaket zugeordnet', promote_item: 'Task wurde Aufgabe', demote_aufgabe: 'Aufgabe wurde Task', move_item: 'Task verschoben'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
 function progressText(actions: AgentAction[], note: unknown): string {
@@ -1040,7 +1125,7 @@ async function unreleasedRecipients(db: Db, page: { id: string; project_id: stri
   return to.filter((x) => !allowed.has(x));
 }
 
-const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource'];
+const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item'];
 const MAX_CREATE = 15;
 
 /**
@@ -1048,9 +1133,11 @@ const MAX_CREATE = 15;
  * sonst nur im eigenen Bereich (dieses AP und seine Aufgaben, eigene Zuständigkeit, eigene Teilprojekte). Agenten
  * weist nur eine PL zu; bestehende Termine anderer ändert nur, wer planen darf.
  */
-function planner(db: Db, c: { agent: { id: string; name: string; org_id: string }; m: any; task: any; canPlan: boolean; myTps: string[]; now: Date }) {
+function planner(db: Db, c: { agent: { id: string; name: string; org_id: string }; m: any; task: any; canPlan: boolean; myTps: string[]; now: Date; items?: any[] }) {
   const { agent, m, task, canPlan, myTps, now } = c;
   const actor: PlanActor = { id: agent.id, name: agent.name, orgId: agent.org_id, role: m.role, label: `${agent.name} (KI-Agent)`, isAgent: true };
+  const sActor: StructureActor = { id: agent.id, name: agent.name, orgId: agent.org_id, kind: 'agent' };
+  const depth = String(task.planning_depth ?? 'auto');
   const code = (n: number) => `${task.project_key}-${n}`;
   const inScope = (t: any) => canPlan || t.id === task.id || t.parent_id === task.id || t.id === task.parent_id || t.eff_responsible === agent.id || Boolean(t.subproject_id && myTps.includes(t.subproject_id));
   const log = (taskId: string, body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [taskId, agent.id, body]);
@@ -1088,9 +1175,65 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       }
       const dup = await db.maybeOne(`select number from tasks where project_id = $1 and deleted_at is null and archived_at is null and lower(title) = lower($2) and parent_id is not distinct from $3::uuid and ($3::uuid is not null or subproject_id is not distinct from $4::uuid)`, [task.project_id, title, parentId, subprojectId]);
       if (dup) return { error: `${a.type}: „${title}“ gibt es schon (${code(dup.number)})` };
+      // Checklistenpunkte gehören zu Aufgaben: items eines neuen Arbeitspakets werden je nach Planungstiefe eine Aufgabe „Schritte“
+      // mit Checkliste (checkliste) oder je item eine Aufgabe (auto, aufgaben); das legt createPlannedTask an
       const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: a.items, logTaskId: task.id });
       created++;
+      if (t.steps?.as === 'aufgaben') {
+        created += t.steps.count;
+        await log(task.id, `Struktur-Regel: ${t.steps.count} Schritte von ${code(t.number)} als Aufgaben angelegt (Planungstiefe „${depth === 'aufgaben' ? 'Immer Aufgaben' : 'Automatisch'}“; Checklistenpunkte gehören zu Aufgaben)`);
+      } else if (t.steps?.as === 'checkliste') {
+        created++;
+        await log(task.id, `Struktur-Regel: ${t.steps.count} Schritte von ${code(t.number)} als Checkliste der Aufgabe ${t.steps.aufgabe} „Schritte“ angelegt (Planungstiefe „Immer Checklistenpunkte“)`);
+      }
       return { applied: { type: a.type, ref: code(t.number), title: t.title, responsible: who.name ?? who.email, startDate: start, dueDate: due } };
+    }
+
+    if (a.type === 'move_aufgabe' || a.type === 'demote_aufgabe' || a.type === 'move_item' || a.type === 'move_ap' || a.type === 'promote_item') {
+      // Struktur ändern (Klasse Umstrukturieren): Quelle und Ziel im eigenen Bereich, sonst Vorschlag an die PL
+      const byRef = async (ref: unknown, what: string): Promise<{ error: string } | { t: any }> => { const t = await findTaskByRef(db, task.project_id, ref); if (!t) return { error: `${a.type}: ${what} ${String(ref ?? '').trim() || 'fehlt'} nicht gefunden` }; if (!(await canSeeSubproject(db, agent.id, t.subproject_id))) return { error: `${a.type}: ${code(t.number)} liegt außerhalb deines Bereichs` }; return { t }; };
+      if (a.type === 'move_aufgabe') {
+        const s = await byRef(a.ref, 'Aufgabe'); if ('error' in s) return s;
+        const d = await byRef(a.target, 'Ziel-Arbeitspaket'); if ('error' in d) return d;
+        if (!s.t.parent_id) return { error: `move_aufgabe: ${code(s.t.number)} ist ein Arbeitspaket; Arbeitspakete ordnest du mit move_ap einem Teilprojekt zu` };
+        if (d.t.parent_id) return { error: `move_aufgabe: ${code(d.t.number)} ist eine Aufgabe; Ziel muss ein Arbeitspaket sein` };
+        if (!inScope(s.t) || !inScope(d.t)) return { error: `move_aufgabe ${code(s.t.number)} → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+        try { await reparentTask(db, sActor, s.t.id, { parentId: d.t.id }); } catch (e: any) { return { error: `move_aufgabe ${code(s.t.number)}: ${e?.message ?? e}` }; }
+        return { applied: { type: 'move_aufgabe', ref: code(s.t.number), target: code(d.t.number), title: s.t.title } };
+      }
+      if (a.type === 'move_ap') {
+        const s = await byRef(a.ref, 'Arbeitspaket'); if ('error' in s) return s;
+        if (s.t.parent_id) return { error: `move_ap: ${code(s.t.number)} ist eine Aufgabe (move_aufgabe)` };
+        const sp = a.subproject ? await subprojectByName(a.subproject) : null;
+        if (a.subproject && !sp) return { error: `move_ap ${code(s.t.number)}: Teilprojekt „${a.subproject}“ gibt es nicht` };
+        if (!canPlan && !(inScope(s.t) && (!sp || myTps.includes(sp.id)))) return { error: `move_ap ${code(s.t.number)}: Arbeitspakete ordnet nur zu, wer planen darf oder in seinen Teilprojekten`, hold: 'plan' };
+        try { await reparentTask(db, sActor, s.t.id, { parentId: null, subprojectId: sp?.id ?? null }); } catch (e: any) { return { error: `move_ap ${code(s.t.number)}: ${e?.message ?? e}` }; }
+        return { applied: { type: 'move_ap', ref: code(s.t.number), subproject: sp?.name ?? null, title: s.t.title } };
+      }
+      const item = (c.items ?? []).find((i: any) => i.id === a.itemId);
+      if (a.type === 'promote_item') {
+        if (!item) return { error: `promote_item: itemId ${a.itemId || 'fehlt'} nicht in der Task-Liste` };
+        const who = await resolvePerson(db, task.project_id, actor, a.responsible);
+        if ('error' in who) return { error: `promote_item „${item.title}“: ${who.error}` };
+        if (created >= MAX_CREATE) return { error: `promote_item „${item.title}“ verworfen: mehr als ${MAX_CREATE} Anlagen je Lauf` };
+        try { const r = await promoteItem(db, sActor, item.task_id ?? task.id, item.id, { title: a.title, dueDate: due, startDate: start, responsibleUserId: who.userId, responsibleEmail: who.email }); created++; c.items?.splice(c.items.indexOf(item), 1); return { applied: { type: 'promote_item', ref: code(r.number), title: r.title, responsible: who.name ?? who.email, dueDate: due } }; }
+        catch (e: any) { return { error: `promote_item „${item.title}“: ${e?.message ?? e}` }; }
+      }
+      if (a.type === 'demote_aufgabe') {
+        const s = await byRef(a.ref, 'Aufgabe'); if ('error' in s) return s;
+        if (!inScope(s.t)) return { error: `demote_aufgabe ${code(s.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+        const why = await demoteBlocker(db, s.t.id);
+        if (why) return { error: `demote_aufgabe ${code(s.t.number)}: ${why}` };
+        let toId: string | null = null;
+        if (String(a.target ?? '').trim()) { const d = await byRef(a.target, 'Ziel-Aufgabe'); if ('error' in d) return d; if (!inScope(d.t)) return { error: `demote_aufgabe ${code(s.t.number)} → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' }; toId = d.t.id; }
+        try { await demoteTask(db, sActor, s.t.id, toId); } catch (e: any) { return { error: `demote_aufgabe ${code(s.t.number)}: ${e?.message ?? e}` }; }
+        return { applied: { type: 'demote_aufgabe', ref: code(s.t.number), title: s.t.title } };
+      }
+      if (!item) return { error: `move_item: itemId ${a.itemId || 'fehlt'} nicht in der Task-Liste` };
+      const d = await byRef(a.target, 'Ziel'); if ('error' in d) return d;
+      if (!inScope(d.t)) return { error: `move_item „${item.title}“ → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+      try { await moveItem(db, sActor, item.task_id ?? task.id, item.id, d.t.id); c.items?.splice(c.items.indexOf(item), 1); } catch (e: any) { return { error: `move_item „${item.title}“: ${e?.message ?? e}` }; }
+      return { applied: { type: 'move_item', target: code(d.t.number), title: item.title } };
     }
 
     if (a.type === 'assign' || a.type === 'set_dates') {

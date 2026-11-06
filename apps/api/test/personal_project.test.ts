@@ -20,7 +20,7 @@ test('Persönliches Projekt: anlegen nur mit Freigabe, leer, nur Ersteller und A
   assert.equal(r.statusCode, 200, r.body);
   pid = r.json().project.id;
   assert.equal(r.json().project.personal, true);
-  assert.equal((await t.db.one(`select count(*)::int as c from doc_folders where project_id = $1`, [pid])).c, 0, 'leer');
+  assert.deepEqual((await t.db.query(`select name from doc_folders where project_id = $1`, [pid])).rows.map((f: any) => f.name), ['Notizen'], 'schlank: nur Ordner Notizen');
   assert.equal((await t.api(max).put(`/projects/${pid}/members/${t.ids.users.anna}`, { role: 'member' })).statusCode, 403);
   assert.equal((await t.api(max).post('/invitations', { email: 'neu@extern.de', name: 'Neu', projectId: pid })).statusCode, 403);
   assert.equal((await t.api(max).patch(`/projects/${pid}`, { visibility: 'org' })).statusCode, 400);

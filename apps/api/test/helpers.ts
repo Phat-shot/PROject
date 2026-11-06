@@ -6,6 +6,8 @@ import { seed, seedDevMails, DEMO_PASSWORD } from '../src/seed.js';
 export async function testApp(opts: { fetchFn?: typeof fetch } = {}) {
   process.env.DATABASE_URL = 'memory';
   process.env.NODE_ENV = 'test';
+  // Hunderte Anmeldungen je Lauf: scrypt mit dem kleinsten erlaubten Arbeitsfaktor (ein eigener Test prüft das Rehash auf den Standard)
+  process.env.PASSWORD_SCRYPT_N ??= '16384';
   const db = await createDb();
   await runMigrations(db);
   const ids = await seed(db);
@@ -44,4 +46,13 @@ export function composeEcho(body: any): Response | null {
   const intent = prompt.slice(prompt.lastIndexOf('Absicht des Agenten'));
   const content = JSON.stringify({ subject: intent.match(/^Betreff: (.*)$/m)?.[1] ?? '', text: intent.split(/^Text:\n/m)[1] ?? '', withheld: [] });
   return new Response(JSON.stringify({ model: body.model, choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 0, completion_tokens: 0 } }), { status: 200 });
+}
+
+/**
+ * Checklistenpunkt direkt am Arbeitspaket per SQL (Altbestand von vor „Checklistenpunkte gehören zu Aufgaben“): die API legt
+ * neue Punkte nur noch an Aufgaben an; bestehende AP-Punkte bleiben lesbar, abhakbar und überführbar.
+ */
+export async function legacyItem(db: { one: (sql: string, params?: unknown[]) => Promise<any> }, taskId: string, title: string, o: { responsibleEmail?: string | null; done?: boolean } = {}): Promise<string> {
+  const r = await db.one(`insert into checklist_items (task_id, title, done, responsible_email, position) values ($1,$2,$3,$4,(select coalesce(max(position), -1) + 1 from checklist_items where task_id = $1)) returning id`, [taskId, title, Boolean(o.done), o.responsibleEmail?.trim().toLowerCase() || null]);
+  return r.id;
 }

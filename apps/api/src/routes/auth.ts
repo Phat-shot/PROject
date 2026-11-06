@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
-import { createSession, hashPassword, mapUser, publicOrgSettings, requireUser, SESSION_COOKIE, setSessionCookie, verifyPassword, withManagedGroups } from '../auth.js';
+import { createSession, hashPassword, mapUser, needsRehash, publicOrgSettings, requireUser, SESSION_COOKIE, setSessionCookie, verifyPassword, withManagedGroups } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, notFound, unauthorized } from '../errors.js';
 import { publicBase } from '../docs/share.js';
@@ -14,6 +14,8 @@ export async function authRoutes(app: FastifyInstance) {
     if (!email || !password) throw badRequest('E-Mail und Passwort erforderlich');
     const row = await app.db.maybeOne(`select * from users where lower(email) = lower($1) and active`, [email]);
     if (!row || row.kind === 'agent' || !verifyPassword(password, row.password_hash)) throw unauthorized('E-Mail oder Passwort falsch');
+    // Bestandshashes (ältere scrypt-Parameter) beim Login auf die aktuellen Parameter heben
+    if (needsRehash(row.password_hash)) await app.db.query(`update users set password_hash = $2 where id = $1`, [row.id, hashPassword(password)]);
     // Zweiter Faktor: Passwort stimmt, Code folgt in einem zweiten Schritt (Challenge 5 Minuten gültig)
     if (row.totp_enabled && row.totp_secret) {
       const challenge = randomBytes(24).toString('base64url');
@@ -74,11 +76,14 @@ export async function authRoutes(app: FastifyInstance) {
     try {
       await app.mail.sendFromAccount(account, {
         to: [row.email], subject: `Passwort zurücksetzen – PROject (${org.name})`,
-        text: `Guten Tag ${row.name},\n\nüber diesen Link legen Sie ein neues Passwort fest (2 Stunden gültig):\n${link}\n\nFalls Sie das nicht angefordert haben, ignorieren Sie diese Mail.\n\n${org.name}`,
+        text: `Hallo ${row.name},\n\nüber diesen Link legst du ein neues Passwort fest (2 Stunden gültig):\n${link}\n\nFalls du das nicht angefordert hast, ignoriere diese Mail einfach.\n\nViele Grüße\n${org.name}`,
         userId: row.id
       });
     } catch (e: any) {
-      return { ok: true, sent: false, error: `Versand fehlgeschlagen: ${String(e?.message ?? e)}` };
+      // Interne Fehlertexte (SMTP, Hostnamen) nicht an Anonyme: loggen, generische Antwort
+      req.log.error({ err: e, userId: row.id }, 'Passwort-vergessen: Versand fehlgeschlagen');
+      await audit(app.db, { orgId: row.org_id, userId: null, action: 'user.password_reset_mail_failed', objectType: 'user', objectId: row.id, details: { error: String(e?.message ?? e).slice(0, 500) } });
+      return { ok: true, sent: false, error: 'Die Mail konnte nicht gesendet werden. Bitte später erneut versuchen oder den Org-Admin um ein neues Passwort bitten.' };
     }
     await audit(app.db, { orgId: row.org_id, userId: row.id, action: 'user.password_reset_requested', objectType: 'user', objectId: row.id });
     return { ok: true, sent: true };

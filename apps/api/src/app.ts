@@ -20,12 +20,14 @@ import { setupRoutes } from './routes/setup.js';
 import { icsRoutes } from './routes/ics.js';
 import { raidRoutes } from './routes/raid.js';
 import { portfolioRoutes } from './routes/portfolio.js';
+import { reportRoutes } from './routes/reports.js';
 import { oauthRoutes } from './routes/oauth.js';
 import { aiRoutes } from './routes/ai.js';
 import { aiPolicyRoutes } from './routes/aiPolicy.js';
 import { analyticsRoutes } from './routes/analytics.js';
 import { meetingRoutes } from './routes/meetings.js';
 import { agentRoutes } from './routes/agents.js';
+import { assistantRoutes } from './routes/assistant.js';
 import { copyRoutes } from './routes/copy.js';
 import { chatRoutes } from './routes/chat.js';
 import { workflowRoutes } from './routes/workflows.js';
@@ -42,6 +44,7 @@ import { questionRoutes } from './routes/questions.js';
 import { knowledgeRoutes } from './routes/knowledge.js';
 import { telephonyRoutes } from './routes/telephony.js';
 import { resourceRoutes } from './routes/resources.js';
+import { fileRoutes } from './routes/files.js';
 
 export interface AppOptions {
   db: Db;
@@ -104,9 +107,13 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     req.user = await userFromToken(opts.db, req.cookies[SESSION_COOKIE]);
   });
 
-  // CSRF: ändernde Anfragen mit Sitzungs-Cookie müssen von der eigenen Herkunft kommen (Origin bzw. Referer gegen Host und PUBLIC_URL)
+  // CSRF: ändernde Anfragen mit Sitzungs-Cookie müssen von der eigenen Herkunft kommen (Origin bzw. Referer gegen Host und PUBLIC_URL).
+  // Auth-POSTs (Login, Zweiter Faktor, Passwort vergessen/zurücksetzen, Logout) auch ohne Sitzung: sonst Login-CSRF
+  // (eine fremde Seite meldet den Browser in einem fremden Konto an).
   app.addHook('onRequest', async (req, reply) => {
-    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !req.cookies?.[SESSION_COOKIE]) return;
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return;
+    const authPost = req.url.split('?')[0].startsWith('/api/auth/');
+    if (!authPost && !req.cookies?.[SESSION_COOKIE]) return;
     const src = req.headers.origin ?? (req.headers.referer ? safeOrigin(req.headers.referer) : null);
     if (!src) return; // kein Browser-Kontext (API-Client, Tests)
     const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim();
@@ -148,12 +155,14 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(icsRoutes);
       await api.register(raidRoutes);
       await api.register(portfolioRoutes);
+      await api.register(reportRoutes);
       await api.register(oauthRoutes);
       await api.register(aiRoutes);
       await api.register(aiPolicyRoutes);
       await api.register(analyticsRoutes);
       await api.register(meetingRoutes);
       await api.register(agentRoutes);
+      await api.register(assistantRoutes);
       await api.register(copyRoutes);
       await api.register(chatRoutes);
       await api.register(workflowRoutes);
@@ -161,6 +170,7 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
       await api.register(questionRoutes);
       await api.register(knowledgeRoutes);
       await api.register(resourceRoutes);
+      await api.register(fileRoutes);
       await api.register(telephonyRoutes);
       if (process.env.NODE_ENV !== 'production') await api.register(devRoutes);
       api.get('/health', async () => ({ ok: true, db: opts.db.kind, version: (process.env.APP_VERSION ?? 'dev').slice(0, 7) }));

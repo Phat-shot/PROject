@@ -69,7 +69,9 @@ test('Agent als Projektagent (stellvertretende PL) bearbeitet Mails im Ordner di
   assert.equal(task.responsible_user_id, agent.id, 'direkt dem Agenten zugewiesen');
   assert.equal(task.origin, true);
   assert.equal(task.copied, true);
-  assert.equal((await t.db.one(`select count(*)::int as c from checklist_items where task_id = $1`, [task.id])).c, 2);
+  // items eines neuen AP werden Aufgaben (Planungstiefe auto; Checklistenpunkte gehören zu Aufgaben)
+  assert.deepEqual((await t.db.query(`select title from tasks where parent_id = $1 order by title`, [task.id])).rows.map((r: any) => r.title), ['Drei Angebote anfragen', 'Vergleich']);
+  assert.equal((await t.db.one(`select count(*)::int as c from checklist_items where task_id = $1`, [task.id])).c, 0);
   assert.ok(await t.db.maybeOne(`select 1 from meetings m join meeting_tasks mt on mt.meeting_id = m.id where m.title = 'Besichtigung Elektro Kurz' and mt.task_id = $1 and m.tentative`, [task.id]), 'Projekt-KI trägt nur vorläufig ein');
   const draft = await t.db.one(`select * from mail_drafts where in_reply_to = $1`, [mail.message_id]);
   assert.equal(draft.status, 'draft');

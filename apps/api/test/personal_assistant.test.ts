@@ -71,9 +71,9 @@ test('Kein Gedächtnis außerhalb des Threads; Dialog im Thread bleibt beim Proj
   chatReply = { reply: 'WEB läuft.', commands: [] };
   const q = (await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Wie steht es bei Website-Relaunch?' })).json().message;
   await flushAgentRuns();
-  // oben ohne Nennung: kein Verlauf → persönliches Projekt
+  // oben ohne Nennung: kein Verlauf; Ich-Form mit Aufgabenbezug („mir … Auftrag“) → persönliches Projekt
   chatReply = { reply: 'Ich lege an.', commands: [C({ title: 'Rack-Plan oben', text: 'Rack-Plan' })] };
-  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg dafür bitte einen Auftrag an' });
+  await t.api(pl).post(`/chat/channels/${dm}/messages`, { body: 'Leg mir dafür bitte einen Auftrag an' });
   await flushAgentRuns();
   assert.equal((await t.db.one(`select project_id from tasks where title = 'Rack-Plan oben'`)).project_id, pid, 'ohne Thread kein Bezug zur vorigen Nachricht');
   // im Thread: das dort genannte Projekt

@@ -24,8 +24,10 @@ services:
       DATABASE_URL: postgres://projekttool:${POSTGRES_PASSWORD:-projekttool}@db:5432/projekttool
       PORT: "3000"
       DATA_DIR: /data
-      # Demodaten (admin@demo.local / demo1234) nur bewusst einschalten: SEED=true docker compose up
+      # Demodaten (admin@demo.local / demo1234) nur bewusst einschalten: SEED=true NODE_ENV=development docker compose up
+      # (opt-in; das Image setzt NODE_ENV=production, dort wird SEED=true ignoriert)
       SEED: ${SEED:-false}
+      NODE_ENV: ${NODE_ENV:-production}
       SYNC_INTERVAL_MS: "60000"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}

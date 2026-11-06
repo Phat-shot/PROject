@@ -1,9 +1,10 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { DocFolder, DocPage, Notification, NotifyEvent, Project } from '@projekttool/shared';
+import type { DocFolder, DocPage, FileRoot, Notification, NotifyEvent, Project } from '@projekttool/shared';
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import { projectPolicy } from '../lib/useProjectPolicy';
 import { Tour, tourDone } from './Tour';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useMailUnread } from '../lib/useMailUnread';
@@ -13,6 +14,8 @@ import { useIsMobile } from '../lib/useMedia';
 import { Messenger, MessengerCtx } from './Messenger';
 import { OpenForMeList } from './OpenForMe';
 import { NotifIcon, NotificationItem, sortNotifications, useOpenNotification } from './Notifications';
+import { Button, IconButton, Loading, useAsync } from './ui';
+import { IconChevronDown, IconChevronRight, IconCloud, IconMenu, IconStar, IconX } from './icons';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -44,6 +47,7 @@ export function Layout({ children }: { children: ReactNode }) {
   const unread = useChatUnread();
   const mailUnread = useMailUnread();
   const open = useOpenForMe();
+  const pinAction = useAsync({ toast: true });
   // Aufgeklappte Liste „Offen für dich“ unter einem Projekt der Leiste
   const [expanded, setExpanded] = useState<string | null>(null);
   useEffect(() => { api.get<{ version?: string }>('/health').then((r) => setVersion(r.version ?? '')).catch(() => undefined); }, []);
@@ -65,11 +69,12 @@ export function Layout({ children }: { children: ReactNode }) {
   const pinned = pinnedIds.map((id) => projects.find((p) => p.id === id)!);
   const others = projects.filter((p) => !pinnedIds.includes(p.id));
   const current = currentId && !pinnedIds.includes(currentId) && !showAll ? projects.find((p) => p.id === currentId) ?? null : null;
-  const togglePin = async (id: string) => {
+  // Anheften: Fehler als Toast (z. B. Sitzung abgelaufen, Server nicht erreichbar)
+  const togglePin = (id: string) => void pinAction.run(async () => {
     const next = pinnedIds.includes(id) ? pinnedIds.filter((x) => x !== id) : [...pinnedIds, id].slice(0, MAX_PINNED);
     const r = await api.patch<{ user: NonNullable<typeof user> }>('/me', { settings: { pinnedProjects: next } });
     setUser(r.user);
-  };
+  });
   const openChat = (channelId?: string | null, threadId?: string | null, msgId?: string | null) => {
     if (mobile) { nav(`/chat${channelId ? `/${channelId}` : ''}${threadId ? `?thread=${threadId}${msgId ? `&msg=${msgId}` : ''}` : ''}`); return; }
     setMenu(false);
@@ -78,14 +83,15 @@ export function Layout({ children }: { children: ReactNode }) {
   const projectNav = (p: Project, pin: boolean, tourId?: string) => {
     const base = `/projekte/${p.id}`;
     const sel = currentId === p.id;
+    const pinLabel = pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften';
     return (
       <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
         <div className="proj-row">
           <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId} title={`${p.name}: Board öffnen`}>
-            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
+            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>{projectPolicy(p).badge && <span className="badge personal-badge" title={projectPolicy(p).badge!.title}>{projectPolicy(p).badge!.text}</span>}
           </NavLink>
-          {(open.byProject[p.id] ?? 0) > 0 && <button className={`badge warn nav-count ${expanded === p.id ? 'on' : ''}`} title="Offen für dich in diesem Projekt: aufklappen" aria-expanded={expanded === p.id} onClick={() => setExpanded(expanded === p.id ? null : p.id)}>{open.byProject[p.id]}</button>}
-          <button className={`pin ${pin ? 'on' : ''}`} disabled={!pin && pinnedIds.length >= MAX_PINNED} title={pin ? 'Nicht mehr anheften' : pinnedIds.length >= MAX_PINNED ? `Höchstens ${MAX_PINNED} Projekte anheften` : 'Anheften'} aria-label={pin ? 'Nicht mehr anheften' : 'Anheften'} onClick={() => void togglePin(p.id)}>{pin ? '★' : '☆'}</button>
+          {(open.byProject[p.id] ?? 0) > 0 && <button className={`badge warn nav-count ${expanded === p.id ? 'on' : ''}`} title="Offen für dich in diesem Projekt: aufklappen" aria-label={`${open.byProject[p.id]} offen für dich in ${p.name}: aufklappen`} aria-expanded={expanded === p.id} onClick={() => setExpanded(expanded === p.id ? null : p.id)}>{open.byProject[p.id]}</button>}
+          <button className={`pin ${pin ? 'on' : ''}`} disabled={(!pin && pinnedIds.length >= MAX_PINNED) || pinAction.busy} title={pinLabel} aria-label={`${p.name}: ${pinLabel}`} aria-pressed={pin} onClick={() => togglePin(p.id)}><IconStar size={14} fill={pin ? 'currentColor' : 'none'} /></button>
         </div>
         {sel && <ProjectDocsNav projectId={p.id} />}
         {expanded === p.id && (open.byProject[p.id] ?? 0) > 0 && <div className="proj-open"><OpenForMeList questions={open.questions.filter((q) => q.projectId === p.id)} waiting={open.waiting} projectId={p.id} bare onNavigate={() => setMenu(false)} /></div>}
@@ -96,40 +102,40 @@ export function Layout({ children }: { children: ReactNode }) {
     <MessengerCtx.Provider value={openChat}>
     <div className="app">
       {menu && <div className="sidebar-backdrop" onClick={() => setMenu(false)} />}
-      <nav className={`sidebar ${menu ? 'open' : ''}`}>
-        <div className="brand"><NavLink to="/dashboard" className="brand-link" data-tour="dashboard" title="Dashboard">PROject{open.total > 0 && <span className="badge warn nav-count" title="Offen für dich: Fragen, Bestätigungen, KI-Vorschläge, Entwürfe, Prüfungen, Blocker">{open.total}</span>}<small>{orgName}</small></NavLink><button className="close-menu" title="Menü schließen" onClick={() => setMenu(false)}>✕</button></div>
+      <nav className={`sidebar ${menu ? 'open' : ''}`} aria-label="Hauptnavigation">
+        <div className="brand"><NavLink to="/dashboard" className="brand-link" data-tour="dashboard" title="Dashboard">PROject{open.total > 0 && <span className="badge warn nav-count" title="Offen für dich: Fragen, Bestätigungen, KI-Vorschläge, Entwürfe, Prüfungen, Blocker">{open.total}</span>}<small>{orgName}</small></NavLink><button className="close-menu" title="Menü schließen" aria-label="Menü schließen" onClick={() => setMenu(false)}><IconX /></button></div>
         <div className="sub projects-nav">
           {pinned.map((p, i) => projectNav(p, true, i === 0 ? 'projekt' : undefined))}
           {current && projectNav(current, false)}
-          {projects.length > 0 && pinned.length === 0 && !current && <div className="muted small" style={{ padding: '2px 10px 4px' }}>Projekte über ☆ anheften.</div>}
+          {projects.length > 0 && pinned.length === 0 && !current && <div className="muted small nav-hint">Projekte über den Stern anheften.</div>}
           <div className="navrow">
             <button className="nav-toggle" data-tour="projekte" aria-expanded={showAll} onClick={() => setShowAll(!showAll)}>
-              <span className="caret-ico">{showAll ? '▾' : '▸'}</span> Alle Projekte <span className="muted small">{projects.length}</span>
+              <span className="caret-ico">{showAll ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}</span> Alle Projekte <span className="muted small">{projects.length}</span>
             </button>
           </div>
           {showAll && <>
             {others.map((p) => projectNav(p, false, pinned.length === 0 && p.id === others[0]?.id ? 'projekt' : undefined))}
-            {projects.length === 0 && <div className="muted small" style={{ padding: '4px 22px' }}>Keine aktiven Projekte.</div>}
+            {projects.length === 0 && <div className="muted small nav-empty">Keine aktiven Projekte.</div>}
             <NavLink to="/projekte" end className="proj-link more">Projektübersicht{user && ['org_admin', 'project_creator'].includes(user.globalRole) ? ' · neues Projekt' : ''}</NavLink>
           </>}
         </div>
         <div className="nav-sep" />
-        <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count">{unread.total}</span>}</NavLink>
-        <NavLink to="/postfach" data-tour="postfach"><span>Postfach</span>{mailUnread.total > 0 && <span className="badge danger" style={{ marginLeft: 6 }} title="ungelesene Mails">{mailUnread.total}</span>}</NavLink>
+        <NavLink to="/chat" data-tour="chat" className={({ isActive: a }) => (a || chat.open ? 'active' : '')} onClick={(e) => { if (!mobile) { e.preventDefault(); if (chat.open) setChat((c) => ({ ...c, open: false })); else openChat(); } }}>Chat{unread.total > 0 && <span className="badge danger nav-count" title="ungelesene Chat-Nachrichten">{unread.total}</span>}</NavLink>
+        <NavLink to="/postfach" data-tour="postfach"><span>Postfach</span>{mailUnread.total > 0 && <span className="badge danger ml-2" title="ungelesene Mails">{mailUnread.total}</span>}</NavLink>
         <NavLink to="/kalender" data-tour="kalender">Kalender</NavLink>
         <NavLink to="/workflows" data-tour="workflows">Workflows</NavLink>
         <div className="section">Einstellungen</div>
         <NavLink to="/einstellungen" data-tour="benutzer">Meine Einstellungen</NavLink>
-        {/* Verwaltung: Org-Admin; mit Org-Recht (KI, Gruppen) oder als Verwalter einer Gruppe nur die passenden Karten */}
+        {/* Verwaltung nur, wer dort etwas sieht: Org-Admin; mit Org-Recht (KI, Gruppen, Ressourcen) oder als Verwalter einer Gruppe die passenden Karten */}
         {user && (user.globalRole === 'org_admin' || user.orgRights?.some((r) => r === 'ai_admin' || r === 'groups_admin' || r === 'resources_admin') || user.managesGroups) && <NavLink to="/verwaltung" data-tour="verwaltung">Verwaltung</NavLink>}
         <div className="footer">
           <div>{user?.name}</div>
           <div className="small">{user?.email}</div>
-          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button><button data-tour="hilfe" onClick={() => nav('/hilfe')} title="Kurzanleitung, Handbuch, KI-Agenten, KI-Sheet">Hilfe</button>{version && <span className="small" title="Build-Version" style={{ marginLeft: 'auto', opacity: 0.6 }}>{version}</span>}</div>
+          <div className="row"><button onClick={() => void logout()}>Abmelden</button><button onClick={() => setTour(true)} title="Interaktives Tutorial starten">Tutorial</button><button data-tour="hilfe" onClick={() => nav('/hilfe')} title="Kurzanleitung, Handbuch, KI-Agenten, KI-Sheet">Hilfe</button>{version && <span className="small ml-auto op-60" title="Build-Version">{version}</span>}</div>
         </div>
       </nav>
       <MenuCtx.Provider value={() => setMenu(true)}>
-        <div className="main">{children}</div>
+        <main className="main" id="main">{children}</main>
       </MenuCtx.Provider>
       {!mobile && !loc.pathname.startsWith('/chat') && (chat.open
         ? <div className="messenger-overlay" role="dialog" aria-label="Chat"><Messenger channelId={chat.channelId} threadId={chat.threadId} msgId={chat.msgId} onSelect={(channelId, threadId) => setChat({ open: true, channelId, threadId: threadId ?? null, msgId: null })} onClose={() => setChat((c) => ({ ...c, open: false }))} onRead={unread.reload} /></div>
@@ -144,63 +150,86 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 /**
- * Doku als Untermenü des geöffneten Projekts (ohne eigene Überschrift): Besprechungen, die Ordner (öffnen ihre Ordnerseite) und die fünf zuletzt
- * geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
+ * Doku als Untermenü des geöffneten Projekts (ohne eigene Überschrift): Besprechungen, die Ordner (öffnen ihre Ordnerseite), unter „Dateien“
+ * die eingebundenen Ordner aus Dateiquellen (Nextcloud/WebDAV) und die fünf zuletzt geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
  */
 function ProjectDocsNav({ projectId }: { projectId: string }) {
   const nav = useNavigate();
   const [d, setD] = useState<{ folders: DocFolder[]; pages: DocPage[] } | null>(null);
-  const load = () => api.get<{ folders: DocFolder[]; pages: DocPage[] }>(`/projects/${projectId}/docs`).then(setD).catch(() => undefined);
-  useEffect(() => { setD(null); void load(); }, [projectId]);
+  const [roots, setRoots] = useState<FileRoot[]>([]);
+  const load = () => Promise.all([
+    api.get<{ folders: DocFolder[]; pages: DocPage[] }>(`/projects/${projectId}/docs`).then(setD).catch(() => undefined),
+    api.get<{ roots?: FileRoot[] }>(`/projects/${projectId}/files`).then((r) => setRoots(r?.roots ?? [])).catch(() => setRoots([]))
+  ]);
+  useEffect(() => { setD(null); setRoots([]); void load(); }, [projectId]);
   useRefresh(load, 120_000);
   const base = `/projekte/${projectId}/doku`;
   const openFolder = async (f: DocFolder) => {
     if (f.pageId) { nav(`${base}/${f.pageId}`); return; }
     try { const r = await api.post<{ page: DocPage }>(`/projects/${projectId}/docs/folders/${f.id}/page`); nav(`${base}/${r.page.id}`); } catch { nav(base); }
   };
-  if (!d) return null;
+  if (!d) return <div className="proj-docs"><span className="proj-sub"><Loading>Lädt Doku …</Loading></span></div>;
   const folderPages = new Set(d.folders.map((f) => f.pageId).filter(Boolean));
   const recent = d.pages.filter((p) => !folderPages.has(p.id)).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 5);
   return (
     <div className="proj-docs">
       <NavLink to={`${base}/besprechungen`} className="proj-sub">Besprechungen</NavLink>
-      {d.folders.filter((f) => !f.parentId).map((f) => <NavLink key={f.id} to={f.pageId ? `${base}/${f.pageId}` : base} end className="proj-sub" onClick={(e) => { e.preventDefault(); void openFolder(f); }}>▸ {f.name}</NavLink>)}
+      {d.folders.filter((f) => !f.parentId).map((f) => <NavLink key={f.id} to={f.pageId ? `${base}/${f.pageId}` : base} end className="proj-sub" onClick={(e) => { e.preventDefault(); void openFolder(f); }}><IconChevronRight size={12} /> {f.name}</NavLink>)}
+      {roots.length > 0 && <div className="proj-sub-h">Dateien</div>}
+      {roots.map((r) => <NavLink key={r.bindingId} to={`${base}/dateien/${r.bindingId}`} className="proj-sub" title={`${r.label} · Quelle: ${r.sourceName} (nur lesend)`}><IconCloud size={12} /> {r.label}</NavLink>)}
       {recent.length > 0 && <div className="proj-sub-h">Zuletzt geändert</div>}
       {recent.map((p) => <NavLink key={p.id} to={`${base}/${p.id}`} className="proj-sub recent" title={p.title}>{p.title}</NavLink>)}
     </div>
   );
 }
 
+export interface TopTab { to: string; label: string; end?: boolean; /** Zähler am Reiter */ badge?: number; badgeTitle?: string; /** Pfad, unter dem der Reiter nicht aktiv ist (eigener Reiter) */ exclude?: string }
+
 /** Kopfzeile; tabsBelow legt viele Reiter (Projektbereiche) in eine eigene Zeile unter Titel, Suche und Glocke. */
-export function TopBar({ title, children, tabs, tabsBelow = false }: { title: ReactNode; children?: ReactNode; tabs?: { to: string; label: string; end?: boolean }[]; tabsBelow?: boolean }) {
+export function TopBar({ title, children, tabs, tabsBelow = false }: { title: ReactNode; children?: ReactNode; tabs?: TopTab[]; tabsBelow?: boolean }) {
   const openMenu = useContext(MenuCtx);
+  const loc = useLocation();
+  const tabsRef = useRef<HTMLDivElement>(null);
+  const [scroll, setScroll] = useState<'none' | 'more' | 'end'>('none');
+  // Scroll-Hinweis: Fade am rechten Rand, solange die Reiter seitlich weitergehen
+  useEffect(() => {
+    const el = tabsRef.current;
+    if (!el || !tabsBelow) return;
+    const check = () => setScroll(el.scrollWidth - el.clientWidth <= 1 ? 'none' : el.scrollLeft + el.clientWidth >= el.scrollWidth - 2 ? 'end' : 'more');
+    check();
+    el.addEventListener('scroll', check, { passive: true });
+    window.addEventListener('resize', check);
+    return () => { el.removeEventListener('scroll', check); window.removeEventListener('resize', check); };
+  }, [tabsBelow, tabs?.length]);
   return (
-    <div className="topbar">
-      <button className="menu-btn" title="Menü" aria-label="Menü öffnen" onClick={openMenu}>☰</button>
+    <header className="topbar">
+      <button className="menu-btn" title="Menü" aria-label="Menü öffnen" onClick={openMenu}><IconMenu size={20} /></button>
       <h1>{title}</h1>
       {tabs && (
-        <div className={`tabs ${tabsBelow ? 'below' : ''}`}>
+        <nav className={`tabs ${tabsBelow ? 'below' : ''} ${scroll !== 'none' ? 'scrollable' : ''} ${scroll === 'end' ? 'at-end' : ''}`} ref={tabsRef} aria-label="Bereiche">
           {tabs.map((t) => (
-            <NavLink key={t.to} to={t.to} end={t.end}>
-              {t.label}
+            <NavLink key={t.to} to={t.to} end={t.end} className={({ isActive }) => (isActive && !(t.exclude && loc.pathname.startsWith(t.exclude)) ? 'active' : '')}>
+              {t.label}{t.badge ? <span className="badge warn ml-1" title={t.badgeTitle}>{t.badge}</span> : null}
             </NavLink>
           ))}
-        </div>
+        </nav>
       )}
       <SearchBox />
       <Bell />
       {children}
-    </div>
+    </header>
   );
 }
 
-/** Glocke: Meldungen mit Filtern (Klasse, Projekt, nur ungelesene); Klick öffnet über openNotification() wie im Dashboard. */
+/** Glocke: Meldungen mit Filtern (Klasse, Projekt, nur ungelesene); Klick öffnet über openNotification() wie im Dashboard. Esc und Klick außerhalb schließen. */
 function Bell() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<{ notifications: Notification[]; unread: number }>({ notifications: [], unread: 0 });
   const [filter, setFilter] = useState<{ event: NotifyEvent | ''; projectId: string; unread: boolean }>({ event: '', projectId: '', unread: false });
   const [projects, setProjects] = useState<Project[]>([]);
   const [tab, setTab] = useState<'all' | 'open'>('all');
+  const ref = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
   // „Offen für dich“: dieselbe Liste und Zahl wie im Dashboard (Fragen, Freigaben, Entwürfe, Blocker, Seiten in Prüfung)
   const openForMe = useOpenForMe();
   const openNotification = useOpenNotification();
@@ -211,24 +240,32 @@ function Bell() {
   useEffect(() => { void load(); }, [query]);
   useRefresh(load);
   useEffect(() => { if (open && !projects.length) api.get<{ projects: Project[] }>('/projects').then((r) => setProjects(r.projects.filter((p) => p.status === 'active'))).catch(() => undefined); }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { setOpen(false); btnRef.current?.focus(); } };
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('mousedown', onDown);
+    return () => { window.removeEventListener('keydown', onKey); document.removeEventListener('mousedown', onDown); };
+  }, [open]);
   const go = async (n: Notification) => {
     setOpen(false);
     await openNotification(n);
     await load();
   };
   return (
-    <div className="bell" style={{ position: 'relative' }}>
-      <button className="btn" title="Benachrichtigungen" aria-label="Benachrichtigungen" onClick={() => setOpen(!open)}><NotifIcon event="bell" size={18} />{data.unread > 0 && <span className="dot">{data.unread > 99 ? '99+' : data.unread}</span>}</button>
+    <div className="bell relative" ref={ref}>
+      <button ref={btnRef} className="btn" title={`Benachrichtigungen${data.unread ? ` (${data.unread} ungelesen)` : ''}`} aria-label="Benachrichtigungen" aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen(!open)}><NotifIcon event="bell" size={18} />{data.unread > 0 && <span className="dot" aria-hidden="true">{data.unread > 99 ? '99+' : data.unread}</span>}</button>
       {open && (
-        <div className="notif-panel">
-          <div className="row between" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}><span className="row" style={{ gap: 8 }}><button className={`btn sm ${tab === 'all' ? 'primary' : ''}`} onClick={() => setTab('all')}>Alle</button><button className={`btn sm ${tab === 'open' ? 'primary' : ''}`} title="Fragen, Freigaben, Entwürfe, Blocker und Seiten in Prüfung, die auf dich warten (wie im Dashboard)" onClick={() => setTab('open')}>Offen für dich{openForMe.total > 0 && <span className="badge" style={{ marginLeft: 4 }}>{openForMe.total}</span>}</button></span>{tab === 'all' && data.unread > 0 && <button className="btn sm link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</button>}</div>
-          {tab === 'open' && <div style={{ padding: '4px 12px' }}><OpenForMeList questions={openForMe.questions} waiting={openForMe.waiting} projectId={null} bare onNavigate={() => setOpen(false)} />{openForMe.waiting && openForMe.total === 0 && <div className="empty" style={{ margin: 12 }}>Nichts offen für dich.</div>}</div>}
+        <div className="notif-panel" role="dialog" aria-label="Benachrichtigungen">
+          <div className="row between pad-row"><span className="row gap-2" role="group" aria-label="Ansicht"><Button size="sm" variant={tab === 'all' ? 'primary' : 'secondary'} aria-pressed={tab === 'all'} onClick={() => setTab('all')}>Alle</Button><Button size="sm" variant={tab === 'open' ? 'primary' : 'secondary'} aria-pressed={tab === 'open'} title="Fragen, Freigaben, Entwürfe, Blocker und Seiten in Prüfung, die auf dich warten (wie im Dashboard)" onClick={() => setTab('open')}>Offen für dich{openForMe.total > 0 && <span className="badge ml-1">{openForMe.total}</span>}</Button></span>{tab === 'all' && data.unread > 0 && <Button size="sm" variant="link" onClick={() => void api.post('/notifications/read', { all: true }).then(load)}>Alle gelesen</Button>}</div>
+          {tab === 'open' && <div className="pad-sm"><OpenForMeList questions={openForMe.questions} waiting={openForMe.waiting} projectId={null} bare onNavigate={() => setOpen(false)} />{openForMe.waiting && openForMe.total === 0 && <div className="empty m-12">Nichts offen für dich.</div>}</div>}
           {tab === 'all' && <><div className="notif-filter">
             <select aria-label="Klasse" value={filter.event} onChange={(e) => setFilter({ ...filter, event: e.target.value as NotifyEvent | '' })}><option value="">alle Klassen</option>{NOTIFY_EVENTS.map((e) => <option key={e.key} value={e.key}>{e.label}</option>)}</select>
             <select aria-label="Projekt" value={filter.projectId} onChange={(e) => setFilter({ ...filter, projectId: e.target.value })}><option value="">alle Projekte</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.key}</option>)}</select>
             <label className="check small"><input type="checkbox" checked={filter.unread} onChange={(e) => setFilter({ ...filter, unread: e.target.checked })} /> nur ungelesene</label>
           </div>
-          {data.notifications.length === 0 && <div className="empty" style={{ margin: 12 }}>Keine Benachrichtigungen.</div>}
+          {data.notifications.length === 0 && <div className="empty m-12">Keine Benachrichtigungen.</div>}
           {sortNotifications(data.notifications).map((n, i, all) => <div key={n.id}>
             {(i === 0 || Boolean(all[i - 1].readAt) !== Boolean(n.readAt)) && data.notifications.some((x) => !x.readAt) && data.notifications.some((x) => x.readAt) && <div className="notif-sep">{n.readAt ? 'Gelesen' : 'Ungelesen'}</div>}
             <NotificationItem n={n} onOpen={(x) => void go(x)} />
@@ -245,28 +282,49 @@ interface SearchResult {
   mails: { id: string; subject: string; fromAddr: string; viewId: string; projectId: string }[];
 }
 
+/** Suche in der Kopfzeile: Ergebnisse als Listbox (Pfeiltasten, Enter öffnet, Esc und Klick außerhalb schließen). */
 function SearchBox() {
   const [q, setQ] = useState('');
   const [res, setRes] = useState<SearchResult | null>(null);
+  const [active, setActive] = useState(0);
+  const ref = useRef<HTMLDivElement>(null);
   const nav = useNavigate();
+  const listId = 'search-results';
   useEffect(() => {
     if (q.trim().length < 2) { setRes(null); return; }
-    const h = setTimeout(() => api.get<SearchResult>(`/search?q=${encodeURIComponent(q)}`).then(setRes).catch(() => setRes(null)), 250);
+    const h = setTimeout(() => api.get<SearchResult>(`/search?q=${encodeURIComponent(q)}`).then((r) => { setRes(r); setActive(0); }).catch(() => setRes(null)), 250);
     return () => clearTimeout(h);
   }, [q]);
+  useEffect(() => {
+    if (!res) return;
+    const onDown = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setRes(null); };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [res]);
   const go = (to: string) => { setQ(''); setRes(null); nav(to); };
+  const items: { key: string; group: string; to: string; node: ReactNode }[] = res ? [
+    ...res.tasks.map((t) => ({ key: `t${t.id}`, group: 'Arbeitspakete', to: `/projekte/${t.projectId}/board?task=${t.id}`, node: <><span className="tkey">{t.projectKey}{t.number ? `-${t.number}` : ''}</span> {t.title}</> })),
+    ...res.pages.map((p) => ({ key: `p${p.id}`, group: 'Seiten', to: `/projekte/${p.projectId}/doku/${p.id}`, node: <><span className="badge">{p.projectKey}</span> {p.title}</> })),
+    ...res.mails.map((m) => ({ key: `m${m.id}`, group: 'Mails', to: `/projekte/${m.projectId}/mail/m/${m.id}`, node: <>{m.subject} <span className="muted small">· {m.fromAddr}</span></> }))
+  ] : [];
+  const onKey = (e: React.KeyboardEvent) => {
+    if (!res) return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); setActive((a) => Math.min(a + 1, items.length - 1)); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); setActive((a) => Math.max(a - 1, 0)); }
+    else if (e.key === 'Enter') { e.preventDefault(); const it = items[active]; if (it) go(it.to); }
+    else if (e.key === 'Escape') { e.preventDefault(); setRes(null); }
+  };
   return (
-    <div className="search-box">
-      <input type="text" placeholder="Suchen … (auch Kennung wie WEB-12)" value={q} onChange={(e) => setQ(e.target.value)} />
+    <div className="search-box" ref={ref}>
+      <input type="text" role="combobox" aria-label="Suche" aria-autocomplete="list" aria-expanded={Boolean(res)} aria-controls={listId} aria-activedescendant={res && items[active] ? `${listId}-${items[active].key}` : undefined}
+        placeholder="Suchen … (auch Kennung wie WEB-12)" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={onKey} />
       {res && (
-        <div className="search-results">
-          {res.tasks.length > 0 && <div className="group">Arbeitspakete</div>}
-          {res.tasks.map((t) => <div key={t.id} className="item" onClick={() => go(`/projekte/${t.projectId}/board?task=${t.id}`)}><span className="tkey">{t.projectKey}{t.number ? `-${t.number}` : ''}</span> {t.title}</div>)}
-          {res.pages.length > 0 && <div className="group">Seiten</div>}
-          {res.pages.map((p) => <div key={p.id} className="item" onClick={() => go(`/projekte/${p.projectId}/doku/${p.id}`)}><span className="badge">{p.projectKey}</span> {p.title}</div>)}
-          {res.mails.length > 0 && <div className="group">Mails</div>}
-          {res.mails.map((m) => <div key={m.id} className="item" onClick={() => go(`/projekte/${m.projectId}/mail/m/${m.id}`)}>{m.subject} <span className="muted small">· {m.fromAddr}</span></div>)}
-          {res.tasks.length + res.pages.length + res.mails.length === 0 && <div className="item muted">Keine Treffer</div>}
+        <div className="search-results" role="listbox" id={listId} aria-label="Suchergebnisse">
+          {items.map((it, i) => <div key={it.key}>
+            {(i === 0 || items[i - 1].group !== it.group) && <div className="group" role="presentation">{it.group}</div>}
+            <div id={`${listId}-${it.key}`} role="option" aria-selected={i === active} className={`item ${i === active ? 'active' : ''}`} onMouseEnter={() => setActive(i)} onClick={() => go(it.to)}>{it.node}</div>
+          </div>)}
+          {items.length === 0 && <div className="item muted" role="option" aria-selected={false}>Keine Treffer</div>}
         </div>
       )}
     </div>

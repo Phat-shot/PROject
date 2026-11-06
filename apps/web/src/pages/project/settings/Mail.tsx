@@ -3,7 +3,7 @@ import { StandardBadge } from '../../../components/settings/Settings';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
-import { useAsync, useDialog } from '../../../components/ui';
+import { useAsync, useDialog, Term } from '../../../components/ui';
 import { AccountForm, OAuthStartDialog, kindLabel, useLabel } from '../../../components/mail/Accounts';
 import { useAiStatus } from '../../../lib/useAi';
 import type { MailAccount, MailInquiryMode } from '@projekttool/shared';
@@ -33,13 +33,13 @@ export function ProjectAccountsCard() {
   return (
     <div className="card" id="konten">
       <h2>Postfächer des Projekts</h2>
-      <p className="muted small">Antwortadresse (Plus-Code), Absender für Agenten, Einladungen, Erinnerungen, Berichte und Workflows. Genau eines ist Standard für ausgehende Mails. Die PL legt ein <strong>Projektpostfach</strong> an oder holt ein <strong>zentrales Postfach</strong> der Organisation (vom Org-Admin angeboten oder für alle Projekte freigegeben) bzw. ein eigenes Konto ins Projekt; das Org-Postfach bleibt den Systemmails vorbehalten.</p>
+      <p className="muted small">Antwortadresse (<Term k="pluscode">Plus-Code</Term>), Absender für Agenten, Einladungen, Erinnerungen, Berichte und Workflows. Genau eines ist Standard für ausgehende Mails. Die PL legt ein <strong>Projektpostfach</strong> an oder holt ein <strong>zentrales Postfach</strong> der Organisation (vom Org-Admin angeboten oder für alle Projekte freigegeben) bzw. ein eigenes Konto ins Projekt; das Org-Postfach bleibt den Systemmails vorbehalten.</p>
       {error && <div className="error small">{error}</div>}
       {accounts.length === 0 && <p className="notice small">Kein Projektkonto: Nachfragen, Erinnerungen, PDF-Versand und Reporting brauchen eines.</p>}
       {accounts.length > 0 && <table className="table"><thead><tr><th>Standard</th><th>Konto</th><th>Art</th><th /></tr></thead><tbody>
         {accounts.map((a) => <tr key={a.id}>
           <td><input type="radio" name="default-account" checked={Boolean(a.isDefault)} disabled={!isPl || busy} title={isPl ? 'Als Standard für ausgehende Mails setzen' : 'Standard-Ausgangskonto'} onChange={() => void run(async () => { await api.put(`/projects/${detail.project.id}/mail/default-account`, { accountId: a.id }); await refresh(); })} /></td>
-          <td>{a.name}<div className="muted small">{a.address}{a.offered && <span className="badge" style={{ marginLeft: 6 }} title="Vom Org-Admin angeboten; wird nie automatisch Standard">angeboten</span>}</div></td>
+          <td>{a.name}<div className="muted small">{a.address}{a.offered && <span className="badge ml-2" title="Vom Org-Admin angeboten; wird nie automatisch Standard">angeboten</span>}</div></td>
           <td className="small">{kindLabel(a, user?.id, [detail.project])}</td>
           <td className="nowrap">{isPl && <button className="btn sm link" disabled={busy} onClick={() => { const u = a.uses?.find((x) => x.use === 'project' && x.projectId === detail.project.id); if (u) void dialog.confirm({ title: 'Projektbindung lösen', text: `${a.address} nicht mehr als Projektkonto nutzen? Ansichten darüber verschwinden, Kopien in Arbeitspaketen bleiben.`, confirmLabel: 'Lösen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/mail/accounts/${a.id}/uses/${u.id}`); await refresh(); }); }); }}>Bindung lösen</button>}</td>
         </tr>)}
@@ -48,7 +48,7 @@ export function ProjectAccountsCard() {
         <button className="btn sm primary" onClick={() => setAccount(true)}>Neues Projektpostfach anbinden</button>
         {providers.map((p) => <button key={p.key} className="btn sm" onClick={() => setOauthStart(p)}>Mit {p.label} verbinden</button>)}
         {bindable.length > 0 && <>
-          <select value={bindId} onChange={(e) => setBindId(e.target.value)} style={{ width: 'auto' }}><option value="">– vorhandenes Postfach ins Projekt holen –</option>{bindable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) · {kindLabel(a, user?.id, [detail.project])}{(a.uses ?? []).filter((u) => u.use === 'project').length ? ` · in ${(a.uses ?? []).filter((u) => u.use === 'project').map(useLabel).join(', ')}` : ''}</option>)}</select>
+          <select className="w-auto" value={bindId} onChange={(e) => setBindId(e.target.value)}><option value="">– vorhandenes Postfach ins Projekt holen –</option>{bindable.map((a) => <option key={a.id} value={a.id}>{a.name} ({a.address}) · {kindLabel(a, user?.id, [detail.project])}{(a.uses ?? []).filter((u) => u.use === 'project').length ? ` · in ${(a.uses ?? []).filter((u) => u.use === 'project').map(useLabel).join(', ')}` : ''}</option>)}</select>
           <button className="btn sm" disabled={!bindId || busy} onClick={() => void run(async () => { await api.post(`/mail/accounts/${bindId}/uses`, { use: 'project', projectId: detail.project.id }); setBindId(''); await refresh(); })}>Binden</button>
         </>}
       </div>}
@@ -86,7 +86,7 @@ export function MailViewsCard() {
             const label = (a: { name: string; role: string }) => `${a.name} (${a.role === 'pl' ? 'stellv. PL: legt direkt an' : 'Mitglied: schlägt vor'})`;
             if (!may) return <span className="muted">{v.agentName ? `${v.agentName}${v.aiProcess ? ' · Ordner' : ''}` : projectAgent ? `Projektagent ${projectAgent.name}` : '–'}</span>;
             return <>
-              <select value={v.agentUserId ?? ''} disabled={busy} style={{ width: 'auto' }} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">{projectAgent ? `– Projektagent ${projectAgent.name} –` : '– kein Agent –'}</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{label(a)}</option>)}</select>
+              <select className="w-auto" value={v.agentUserId ?? ''} disabled={busy} onChange={(e) => void setAi(v, { agentUserId: e.target.value || null })}><option value="">{projectAgent ? `– Projektagent ${projectAgent.name} –` : '– kein Agent –'}</option>{agents.map((a) => <option key={a.userId} value={a.userId}>{label(a)}</option>)}</select>
               <label className="check" title="Jede Mail, die in diesem Ordner landet, bearbeitet der Agent sofort (Ordner „KI Bearbeiten“)"><input type="checkbox" checked={Boolean(v.aiProcess)} disabled={busy || (!v.aiProcess && !v.agentUserId && !projectAgent)} onChange={(e) => void setAi(v, { aiProcess: e.target.checked })} /> Ordner: sofort bearbeiten</label>
             </>;
           })()}</td>
@@ -110,13 +110,13 @@ function ReminderForm() {
   if (me.role !== 'pl') return <p className="small muted">{p.enabled ? `Externe Zuständige werden ${p.daysBefore.map((d) => d === 0 ? 'am Fälligkeitstag' : `${d} Tage vorher`).join(', ')}${p.overdueEveryDays ? ` und bei Verzug alle ${p.overdueEveryDays} Tage` : ''} per Mail erinnert.` : 'Keine automatischen Erinnerungen.'}</p>;
   return (
     <div className="form">
-      <p className="muted small">Mail über das Projektkonto an externe Zuständige (Arbeitspaket mit Mail-Adresse); die Antwort landet über die Antwortadresse im Arbeitspaket. Je Arbeitspaket und Tag höchstens eine Mail.{!detail.project.mailAddress && <span style={{ color: 'var(--warn)' }}> Ohne Projektkonto wird nichts verschickt.</span>}</p>
+      <p className="muted small">Mail über das Projektkonto an externe Zuständige (Arbeitspaket mit Mail-Adresse); die Antwort landet über die Antwortadresse im Arbeitspaket. Je Arbeitspaket und Tag höchstens eine Mail.{!detail.project.mailAddress && <span className="text-warn"> Ohne Projektkonto wird nichts verschickt.</span>}</p>
       <label className="check"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} /> Erinnerungen aktiv</label>
-      <div className="row small"><span>Tage vor Fälligkeit</span><input type="text" value={f.daysBefore} onChange={(e) => setF({ ...f, daysBefore: e.target.value })} placeholder="3, 0" style={{ width: 90 }} /><span>(0 = am Tag selbst)</span></div>
-      <div className="row small"><span>Bei Verzug alle</span><input type="number" min={1} max={30} value={f.overdueEveryDays} onChange={(e) => setF({ ...f, overdueEveryDays: e.target.value })} placeholder="–" style={{ width: 60 }} /><span>Tage (leer = nicht)</span></div>
+      <div className="row small"><span>Tage vor Fälligkeit</span><input className="w-90" type="text" value={f.daysBefore} onChange={(e) => setF({ ...f, daysBefore: e.target.value })} placeholder="3, 0" /><span>(0 = am Tag selbst)</span></div>
+      <div className="row small"><span>Bei Verzug alle</span><input className="w-60" type="number" min={1} max={30} value={f.overdueEveryDays} onChange={(e) => setF({ ...f, overdueEveryDays: e.target.value })} placeholder="–" /><span>Tage (leer = nicht)</span></div>
       <label className="check"><input type="checkbox" checked={f.includeInternal} onChange={(e) => setF({ ...f, includeInternal: e.target.checked })} /> auch interne Zuständige per Mail erinnern</label>
       {error && <div className="error">{error}</div>}
-      <div><button className="btn primary sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reminders: { enabled: f.enabled, daysBefore: f.daysBefore.split(/[,;\s]+/).filter(Boolean).map(Number), overdueEveryDays: f.overdueEveryDays === '' ? null : Number(f.overdueEveryDays), includeInternal: f.includeInternal } }); await reload(); })}>Speichern</button></div>
+      <div><button className="btn sm primary" disabled={busy} onClick={() => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { reminders: { enabled: f.enabled, daysBefore: f.daysBefore.split(/[,;\s]+/).filter(Boolean).map(Number), overdueEveryDays: f.overdueEveryDays === '' ? null : Number(f.overdueEveryDays), includeInternal: f.includeInternal } }); await reload(); })}>Speichern</button></div>
     </div>
   );
 }
@@ -140,9 +140,9 @@ export function MailInquiryCard() {
   return (
     <SettingsCard title="Mail-Rückfrage" hint="Nennt die Mail-KI zu einer neuen Mail offene Punkte, fragt der Projektagent nach, statt zu raten. Ohne Projektagent stehen sie im Log des Arbeitspakets. Ohne eigenen Wert gilt die Vorgabe des Mandanten.">
       {!isPl && <ReadOnlyNote who="PL" />}
-      <div className="row small" style={{ flexWrap: 'wrap' }}>
+      <div className="row small wrap">
         <InheritSelect ariaLabel="Mail-Rückfrage" value={own} effective={{ value: v.mode, origin: 'Mandant' }} options={INQUIRY_OPTIONS} disabled={!isPl || busy} onChange={(mode) => void save(mode ? { mode, waitHours: v.waitHours } : null)} />
-        {v.mode !== 'off' && <label className="row small" style={{ gap: 4 }}>Frist <input type="number" min={1} max={720} value={hours ?? String(v.waitHours)} disabled={!isPl || busy || v.inherited} title={v.inherited ? 'Frist aus der Vorgabe des Mandanten; für eine eigene Frist zuerst einen eigenen Modus wählen' : 'Stunden, nach denen eine Rückfrage im Projekt weitergegeben wird'} style={{ width: 70 }} onChange={(e) => setHours(e.target.value)} onBlur={() => { const h = Number(hours); if (hours !== null && Number.isInteger(h) && h >= 1 && h <= 720 && h !== v.waitHours) void save({ mode: v.mode, waitHours: h }); else setHours(null); }} /> h{v.inherited && <span className="muted">(Mandant)</span>}</label>}
+        {v.mode !== 'off' && <label className="row small gap-1">Frist <input type="number" min={1} max={720} value={hours ?? String(v.waitHours)} disabled={!isPl || busy || v.inherited} title={v.inherited ? 'Frist aus der Vorgabe des Mandanten; für eine eigene Frist zuerst einen eigenen Modus wählen' : 'Stunden, nach denen eine Rückfrage im Projekt weitergegeben wird'} style={{ width: 70 }} onChange={(e) => setHours(e.target.value)} onBlur={() => { const h = Number(hours); if (hours !== null && Number.isInteger(h) && h >= 1 && h <= 720 && h !== v.waitHours) void save({ mode: v.mode, waitHours: h }); else setHours(null); }} /> h{v.inherited && <span className="muted">(Mandant)</span>}</label>}
       </div>
       {error && <div className="error small mt">{error}</div>}
     </SettingsCard>
@@ -165,7 +165,7 @@ export function ExternalCard() {
   const dirty = f.name !== (p.name ?? '') || f.address !== (p.address ?? '') || f.access !== (p.access ?? '');
   const contacts = p.contacts?.length ? p.contacts.map((c) => `${c.name}${c.role ? ` (${c.role})` : ''}${c.email ? ` <${c.email}>` : ''}`).join('; ') : 'keiner (Verweis an „die Projektleitung“)';
   return (
-    <SettingsCard title="Außenkommunikation" hint={<>KI-Agenten schreiben Externen nur, was zu deren Aufgabe gehört: Außenbeschreibung des AP, Log-Einträge „für Externe sichtbar“, freigegebene Seiten und dieses Profil. Prüfstufe (<Link to="/verwaltung/mail">Verwaltung › Mail</Link>): <strong>{guard}</strong>. Der erste Kontakt zu einer Adresse ohne Bezug zum AP geht immer als Entwurf; Angehaltenes steht unter <Link to={`/projekte/${detail.project.id}/mail/freigaben`}>Mail › Freigaben</Link>.</>}>
+    <SettingsCard title={<><Term k="aussenpruefung">Außenkommunikation</Term></>} hint={<>KI-Agenten schreiben Externen nur, was zu deren Aufgabe gehört: Außenbeschreibung des AP, Log-Einträge „für Externe sichtbar“, freigegebene Seiten und dieses Profil. Prüfstufe (<Link to="/verwaltung/mail">Verwaltung › Mail</Link>): <strong>{guard}</strong>. Der erste Kontakt zu einer Adresse ohne Bezug zum AP geht immer als Entwurf; Angehaltenes steht unter <Link to={`/projekte/${detail.project.id}/mail/freigaben`}>Mail › Freigaben</Link>.</>}>
       {!isPl && <ReadOnlyNote who="PL" />}
       {!isPl ? <dl className="kv"><dt>Name nach außen</dt><dd>{p.name || '–'}</dd><dt>Adresse</dt><dd>{p.address || '–'}</dd><dt>Zufahrt, Hinweise</dt><dd>{p.access || '–'}</dd><dt>Ansprechpartner</dt><dd>{contacts}</dd></dl> : (
         <div className="form">
@@ -174,7 +174,7 @@ export function ExternalCard() {
           <label className="field"><span>Zufahrt und Hinweise für Externe</span><textarea value={f.access} onChange={(e) => setF({ ...f, access: e.target.value })} /></label>
           <div className="field"><span>Ansprechpartner für Externe</span><span className="small">{contacts} · <Link to={`/projekte/${detail.project.id}/einstellungen/personen`}>Kontakte mit „nach außen“ pflegen</Link></span></div>
           {error && <div className="error">{error}</div>}
-          <div className="row"><button className="btn primary sm" disabled={busy || !dirty} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/external-profile`, f); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
+          <div className="row"><button className="btn sm primary" disabled={busy || !dirty} onClick={() => void run(async () => { await api.put(`/projects/${detail.project.id}/external-profile`, f); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
         </div>
       )}
     </SettingsCard>

@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { Navigate, Route, Routes, useLocation, useParams } from 'react-router-dom';
+import { IconLock } from '../icons';
 
 /**
  * Gemeinsames Muster der drei Einstellungsseiten (Verwaltung, Projekt, Meine Einstellungen): Reiter sind Routen unter einer
@@ -51,7 +52,7 @@ export interface Inherited<T> { value: T; origin: string }
 export const inheritedText = <T,>(e: Inherited<T> | null | undefined, text: (v: T) => string) => (e ? `erbt: ${text(e.value)} (${e.origin})` : 'erbt');
 
 /**
- * Select für ein vererbbares Feld: erste Option „erbt: Wert (Ebene)“ (eigener Wert leer), dann die Werte; gesperrt mit 🔒 und Ebene.
+ * Select für ein vererbbares Feld: erste Option „erbt: Wert (Ebene)“ (eigener Wert leer), dann die Werte; gesperrt mit <IconLock size={12} /> und Ebene.
  * `value` ist der eigene Wert dieser Ebene (undefined = erbt), `effective` der wirksame Wert mit Herkunft.
  */
 export function InheritSelect<T extends string>({ value, effective, options, onChange, disabled, lockedBy, label, ariaLabel, text }: {
@@ -60,12 +61,12 @@ export function InheritSelect<T extends string>({ value, effective, options, onC
 }) {
   const t = text ?? ((v: T) => options.find((o) => o.key === v)?.label ?? String(v));
   const select = (
-    <span className="row nowrap" style={{ gap: 4 }}>
+    <span className="row nowrap gap-1">
       <select aria-label={ariaLabel} className={value == null ? 'inherited' : ''} value={value ?? ''} disabled={disabled || Boolean(lockedBy)} style={{ width: 'auto' }} onChange={(e) => onChange((e.target.value || undefined) as T | undefined)}>
         <option value="">{inheritedText(effective, t)}</option>
         {options.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
       </select>
-      {lockedBy && <span className="muted small" title="Gesperrt auf einer Ebene darüber">🔒 {lockedBy}</span>}
+      {lockedBy && <span className="muted small" title="Gesperrt auf einer Ebene darüber"><IconLock size={12} /> {lockedBy}</span>}
     </span>
   );
   return label ? <label className="field"><span>{label}</span>{select}</label> : select;
@@ -80,11 +81,11 @@ export function InheritNumber({ value, effective, onChange, disabled, lockedBy, 
   useEffect(() => setV(value == null ? '' : String(value)), [value]);
   const commit = () => { const n = v.trim() === '' ? undefined : Number(v); if (n !== undefined && (!Number.isFinite(n) || (min != null && n < min) || (max != null && n > max))) { setV(value == null ? '' : String(value)); return; } if (n !== (value ?? undefined)) onChange(n); };
   const input = (
-    <span className="row nowrap" style={{ gap: 4 }}>
+    <span className="row nowrap gap-1">
       <input type="number" aria-label={ariaLabel} className={value == null ? 'inherited' : ''} value={v} min={min} max={max} disabled={disabled || Boolean(lockedBy)} style={{ width }} placeholder={effective ? `${effective.value}${unit ? ` ${unit}` : ''} (${effective.origin})` : '–'} title={inheritedText(effective, (x) => `${x}${unit ? ` ${unit}` : ''}`)}
         onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
       {unit && <span className="muted small">{unit}</span>}
-      {lockedBy && <span className="muted small" title="Gesperrt auf einer Ebene darüber">🔒 {lockedBy}</span>}
+      {lockedBy && <span className="muted small" title="Gesperrt auf einer Ebene darüber"><IconLock size={12} /> {lockedBy}</span>}
     </span>
   );
   return label ? <label className="field"><span>{label}</span>{input}</label> : input;
@@ -94,7 +95,7 @@ export function InheritNumber({ value, effective, onChange, disabled, lockedBy, 
 export function SettingsCard({ title, action, children, id, hint }: { title: ReactNode; action?: ReactNode; children: ReactNode; id?: string; hint?: ReactNode }) {
   return (
     <div className="card" id={id}>
-      <div className="row between mb"><h2 style={{ margin: 0 }}>{title}</h2>{action}</div>
+      <div className="row between mb"><h2 className="m-0">{title}</h2>{action}</div>
       {hint && <p className="muted small">{hint}</p>}
       {children}
     </div>

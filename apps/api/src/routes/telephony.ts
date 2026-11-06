@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -11,6 +11,8 @@ import { finishCall, handleFlowEvent, normNumber, verifyFlowRequest, type FlowEv
  * Telefonie: Ereignisse von sipgate Flow (KI am Telefon) und sipgate.io (Anruf-Log ohne KI) sowie die Verwaltung
  * (Org-Admin): Freischaltung, Schlüssel, Rufnummern mit Projekt, Agent und KI-Profil, Anrufliste.
  */
+const safeEq = (a: string, b: string) => { const x = Buffer.from(a); const y = Buffer.from(b); return x.length === y.length && timingSafeEqual(x, y); };
+
 export async function telephonyRoutes(app: FastifyInstance) {
   const db = app.db;
   const config = (orgId: string) => db.maybeOne(`select * from telephony_config where org_id = $1`, [orgId]);
@@ -40,7 +42,8 @@ export async function telephonyRoutes(app: FastifyInstance) {
     hooks.post<{ Params: { orgId: string; token: string }; Body: Record<string, any> }>('/telephony/sipgate-io/:orgId/:token', async (req, reply) => {
       const cfg = /^[0-9a-f-]{36}$/i.test(req.params.orgId) ? await config(req.params.orgId) : null;
       const token = cfg ? unseal(cfg.io_token) : null;
-      if (!cfg?.enabled || !token || token !== req.params.token) return reply.status(401).send('Nicht autorisiert');
+      // Token aus der URL zeitkonstant vergleichen (kein Rückschluss über die Antwortzeit)
+      if (!cfg?.enabled || !token || !safeEq(token, String(req.params.token ?? ''))) return reply.status(401).send('Nicht autorisiert');
       const b = req.body ?? {};
       const callId = String(b.callId ?? '').slice(0, 100);
       if (!callId) return reply.status(400).send('callId fehlt');

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '../../../lib/api';
-import { Modal, roleLabel, useAsync, useDialog } from '../../../components/ui';
+import { Badge, Button, FieldError, Modal, roleLabel, Term, useAsync, useDialog, useDirty } from '../../../components/ui';
 import { InviteCard } from '../InviteCard';
 import type { AiFeature, Group, ProjectGroup } from '@projekttool/shared';
 import { rightsSummary } from '../../../components/AgentEditor';
@@ -16,6 +16,7 @@ export const rightsText = (m: { canEditPlan: boolean; canApprove: boolean; canFi
 /**
  * Mitglieder mit Herkunft (Regel M): ein Direkteintrag überschreibt alle Gruppen, zwischen Gruppen gilt die höchste Rolle,
  * Einzelrechte werden addiert. Darunter die Gruppen im Projekt (nicht in persönlichen Projekten).
+ * Zwei Wege: „Vorhandenen Benutzer hinzufügen“ (Person des Mandanten) und „Neue Person per Mail einladen“ (InviteCard).
  */
 export function MembersCard() {
   const { detail, reload } = useProject();
@@ -26,7 +27,7 @@ export function MembersCard() {
   const [edit, setEdit] = useState<MemberRow | null>(null);
   const [invite, setInvite] = useState(false);
   const [group, setGroup] = useState<ProjectGroup | 'new' | null>(null);
-  const { error, run } = useAsync();
+  const { error, run } = useAsync({ toast: true });
   const dialog = useDialog();
   const pid = detail.project.id;
   const policy = useProjectPolicy(detail.project);
@@ -41,10 +42,13 @@ export function MembersCard() {
     void dialog.confirm({ title: 'Mitglied entfernen', text: stays.length ? `${m.name} bleibt über ${stays.map(groupLabel).join(', ')} Mitglied; der Direkteintrag entfällt.` : `${m.name} aus dem Projekt entfernen? Der Zugriff endet sofort, die Historie bleibt.`, confirmLabel: 'Entfernen', danger: true })
       .then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/members/${m.userId}`); await reload(); }); });
   };
+  // Direkteintrag aufgeben: die Person behält nur noch die Rechte ihrer Gruppen
+  const takeGroupRights = (m: MemberRow, via: ProjectGroup[]) => void dialog.confirm({ title: 'Gruppenrechte übernehmen', text: `Der Direkteintrag von ${m.name} entfällt. Danach gelten nur noch Rolle und Einzelrechte aus ${via.map(groupLabel).join(', ')}.`, confirmLabel: 'Direkteintrag entfernen', danger: true })
+    .then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/members/${m.userId}`); await reload(); }); });
   return (
     <div className="card" id="mitglieder">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Mitglieder</h2>{isPl && <span className="row">{policy.members.groups && <button className="btn sm" onClick={() => setGroup('new')}>Gruppe hinzufügen</button>}<button className="btn primary sm" onClick={() => setInvite(true)}>Hinzufügen</button></span>}</div>
-      {error && <div className="error mb">{error}</div>}
+      <div className="row between mb"><h2 className="m-0">Mitglieder</h2>{isPl && <span className="row">{policy.members.groups && <Button size="sm" onClick={() => setGroup('new')}>Gruppe hinzufügen</Button>}<Button size="sm" variant="primary" title="Person, die im Mandanten schon ein Konto hat; neue Personen lädst du unten per Mail ein" onClick={() => setInvite(true)}>Vorhandenen Benutzer hinzufügen</Button></span>}</div>
+      {error && <div className="error mb" role="alert">{error}</div>}
       <table className="table"><thead><tr><th>Name</th><th>Projektrolle</th><th>Einzelrechte</th><th>Herkunft</th><th /></tr></thead><tbody>
         {detail.members.map((m) => {
           const primaryRow = m.role === 'pl' && !m.isDeputy;
@@ -52,11 +56,11 @@ export function MembersCard() {
           return (
             <tr key={m.userId}>
               <td>{m.name}<div className="muted small">{m.kind === 'agent' ? <>KI-Agent · {agentOf(m.userId)?.profileName ?? 'kein LLM'}{agentOf(m.userId)?.profileProjectId ? ' (eigenes LLM)' : ''}</> : m.email}</div></td>
-              <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.userId === detail.project.agentUserId ? ' (Projektagent)' : m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <span className="badge" style={{ marginLeft: 4 }} title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</span>}</td>
+              <td><span className={`badge ${m.role}`}>{roleLabel[m.role]}{m.role === 'pl' && (m.userId === detail.project.agentUserId ? ' (Projektagent)' : m.isDeputy ? ' (Stellvertretung)' : ' (verantwortlich)')}</span>{m.kind === 'agent' && <Badge className="ml-1" title={m.agentCanMail === false ? 'KI-Agent, Mails nur als Entwurf' : 'KI-Agent, darf Mails senden'}>KI-Agent{m.agentCanMail === false ? ' · ohne Mail' : ''}</Badge>}</td>
               <td className="small muted">{m.kind === 'agent' ? <AgentRights a={agentOf(m.userId)} /> : m.role === 'pl' ? 'alle' : rightsText(m)}</td>
               <td className="small">{m.origin === 'group'
                 ? <span title="Mitglied über Gruppen des Projekts: höchste Rolle, Einzelrechte addiert">über {via.map((g) => g.name).join(', ') || 'Gruppe'}</span>
-                : <>direkt{via.length > 0 && <div className="muted">überschreibt {via.map(groupLabel).join(', ')}{isPl && !primaryRow && <> · <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/projects/${pid}/members/${m.userId}`); await reload(); })}>Gruppenrechte übernehmen</button></>}</div>}</>}</td>
+                : <>direkt{via.length > 0 && <div className="muted">überschreibt {via.map(groupLabel).join(', ')}{isPl && !primaryRow && <> · <button className="btn sm link" title="Direkteintrag entfernen; es gelten dann die Gruppenrechte" onClick={() => takeGroupRights(m, via)}>Gruppenrechte übernehmen</button></>}</div>}</>}</td>
               <td className="nowrap">{isPl && m.kind === 'agent' ? <Link className="btn sm link" to={`/projekte/${pid}/einstellungen/ki`} title="Einladen, einschränken, entfernen: Einstellungen › KI">Verwalten</Link> : null}{isPl && m.kind !== 'agent' && <>{(isPrimary || !primaryRow) && <button className="btn sm link" title={m.origin === 'group' ? 'Als Direkteintrag festlegen (überschreibt die Gruppen)' : undefined} onClick={() => setEdit(m)}>Rolle</button>}{!primaryRow && m.origin !== 'group' && <button className="btn sm link" onClick={() => remove(m)}>Entfernen</button>}</>}</td>
             </tr>
           );
@@ -66,7 +70,7 @@ export function MembersCard() {
       {policy.members.groups && (isPl || groups.length > 0) && <>
         <h3 className="mt">Gruppen im Projekt</h3>
         {groups.length === 0
-          ? <p className="muted small">Noch keine Gruppen. Eine Gruppe macht ihre Personen zu Mitgliedern oder Lesern (höchste Rolle zählt, Einzelrechte addieren sich); ein Direkteintrag überschreibt die Gruppen. PL und Stellvertretung sind immer einzelne Personen.</p>
+          ? <p className="muted small">Noch keine Gruppen. Eine Gruppe macht ihre Personen zu Mitgliedern oder Lesern (<Term k="regelm">Regel M</Term>: höchste Rolle zählt, Einzelrechte addieren sich); ein Direkteintrag überschreibt die Gruppen. PL und Stellvertretung sind immer einzelne Personen.</p>
           : <table className="table"><thead><tr><th>Gruppe</th><th>Rolle</th><th>Einzelrechte</th><th /></tr></thead><tbody>
             {groups.map((g) => <tr key={g.groupId}>
               <td>{g.name}<div className="muted small">{g.memberIds.length} {g.memberIds.length === 1 ? 'Person' : 'Personen'}</div></td>
@@ -87,7 +91,7 @@ export function MembersCard() {
 /** Was ein Agent hier darf: Kurztext der Rechte, abgeschaltete und „läuft nicht“ mit Grund. */
 function AgentRights({ a }: { a?: { rights: AiFeature[]; deny: AiFeature[]; usable: boolean; reason: string | null } }) {
   if (!a) return <>…</>;
-  return <>{rightsSummary(a.rights.filter((r) => !a.deny.includes(r)))}{a.deny.length > 0 && <div>{a.deny.length} im Projekt abgeschaltet</div>}{!a.usable && <div><span className="badge warn">läuft nicht</span> {a.reason}</div>}</>;
+  return <>{rightsSummary(a.rights.filter((r) => !a.deny.includes(r)))}{a.deny.length > 0 && <div>{a.deny.length} im Projekt abgeschaltet</div>}{!a.usable && <div><Badge tone="warn">läuft nicht</Badge> {a.reason}</div>}</>;
 }
 
 /** Gruppe ins Projekt aufnehmen oder ihre Rechte ändern (Rolle Leser oder Mitglied, Einzelrechte nur für Mitglieder). */
@@ -96,12 +100,17 @@ function GroupForm({ group, onClose }: { group: ProjectGroup | null; onClose: ()
   const all = useData<{ groups: Group[] }>('/groups');
   const options = (all.data?.groups ?? []).filter((g) => (group ? g.id === group.groupId : !(detail.groups ?? []).some((x) => x.groupId === g.id)));
   const [f, setF] = useState({ groupId: group?.groupId ?? '', role: group?.role ?? 'member', canEditPlan: group?.canEditPlan ?? false, canApprove: group?.canApprove ?? false, canFinalize: group?.canFinalize ?? false, canUseAi: group?.canUseAi ?? true });
-  const { busy, error, run } = useAsync();
+  const { busy, error, fieldErrors, run } = useAsync();
+  const { dirty } = useDirty(f);
   const groupId = f.groupId || options[0]?.id || '';
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!groupId) return; void run(async () => {
+    const { groupId: _g, ...rights } = f; void _g;
+    await api.put(`/projects/${detail.project.id}/groups/${groupId}`, rights); await reload(); onClose();
+  }); };
   return (
-    <Modal title={group ? `Gruppe: ${group.name}` : 'Gruppe hinzufügen'} onClose={onClose}>
-      <div className="form">
-        {!group && <label className="field"><span>Gruppe</span><select value={groupId} onChange={(e) => setF({ ...f, groupId: e.target.value })}>{options.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberIds.length})</option>)}</select></label>}
+    <Modal title={group ? `Gruppe: ${group.name}` : 'Gruppe hinzufügen'} onClose={onClose} dirty={dirty}>
+      <form className="form" onSubmit={submit} noValidate>
+        {!group && <label className="field"><span className="req">Gruppe</span><select value={groupId} required aria-required="true" onChange={(e) => setF({ ...f, groupId: e.target.value })}>{options.map((g) => <option key={g.id} value={g.id}>{g.name} ({g.memberIds.length})</option>)}</select><FieldError error={fieldErrors.groupId} /></label>}
         {!group && all.data && options.length === 0 && <div className="muted small">Keine weitere Gruppe vorhanden. Gruppen legt die Verwaltung an.</div>}
         <label className="field"><span>Rolle der Gruppe</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as 'member' | 'reader', canUseAi: e.target.value === 'member' })}><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
         {f.role === 'member' && <>
@@ -111,13 +120,10 @@ function GroupForm({ group, onClose }: { group: ProjectGroup | null; onClose: ()
           <label className="check"><input type="checkbox" checked={f.canFinalize} onChange={(e) => setF({ ...f, canFinalize: e.target.checked })} /> Dokument final setzen, Versand auslösen</label>
         </>}
         <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> {f.role === 'reader' ? 'KI nutzen (nur Fragen)' : 'KI nutzen'}</label>
-        <p className="muted small">Personen mit Direkteintrag behalten ihre eigenen Rechte. Bei mehreren Gruppen gilt die höchste Rolle, Einzelrechte addieren sich. KI-Agenten werden nie über Gruppen Mitglied.</p>
-        {error && <div className="error">{error}</div>}
-        <div><button className="btn primary" disabled={busy || !groupId} onClick={() => void run(async () => {
-          const { groupId: _g, ...rights } = f; void _g;
-          await api.put(`/projects/${detail.project.id}/groups/${groupId}`, rights); await reload(); onClose();
-        })}>Speichern</button></div>
-      </div>
+        <p className="muted small">Personen mit Direkteintrag behalten ihre eigenen Rechte. Bei mehreren Gruppen gilt die höchste Rolle, Einzelrechte addieren sich (<Term k="regelm">Regel M</Term>). KI-Agenten werden nie über Gruppen Mitglied.</p>
+        {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}
+        <div><Button type="submit" variant="primary" loading={busy} disabled={!groupId}>Speichern</Button></div>
+      </form>
     </Modal>
   );
 }
@@ -131,13 +137,23 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
   const onlyAgents = useProjectPolicy(detail.project).members.onlyOwnerAndAgents;
   const candidates = onlyAgents ? [] : users.filter((u) => u.kind !== 'agent' && !detail.members.some((m) => m.userId === u.id));
   const [f, setF] = useState({ userId: member?.userId ?? candidates[0]?.id ?? '', role: member?.role ?? 'member', isDeputy: member?.isDeputy ?? true, canEditPlan: member?.canEditPlan ?? false, canApprove: member?.canApprove ?? false, canFinalize: member?.canFinalize ?? false, canUseAi: member?.canUseAi ?? true });
-  const { busy, error, run } = useAsync();
+  const { busy, error, fieldErrors, run } = useAsync();
+  const { dirty } = useDirty(f);
+  const submit = (e: React.FormEvent) => { e.preventDefault(); if (!f.userId) return; void run(async () => {
+    const isDeputy = isPrimary ? f.isDeputy : true;
+    const body: Record<string, unknown> = { ...f, isDeputy };
+    const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
+    if (f.role === 'pl' && !isDeputy && primary && primary.userId !== f.userId) {
+      const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
+      if (direct > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt  zugewiesen. Auch an die neue Projektleitung übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
+    }
+    await api.put(`/projects/${detail.project.id}/members/${f.userId}`, body); await reload(); await reloadTasks(); onClose(); }); };
   return (
-    <Modal title={member ? `${member.origin === 'group' ? 'Direkteintrag' : 'Rolle'}: ${member.name}` : 'Mitglied hinzufügen'} onClose={onClose}>
-      <div className="form">
+    <Modal title={member ? `${member.origin === 'group' ? 'Direkteintrag' : 'Rolle'}: ${member.name}` : 'Vorhandenen Benutzer hinzufügen'} onClose={onClose} dirty={dirty}>
+      <form className="form" onSubmit={submit} noValidate>
         {member?.origin === 'group' && <div className="notice small">Mitglied über {(detail.groups ?? []).filter((g) => g.memberIds.includes(member.userId)).map((g) => g.name).join(', ') || 'eine Gruppe'}. Speichern legt einen Direkteintrag an; er überschreibt die Rechte aus den Gruppen, bis du „Gruppenrechte übernehmen“ wählst.</div>}
-        {!member && <label className="field"><span>Person des Mandanten</span><select value={f.userId} onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select></label>}
-        {!member && <div className="muted small">KI-Agenten lädst du unter <Link to={`/projekte/${detail.project.id}/einstellungen/ki`} onClick={onClose}>Einstellungen › KI</Link> ein.{onlyAgents ? ' In diesem Projekt sind nur du und Agenten Mitglied.' : ''}</div>}
+        {!member && <label className="field"><span className="req">Person des Mandanten</span><select value={f.userId} required aria-required="true" onChange={(e) => setF({ ...f, userId: e.target.value })}>{candidates.map((u) => <option key={u.id} value={u.id}>{u.name} ({u.email})</option>)}</select><FieldError error={fieldErrors.userId} /></label>}
+        {!member && <div className="muted small">Noch kein Konto? Dann unten „Neue Person per Mail einladen“. KI-Agenten lädst du unter <Link to={`/projekte/${detail.project.id}/einstellungen/ki`} onClick={onClose}>Einstellungen › KI</Link> ein.{onlyAgents ? ' In diesem Projekt sind nur du und Agenten Mitglied.' : ''}</div>}
         {/* „KI nutzen“ je Rolle vorbelegt: Mitglied an, Leser aus */}
         <label className="field"><span>Projektrolle</span><select value={f.role} onChange={(e) => setF({ ...f, role: e.target.value as any, canUseAi: e.target.value !== 'reader' })}><option value="pl">PL</option><option value="member">Mitglied</option><option value="reader">Leser</option></select></label>
         {f.role === 'pl' && (isPrimary
@@ -151,17 +167,9 @@ function RoleForm({ member, onClose }: { member?: MemberRow; onClose: () => void
           <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen</label>
         </>}
         {f.role === 'reader' && <label className="check"><input type="checkbox" checked={f.canUseAi} onChange={(e) => setF({ ...f, canUseAi: e.target.checked })} /> KI nutzen (nur Fragen)</label>}
-        {error && <div className="error">{error}</div>}
-        <div><button className="btn primary" disabled={busy || !f.userId} onClick={() => void run(async () => {
-          const isDeputy = isPrimary ? f.isDeputy : true;
-          const body: Record<string, unknown> = { ...f, isDeputy };
-          const primary = detail.members.find((m) => m.role === 'pl' && !m.isDeputy);
-          if (f.role === 'pl' && !isDeputy && primary && primary.userId !== f.userId) {
-            const direct = tasks.filter((x) => !x.done && x.responsibleUserId === primary.userId).length + detail.subprojects.filter((s) => s.responsibleUserId === primary.userId).length;
-            if (direct > 0) { const v = await dialog.choose({ title: 'Direkt zugewiesene Arbeitspakete', text: `${direct} Arbeitspaket(e)/Teilprojekt(e) sind ${primary.name} direkt  zugewiesen. Auch an die neue Projektleitung übertragen? Geerbte Zuständigkeiten wechseln in jedem Fall.`, options: [{ label: 'Mit übertragen', value: true, primary: true }, { label: 'Nur geerbte wechseln', value: false }] }); if (v === null) return; body.transferTasks = v; }
-          }
-          await api.put(`/projects/${detail.project.id}/members/${f.userId}`, body); await reload(); await reloadTasks(); onClose(); })}>Speichern</button></div>
-      </div>
+        {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}
+        <div><Button type="submit" variant="primary" loading={busy} disabled={!f.userId}>Speichern</Button></div>
+      </form>
     </Modal>
   );
 }

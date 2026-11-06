@@ -232,7 +232,13 @@ async function createStepTask(db: Db, run: any, step: WorkflowStep, steps: Workf
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning id`,
     [run.project_id, run.subproject_id, col.id, title, fill(step.description, vars) || null, step.priority ?? 'normal', due, userId, email, pos.p, newMailCode(), run.started_by, run.id]
   );
-  for (const [i, c] of (step.checklist ?? []).entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [r.id, fill(c, vars).slice(0, 300), i]);
+  // Checkliste des Schritts: Checklistenpunkte gehören zu Aufgaben, also eine Aufgabe „Checkliste“ am Arbeitspaket; sind ihre
+  // Punkte erledigt, schließt sie automatisch und mit ihr das Arbeitspaket (Projekt-Automatik), das den nächsten Schritt startet
+  if (step.checklist?.length) {
+    const a = await db.one(`insert into tasks (project_id, subproject_id, column_id, title, priority, responsible_user_id, responsible_email, position, mail_code, created_by, parent_id) values ($1,$2,$3,'Checkliste',$4,null,null,0,$5,$6,$7) returning id`,
+      [run.project_id, run.subproject_id, col.id, step.priority ?? 'normal', newMailCode(), run.started_by, r.id]);
+    for (const [i, c] of step.checklist.entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [a.id, fill(c, vars).slice(0, 300), i]);
+  }
   if (email) await db.query(`insert into project_contacts (project_id, email) values ($1,$2) on conflict do nothing`, [run.project_id, email]);
   await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [r.id, run.started_by ?? (await resolveProjectLead(db, run.project_id)).userId, `Aus Workflow „${run.def_name}“ (Lauf „${run.name}“, Schritt ${idx + 1}: ${step.title})`]).catch(() => undefined);
   if (agentNote) {

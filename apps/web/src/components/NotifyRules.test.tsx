@@ -27,37 +27,37 @@ describe('Regelmatrix', () => {
   it('Projekt: geerbte Werte mit Herkunft, Sperre der Org deaktiviert das Feld, feste Kanäle; Änderungen gehen als Zeile der Klasse an onSave', () => {
     const data = { rules: [row('decision', { channels: { doc: 'page1' } })], effective: eff({ assigned: { value: { mail: 'now' }, origin: { mail: 'org' }, locked: { mail: 'org' } }, decision: { value: { doc: 'page1' }, origin: { doc: 'project' } } }) };
     render(<RulesMatrix level="project" data={data} canEdit onSave={onSave} />);
-    const assignedMail = screen.getByLabelText('assigned mail');
+    const assignedMail = screen.getByLabelText('Zuweisung: Mail');
     expect(assignedMail).toBeDisabled();
     expect(within(assignedMail).getByRole('option', { name: 'erbt: sofort (Org)' })).toBeInTheDocument();
-    expect(assignedMail.closest('td')).toHaveTextContent('🔒 Org');
+    expect(assignedMail.closest('td')).toHaveTextContent('gesperrt durch Org');
     expect(assignedMail.closest('td')!.querySelector('button')).toBeNull();
-    expect(within(screen.getByLabelText('due mail')).getByRole('option', { name: 'erbt: Digest (Standard)' })).toBeInTheDocument();
+    expect(within(screen.getByLabelText('Fälligkeit: Mail')).getByRole('option', { name: 'erbt: Digest (Standard)' })).toBeInTheDocument();
     // Fragearten: der Chat ist die Frage selbst; Chat-Meldungen haben keinen Chat-Kanal
     expect(within(screen.getByText('offene Fragen').closest('tr')!).getByText('Thread (fest)')).toBeInTheDocument();
-    expect(screen.queryByLabelText('question chat')).toBeNull();
+    expect(screen.queryByLabelText('Frage: Chat')).toBeNull();
     expect(within(screen.getByText('Direktnachricht, Erwähnung, Antwort').closest('tr')!).getAllByRole('cell')[2]).toHaveTextContent('–');
-    expect(screen.queryByLabelText('chat chat')).toBeNull();
+    expect(screen.queryByLabelText('Chat: Chat')).toBeNull();
     // Mail auf Digest: nur das geänderte Feld, der Rest erbt
-    fireEvent.change(screen.getByLabelText('due mail'), { target: { value: 'digest' } });
+    fireEvent.change(screen.getByLabelText('Fälligkeit: Mail'), { target: { value: 'digest' } });
     expect(onSave).toHaveBeenLastCalledWith([item('due', { channels: { mail: 'digest' } })]);
     // Log als Wahrheitswert, nicht als Text
-    fireEvent.change(screen.getByLabelText('due log'), { target: { value: 'true' } });
+    fireEvent.change(screen.getByLabelText('Fälligkeit: Log'), { target: { value: 'true' } });
     expect(onSave).toHaveBeenLastCalledWith([item('due', { channels: { log: true } })]);
     // Schloss sperrt das Feld für die Ebenen darunter
-    fireEvent.click(within(screen.getByLabelText('due mail').closest('tr')!).getByRole('button', { name: 'mail sperren' }));
+    fireEvent.click(within(screen.getByLabelText('Fälligkeit: Mail').closest('tr')!).getByRole('button', { name: 'Fälligkeit: Mail für die Ebenen darunter sperren' }));
     expect(onSave).toHaveBeenLastCalledWith([item('due', { locked: ['mail'] })]);
     // Zeile mit eingeschalteter Doku-Seite: die Seite geht als „an“ zurück, die Änderung dazu
-    expect(screen.getByLabelText('decision Doku')).toBeChecked();
-    fireEvent.change(screen.getByLabelText('decision mail'), { target: { value: 'digest' } });
+    expect(screen.getByLabelText('Entscheidung: Doku-Seite')).toBeChecked();
+    fireEvent.change(screen.getByLabelText('Entscheidung: Mail'), { target: { value: 'digest' } });
     expect(onSave).toHaveBeenLastCalledWith([item('decision', { channels: { doc: true, mail: 'digest' } })]);
-    fireEvent.click(screen.getByLabelText('decision Doku'));
+    fireEvent.click(screen.getByLabelText('Entscheidung: Doku-Seite'));
     expect(onSave).toHaveBeenLastCalledWith([item('decision', { channels: { doc: false } })]);
   });
 
   it('Benutzer: nur Chat (aus, Thread) und Mail, keine Spalten Empfänger, Log, Doku, Fristen', () => {
     render(<RulesMatrix level="user" data={{ rules: [], effective: eff() }} canEdit onSave={onSave} />);
-    const chat = screen.getByLabelText('assigned chat') as HTMLSelectElement;
+    const chat = screen.getByLabelText('Zuweisung: Chat') as HTMLSelectElement;
     expect(Array.from(chat.options).map((o) => o.textContent)).toEqual(['erbt: aus (Standard)', 'aus', 'Thread']);
     for (const h of ['Empfänger', 'Log', 'Doku', 'Fristen']) expect(screen.queryByRole('columnheader', { name: h })).toBeNull();
     expect(screen.queryByRole('button', { name: /sperren/ })).toBeNull();
@@ -67,7 +67,7 @@ describe('Regelmatrix', () => {
 
   it('Empfänger: Rollen in Reihenfolge, „sonst“ hängt an den letzten Eintrag, „Erben“ löscht die eigene Liste', async () => {
     render(<RulesMatrix level="project" data={{ rules: [], effective: eff() }} canEdit onSave={onSave} />);
-    const reviewRow = () => screen.getByLabelText('review mail').closest('tr')!;
+    const reviewRow = () => screen.getByLabelText('Prüfung und Freigabe: Mail').closest('tr')!;
     fireEvent.click(within(reviewRow()).getByRole('button', { name: 'ändern' }));
     let dlg = screen.getByText('Empfänger: Prüfung und Freigabe').closest('.modal') as HTMLElement;
     fireEvent.change(within(dlg).getByLabelText('Empfänger hinzufügen'), { target: { value: 'subproject_lead' } });

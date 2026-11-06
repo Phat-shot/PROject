@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api } from '../lib/api';
+import { Button, FieldError } from '../components/ui';
+
+const MIN_PW = 10;
 
 /** Öffentliche Seite /passwort/:token: neues Passwort setzen, danach angemeldet (mit zweitem Faktor: danach normal anmelden). */
 export function ResetPasswordPage({ token }: { token: string }) {
@@ -9,6 +12,8 @@ export function ResetPasswordPage({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [mfaDone, setMfaDone] = useState(false);
   useEffect(() => { api.get<{ email: string; name: string }>(`/auth/reset/${token}`).then(setInfo).catch((e) => setError(e.message)); }, [token]);
+  const mismatch = pw.repeat.length > 0 && pw.next !== pw.repeat;
+  const tooShort = pw.next.length > 0 && pw.next.length < MIN_PW;
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true); setError(null);
@@ -20,18 +25,17 @@ export function ResetPasswordPage({ token }: { token: string }) {
   };
   return (
     <div className="login">
-      <form className="card" onSubmit={submit}>
+      <form className="card" onSubmit={submit} noValidate>
         <h1>Neues Passwort</h1>
-        {error && !info && <><div className="error mb">{error}</div><a href="/">Zur Anmeldung</a></>}
+        {error && !info && <><div className="error mb" role="alert">{error}</div><a href="/">Zur Anmeldung</a></>}
         {mfaDone && <><p>Passwort gesetzt. Bitte jetzt mit dem neuen Passwort und dem Code aus der Authenticator-App anmelden.</p><a className="btn primary" href="/">Zur Anmeldung</a></>}
         {info && !mfaDone && (
           <div className="form">
             <p className="muted">Für {info.name} ({info.email}).</p>
-            <label className="field"><span>Neues Passwort (mindestens 10 Zeichen)</span><input type="password" value={pw.next} autoFocus onChange={(e) => setPw({ ...pw, next: e.target.value })} /></label>
-            <label className="field"><span>Wiederholen</span><input type="password" value={pw.repeat} onChange={(e) => setPw({ ...pw, repeat: e.target.value })} /></label>
-            {pw.repeat && pw.next !== pw.repeat && <div className="small" style={{ color: 'var(--danger)' }}>Passwörter stimmen nicht überein.</div>}
-            {error && <div className="error">{error}</div>}
-            <button className="btn primary" disabled={busy || pw.next.length < 10 || pw.next !== pw.repeat}>Passwort setzen und anmelden</button>
+            <label className="field"><span className="req">Neues Passwort (mindestens {MIN_PW} Zeichen)</span><input type="password" value={pw.next} autoFocus required aria-required="true" minLength={MIN_PW} autoComplete="new-password" aria-invalid={tooShort || undefined} onChange={(e) => setPw({ ...pw, next: e.target.value })} /><FieldError error={tooShort ? `Noch ${MIN_PW - pw.next.length} Zeichen` : null} /></label>
+            <label className="field"><span className="req">Wiederholen</span><input type="password" value={pw.repeat} required aria-required="true" autoComplete="new-password" aria-invalid={mismatch || undefined} onChange={(e) => setPw({ ...pw, repeat: e.target.value })} /><FieldError error={mismatch ? 'Passwörter stimmen nicht überein.' : null} /></label>
+            {error && <div className="error" role="alert">{error}</div>}
+            <Button type="submit" variant="primary" loading={busy} disabled={pw.next.length < MIN_PW || pw.next !== pw.repeat}>Passwort setzen und anmelden</Button>
           </div>
         )}
       </form>

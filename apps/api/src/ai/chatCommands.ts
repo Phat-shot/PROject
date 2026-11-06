@@ -9,6 +9,7 @@ import { askQuestion, cancelQuestions, type Asker } from '../questions.js';
 import { setRules } from '../rules.js';
 import { cleanTitle, createPlannedTask, findTaskByRef, ymd, type PlanActor } from './plan.js';
 import { queueAgentRun } from './agentEvents.js';
+import { reparentTask } from '../tasks/structure.js';
 import { CHAT_ORDERS, MODE_ORDER, effectiveAgentPolicy, parseAgentPolicy } from './agentPolicy.js';
 import { aiAllowed } from './policy.js';
 import { SQL } from '../projectPolicy.js';
@@ -19,9 +20,9 @@ import { SQL } from '../projectPolicy.js';
  * mit dem tatsächlichen Ergebnis je Befehl. Aufträge legt createPlannedTask mit den Rechten des Auftraggebers an; der Agent wird
  * zuständig und läuft mit Anlass order. Freigaben führt der Agent nie selbst aus: approve zeigt die Karte mit den offenen Vorschlägen.
  */
-export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer';
-export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'];
-export interface ChatCommand { type: ChatCommandType; ref?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
+export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer' | 'move';
+export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move'];
+export interface ChatCommand { type: ChatCommandType; ref?: string | null; /** move: Kennung des Ziel-Arbeitspakets (Aufgabe umhängen); leer mit subproject = Arbeitspaket einem Teilprojekt zuordnen */ to?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
 export type SenderRole = 'pl' | 'tp' | 'responsible' | 'member' | 'reader' | 'none';
@@ -63,7 +64,7 @@ export function allowedCommands(role: SenderRole, policy: EffectiveAgentPolicy |
 export const commandsText = (role: SenderRole, a: ReturnType<typeof allowedCommands>, policy: EffectiveAgentPolicy | null) => {
   const r: Record<SenderRole, string> = { pl: 'Projektleitung', tp: 'Teilprojekt-Verantwortung', responsible: 'Zuständige/r bzw. Ansprechpartner', member: 'Mitglied', reader: 'Leser (nur Auskunft)', none: 'ohne Projektzugriff (nur Auskunft)' };
   const can: string[] = [];
-  if (a.orders) can.push(`Aufträge (order${role === 'pl' ? ', überall im Projekt' : role === 'tp' ? ', im eigenen Teilprojekt' : role === 'responsible' ? ', Aufgaben unter dem eigenen AP' : ''})`);
+  if (a.orders) can.push(`Aufträge (order${role === 'pl' ? ', überall im Projekt' : role === 'tp' ? ', im eigenen Teilprojekt' : role === 'responsible' ? ', Aufgaben unter dem eigenen AP' : ''}), Verschieben (move: Aufgabe unter ein anderes AP, AP in ein Teilprojekt)`);
   else if (role !== 'reader' && role !== 'none') can.push(`keine Aufträge (Policy chatOrders = ${policy?.chatOrders ?? 'pl'}: Vorschlag an die PL als order_request über refer)`);
   if (a.control) can.push(`Steuerbefehle run, pause, resume, stop, priority${role === 'pl' ? ' an allen Arbeitspaketen' : ' an eigenen Arbeitspaketen'}`);
   if (a.approve) can.push('approve/reject zeigt die Karte mit offenen Bestätigungen (Klick entscheidet)');
@@ -146,6 +147,34 @@ async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null):
       await touchTask(db, task.id);
       queueAgentRun(task.id, 'comment');
       return { type: c.type, status: 'ok', text: `${code}: im Log vermerkt (${sender.name})`, link: lnk, taskId: task.id };
+    }
+    case 'move': {
+      // Verschieben wie ein Auftrag: Auftragsrecht am Quell-AP (PL, TP-Verantwortung, Zuständige je chatOrders) oder Planrecht; Ausführung über reparentTask (Log an Quelle und Ziel, Audit)
+      const m = await getMembership(db, project.id, sender.id);
+      if (!m || m.role === 'reader') return { type: c.type, status: 'denied', text: `${code}: nur Mitglieder verschieben` };
+      if (!a.orders && !m.canEditPlan) return { type: c.type, status: 'denied', text: `${code}: Verschieben erfordert das Auftragsrecht (Policy chatOrders = ${policy.chatOrders}) oder „Projektplan ändern“` };
+      const actor = { id: sender.id, name: sender.name, orgId: sender.orgId, kind: 'person' as const };
+      const to = String(c.to ?? '').trim();
+      if (to) {
+        const d = await targetTask(ctx, { type: 'move', ref: to }, ordered);
+        if ('error' in d) return { type: c.type, status: 'denied', text: `${code}: Ziel ${d.error}` };
+        if (d.project.id !== project.id) return { type: c.type, status: 'denied', text: `${code}: Verschieben nur innerhalb des Projekts (Projektwechsel im Arbeitspaket unter „Verschieben“)` };
+        if (d.task.parent_id) return { type: c.type, status: 'denied', text: `${code}: ${d.project.key}-${d.task.number} ist eine Aufgabe; Ziel muss ein Arbeitspaket sein` };
+        try { await reparentTask(db, actor, task.id, { parentId: d.task.id }); }
+        catch (e: any) { return { type: c.type, status: 'denied', text: `${code}: ${String(e?.message ?? e).slice(0, 200)}` }; }
+        queueAgentRun(task.id, 'task_changed');
+        return { type: c.type, status: 'ok', text: `${code} „${cut(task.title, 60)}“ verschoben unter ${d.project.key}-${d.task.number} „${cut(d.task.title, 60)}“`, link: lnk, taskId: task.id };
+      }
+      const spName = String(c.subproject ?? '').trim();
+      const none = !spName || /^(keins|keines|kein|ohne|-|–)$/i.test(spName) || [project.key, project.name].some((x) => x.toLowerCase() === spName.toLowerCase());
+      const sp = none ? null : await db.maybeOne(`select id, name from subprojects where project_id = $1 and lower(name) = lower($2)`, [project.id, spName]);
+      if (!none && !sp) return { type: c.type, status: 'denied', text: `${code}: Teilprojekt „${spName}“ gibt es nicht` };
+      if (!spName && !c.to) return { type: c.type, status: 'denied', text: `${code}: Ziel fehlt (to = Kennung des Ziel-AP oder subproject = Teilprojekt)` };
+      if (task.parent_id && !sp) return { type: c.type, status: 'denied', text: `${code}: Aufgaben verschiebt man unter ein Arbeitspaket (to = Kennung)` };
+      if (sp && !(await canSeeSubproject(db, sender.id, sp.id))) return { type: c.type, status: 'denied', text: `${code}: Teilprojekt „${sp.name}“ ist eingeschränkt sichtbar` };
+      try { await reparentTask(db, actor, task.id, { parentId: null, subprojectId: sp?.id ?? null }); }
+      catch (e: any) { return { type: c.type, status: 'denied', text: `${code}: ${String(e?.message ?? e).slice(0, 200)}` }; }
+      return { type: c.type, status: 'ok', text: `${code} „${cut(task.title, 60)}“ ${sp ? `dem Teilprojekt „${sp.name}“ zugeordnet` : 'aus dem Teilprojekt herausgenommen'}${task.parent_id ? ' (jetzt eigenes Arbeitspaket)' : ''}`, link: lnk, taskId: task.id };
     }
     case 'run': case 'pause': case 'resume': case 'stop': case 'priority': {
       if (!a.control) return { type: c.type, status: 'denied', text: `${code}: Steuerbefehle geben PL, Teilprojekt-Verantwortung oder Zuständige` };

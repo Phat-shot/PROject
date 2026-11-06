@@ -324,7 +324,7 @@ export async function docRoutes(app: FastifyInstance) {
     const result = await app.mail.sendFromAccount(account, {
       to: list,
       subject: `${r.title} (Version ${r.version})`,
-      text: `Anbei „${r.title}“ in der finalen Version ${r.version} aus dem Projekt „${project.name}“ als PDF.\n\nMit freundlichen Grüßen\n${user.name}`,
+      text: `Hallo,\n\nanbei „${r.title}“ in der finalen Version ${r.version} aus dem Projekt „${project.name}“ als PDF.\n\nViele Grüße\n${user.name}`,
       userId: user.id,
       projectId: r.project_id,
       attachments: [{ filename, content: pdf, contentType: 'application/pdf' }]
@@ -370,7 +370,7 @@ export async function docRoutes(app: FastifyInstance) {
       const account = await projectAccount(db, page.project_id);
       if (!account) throw badRequest('Kein Projektkonto für den Versand. Link wurde erstellt, bitte manuell weitergeben.');
       const project = await db.one(`select name from projects where id = $1`, [page.project_id]);
-      const text = `${b.message?.trim() ? b.message.trim() + '\n\n' : ''}${user.name} hat die Seite „${page.title}“ aus dem Projekt „${project.name}“ für Sie freigegeben (${b.mode === 'write' ? 'lesen und bearbeiten' : 'nur lesen'}${share.includeChildren ? ', inkl. Unterseiten' : ''}).\n\nLink: ${share.url}${expires ? `\nGültig bis ${expires.toLocaleDateString('de-DE')}` : ''}\n\nDer Link ist persönlich; bitte nicht weitergeben.`;
+      const text = `Hallo,\n\n${b.message?.trim() ? b.message.trim() + '\n\n' : ''}${user.name} hat die Seite „${page.title}“ aus dem Projekt „${project.name}“ für dich freigegeben (${b.mode === 'write' ? 'lesen und bearbeiten' : 'nur lesen'}${share.includeChildren ? ', inkl. Unterseiten' : ''}).\n\nLink: ${share.url}${expires ? `\nGültig bis ${expires.toLocaleDateString('de-DE')}` : ''}\n\nDer Link ist persönlich; bitte gib ihn nicht weiter.\n\nViele Grüße\n${user.name}`;
       await app.mail.sendFromAccount(account, { to: [b.email], subject: `Freigabe: ${page.title}`, text, userId: user.id, projectId: page.project_id });
       sent = true;
     }

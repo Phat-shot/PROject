@@ -65,10 +65,10 @@ export function Calendar({ items, hint, occupancy, initialMode }: { items: CalIt
     <div className="calendar">
       <div className="row mb">
         <button className="btn sm" onClick={() => step(-1)}>‹</button>
-        <strong style={{ minWidth: 160, textAlign: 'center' }}>{range.label}</strong>
+        <strong className="min-w-160 text-center">{range.label}</strong>
         <button className="btn sm" onClick={() => step(1)}>›</button>
         <button className="btn sm" onClick={() => { const d = new Date(); setCursor(new Date(d.getFullYear(), d.getMonth(), d.getDate())); }}>Heute</button>
-        <span className="row" style={{ gap: 2 }}>{[...MODES, ...(occupancy ? [['occupancy', 'Belegung'] as [Mode, string]] : [])].map(([m, l]) => <button key={m} className={`chip ${mode === m ? 'on' : ''}`} onClick={() => setModeKeep(m)}>{l}</button>)}</span>
+        <span className="row gap-1">{[...MODES, ...(occupancy ? [['occupancy', 'Belegung'] as [Mode, string]] : [])].map(([m, l]) => <button key={m} className={`chip ${mode === m ? 'on' : ''}`} onClick={() => setModeKeep(m)}>{l}</button>)}</span>
         {hint && <span className="muted small">{hint}</span>}
       </div>
       {mode === 'occupancy' && occupancy}

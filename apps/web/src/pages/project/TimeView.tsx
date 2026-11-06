@@ -4,6 +4,7 @@ import { api, fmtDate, today } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { IconX } from '../../components/icons';
 
 interface TimeData {
   enabled: boolean;
@@ -48,7 +49,7 @@ export function TimeView() {
       <div className="grid cols-3 mb">
         <div className="card">
           <h3>{me.role === 'pl' ? 'Gesamt gebucht' : 'Meine Buchungen'}</h3>
-          <div style={{ fontSize: 24, fontWeight: 700 }}>{fmtH(total)}</div>
+          <div className="kpi-big">{fmtH(total)}</div>
           {budgetMin && me.role === 'pl' && <><div className={`time-bar mt ${total > budgetMin ? 'over' : ''}`}><div style={{ width: `${Math.min(100, (total / budgetMin) * 100)}%` }} /></div><div className="muted small">Budget {data.budgetHours} h · {Math.round((total / budgetMin) * 100)} %</div></>}
           {data.estimateMinutes > 0 && <div className="muted small">Schätzung offener / aller Arbeitspakete: {fmtH(data.estimateMinutes)}</div>}
         </div>
@@ -65,11 +66,11 @@ export function TimeView() {
         <div className="card mb">
           <h3>Zeit buchen</h3>
           <div className="row">
-            <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })} style={{ width: 280 }}><option value="">– ohne Arbeitspaket –</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
-            <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={{ width: 150 }} />
-            <input type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} style={{ width: 70 }} />
-            <input type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} style={{ width: 70 }} />
-            <input type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} style={{ flex: 1 }} />
+            <select className="w-280" value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}><option value="">– ohne Arbeitspaket –</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
+            <input className="w-150" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+            <input className="w-70" type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
+            <input className="w-70" type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} />
+            <input className="grow" type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
             <button className="btn primary" disabled={busy || minutes <= 0} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/time`, { taskId: f.taskId || null, date: f.date, minutes, note: f.note }); setF({ ...f, hours: '', minutes: '', note: '' }); await d.reload(); })}>Buchen</button>
           </div>
           {error && <div className="error mt">{error}</div>}
@@ -77,16 +78,16 @@ export function TimeView() {
       )}
       <div className="card">
         <div className="row mb">
-          <h3 style={{ margin: 0 }}>Buchungen</h3>
-          <input type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} style={{ width: 150 }} />
+          <h3 className="m-0">Buchungen</h3>
+          <input className="w-150" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
           <span className="muted">bis</span>
-          <input type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} style={{ width: 150 }} />
-          {me.role === 'pl' && <select value={range.userId} onChange={(e) => setRange({ ...range, userId: e.target.value })} style={{ width: 'auto' }}><option value="">Alle Personen</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select>}
+          <input className="w-150" type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          {me.role === 'pl' && <select className="w-auto" value={range.userId} onChange={(e) => setRange({ ...range, userId: e.target.value })}><option value="">Alle Personen</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select>}
           <button className="btn sm right" onClick={csv}>CSV-Export</button>
         </div>
         <table className="table"><thead><tr><th>Datum</th><th>Person</th><th>Arbeitspaket</th><th>Dauer</th><th>Notiz</th><th /></tr></thead><tbody>
           {data.entries.map((e) => <tr key={e.id}><td className="nowrap">{fmtDate(e.date)}</td><td>{e.userName}</td><td>{e.taskId ? <a href="#" onClick={(ev) => { ev.preventDefault(); openTask(e.taskId!); }}>{e.taskTitle}</a> : <span className="muted">–</span>}</td><td className="nowrap">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td>
-            <td>{(e.userId === me.userId || me.role === 'pl') && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await d.reload(); })}>✕</button>}</td></tr>)}
+            <td>{(e.userId === me.userId || me.role === 'pl') && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await d.reload(); })} aria-label="Entfernen"><IconX /></button>}</td></tr>)}
           {data.entries.length === 0 && <tr><td colSpan={6} className="muted">Keine Buchungen im Zeitraum.</td></tr>}
         </tbody></table>
       </div>

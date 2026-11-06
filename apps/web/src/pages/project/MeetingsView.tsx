@@ -40,15 +40,15 @@ export function MeetingsView() {
   const confirm = (m: Meeting) => run(async () => { await api.post(`/meetings/${m.id}/confirm`); await refresh(); await reloadTasks(); });
   const Row = ({ m }: { m: Meeting }) => (
     <div className={`meeting ${open === m.id ? 'open' : ''}`}>
-      <div className="row between" onClick={() => setOpen(open === m.id ? null : m.id)} style={{ cursor: 'pointer' }}>
-        <div><strong>{m.title}</strong>{m.seriesPageTitle && <span className="badge" style={{ marginLeft: 6 }}>{m.seriesPageTitle}</span>}<div className="muted small">{fmtDateTime(m.startsAt)} – {fmtTime(m.endsAt)}{m.location ? ` · ${m.location}` : ''} · {m.attendees.length} Teilnehmer{m.tasks.length ? ` · ${m.tasks.filter((t) => !t.done).length}/${m.tasks.length} Aktionspunkte offen` : ''}</div></div>
+      <div className="row between pointer" onClick={() => setOpen(open === m.id ? null : m.id)}>
+        <div><strong>{m.title}</strong>{m.seriesPageTitle && <span className="badge ml-2">{m.seriesPageTitle}</span>}<div className="muted small">{fmtDateTime(m.startsAt)} – {fmtTime(m.endsAt)}{m.location ? ` · ${m.location}` : ''} · {m.attendees.length} Teilnehmer{m.tasks.length ? ` · ${m.tasks.filter((t) => !t.done).length}/${m.tasks.length} Aktionspunkte offen` : ''}</div></div>
         <div className="row small">{m.tentative && <span className="badge warn" title="Von der KI eingetragen: verbindlich erst nach Bestätigung durch eine Person">vorläufig</span>}{m.pageId ? <Link className="badge ok" to={`${base}/doku/${m.pageId}`} onClick={(e) => e.stopPropagation()}>Protokoll</Link> : <span className="badge">kein Protokoll</span>}{m.inviteSentAt && <span className="badge" title={`gesendet ${fmtDateTime(m.inviteSentAt)}`}>eingeladen</span>}</div>
       </div>
       {open === m.id && (
         <div className="mt">
-          {m.description && <p className="small" style={{ whiteSpace: 'pre-wrap' }}>{m.description}</p>}
+          {m.description && <p className="small pre">{m.description}</p>}
           {(m.resources?.length ?? 0) > 0 && <div className="small"><span className="muted">Ressourcen:</span> {m.resources!.map((r) => `${r.name} (${kindLabel(r.kind)})`).join(', ')}</div>}
-          <div className="small"><span className="muted">Teilnehmer:</span> {m.attendees.length ? m.attendees.map((a) => <span key={a.email} className="badge" style={{ marginRight: 4 }} title={a.email}>{a.name ?? a.email}{!a.userId && ' (extern)'}</span>) : '–'}</div>
+          <div className="small"><span className="muted">Teilnehmer:</span> {m.attendees.length ? m.attendees.map((a) => <span key={a.email} className="badge mr-1" title={a.email}>{a.name ?? a.email}{!a.userId && ' (extern)'}</span>) : '–'}</div>
           {m.tentative && <div className="notice small mt">Vorläufig, von der KI eingetragen. Erst bestätigen, wenn der Termin geklärt ist; danach sind Einladung und Kalenderübernahme möglich. {detail.project.myMembership.role !== 'reader' && <button className="btn sm primary" disabled={busy} onClick={() => void confirm(m)}>Bestätigen</button>}</div>}
           <div className="row mt">
             <button className="btn sm primary" disabled={busy} onClick={() => void protocol(m)}>{m.pageId ? 'Protokoll öffnen' : 'Protokoll anlegen'}</button>
@@ -77,7 +77,7 @@ export function MeetingsView() {
         {upcoming.map((m) => <Row key={m.id} m={m} />)}
       </div>
       <div className="card">
-        <div className="row between"><h2 style={{ margin: 0 }}>Vergangen <span className="muted small" style={{ fontWeight: 400 }}>{past.length}</span></h2>{past.length > 0 && <button className="btn sm" onClick={() => setShowPast(!showPast)}>{showPast ? 'Ausblenden' : 'Anzeigen'}</button>}</div>
+        <div className="row between"><h2 className="m-0">Vergangen <span className="muted small fw-400">{past.length}</span></h2>{past.length > 0 && <button className="btn sm" onClick={() => setShowPast(!showPast)}>{showPast ? 'Ausblenden' : 'Anzeigen'}</button>}</div>
         {showPast && past.map((m) => <Row key={m.id} m={m} />)}
       </div>
       {edit && <MeetingForm existing={edit === 'new' ? undefined : edit} series={series} onClose={() => setEdit(null)} onSaved={async () => { setEdit(null); await refresh(); }} />}
@@ -97,15 +97,15 @@ function ActionItems({ m, onChanged }: { m: Meeting; onChanged: () => Promise<vo
   return (
     <div className="mt">
       <div className="small"><span className="muted">Aktionspunkte / Arbeitspakete:</span></div>
-      {m.tasks.length > 0 && <ul className="small" style={{ margin: '4px 0', paddingLeft: 18 }}>{m.tasks.map((t) => <li key={t.id}><button className="btn sm link" onClick={() => openTask(t.id)}>{t.number ? `${detail.project.key}-${t.number} ` : ''}{t.title}</button>{t.done && <span className="badge ok" style={{ marginLeft: 4 }}>erledigt</span>} <button className="btn sm link" title="Verknüpfung lösen" onClick={() => void run(async () => { await api.del(`/meetings/${m.id}/tasks/${t.id}`); await onChanged(); })}>×</button></li>)}</ul>}
+      {m.tasks.length > 0 && <ul className="small my-1 ul-18">{m.tasks.map((t) => <li key={t.id}><button className="btn sm link" onClick={() => openTask(t.id)}>{t.number ? `${detail.project.key}-${t.number} ` : ''}{t.title}</button>{t.done && <span className="badge ok ml-1">erledigt</span>} <button className="btn sm link" title="Verknüpfung lösen" onClick={() => void run(async () => { await api.del(`/meetings/${m.id}/tasks/${t.id}`); await onChanged(); })}>×</button></li>)}</ul>}
       {error && <div className="error small">{error}</div>}
       <form className="row small" onSubmit={(e) => { e.preventDefault(); if (!title.trim()) return; void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { title, responsibleUserId: resp || null, dueDate: due || null }); setTitle(''); setDue(''); await onChanged(); }); }}>
-        <input type="text" placeholder="Neuer Aktionspunkt …" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1, minWidth: 180 }} />
-        <select value={resp} onChange={(e) => setResp(e.target.value)} style={{ width: 'auto' }}><option value="">Zuständig …</option>{members.map((x) => <option key={x.userId} value={x.userId}>{x.name}</option>)}</select>
-        <input type="date" value={due} min={today()} onChange={(e) => setDue(e.target.value)} style={{ width: 'auto' }} />
+        <input className="grow min-w-180" type="text" placeholder="Neuer Aktionspunkt …" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <select className="w-auto" value={resp} onChange={(e) => setResp(e.target.value)}><option value="">Zuständig …</option>{members.map((x) => <option key={x.userId} value={x.userId}>{x.name}</option>)}</select>
+        <input className="w-auto" type="date" value={due} min={today()} onChange={(e) => setDue(e.target.value)} />
         <button className="btn sm primary" disabled={busy || !title.trim()}>Anlegen</button>
       </form>
-      {linkable.length > 0 && <div className="row small mt"><select value={link} onChange={(e) => setLink(e.target.value)} style={{ width: 'auto', maxWidth: 320 }}><option value="">Bestehendes Arbeitspaket verknüpfen …</option>{linkable.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select><button className="btn sm" disabled={busy || !link} onClick={() => void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { taskId: link }); setLink(''); await onChanged(); })}>Verknüpfen</button></div>}
+      {linkable.length > 0 && <div className="row small mt"><select className="w-auto max-w-320" value={link} onChange={(e) => setLink(e.target.value)}><option value="">Bestehendes Arbeitspaket verknüpfen …</option>{linkable.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select><button className="btn sm" disabled={busy || !link} onClick={() => void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { taskId: link }); setLink(''); await onChanged(); })}>Verknüpfen</button></div>}
     </div>
   );
 }
@@ -151,13 +151,13 @@ function MeetingForm({ existing, series, onClose, onSaved }: { existing?: Meetin
         <label className="field"><span>Besprechungsreihe (Protokoll-Vorlage und Ablage)</span><select value={f.seriesPageId} onChange={(e) => set('seriesPageId', e.target.value)}><option value="">keine (Ordner „Protokolle“)</option>{series.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}</select></label>
         <label className="field full"><span>Agenda / Beschreibung</span><textarea rows={3} value={f.description} onChange={(e) => set('description', e.target.value)} /></label>
         {(resources.data?.resources ?? []).some((r) => r.active) && <div className="field full"><span>Ressourcen <span className="muted">(Raum wird Ort, externe Personen werden Teilnehmer; Ampel: frei · vorläufig · belegt)</span></span>
-          <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>{(resources.data?.resources ?? []).filter((r) => r.active).map((r) => <button key={r.id} type="button" className={`chip ${resourceIds.includes(r.id) ? 'on' : ''}`} title={`${kindLabel(r.kind)}${r.projectId ? '' : ' (Pool)'}${r.location ? ` · ${r.location}` : ''}`} onClick={() => setResourceIds(resourceIds.includes(r.id) ? resourceIds.filter((x) => x !== r.id) : [...resourceIds, r.id])}><span className={`dot ${avail[r.id] ?? 'free'}`} /> {r.name}</button>)}</div>
+          <div className="row wrap gap-1">{(resources.data?.resources ?? []).filter((r) => r.active).map((r) => <button key={r.id} type="button" className={`chip ${resourceIds.includes(r.id) ? 'on' : ''}`} title={`${kindLabel(r.kind)}${r.projectId ? '' : ' (Pool)'}${r.location ? ` · ${r.location}` : ''}`} onClick={() => setResourceIds(resourceIds.includes(r.id) ? resourceIds.filter((x) => x !== r.id) : [...resourceIds, r.id])}><span className={`dot ${avail[r.id] ?? 'free'}`} /> {r.name}</button>)}</div>
         </div>}
         <div className="field full"><span>Teilnehmer</span>
-          <div className="row" style={{ flexWrap: 'wrap', gap: 4 }}>{detail.members.map((m) => <button key={m.userId} type="button" className={`chip ${sel.has(m.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ userId: m.userId, email: m.email, name: m.name })}>{m.name}</button>)}</div>
-          {(contacts.data?.contacts.length ?? 0) > 0 && <div className="row mt" style={{ flexWrap: 'wrap', gap: 4 }}><span className="muted small">Kontakte:</span>{contacts.data!.contacts.map((c) => <button key={c.email} type="button" className={`chip ${sel.has(c.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ email: c.email, name: c.name })}>{c.name ?? c.email}</button>)}</div>}
+          <div className="row wrap gap-1">{detail.members.map((m) => <button key={m.userId} type="button" className={`chip ${sel.has(m.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ userId: m.userId, email: m.email, name: m.name })}>{m.name}</button>)}</div>
+          {(contacts.data?.contacts.length ?? 0) > 0 && <div className="row mt wrap gap-1"><span className="muted small">Kontakte:</span>{contacts.data!.contacts.map((c) => <button key={c.email} type="button" className={`chip ${sel.has(c.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ email: c.email, name: c.name })}>{c.name ?? c.email}</button>)}</div>}
           <div className="row mt"><input type="email" placeholder="Weitere Adresse …" value={extra} onChange={(e) => setExtra(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } }} style={{ width: 260 }} /><button type="button" className="btn sm" onClick={addExtra}>Hinzufügen</button></div>
-          {attendees.filter((a) => !a.userId && !contacts.data?.contacts.some((c) => c.email.toLowerCase() === a.email.toLowerCase())).map((a) => <span key={a.email} className="badge" style={{ marginRight: 4 }}>{a.email} <button type="button" className="btn sm link" onClick={() => toggle(a)}>×</button></span>)}
+          {attendees.filter((a) => !a.userId && !contacts.data?.contacts.some((c) => c.email.toLowerCase() === a.email.toLowerCase())).map((a) => <span key={a.email} className="badge mr-1">{a.email} <button type="button" className="btn sm link" onClick={() => toggle(a)}>×</button></span>)}
         </div>
         {error && <div className="error full">{error}</div>}
         <div className="full row"><button className="btn primary" disabled={busy || !f.title.trim() || !f.startsAt} onClick={() => void save()}>{existing ? 'Speichern' : 'Anlegen'}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>

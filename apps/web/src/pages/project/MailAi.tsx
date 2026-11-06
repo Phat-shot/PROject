@@ -33,7 +33,7 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
   return (
     <div className="ai-proposal">
       <div className="row between">
-        <div><span className="badge">{run.mode === 'process' ? `${run.agentName ?? 'Agent'} hat bearbeitet` : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{run.openPoints && run.openPoints.length > 0 && <span className="badge warn" style={{ marginLeft: 4 }} title={run.openPoints.join(' · ')}>{run.openPoints.length} offen</span>}{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
+        <div><span className="badge">{run.mode === 'process' ? `${run.agentName ?? 'Agent'} hat bearbeitet` : `Vorschläge von ${run.agentName ?? 'Agent'}`}</span>{run.openPoints && run.openPoints.length > 0 && <span className="badge warn ml-1" title={run.openPoints.join(' · ')}>{run.openPoints.length} offen</span>}{showMail && run.mail && <> <Link to={`${base}/mail/m/${run.mail.id}`}>{run.mail.subject || '(kein Betreff)'}</Link> <span className="muted small">von {run.mail.fromName ?? run.mail.fromAddr}</span></>}</div>
         <span className="muted small">{STATUS[run.status]}{run.requestedBy ? ` · auf Anfrage von ${run.requestedBy} (Antwort per Chat)` : ''} · {fmtDateTime(run.createdAt)}</span>
       </div>
       {run.summary && <div className="small mt">{run.summary}</div>}
@@ -50,9 +50,9 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
             {r.sent && <span className="badge ok">gesendet</span>}
             {r.scheduled && <span className="badge" title="Arbeitszeitfenster für Mails nach außen">Versand geplant {r.scheduled}</span>}
             {r.draftId && !r.scheduled && <Link className="btn sm link" to={`${base}/mail/freigaben`}>Entwurf</Link>}
-            {r.draftId && r.hints ? <span className="small" style={{ color: 'var(--warn)' }} title="Der Entwurf nennt Inhalte, die Externe nicht erfahren sollen; Details unter Mail › Freigaben">{r.hints} {r.hints === 1 ? 'Hinweis' : 'Hinweise'} der Außenprüfung</span> : null}
+            {r.draftId && r.hints ? <span className="small text-warn" title="Der Entwurf nennt Inhalte, die Externe nicht erfahren sollen; Details unter Mail › Freigaben">{r.hints} {r.hints === 1 ? 'Hinweis' : 'Hinweise'} der Außenprüfung</span> : null}
             {r.error && <span className="muted small"> {r.error}</span>}
-            {run.mode === 'triage' && (a.status === 'pending' || a.status === 'error') && <span className="row" style={{ display: 'inline-flex', gap: 4, marginLeft: 6 }}>
+            {run.mode === 'triage' && (a.status === 'pending' || a.status === 'error') && <span className="row inline-flex gap-1 ml-2">
               <button className="btn sm primary" disabled={busy} onClick={() => void decide(i, true)}>Annehmen</button>
               <button className="btn sm" disabled={busy} onClick={() => void decide(i, false)}>Verwerfen</button>
             </span>}

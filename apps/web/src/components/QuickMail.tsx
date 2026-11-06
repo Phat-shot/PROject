@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { MailView } from '@projekttool/shared';
 import { api } from '../lib/api';
-import { Modal, useAsync } from './ui';
+import { Button, FieldError, Loading, Modal, useAsync, useDirty } from './ui';
 
 /**
  * Mail im Popup schreiben und direkt senden, ohne ins Postfach zu wechseln.
@@ -12,7 +12,8 @@ export function QuickMail({ projectId, taskId, checklistItemId, to, subject, bod
 }) {
   const [views, setViews] = useState<MailView[] | null>(null);
   const [f, setF] = useState({ viewId: '', to, cc: '', subject, body });
-  const { busy, error, run } = useAsync();
+  const { busy, error, fieldErrors, run } = useAsync();
+  const { dirty } = useDirty({ to: f.to, cc: f.cc, subject: f.subject, body: f.body });
   useEffect(() => {
     api.get<{ views: MailView[] }>(`/projects/${projectId}/mail/views`).then((r) => {
       const writable = r.views.filter((v) => v.myRights.canSend || v.myRights.canDraft)
@@ -29,25 +30,25 @@ export function QuickMail({ projectId, taskId, checklistItemId, to, subject, bod
     onClose();
   });
   return (
-    <Modal title={title ?? 'Mail senden'} onClose={onClose}>
+    <Modal title={title ?? 'Mail senden'} onClose={onClose} dirty={dirty}>
       {views && views.length === 0 && <div className="empty">Keine Ansicht mit Entwurfs- oder Senderecht in diesem Projekt. Die PL legt Ansichten unter Einstellungen › Mail an.</div>}
       {views && views.length > 0 && (
-        <div className="form">
+        <form className="form" onSubmit={(e) => { e.preventDefault(); void send(); }} noValidate>
           <label className="field"><span>Senden über</span>
             <select value={f.viewId} onChange={(e) => setF({ ...f, viewId: e.target.value })}>{views.map((v) => <option key={v.id} value={v.id}>{v.name} – {v.accountAddress}{v.myRights.canSend ? '' : ' (nur Entwurf, Versand nach Freigabe)'}</option>)}</select></label>
-          <label className="field"><span>An</span><input type="text" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="mehrere mit Komma" autoFocus={!to} /></label>
-          <label className="field"><span>Cc</span><input type="text" value={f.cc} onChange={(e) => setF({ ...f, cc: e.target.value })} /></label>
-          <label className="field"><span>Betreff</span><input type="text" value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></label>
-          <label className="field"><span>Text</span><textarea style={{ minHeight: 180 }} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+          <label className="field"><span className="req">An</span><input type="text" value={f.to} required aria-required="true" aria-invalid={Boolean(fieldErrors.to) || undefined} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="mehrere mit Komma" autoFocus={!to} /><FieldError error={fieldErrors.to} /></label>
+          <label className="field"><span>Cc</span><input type="text" value={f.cc} onChange={(e) => setF({ ...f, cc: e.target.value })} /><FieldError error={fieldErrors.cc} /></label>
+          <label className="field"><span className="req">Betreff</span><input type="text" value={f.subject} required aria-required="true" aria-invalid={Boolean(fieldErrors.subject) || undefined} onChange={(e) => setF({ ...f, subject: e.target.value })} /><FieldError error={fieldErrors.subject} /></label>
+          <label className="field"><span>Text</span><textarea className="mail-body" value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
           {taskId && <p className="muted small">Die Antwortadresse trägt den Arbeitspaket-Code, Antworten landen automatisch im Arbeitspaket.</p>}
-          {error && <div className="error">{error}</div>}
+          {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}
           <div className="row">
-            <button className="btn primary" disabled={busy || !f.to.trim() || !f.subject.trim()} onClick={() => void send()}>{view?.myRights.canSend ? 'Senden' : 'Zur Freigabe einreichen'}</button>
-            <button className="btn" onClick={onClose}>Abbrechen</button>
+            <Button type="submit" variant="primary" loading={busy} disabled={!f.to.trim() || !f.subject.trim()}>{view?.myRights.canSend ? 'Senden' : 'Zur Freigabe einreichen'}</Button>
+            <Button onClick={onClose}>Abbrechen</Button>
           </div>
-        </div>
+        </form>
       )}
-      {!views && <div className="muted">Lade …</div>}
+      {!views && <Loading />}
     </Modal>
   );
 }

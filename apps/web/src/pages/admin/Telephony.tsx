@@ -5,6 +5,7 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { SettingsCard } from '../../components/settings/Settings';
+import { IconX } from '../../components/icons';
 
 interface Line { id: string; number: string; label: string; projectId: string | null; agentUserId: string | null; aiProfileId: string | null; greeting: string | null; active: boolean }
 interface Config { enabled: boolean; hasSecret: boolean; flowUrl: string; ioUrl: string | null; lines: Line[] }
@@ -47,7 +48,7 @@ export function TelephonySection() {
           <td className="nowrap">{fmtNumber(l.number)}</td><td>{l.label || '–'}</td><td>{a?.name ?? <span className="badge warn">kein Agent</span>}</td>
           <td>{l.projectId ? a?.projects.find((p) => p.id === l.projectId)?.key ?? 'Projekt' : <span className="muted">ohne</span>}</td>
           <td>{profileList.find((p) => p.id === l.aiProfileId)?.name ?? <span className="muted">wie Agent</span>}</td>
-          <td className="nowrap"><button className="btn sm link" onClick={() => setEdit(l)}>Bearbeiten</button><button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Rufnummer entfernen', text: `${fmtNumber(l.number)} entfernen? Bisherige Anrufe bleiben im Log.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/telephony/lines/${l.id}`); await cfg.reload(); }); })}>✕</button></td>
+          <td className="nowrap"><button className="btn sm link" onClick={() => setEdit(l)}>Bearbeiten</button><button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Rufnummer entfernen', text: `${fmtNumber(l.number)} entfernen? Bisherige Anrufe bleiben im Log.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/telephony/lines/${l.id}`); await cfg.reload(); }); })} aria-label="Entfernen"><IconX /></button></td>
         </tr>; })}
       </tbody></table>}
     </SettingsCard>
@@ -55,7 +56,7 @@ export function TelephonySection() {
     <SettingsCard title="Anrufe" action={<button className="btn sm" onClick={() => void calls.reload()}>Aktualisieren</button>}>
       {(calls.data?.calls.length ?? 0) === 0 ? <div className="empty">Noch keine Anrufe.</div> : <table className="table"><thead><tr><th>Zeit</th><th>Von</th><th>An</th><th>Ergebnis</th><th /></tr></thead><tbody>
         {calls.data!.calls.map((x) => <tr key={x.id}>
-          <td className="nowrap small">{fmtDateTime(x.startedAt)}{x.status === 'active' && <span className="badge ok" style={{ marginLeft: 4 }}>läuft</span>}</td>
+          <td className="nowrap small">{fmtDateTime(x.startedAt)}{x.status === 'active' && <span className="badge ok ml-1">läuft</span>}</td>
           <td className="small">{x.callerName ?? fmtNumber(x.from)}{x.direction === 'out' && <span className="muted"> (ausgehend)</span>}</td>
           <td className="small">{x.lineLabel ?? fmtNumber(x.to)}{x.agentName && <div className="muted">KI: {x.agentName}</div>}</td>
           <td className="small">{x.taskNumber && x.projectId ? <Link to={`/projekte/${x.projectId}/board?task=${x.taskId}`}>{x.projectKey}-{x.taskNumber}</Link> : null} {x.summary ?? (x.provider === 'sipgate_io' ? 'ohne KI' : '')}{x.error && <div className="error small">{x.error}</div>}</td>

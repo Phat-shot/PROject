@@ -14,7 +14,9 @@ test('projectPolicy: neun Abweichungen als Entscheidungen, sonst identisch', () 
   const p = projectPolicy({ personal: true });
   assert.equal(createProjectReason({ kind: 'person', globalRole: 'user' }, true, false), TEXT.createDenied);
   assert.equal(createProjectReason({ kind: 'person', globalRole: 'user' }, true, true), null);
-  assert.equal(createProjectReason({ kind: 'agent', globalRole: 'user' }, true, true), 'Persönliche Projekte sind im Mandanten nicht freigegeben (Verwaltung)', 'Agenten nie');
+  assert.equal(createProjectReason({ kind: 'agent', globalRole: 'user' }, true, true), 'KI-Agenten legen keine Projekte an', 'Agenten nie');
+  assert.equal(createProjectReason({ kind: 'person', globalRole: 'user', personalProjectAllowed: true }, true, false), null, 'Freigabe je Person geht vor');
+  assert.equal(createProjectReason({ kind: 'person', globalRole: 'project_creator', personalProjectAllowed: false }, true, true), TEXT.personalBlocked, 'Sperre je Person geht vor');
   assert.equal(createProjectReason({ kind: 'person', globalRole: 'user' }, false, true), 'Nur Projektersteller dürfen Projekte anlegen');
   assert.equal(createProjectReason({ kind: 'person', globalRole: 'project_creator' }, true, false), null);
   assert.deepEqual(p.members, { onlyOwnerAndAgents: true, groups: false, invitations: false });
@@ -26,7 +28,9 @@ test('projectPolicy: neun Abweichungen als Entscheidungen, sonst identisch', () 
   assert.equal(p.ai.ownLlm('personal'), true); assert.equal(n.ai.ownLlm('personal'), false); assert.equal(n.ai.ownLlm('all'), true); assert.equal(p.ai.ownLlm('off'), false);
   assert.equal(p.ai.orgProfilesNeedRelease, true); assert.equal(n.ai.orgProfilesNeedRelease, false);
   assert.equal(p.channelPosts, false); assert.equal(n.channelPosts, true);
-  assert.deepEqual(p.scaffold, { defaultFolders: false, template: false }); assert.deepEqual(n.scaffold, { defaultFolders: true, template: true });
+  assert.deepEqual(p.scaffold, { defaultFolders: false, template: false, slim: true }); assert.deepEqual(n.scaffold, { defaultFolders: true, template: true, slim: false });
+  assert.equal(p.slim, true); assert.equal(projectPolicy({ personal: true, show_all_tabs: true }).slim, false); assert.equal(n.slim, false);
+  assert.equal(p.ai.personalGate, true); assert.equal(n.ai.personalGate, false); assert.equal(p.assistant, true); assert.equal(n.assistant, false);
   assert.equal(p.label, 'persönliches Projekt'); assert.equal(n.label, 'Projekt');
 });
 
@@ -64,7 +68,7 @@ test('Persönliches Projekt im Betrieb: Vorlage 400, keine Gruppen, keine Einlad
   const r = await t.api(pl).post('/projects', { key: 'PP1', name: 'Petra privat', personal: true });
   assert.equal(r.statusCode, 200, r.body);
   const pid = r.json().project.id;
-  assert.equal((await t.db.one(`select count(*)::int as c from doc_folders where project_id = $1`, [pid])).c, 0, 'leer');
+  assert.deepEqual((await t.db.query(`select name from doc_folders where project_id = $1`, [pid])).rows.map((f: any) => f.name), ['Notizen'], 'schlank: nur Ordner Notizen');
   assert.equal((await t.api(pl).patch(`/projects/${pid}`, { visibility: 'org' })).statusCode, 400);
   assert.equal((await t.api(pl).put(`/projects/${pid}/members/${t.ids.users.anna}`, { role: 'member' })).statusCode, 403);
   const g = (await t.api(admin).post('/groups', { name: 'PP-Gruppe' })).json().group;

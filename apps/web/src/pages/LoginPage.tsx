@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import { Button } from '../components/ui';
 
 const DEMO = [
   ['pl@demo.local', 'Petra Lenz · PL Website-Relaunch'],
@@ -12,7 +13,7 @@ const DEMO = [
 
 /** Anmeldung; Demo-Zugänge nur, wenn Demodaten vorhanden sind. „Passwort vergessen“ schickt einen Link über das Org-Postfach. */
 export function LoginPage() {
-  const { login, loginTotp } = useAuth();
+  const { login, loginTotp, sessionExpired } = useAuth();
   const [challenge, setChallenge] = useState<string | null>(null);
   const [code, setCode] = useState('');
   const [demo, setDemo] = useState(false);
@@ -53,30 +54,31 @@ export function LoginPage() {
       <form className="card" onSubmit={submit}>
         <h1>PROject</h1>
         <p className="muted">Arbeitspakete, Mail und Doku auf einem Datenmodell</p>
+        {sessionExpired && <div className="notice mb" role="status">Deine Sitzung ist abgelaufen. Bitte melde dich erneut an; du landest danach wieder an der Stelle, an der du warst.</div>}
         {challenge ? (
           <div className="form">
             <p className="muted small">Zweiter Faktor: Code aus deiner Authenticator-App für {email}.</p>
-            <label className="field"><span>Code (6 Stellen)</span><input type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]*" maxLength={6} value={code} autoFocus onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></label>
-            {error && <div className="error">{error}</div>}
-            <div className="row"><button className="btn primary" disabled={busy || code.length !== 6}>Anmelden</button><button type="button" className="btn link small right" onClick={() => { setChallenge(null); setError(null); }}>Zurück</button></div>
+            <label className="field"><span className="req">Code (6 Stellen)</span><input type="text" inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]*" maxLength={6} value={code} autoFocus required aria-required="true" onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} /></label>
+            {error && <div className="error" role="alert">{error}</div>}
+            <div className="row"><Button type="submit" variant="primary" loading={busy} disabled={code.length !== 6}>Anmelden</Button><Button variant="link" className="small right" onClick={() => { setChallenge(null); setError(null); }}>Zurück</Button></div>
           </div>
         ) : (
         <div className="form">
-          <label className="field"><span>E-Mail</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username" /></label>
-          {!forgot && <label className="field"><span>Passwort</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></label>}
-          {error && <div className="error">{error}</div>}
-          {sent && <div className="success small">{sent}</div>}
+          <label className="field"><span className="req">E-Mail</span><input type="email" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus autoComplete="username" required aria-required="true" /></label>
+          {!forgot && <label className="field"><span className="req">Passwort</span><input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" required aria-required="true" /></label>}
+          {error && <div className="error" role="alert">{error}</div>}
+          {sent && <div className="success small" role="status">{sent}</div>}
           <div className="row">
-            <button className="btn primary" disabled={busy || !email || (!forgot && !password)}>{forgot ? 'Link anfordern' : 'Anmelden'}</button>
-            <button type="button" className="btn link small right" onClick={() => { setForgot(!forgot); setSent(null); setError(null); }}>{forgot ? 'Zurück zur Anmeldung' : 'Passwort vergessen?'}</button>
+            <Button type="submit" variant="primary" loading={busy} disabled={!email || (!forgot && !password)}>{forgot ? 'Link anfordern' : 'Anmelden'}</Button>
+            <Button variant="link" className="small right" onClick={() => { setForgot(!forgot); setSent(null); setError(null); }}>{forgot ? 'Zurück zur Anmeldung' : 'Passwort vergessen?'}</Button>
           </div>
-          {oidc && !forgot && <div className="row" style={{ marginTop: 4 }}><a className="btn" style={{ width: '100%', textAlign: 'center' }} href="/api/auth/oidc/start">Anmelden mit {oidc.label}</a></div>}
+          {oidc && !forgot && <div className="row mt-1"><a className="btn oidc-btn" href="/api/auth/oidc/start">Anmelden mit {oidc.label}</a></div>}
         </div>
         )}
         {demo && (
           <div className="demo">
             Demo-Zugänge (Passwort <code>demo1234</code>):
-            <ul style={{ margin: '6px 0 0', paddingLeft: 18 }}>
+            <ul className="demo-list">
               {DEMO.map(([m, l]) => <li key={m}><code onClick={() => { setEmail(m); setPassword('demo1234'); }}>{m}</code> – {l}</li>)}
             </ul>
           </div>

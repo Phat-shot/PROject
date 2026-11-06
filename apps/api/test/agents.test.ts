@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { composeEcho, testApp } from './helpers.js';
+import { composeEcho, testApp, legacyItem } from './helpers.js';
 import { agentBudgetLeft, runAgents } from '../src/ai/agent.js';
 import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
 
@@ -100,8 +100,8 @@ test('Agentenlauf: Kontext aus Arbeitspaket, Aktionen (Log, Status, Task, Mail a
   const a = (await t.api(pl).get('/agents')).json().agents[0];
   const taskId = t.ids.tasks.t2;
   await t.db.query(`update tasks set column_id = (select id from board_columns where project_id = $2 order by position limit 1) where id = $1`, [taskId, pid]);
-  const item = (await t.api(pl).post(`/tasks/${taskId}/checklist`, { title: 'Angebot prüfen' })).json();
-  const itemId = (item.item ?? item.checklist?.[0] ?? item).id ?? (await t.db.one(`select id from checklist_items where task_id = $1 order by position desc limit 1`, [taskId])).id;
+  // Altbestand am AP (Checklistenpunkte gehören sonst zu Aufgaben): der Agent hakt ihn trotzdem ab
+  const itemId = await legacyItem(t.db, taskId, 'Angebot prüfen');
   await flushAgentRuns();
   const runsBefore = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
   nextActions = [
@@ -289,7 +289,11 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   await flushAgentRuns();
   assert.match(calls[calls.length - 1].body.messages[1].content, /Doku-Ordner: .*Protokolle/);
 
-  // Task-Änderung durch Person löst Lauf aus; Agent legt Seite im Ordner an, ergänzt Tasks, wartet bis 20:20
+  // Aufgabe mit Checkliste am AP; der Task des Agenten am AP landet an der einzigen offenen Aufgabe
+  const auf = (await t.api(pl).post(`/projects/${pid}/tasks`, { title: 'Protokoll', parentId: taskId, responsibleUserId: t.ids.users.pl })).json().task;
+  await t.api(pl).post(`/tasks/${auf.id}/checklist`, { title: 'Protokoll anlegen' });
+  await flushAgentRuns();
+  // Änderung durch Person löst Lauf aus; Agent legt Seite im Ordner an, ergänzt Tasks, wartet bis 20:20
   const now = new Date();
   nextActions = [
     { type: 'doc_create', title: 'JF 2026-10-17', folder: 'protokolle', text: '# Jour fixe\n\n- Thema A\n- Thema B' },
@@ -297,7 +301,7 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
     { type: 'wait', kind: 'date', reason: 'Versand um 20:20', until: '20:20' }
   ];
   const n0 = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs.length;
-  await t.api(pl).post(`/tasks/${taskId}/checklist`, { title: 'Protokoll anlegen' });
+  await t.api(pl).patch(`/tasks/${taskId}`, { description: 'Jour fixe am Freitag dokumentieren' });
   await flushAgentRuns();
   const runs = (await t.api(pl).get(`/projects/${pid}/agent-runs?taskId=${taskId}`)).json().runs;
   assert.equal(runs.length, n0 + 1, 'Lauf nach Task-Änderung');
@@ -308,7 +312,7 @@ test('Doku-Aktionen (Seite anlegen, ergänzen, PDF senden), Tasks ergänzen/umfo
   assert.equal(page.created_by, agent.id);
   assert.match(page.content_html, /<h1>Jour fixe<\/h1>/);
   assert.equal((await t.db.one(`select count(*)::int as n from doc_page_versions where page_id = $1`, [page.id])).n, 1);
-  const items = await t.db.query(`select id, title from checklist_items where task_id = $1 order by position`, [taskId]);
+  const items = await t.db.query(`select id, title from checklist_items where task_id = $1 order by position`, [auf.id]);
   assert.deepEqual(items.rows.map((i: any) => i.title), ['Protokoll anlegen', 'PDF an Teilnehmer senden']);
   const t1 = (await t.api(pl).get(`/tasks/${taskId}`)).json().task;
   assert.equal(t1.agentWait.kind, 'date');

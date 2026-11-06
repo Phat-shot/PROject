@@ -31,6 +31,10 @@ export interface User {
   kind?: 'person' | 'agent';
   /** Agent einer PL: nur in diesem Projekt einsetzbar */
   agentProjectId?: string;
+  /** Agentenrolle: project = Projektagent (einladbar), assistant = persönlicher Assistent einer Person (nur ihr persönliches Projekt, nur Direktnachrichten) */
+  agentRole?: AgentRole;
+  /** Persönliches Projekt je Person: null = Mandantenschalter „Persönliche Projekte“ gilt, true = freigegeben (auch ohne Schalter), false = gesperrt (KI im persönlichen Projekt aus) */
+  personalProjectAllowed?: boolean | null;
   /** Verwalter mindestens einer Gruppe (pflegt deren Mitglieder unter Verwaltung); nur in /auth/me und bei der Anmeldung */
   managesGroups?: boolean;
 }
@@ -43,6 +47,34 @@ export interface UserSettings {
   chatCards?: 'needed' | 'all';
 }
 /** Schlüssel, die PATCH /me in settings annimmt (null löscht den Schlüssel) */
+/**
+ * Rückfrage des KI-Agenten im Chat (Systemkarte meta.card = 'choices'): Thema wählen, wenn das System die Absicht einer
+ * Nachricht nicht sicher erkennt. value ist zugleich das Markerwort, das die Person als Antwort schicken kann
+ * („Projekt WEB“, „persönlich“, „allgemein“); meta.chosen hält den gewählten Wert, meta.forMessageId die Ursprungsnachricht.
+ */
+export interface ChatChoice { label: string; value: string; hint?: string }
+/** Absicht einer Chat-Nachricht an einen Agenten: allgemein (kein Projektbezug), ein Projekt, persönlicher Assistent */
+export type ChatIntent = 'general' | 'project' | 'personal';
+/** Rolle eines KI-Agenten (users.agent_role) */
+export type AgentRole = 'project' | 'assistant';
+/** Freigabe eines Mandanten-LLM für persönliche Projekte: none (Standard), all, users (nur personalUserIds) */
+export type PersonalUse = 'none' | 'all' | 'users';
+export const PERSONAL_USES: { key: PersonalUse; label: string }[] = [
+  { key: 'none', label: 'nicht in persönlichen Projekten' },
+  { key: 'all', label: 'alle persönlichen Projekte' },
+  { key: 'users', label: 'nur ausgewählte Personen' }
+];
+/** Zustand des persönlichen Assistenten (GET /projects/:id/assistant) */
+export interface AssistantState {
+  /** vorhandener Assistent (Agent mit agentRole assistant) */
+  assistant: { id: string; name: string; persona: string | null; active: boolean; aiProfileId: string | null; profileName: string | null; dailyBudget: number | null; channelId: string } | null;
+  /** wählbare LLM-Profile: freigegebene Mandanten-Profile für diese Person und eigene LLMs des Projekts */
+  profiles: { id: string; name: string; provider: 'anthropic' | 'local'; model: string; own: boolean }[];
+  /** Sperrgründe (leer = Assistent anlegbar bzw. nutzbar) */
+  blocked: string[];
+  canCreate: boolean;
+}
+
 export const USER_SETTING_KEYS = ['theme', 'pinnedProjects', 'chatCards'] as const satisfies readonly (keyof UserSettings)[];
 
 export interface Membership {
@@ -62,6 +94,16 @@ export interface Membership {
   origin?: 'direct' | 'group';
 }
 
+/**
+ * Planungstiefe eines Projekts: auto = Regel (Aufgabe bei eigener Zuständigkeit, eigenem Termin oder eigenem Status/Log, sonst
+ * Checklistenpunkt), aufgaben = Schritte immer als Aufgaben, checkliste = Schritte immer als Checklistenpunkte (Aufgaben nur auf Wunsch).
+ */
+export type PlanningDepth = 'auto' | 'aufgaben' | 'checkliste';
+export const PLANNING_DEPTHS: { key: PlanningDepth; label: string; hint: string }[] = [
+  { key: 'auto', label: 'Automatisch (Regel)', hint: 'Aufgabe, wenn ein Schritt eine eigene Zuständigkeit, einen eigenen Termin oder eigenen Status und Log braucht (delegierbar, nachverfolgbar); sonst Checklistenpunkt einer Aufgabe, den die zuständige Person selbst abhakt.' },
+  { key: 'aufgaben', label: 'Immer Aufgaben', hint: 'Jeder Schritt wird eine Aufgabe mit eigenem Status, Termin und Log; Checklistenpunkte nur an Aufgaben.' },
+  { key: 'checkliste', label: 'Immer Checklistenpunkte', hint: 'Schritte werden Checklistenpunkte einer Aufgabe (neues Arbeitspaket: eine Aufgabe „Schritte“); weitere Aufgaben nur auf ausdrücklichen Wunsch (mit Termin oder eigener Zuständigkeit).' }
+];
 export interface Project {
   id: string;
   key: string;
@@ -72,6 +114,10 @@ export interface Project {
   visibility: 'members' | 'org';
   /** Persönliches Projekt: nur der Ersteller (PL) und KI-Agenten */
   personal?: boolean;
+  /** Schlanke Oberfläche (persönliches Projekt ohne showAllTabs): Reiter Plan, Risiken, Zeiten und Auswertung ausblenden; Datenmodell und Routen bleiben vollständig */
+  slim?: boolean;
+  /** Persönliches Projekt: alle Reiter zeigen (Projekteinstellung, PATCH /projects/:id) */
+  showAllTabs?: boolean;
   /** Projektagent (dritte PL-Rolle): KI-Agent als Stellvertretung; agentMail: off = nur Rolle, process = bearbeitet neue Mails der Projektkonten direkt, triage = schlägt nur vor */
   agentUserId?: string | null;
   agentMail?: AgentMailMode;
@@ -83,6 +129,10 @@ export interface Project {
   timeTrackingEnabled: boolean;
   /** Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind (Vorgabe, je AP übersteuerbar) */
   autoCompleteParent?: boolean;
+  /** Aufgabe automatisch erledigt, wenn alle ihre Checklistenpunkte erledigt sind (Vorgabe, Standard an, je Aufgabe übersteuerbar über Task.autoComplete) */
+  autoDoneAufgabe?: boolean;
+  /** Planungstiefe: wie Schritte eines Arbeitspakets angelegt werden (auto = Regel Aufgabe vs. Checklistenpunkt, aufgaben, checkliste) */
+  planningDepth?: PlanningDepth;
   budgetHours: number | null;
   escalation?: EscalationPolicy;
   reporting?: ReportingPolicy;
@@ -134,12 +184,70 @@ export interface ReportingPolicy {
   parentPageId: string | null;
   lastRunOn: string | null;
   lastPageId: string | null;
+  /** Aufbau des Berichts: Blöcke untereinander; leer/undefined = Standard „Management-Report“ (DEFAULT_REPORT_BLOCKS) */
+  blocks?: ReportBlock[];
+  /** Texte regelbasiert („rules“) oder von der Projekt-KI formuliert („ai“, fällt ohne Agent/Freigabe auf rules zurück) */
+  textSource?: 'rules' | 'ai';
+  /** Grafische Ausarbeitung (Diagramme als SVG in Seite und PDF) für alle Blöcke, die es unterstützen */
+  graphic?: boolean;
 }
 
 /** Code-Standards der Projekt-Policies ohne Org-Ebene; die Oberfläche zeigt „Standard“, solange ein Projekt nichts Eigenes gesetzt hat. */
 export const DEFAULT_ESCALATION: EscalationPolicy = { enabled: true, stageDays: [2, 5, 10], staleDays: 7, contactUserId: null, contactEmail: null, externalMode: 'proposal' };
 export const DEFAULT_REMINDERS: ReminderPolicy = { enabled: false, daysBefore: [3, 0], overdueEveryDays: 3, includeInternal: false };
-export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1, recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null };
+/** Zeitraum eines Berichtsblocks: seit dem letzten Bericht, letzte Woche/Monat/Quartal oder n Tage */
+export type ReportPeriod = 'since_last' | 'week' | 'month' | 'quarter' | 'days';
+
+/** Blocktypen des Berichts (untereinander angeordnet) */
+export type ReportBlockType =
+  | 'summary'      // Gesamtstand: Ampel, Fortschritt Soll/Ist, Kennzahlen
+  | 'changes'      // Änderungen im Zeitraum: erledigt, neu, Termine verschoben, Statuswechsel
+  | 'overdue'      // Überfällige Arbeitspakete
+  | 'blocked'      // Blockiert und eskaliert
+  | 'milestones'   // Nächste und erreichte Meilensteine
+  | 'subprojects'  // Fortschritt je Teilprojekt
+  | 'risks'        // RAID-Register (offene Risiken/Issues/Entscheidungen)
+  | 'time'         // Gebuchte Zeit im Zeitraum (je Person / Teilprojekt)
+  | 'decisions'    // Entscheidungen und Meldungen (Log) im Zeitraum
+  | 'outlook'      // Ausblick: fällig in den nächsten n Tagen
+  | 'ai_summary'   // Management-Summary als KI-Text (Fallback: Regeltext)
+  | 'text';        // Freitext der PL
+
+export interface ReportBlock {
+  id: string;
+  type: ReportBlockType;
+  /** Überschrift; leer = Standardtitel des Typs */
+  title?: string;
+  /** Zeitraum (nur Blöcke mit Zeitbezug) */
+  period?: ReportPeriod;
+  /** Tage für period = 'days' bzw. Vorschau-Horizont bei 'outlook' */
+  days?: number;
+  /** Diagramm statt/zusätzlich zur Tabelle, wenn der Typ es unterstützt */
+  chart?: boolean;
+  /** Maximale Listenlänge */
+  limit?: number;
+  /** Freitext (type = 'text') als Markdown */
+  text?: string;
+}
+
+export const REPORT_BLOCK_LABEL: Record<ReportBlockType, string> = {
+  summary: 'Gesamtstand', changes: 'Änderungen im Zeitraum', overdue: 'Überfällig', blocked: 'Blockiert und eskaliert', milestones: 'Meilensteine',
+  subprojects: 'Teilprojekte', risks: 'Risiken und Entscheidungen (RAID)', time: 'Gebuchte Zeit', decisions: 'Entscheidungen und Meldungen', outlook: 'Ausblick',
+  ai_summary: 'Management-Summary (KI)', text: 'Freitext'
+};
+
+/** Standard „Management-Report“: Gesamtstand, Änderungen seit dem letzten Bericht, Risiken, Meilensteine, Ausblick */
+export const DEFAULT_REPORT_BLOCKS: ReportBlock[] = [
+  { id: 'b1', type: 'summary', chart: true },
+  { id: 'b2', type: 'changes', period: 'since_last', chart: true, limit: 15 },
+  { id: 'b3', type: 'overdue', limit: 10 },
+  { id: 'b4', type: 'blocked', limit: 10 },
+  { id: 'b5', type: 'milestones', limit: 5 },
+  { id: 'b6', type: 'risks', limit: 10 },
+  { id: 'b7', type: 'outlook', days: 14, limit: 10 }
+];
+
+export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1, recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null, blocks: DEFAULT_REPORT_BLOCKS, textSource: 'rules', graphic: true };
 
 export interface EscalationRow {
   taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
@@ -303,6 +411,8 @@ export interface BoardColumn {
   /** backlog = Geplant, active = in Bearbeitung, parked = Zurückgestellt, done = Erledigt */
   kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done';
   wipLimit: number | null;
+  /** Spaltengruppe: Spalten mit gleichem Namen erscheinen im Board als eine Spalte mit Abschnitten untereinander */
+  group: string | null;
 }
 
 export interface Label {
@@ -382,6 +492,8 @@ export interface Invitation {
   /** Einladung direkt in ein Projekt (durch den PL): Annahme macht die Person zum Mitglied mit dieser Rolle */
   projectId?: string | null;
   projectRole?: 'member' | 'reader' | null;
+  /** Einladung ohne Projekt: persönliches Projekt bei Annahme anlegen und freigeben (Opt-out, Standard an) */
+  personalProject?: boolean;
   createdAt: string;
   expiresAt: string;
   sentAt: string | null;
@@ -425,8 +537,11 @@ export interface Task {
   externalBrief?: string | null;
   /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
   agentPaused?: boolean;
-  /** Automatisch erledigt, wenn alle Aufgaben erledigt sind; null = Vorgabe des Projekts */
+  /** Automatik je Element, null = Vorgabe des Projekts: am Arbeitspaket „erledigt, wenn alle Aufgaben erledigt“ (autoCompleteParent),
+   *  an einer Aufgabe „erledigt, wenn alle Checklistenpunkte erledigt“ (autoDoneAufgabe) */
   autoComplete?: boolean | null;
+  /** Von der Automatik erledigt (letzter Checklistenpunkt); ein wieder geöffneter Punkt holt die Aufgabe in die vorherige Spalte zurück */
+  autoDoneAt?: string | null;
   /** Lauf des Agenten steht an oder läuft gerade */
   agentRunning?: boolean;
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
@@ -1026,7 +1141,7 @@ export interface ProjectHealth {
 
 /** Projektvorlage: Struktur, die ein neues Projekt vorbelegt; Termine relativ zum Projektstart */
 export interface ProjectTemplateSpec {
-  columns?: { name: string; kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done'; wipLimit: number | null }[];
+  columns?: { name: string; kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done'; wipLimit: number | null; /** Spaltengruppe (siehe BoardColumn.group) */ group?: string | null }[];
   labels?: { name: string; color: string }[];
   subprojects?: { name: string; startOffsetDays: number | null; endOffsetDays: number | null }[];
   folders?: string[];
@@ -1141,7 +1256,36 @@ export interface Meeting {
 
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
-export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** bei „alle“: auch in persönlichen Projekten (sonst dort nur per Auswahl) */ personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
+export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** Freigabe für persönliche Projekte: none (Standard), all, users (personalUserIds); personalScope = (personalUse === 'all') bleibt lesend für ältere Oberflächen */ personalUse?: PersonalUse; personalUserIds?: string[]; personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
 export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
+
+/** Dateiquelle (Nextcloud-Freigabelink oder WebDAV-Konto, nur lesend); Geheimnis nie, nur hasSecret. */
+export type FileSourceKind = 'nextcloud_share' | 'webdav';
+export interface FileSourceBindingRef { id: string; projectId: string; project: string; subPath: string | null; label: string }
+export interface FileSource {
+  id: string; name: string; kind: FileSourceKind;
+  /** eingegebene Adresse (Freigabelink bzw. WebDAV-Adresse) und abgeleitete WebDAV-Wurzel */
+  url: string; davUrl: string; username: string | null; hasSecret: boolean;
+  /** Startordner innerhalb der WebDAV-Wurzel ('/' = alles) */
+  rootPath: string;
+  /** org: Org-Admin, Freigabe für Projekte; project: Quelle eines Projekts (ownerProjectId) */
+  scope: 'org' | 'project'; ownerProjectId: string | null;
+  projectScope: 'all' | 'selected' | 'none'; projectIds: string[];
+  personalUse: PersonalUse; personalUserIds: string[];
+  active: boolean; lastSyncAt: string | null; lastError: string | null;
+  lastStats: FileSyncStats | null; files: number; bindings: FileSourceBindingRef[]; createdAt: string;
+}
+export interface FileSyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; truncated: boolean; error?: string | null }
+/** Org-Quelle aus Sicht der PL (ohne Adresse und Zugangsdaten) */
+export interface FileSourceAvailable { id: string; name: string; kind: FileSourceKind; scope: 'org' | 'project'; rootPath: string; lastSyncAt: string | null; lastError: string | null; /** nicht gelöschte Dateien der Quelle */ files: number }
+export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean; /** nicht gelöschte Dateien unter dem Unterordner der Einbindung */ files: number }
+export interface FileRoot { bindingId: string; sourceId: string; label: string; sourceName: string; kind: FileSourceKind; scope: 'org' | 'project'; subPath: string | null; lastSyncAt: string | null; lastError: string | null }
+export type FileEntry =
+  | { type: 'folder'; name: string; path: string; bindingId: string; /** Dateien darunter (rekursiv) */ files?: number }
+  | { type: 'file'; id: string; name: string; path: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; /** Grund zum Textstatus (z. B. „Dateityp ohne Textauszug“) */ textNote: string | null; bindingId: string };
+/** GET /projects/:id/files?binding=&path= */
+export interface FileListing { binding: FileRoot | null; path: string; parent: string | null; roots: FileRoot[]; entries: FileEntry[] }
+/** GET /files/:id/text */
+export interface FileText { id: string; name: string; path: string; projectId: string; bindingId: string; displayPath: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; textNote: string | null; text: string | null }

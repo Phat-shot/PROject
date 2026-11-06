@@ -81,7 +81,8 @@ function isFirstBlock(root: HTMLElement, el: HTMLElement): boolean {
   return false;
 }
 
-const strip = (t: string) => t.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').replace(/\s+/g, ' ');
+/** Emojis entfernen; Zeichen außerhalb von WinAnsi (Pfeile, Vergleichszeichen, Kreise der Berichte) durch Ersatz in der Standardschrift. */
+const strip = (t: string) => t.replace(/[\u{1F000}-\u{1FFFF}\u{2600}-\u{27BF}\u{FE0F}]/gu, '').replace(/→/g, '->').replace(/←/g, '<-').replace(/≥/g, '>=').replace(/≤/g, '<=').replace(/[●■◆]/g, '•').replace(/[↑↓]/g, '').replace(/\s+/g, ' ');
 
 function fontSizeOf(style: string | undefined): number | undefined {
   const m = /font-size:\s*([\d.]+)(px|pt|em|rem)?/i.exec(style ?? '');
@@ -263,6 +264,9 @@ async function renderBlock(ctx: Ctx, node: Node, width: number, x: number) {
     case 'img':
       await renderImage(ctx, el, width, x);
       break;
+    case 'svg':
+      renderSvg(ctx, el, width, x);
+      break;
     case 'div': case 'section': case 'article': case 'body': case 'html':
       await renderChildren(ctx, el, width, x);
       break;
@@ -272,6 +276,125 @@ async function renderBlock(ctx: Ctx, node: Node, width: number, x: number) {
     default: {
       const runs = inlineRuns(el);
       if (runs.some((r) => r.text.trim())) { writeRuns(doc, runs, { width, x }); doc.moveDown(0.5); }
+    }
+  }
+}
+
+// ---- SVG (Diagramme der Berichte): begrenzter Dialekt aus eigener Erzeugung – rect, text, line, circle, path, g (translate)
+
+const attr = (el: HTMLElement, name: string) => el.getAttribute(name) ?? el.getAttribute(name.toLowerCase()) ?? undefined;
+const num = (v: string | undefined, d = 0) => { const n = parseFloat(v ?? ''); return Number.isFinite(n) ? n : d; };
+const SVG_COLOR = /^#[0-9a-fA-F]{6}$|^#[0-9a-fA-F]{3}$/;
+const NAMED: Record<string, string> = { black: '#000000', white: '#ffffff', red: '#d32f2f', green: '#2e7d32', yellow: '#f9a825', grey: '#888888', gray: '#888888', orange: '#ef6c00', blue: '#1f5eff', none: 'none' };
+function color(v: string | undefined, fallback: string): string {
+  if (!v) return fallback;
+  const t = v.trim();
+  if (t === 'none' || t === 'transparent') return 'none';
+  if (SVG_COLOR.test(t)) return t.length === 4 ? `#${t[1]}${t[1]}${t[2]}${t[2]}${t[3]}${t[3]}` : t;
+  return NAMED[t.toLowerCase()] ?? fallback;
+}
+interface SvgStyle { fill: string; stroke: string; strokeWidth: number; fontSize: number; bold: boolean; anchor: 'start' | 'middle' | 'end'; opacity: number }
+function styleOf(el: HTMLElement, base: SvgStyle): SvgStyle {
+  const anchor = attr(el, 'text-anchor');
+  return {
+    fill: attr(el, 'fill') !== undefined ? color(attr(el, 'fill'), base.fill) : base.fill,
+    stroke: attr(el, 'stroke') !== undefined ? color(attr(el, 'stroke'), base.stroke) : base.stroke,
+    strokeWidth: attr(el, 'stroke-width') !== undefined ? num(attr(el, 'stroke-width'), 1) : base.strokeWidth,
+    fontSize: attr(el, 'font-size') !== undefined ? num(attr(el, 'font-size'), 10) : base.fontSize,
+    bold: attr(el, 'font-weight') !== undefined ? /bold|[6-9]00/.test(attr(el, 'font-weight')!) : base.bold,
+    anchor: anchor === 'middle' || anchor === 'end' ? anchor : anchor === 'start' ? 'start' : base.anchor,
+    opacity: attr(el, 'opacity') !== undefined ? Math.max(0, Math.min(1, num(attr(el, 'opacity'), 1))) : base.opacity
+  };
+}
+
+/**
+ * Zeichnet ein eingebettetes <svg> als Vektorgrafik: skaliert den Koordinatenraum (width/height, sonst viewBox) auf die
+ * verfügbare Breite, bricht vorher die Seite um, wenn die Grafik nicht mehr passt. Unbekannte Elemente werden übergangen.
+ */
+function renderSvg(ctx: Ctx, el: HTMLElement, width: number, x: number) {
+  const { doc } = ctx;
+  const vb = (attr(el, 'viewBox') ?? '').split(/[\s,]+/).map(Number);
+  const vw = num(attr(el, 'width'), vb.length === 4 && vb[2] > 0 ? vb[2] : 600);
+  const vh = num(attr(el, 'height'), vb.length === 4 && vb[3] > 0 ? vb[3] : 200);
+  if (vw <= 0 || vh <= 0) return;
+  const scale = Math.min(1, width / vw);
+  const h = vh * scale;
+  if (doc.y + h > doc.page.height - doc.page.margins.bottom) doc.addPage();
+  const top = doc.y;
+  doc.save();
+  doc.translate(x, top).scale(scale);
+  const base: SvgStyle = { fill: '#111111', stroke: 'none', strokeWidth: 1, fontSize: 11, bold: false, anchor: 'start', opacity: 1 };
+  drawSvgChildren(doc, el, base);
+  doc.restore();
+  doc.y = top + h + 8;
+  doc.x = x;
+  doc.font('Helvetica').fontSize(BASE).fillColor('#111');
+}
+
+function drawSvgChildren(doc: PDFKit.PDFDocument, parent: HTMLElement, style: SvgStyle) {
+  for (const c of parent.childNodes) {
+    if (c.nodeType !== 1) continue;
+    const el = c as HTMLElement;
+    const st = styleOf(el, style);
+    const tag = el.rawTagName?.toLowerCase();
+    const paint = (shape: () => PDFKit.PDFDocument) => {
+      doc.opacity(st.opacity);
+      if (st.fill !== 'none' && st.stroke !== 'none') shape().fillAndStroke(st.fill, st.stroke);
+      else if (st.fill !== 'none') shape().fill(st.fill);
+      else if (st.stroke !== 'none') shape().stroke(st.stroke);
+      doc.opacity(1);
+    };
+    doc.lineWidth(st.strokeWidth);
+    switch (tag) {
+      case 'g': {
+        const m = /translate\(\s*([-\d.]+)[\s,]*([-\d.]*)\s*\)/.exec(attr(el, 'transform') ?? '');
+        doc.save();
+        if (m) doc.translate(num(m[1]), num(m[2]));
+        drawSvgChildren(doc, el, st);
+        doc.restore();
+        break;
+      }
+      case 'rect': {
+        const w = num(attr(el, 'width')), hh = num(attr(el, 'height'));
+        if (w <= 0 || hh <= 0) break;
+        const rx = Math.min(num(attr(el, 'rx')), w / 2, hh / 2);
+        paint(() => (rx > 0 ? doc.roundedRect(num(attr(el, 'x')), num(attr(el, 'y')), w, hh, rx) : doc.rect(num(attr(el, 'x')), num(attr(el, 'y')), w, hh)));
+        break;
+      }
+      case 'circle': {
+        const r = num(attr(el, 'r'));
+        if (r > 0) paint(() => doc.circle(num(attr(el, 'cx')), num(attr(el, 'cy')), r));
+        break;
+      }
+      case 'line': {
+        const stroke = st.stroke === 'none' ? '#111111' : st.stroke;
+        const dash = (attr(el, 'stroke-dasharray') ?? '').split(/[\s,]+/).map(Number).filter((n) => n > 0);
+        doc.opacity(st.opacity);
+        if (dash.length) doc.dash(dash[0], { space: dash[1] ?? dash[0] });
+        doc.moveTo(num(attr(el, 'x1')), num(attr(el, 'y1'))).lineTo(num(attr(el, 'x2')), num(attr(el, 'y2'))).stroke(stroke);
+        if (dash.length) doc.undash();
+        doc.opacity(1);
+        break;
+      }
+      case 'path': {
+        const d = attr(el, 'd');
+        if (d) { try { paint(() => doc.path(d)); } catch { /* ungültiger Pfad: übergehen */ } }
+        break;
+      }
+      case 'text': {
+        const text = strip(decode(el.textContent)).trim();
+        if (!text) break;
+        const size = st.fontSize;
+        doc.font(st.bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(size).fillColor(st.fill === 'none' ? '#111111' : st.fill).opacity(st.opacity);
+        const w = doc.widthOfString(text);
+        const tx = num(attr(el, 'x')) - (st.anchor === 'middle' ? w / 2 : st.anchor === 'end' ? w : 0);
+        // SVG-y ist die Grundlinie; pdfkit setzt die Oberkante
+        doc.text(text, tx, num(attr(el, 'y')) - size * 0.85, { lineBreak: false, width: w + 2 });
+        doc.opacity(1);
+        break;
+      }
+      default:
+        break;
     }
   }
 }

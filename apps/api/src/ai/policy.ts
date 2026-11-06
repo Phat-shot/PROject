@@ -4,7 +4,8 @@ import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
 import { mapMembership } from '../rights.js';
 import { aiConfigForAgent, aiConfigForProfile, orgAiSettings, type AiConfig, agentUsableIn } from './client.js';
-import { PROJECT_LABEL_SQL, projectPolicy } from '../projectPolicy.js';
+import { PROJECT_LABEL_SQL, personalAllowed, projectPolicy, TEXT } from '../projectPolicy.js';
+import { orgAllowsPersonal } from '../auth.js';
 
 /**
  * Prüfweg jeder KI-Nutzung. Im Projekt arbeiten nur Agenten: Ein Agent gehört zu einem LLM, wer das LLM verwaltet, legt seine
@@ -34,6 +35,15 @@ export interface AiQuery {
 
 export const KILLSWITCH_TEXT = 'KI im Mandanten abgeschaltet (Notaus)';
 export const NO_AI_RIGHT = 'Kein KI-Recht in diesem Projekt (Mitgliedschaft: „KI nutzen“)';
+export const PERSONAL_BLOCKED_TEXT = TEXT.personalBlocked;
+
+/** Persönliches Projekt: KI nur, wenn die Eigentümerin bzw. der Eigentümer freigegeben ist (je Person oder Mandantenschalter). null = frei, sonst Grund. */
+export async function personalAiReason(db: Db, project: { personal?: boolean | null; created_by?: string | null; org_id: string }): Promise<string | null> {
+  if (!projectPolicy(project).ai.personalGate || !project.created_by) return null;
+  const owner = await db.maybeOne(`select personal_project_allowed, global_role from users where id = $1`, [project.created_by]);
+  if (!owner) return null;
+  return personalAllowed({ personalProjectAllowed: owner.personal_project_allowed, globalRole: owner.global_role }, await orgAllowsPersonal(db, project.org_id)) ? null : TEXT.personalBlocked;
+}
 export { PROJECT_LABEL_SQL };
 
 export const featureLabel = (k: string): string => AI_FEATURES.find((x) => x.key === k)?.label ?? AI_CATEGORIES.find((x) => x.key === k)?.label ?? k;
@@ -92,8 +102,10 @@ export async function checkAi(db: Db, q: AiQuery): Promise<{ decision: AiDecisio
   const def = featureDef(f);
   if (!def) return deny('policy', `Unbekannte KI-Funktion ${f}`);
   const isAgent = subj.kind === 'agent';
-  const project = q.projectId ? await db.maybeOne(`select p.id, p.org_id, p.personal from projects p where p.id = $1`, [q.projectId]) : null;
+  const project = q.projectId ? await db.maybeOne(`select p.id, p.org_id, p.personal, p.created_by from projects p where p.id = $1`, [q.projectId]) : null;
   if (q.projectId && (!project || project.org_id !== subj.org_id)) return deny('project', 'Projekt nicht gefunden');
+  // Persönliches Projekt: Freigabe je Person (Verwaltung) sperrt die KI für Eigentümer und Agenten dort
+  if (project) { const r = await personalAiReason(db, project); if (r) return deny('project', r); }
 
   if (!isAgent) {
     // Personen: nur auslösen (Assistenz, Chat, Aufträge); was der Agent darf, prüft dessen eigener Aufruf

@@ -4,12 +4,19 @@ import type { EffectiveNotifyRule, Group, NotificationRule, NotifyChat, NotifyEv
 import { NOTIFY_EVENTS, NOTIFY_LEVEL_FIELDS, NOTIFY_LEVEL_LABEL, NOTIFY_ROLES } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { useData } from '../lib/useData';
-import { Modal, useAsync } from './ui';
+import { IconButton, Modal, useAsync } from './ui';
+import { IconLock, IconLockOpen, IconX } from './icons';
+
+/** Klartext je Feld und Ereignis für Screenreader (statt technischer Schlüssel). */
+const FIELD_LABEL: Record<string, string> = { recipients: 'Empfänger', chat: 'Chat', mail: 'Mail', log: 'Log', doc: 'Doku-Seite', remindH: 'Erinnern nach Stunden', escalateH: 'Weitergeben nach Stunden', expireH: 'Verfällt nach Stunden', every: 'Zwischenstände' };
+const eventLabel = (e: string) => (e === '*' ? 'Alle Klassen' : NOTIFY_EVENTS.find((x) => x.key === e)?.label ?? e);
+/** Zugängliche Beschriftung einer Zelle: „Fälligkeit: Mail“ */
+export const cellLabel = (e: string, f: string) => `${eventLabel(e)}: ${FIELD_LABEL[f] ?? f}`;
 
 /**
  * Benachrichtigungsregeln (Regel N) in der Oberfläche: dieselbe Matrix für Org (Verwaltung), Projekt (Einstellungen),
  * Benutzer (Benutzereinstellungen, je Projekt) und den Berichtswunsch am AP. Geerbte Werte stehen grau mit Herkunft,
- * gesperrte Felder sind deaktiviert (🔒 mit Ebene); Org und Projekt sperren Felder für die Ebenen darunter.
+ * gesperrte Felder sind deaktiviert (mit Ebene); Org und Projekt sperren Felder für die Ebenen darunter.
  */
 type Level = Exclude<NotifyLevel, 'code'>;
 export interface RuleItem { event: string; recipients?: string[] | null; channels?: NotificationRule['channels']; timing?: NotificationRule['timing']; locked?: NotifyField[] }
@@ -54,15 +61,15 @@ export function RulesMatrix({ level, data, canEdit, onSave, events, targets }: {
     return `erbt: ${text(eff.value[f])} (${NOTIFY_LEVEL_LABEL[eff.origin[f] ?? 'code']})`;
   };
   const Lock = ({ e, f }: { e: string; f: NotifyField }) => canLock && !lockedAbove(e, f)
-    ? <button className={`btn sm link lock ${ownLock(e, f) ? 'on' : ''}`} title={ownLock(e, f) ? 'Gesperrt für die Ebenen darunter (Klick hebt auf)' : 'Für die Ebenen darunter sperren'} aria-label={`${f} sperren`} aria-pressed={ownLock(e, f)} onClick={() => void save(e, (it) => { it.locked = ownLock(e, f) ? it.locked!.filter((x) => x !== f) : [...it.locked!, f]; })}>{ownLock(e, f) ? '🔒' : '🔓'}</button>
+    ? <button className={`btn sm link lock ${ownLock(e, f) ? 'on' : ''}`} title={ownLock(e, f) ? 'Gesperrt für die Ebenen darunter (Klick hebt auf)' : 'Für die Ebenen darunter sperren'} aria-label={`${cellLabel(e, f)} für die Ebenen darunter sperren`} aria-pressed={ownLock(e, f)} onClick={() => void save(e, (it) => { it.locked = ownLock(e, f) ? it.locked!.filter((x) => x !== f) : [...it.locked!, f]; })}>{ownLock(e, f) ? <IconLock size={14} /> : <IconLockOpen size={14} />}</button>
     : null;
-  const lockNote = (e: string, f: NotifyField) => { const l = lockedAbove(e, f); return l ? <span className="muted small" title="Gesperrt auf einer Ebene darüber">🔒 {NOTIFY_LEVEL_LABEL[l]}</span> : null; };
+  const lockNote = (e: string, f: NotifyField) => { const l = lockedAbove(e, f); return l ? <span className="muted small" title="Gesperrt auf einer Ebene darüber"><IconLock size={12} /><span className="sr-only">gesperrt durch</span> {NOTIFY_LEVEL_LABEL[l]}</span> : null; };
   const channelSelect = (e: string, f: 'chat' | 'mail' | 'log', options: [string, string][], text: (v: any) => string) => {
     const own = (rowAt(e)?.channels as any)?.[f];
     const locked = lockedAbove(e, f);
     return (
-      <span className="row nowrap" style={{ gap: 2 }}>
-        <select aria-label={`${e} ${f}`} className={own === undefined ? 'inherited' : ''} disabled={!canEdit || Boolean(locked)} value={own === undefined ? '' : String(own)}
+      <span className="row nowrap gap-1">
+        <select aria-label={cellLabel(e, f)} className={own === undefined ? 'inherited' : ''} disabled={!canEdit || Boolean(locked)} value={own === undefined ? '' : String(own)}
           onChange={(x) => void save(e, (it) => { const v = x.target.value; if (v === '') delete (it.channels as any)[f]; else (it.channels as any)[f] = f === 'log' ? v === 'true' : v; })}>
           <option value="">{e === '*' ? 'erbt' : inherited(e, f, text)}</option>
           {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
@@ -73,7 +80,8 @@ export function RulesMatrix({ level, data, canEdit, onSave, events, targets }: {
   };
   const rows = [{ key: '*', label: 'Alle Klassen', fixedChat: false, noChat: false, timing: false, types: 'Standard für jede Klasse ohne eigene Zeile' }, ...NOTIFY_EVENTS.filter((x) => !events || events.includes(x.key))];
   return (
-    <div style={{ overflowX: 'auto' }}>
+    <div className="scroll-x">
+      {canEdit && <p className="muted small">Änderungen werden sofort gespeichert; geerbte Werte stehen grau mit ihrer Herkunft.</p>}
       <table className="table notify-matrix"><thead><tr>
         <th>Klasse</th>
         {fields.includes('recipients') && <th>Empfänger</th>}
@@ -99,9 +107,9 @@ export function RulesMatrix({ level, data, canEdit, onSave, events, targets }: {
                 : channelSelect(e, 'chat', (userLevel ? ['off', 'thread'] : ['off', 'thread', 'project']).map((v) => [v, CHAT_LABEL[v as NotifyChat]]), (v) => CHAT_LABEL[v as NotifyChat])}</td>
               <td>{channelSelect(e, 'mail', (['now', 'digest', 'off'] as NotifyMail[]).map((v) => [v, MAIL_LABEL[v]]), (v) => MAIL_LABEL[v as NotifyMail])}</td>
               {fields.includes('log') && <td>{channelSelect(e, 'log', [['true', 'an'], ['false', 'aus']], (v) => (v ? 'an' : 'aus'))}</td>}
-              {fields.includes('doc') && <td>{e === '*' ? null : <label className="check small"><input type="checkbox" aria-label={`${e} Doku`} disabled={!canEdit} checked={Boolean(eff?.value.doc)} onChange={(x) => void save(e, (it) => { it.channels!.doc = x.target.checked ? (true as unknown as string) : false; })} /> Seite</label>}</td>}
-              {fields.includes('remindH') && <td className="small">{ev.timing && e !== 'progress' ? <span className="row nowrap" style={{ gap: 4 }}>
-                {(['remindH', 'escalateH', 'expireH'] as const).filter((f) => fields.includes(f)).map((f) => <input key={f} type="number" min={1} max={2000} aria-label={`${e} ${f}`} title={f === 'remindH' ? 'Erinnern nach Stunden' : f === 'escalateH' ? 'Weitergeben nach Stunden' : 'Verfällt nach Stunden'} disabled={!canEdit || Boolean(lockedAbove(e, f))} style={{ width: 64 }}
+              {fields.includes('doc') && <td>{e === '*' ? null : <label className="check small"><input type="checkbox" aria-label={cellLabel(e, 'doc')} disabled={!canEdit} checked={Boolean(eff?.value.doc)} onChange={(x) => void save(e, (it) => { it.channels!.doc = x.target.checked ? (true as unknown as string) : false; })} /> Seite</label>}</td>}
+              {fields.includes('remindH') && <td className="small">{ev.timing && e !== 'progress' ? <span className="row nowrap gap-1">
+                {(['remindH', 'escalateH', 'expireH'] as const).filter((f) => fields.includes(f)).map((f) => <input key={f} type="number" min={1} max={2000} aria-label={cellLabel(e, f)} title={f === 'remindH' ? 'Erinnern nach Stunden' : f === 'escalateH' ? 'Weitergeben nach Stunden' : 'Verfällt nach Stunden'} disabled={!canEdit || Boolean(lockedAbove(e, f))} style={{ width: 64 }}
                   defaultValue={own?.timing[f] ?? ''} placeholder={eff?.value[f] ? `${eff.value[f]} h` : '–'} onBlur={(x) => { const v = x.target.value ? Number(x.target.value) : undefined; if (v !== own?.timing[f]) void save(e, (it) => { if (v === undefined) delete it.timing![f]; else it.timing![f] = v; }); }} />)}
               </span> : e === 'progress' ? <EverySelect value={own?.timing.every} inheritedText={inherited(e, 'every', (v) => EVERY_LABEL[v as NotifyEvery])} disabled={!canEdit || Boolean(lockedAbove(e, 'every'))} onChange={(v) => void save(e, (it) => { if (v) it.timing!.every = v; else delete it.timing!.every; })} /> : null}</td>}
               {level === 'user_task' && <td>{e === 'progress' ? <EverySelect value={own?.timing.every} inheritedText={inherited(e, 'every', (v) => EVERY_LABEL[v as NotifyEvery])} disabled={!canEdit} onChange={(v) => void save(e, (it) => { if (v) it.timing!.every = v; else delete it.timing!.every; })} /> : null}</td>}
@@ -138,9 +146,9 @@ function RecipientsDialog({ label, value, targets, inherit, onClose, onSave }: {
       <div className="form">
         <p className="muted small">Agenten, Inaktive, wer das Ereignis auslöst, und Personen ohne Sicht auf das AP bekommen nie eine Meldung. Gruppen zählen nur mit Projektzugriff.</p>
         {list.length === 0 && <div className="muted small">Niemand (nur die Empfänger der jeweiligen Stelle, z. B. Eskalationsstufen).</div>}
-        <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>{list.map((r, i) => <li key={`${r}-${i}`}>{recipientsLabel([r], targets)} <button className="btn sm link" aria-label={`${r} entfernen`} onClick={() => setList(list.filter((_, j) => j !== i))}>✕</button></li>)}</ul>
-        <div className="row small" style={{ flexWrap: 'wrap' }}>
-          <select aria-label="Empfänger hinzufügen" value={add} onChange={(e) => setAdd(e.target.value)} style={{ width: 'auto' }}>
+        <ul className="small m-0 ul-18">{list.map((r, i) => <li key={`${r}-${i}`}>{recipientsLabel([r], targets)} <IconButton label={`${recipientsLabel([r], targets)} entfernen`} size="sm" variant="link" onClick={() => setList(list.filter((_, j) => j !== i))}><IconX /></IconButton></li>)}</ul>
+        <div className="row small wrap">
+          <select className="w-auto" aria-label="Empfänger hinzufügen" value={add} onChange={(e) => setAdd(e.target.value)}>
             <option value="">Rolle, Gruppe oder Person …</option>
             <optgroup label="Rollen">{NOTIFY_ROLES.map((r) => <option key={r.key} value={r.key}>{r.label}</option>)}</optgroup>
             {targets?.groups.length ? <optgroup label="Gruppen">{targets.groups.map((g) => <option key={g.id} value={`group:${g.id}`}>{g.name}</option>)}</optgroup> : null}
@@ -175,7 +183,7 @@ export function OrgNotifyCard() {
         <p className="muted small">Meldungen mit Mail-Modus „Digest“ gehen einmal täglich zu dieser Stunde (Europe/Berlin) über das Org-Postfach; gilt für alle Personen des Mandanten.</p>
         {error && <div className="error mb">{error}</div>}
         <label className="row small">Tages-Digest um
-          <select aria-label="Digest-Stunde" value={d.data.digestHour} disabled={busy} onChange={(e) => void put({ digestHour: Number(e.target.value) })} style={{ width: 'auto' }}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}</select> Uhr</label>
+          <select className="w-auto" aria-label="Digest-Stunde" value={d.data.digestHour} disabled={busy} onChange={(e) => void put({ digestHour: Number(e.target.value) })}>{Array.from({ length: 24 }, (_, h) => <option key={h} value={h}>{String(h).padStart(2, '0')}:00</option>)}</select> Uhr</label>
       </div>
       <div className="card">
         <h2>Benachrichtigungsregeln</h2>
@@ -199,10 +207,10 @@ export function ProjectNotifyCard({ projectId, members }: { projectId: string; m
   const docOn = (e: string): RuleItem => { const it = itemOf(d.data!.rules.find((r) => r.event === e), e); it.channels!.doc = true as unknown as string; return it; };
   return (
     <>
-      <p className="muted small">Erbt von der Org (<Link to="/verwaltung/benachrichtigungen">Verwaltung › Benachrichtigungen</Link>); 🔒 Org heißt gesperrt. Als PL weichst du für dieses Projekt ab und sperrst Felder für Arbeitspakete und Personen. Chat „Projektkanal“ gilt nie bei eingeschränkten Teilprojekten.</p>
+      <p className="muted small">Erbt von der Org (<Link to="/verwaltung/benachrichtigungen">Verwaltung › Benachrichtigungen</Link>); Org heißt gesperrt. Als PL weichst du für dieses Projekt ab und sperrst Felder für Arbeitspakete und Personen. Chat „Projektkanal“ gilt nie bei eingeschränkten Teilprojekten.</p>
       {error && <div className="error mb">{error}</div>}
       <RulesMatrix level="project" data={d.data} canEdit={d.data.canEdit && !busy} targets={targets} onSave={save} />
-      <div className="row mt small" style={{ flexWrap: 'wrap' }}>
+      <div className="row mt small wrap">
         {docPage ? <Link to={`/projekte/${projectId}/doku/${docPage}`}>Seite „Entscheidungen und Meldungen“</Link>
           : d.data.canEdit && <button className="btn sm" disabled={busy} title="Legt die Seite an; Entscheidungen und Eskalationen werden dort eingetragen" onClick={() => void save([docOn('decision'), docOn('escalation')])}>Doku-Seite „Entscheidungen und Meldungen“ einschalten</button>}
         {d.data.canEdit && <button className="btn sm" aria-expanded={preview} onClick={() => setPreview(!preview)}>Wer bekommt was?</button>}
@@ -250,13 +258,13 @@ export function MyNotifyCard() {
   const list = (projects.data?.projects ?? []).filter((p) => p.status === 'active');
   return (
     <div className="card full">
-      <div className="row between"><h2 style={{ margin: 0 }}>Benachrichtigungen</h2>
-        <select aria-label="Geltungsbereich" value={projectId} onChange={(e) => setProjectId(e.target.value)} style={{ width: 'auto' }}>
+      <div className="row between"><h2 className="m-0">Benachrichtigungen</h2>
+        <select className="w-auto" aria-label="Geltungsbereich" value={projectId} onChange={(e) => setProjectId(e.target.value)}>
           <option value="">alle Projekte</option>
           {list.map((p) => <option key={p.id} value={p.id}>{p.key} · {p.name}</option>)}
         </select>
       </div>
-      <p className="muted small">In der App erscheint jede Meldung. Hier legst du fest, was zusätzlich per Mail (sofort oder im Tages-Digest) und als Systembeitrag im Chat kommt; für ein Projekt kannst du abweichen. Was die Org oder die PL sperrt (🔒), gilt trotzdem. Zwischenstände einzelner Arbeitspakete wählst du im Arbeitspaket (Berichtswunsch).</p>
+      <p className="muted small">In der App erscheint jede Meldung. Hier legst du fest, was zusätzlich per Mail (sofort oder im Tages-Digest) und als Systembeitrag im Chat kommt; für ein Projekt kannst du abweichen. Was die Org oder die PL sperrt (), gilt trotzdem. Zwischenstände einzelner Arbeitspakete wählst du im Arbeitspaket (Berichtswunsch).</p>
       {projectId && <div className="row mb small">
         {muted ? <><span className="badge warn">stummgeschaltet</span><button className="btn sm" disabled={busy} onClick={() => void save([{ event: '*' }])}>Stummschaltung aufheben</button></>
           : <button className="btn sm" disabled={busy} title="Für dieses Projekt keine Mails und keine Chat-Beiträge mehr, nur noch In-App (Sperren der Org oder PL gelten weiter)" onClick={() => void save([{ event: '*', channels: { mail: 'off', chat: 'off' } }])}>Projekt stummschalten</button>}
@@ -336,14 +344,14 @@ export function ReportWish({ taskId }: { taskId: string }) {
             {(['now', 'digest', 'off'] as NotifyMail[]).map((k) => <option key={k} value={k}>{MAIL_LABEL[k]}</option>)}
           </select></label>}
         {d.data.canEditProgress && <>
-          <div className="field"><span>Für das AP an</span><span className="row small" style={{ flexWrap: 'wrap' }}>
+          <div className="field"><span>Für das AP an</span><span className="row small wrap">
             {[['responsible', 'Zuständige(r)'], ['pl', 'verantwortliche PL'], ['requester', 'Auftraggeber']].map(([k, l]) => <label key={k} className="check"><input type="checkbox" disabled={busy} checked={recipients.includes(k)} onChange={(e) => void toggle(k, e.target.checked)} /> {l}</label>)}
           </span></div>
           <label className="field"><span>Häufigkeit am AP</span>
             <EverySelect value={ap?.timing.every} inheritedText={`erbt: ${EVERY_LABEL[eff.value.every ?? 'milestones']} (${NOTIFY_LEVEL_LABEL[eff.origin.every ?? 'code']})`} disabled={busy} onChange={(v) => void setAp(ap?.recipients ?? null, v ?? undefined)} /></label>
         </>}
       </div>
-      <p className="muted small" style={{ margin: 0 }}>Zwischenstände schreibt das System aus den Läufen des KI-Agenten an diesem AP (ausgeführte Aktionen und Notiz).</p>
+      <p className="muted small m-0">Zwischenstände schreibt das System aus den Läufen des KI-Agenten an diesem AP (ausgeführte Aktionen und Notiz).</p>
       {error && <div className="error small">{error}</div>}
     </>
   );

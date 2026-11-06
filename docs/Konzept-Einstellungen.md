@@ -1,5 +1,9 @@
 # Konzept: Einstellungen (Ist, Befund, Zielbild)
 
+> **Zielgruppe:** Entwickler. Zielbild der drei Einstellungsseiten (Meine Einstellungen, Projekt › Einstellungen, Verwaltung) mit gleichen Reitern.
+> **Stand der Umsetzung (06.11.2026):** Schritte 0 bis 6 umgesetzt (Abschnitt 9; Migrationen 061, 063), Nachtrag 063 (KI neu geordnet) umgesetzt. Seit 05.11.2026 liegen zusätzlich die KI-Läufe als Unterreiter unter Projekt › Einstellungen, der Reiter Telefonie in der Verwaltung (Migration 069) und die Doku als Untermenü in der Leiste; das Inventar in Abschnitt 2 beschreibt den Stand vor dem Umbau.
+> **Offen:** LLM der Assistenz erbt nicht von `defaultProfileId` (bewusst); Bestätigungsklassen je Agent im Projekt nur per API (Abschnitt 9).
+
 Stand 2026-10-20. Grundlage: vollständiges Inventar der Web-UI (`apps/web`), der API (`apps/api`) und der Typen (`packages/shared`). Zeilenangaben beziehen sich auf den Stand dieses Datums.
 
 ## 1. Kurzbefund

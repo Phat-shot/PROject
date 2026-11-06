@@ -68,7 +68,8 @@ test('Planungsaktionen als Mitglied: Aufgaben, AP im eigenen Teilprojekt, Termin
   next = [
     A({ type: 'create_aufgabe', title: 'Leitungen planen', text: 'Plan der Leitungswege', startDate: '2026-11-02', dueDate: '2026-11-06', responsible: 'anna@demo.local', items: ['Grundriss', 'Stromkreise'] }),
     A({ type: 'create_aufgabe', title: 'Material bestellen', dueDate: '2026-11-10' }),
-    A({ type: 'create_aufgabe', title: 'Leitungen planen' }),
+    // Dublette (mit Termin, sonst macht die Struktur-Regel „auto“ daraus einen Task)
+    A({ type: 'create_aufgabe', title: 'Leitungen planen', dueDate: '2026-11-06' }),
     A({ type: 'create_ap', title: 'Abnahme Elektrik', dueDate: '2026-11-28' }),
     A({ type: 'create_event', title: 'Besichtigung Elektriker', startsAt: '2026-11-03T10:00', location: 'Gästezimmer' }),
     A({ type: 'set_dates', ref: `WEB-${other.number}`, dueDate: '2026-12-24' }),
@@ -124,6 +125,8 @@ test('Stellvertretende PL: Agent plant im ganzen Projekt, weist Agenten zu, änd
     A({ type: 'set_dates', ref: `WEB-${other.number}`, dueDate: '2026-12-24' }),
     A({ type: 'create_ap', title: 'Wände streichen', subproject: 'Maler', responsible: 'max@demo.local' })
   ];
+  // Folgelauf aus der Freigabe des vorigen Tests abwarten, damit der nächste Aufruf der Lauf als stellvertretende PL ist
+  await flushAgentRuns();
   const before = calls.length;
   const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);

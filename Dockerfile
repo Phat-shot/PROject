@@ -23,7 +23,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
 FROM node:22-alpine
 WORKDIR /app
 ARG GIT_SHA=dev
-ENV NODE_ENV=production PORT=3000 DATA_DIR=/data STATIC_DIR=/app/apps/web/dist APP_VERSION=$GIT_SHA
+# SEED=false: Demodaten (admin@demo.local / demo1234) nur opt-in mit SEED=true, nie in NODE_ENV=production
+ENV NODE_ENV=production PORT=3000 DATA_DIR=/data STATIC_DIR=/app/apps/web/dist APP_VERSION=$GIT_SHA SEED=false
 RUN apk add --no-cache curl tini && mkdir -p /data && chown node:node /data
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/package.json ./package.json

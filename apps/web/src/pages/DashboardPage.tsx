@@ -1,20 +1,19 @@
 import { useMemo } from 'react';
 import { Link, useLocation, useSearchParams } from 'react-router-dom';
-import type { Notification, Project, TimeEntry, Question } from '@projekttool/shared';
+import type { Notification, Project, TimeEntry } from '@projekttool/shared';
 import { useData } from '../lib/useData';
 import { useAuth } from '../lib/auth';
 import { fmtDate, today } from '../lib/api';
 import { TopBar } from '../components/Layout';
+import { Badge, Loading } from '../components/ui';
 import { buildWorkTree, useShowDone, WorkTree, type WorkItem, type WorkProject } from './WorkTree';
 import { PortfolioView } from './PortfolioPage';
 import { AllTasksView } from './AllTasksPage';
 import { ProjectScope } from './ProjectPage';
 import { OverviewView } from './project/OverviewView';
-import { useOpenChat } from '../components/Messenger';
-import { NotifIcon, NotificationRow, sortNotifications } from '../components/Notifications';
+import { NotificationRow, sortNotifications } from '../components/Notifications';
 import { useOpenForMe } from '../lib/useOpenForMe';
 import { OpenForMeList } from '../components/OpenForMe';
-import type { NotifyEvent } from '@projekttool/shared';
 
 /**
  * Dashboard (nur global, filterbar nach Projekt über ?projekt=): Reiter Meine Arbeit, Projekte (Ampel, Fortschritt,
@@ -59,7 +58,6 @@ function MyWork({ projectId }: { projectId: string | null }) {
   const work = useData<{ projects: WorkProject[] }>('/my/work');
   const notes = useData<{ notifications: Notification[]; unread: number }>('/notifications');
   const openForMe = useOpenForMe();
-  const openChat = useOpenChat();
   const myQuestions = openForMe.questions.filter((q) => !projectId || q.projectId === projectId);
   const time = useData<{ entries: (TimeEntry & { projectKey: string })[]; totalMinutes: number }>(timeTracking ? '/my/time' : null);
   const { showDone, setShowDone } = useShowDone();
@@ -68,7 +66,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
   const scoped = useMemo(() => (work.data?.projects ?? []).filter((p) => !projectId || p.id === projectId), [work.data, projectId]);
   const nodes = useMemo(() => buildWorkTree(scoped, user?.id, showDone), [scoped, user?.id, showDone]);
   const all = useMemo(() => buildWorkTree(scoped, user?.id, true), [scoped, user?.id]);
-  // Arbeitspakete und Aufgaben, die mir zugewiesen oder vererbt sind oder eigene Tasks haben (Aufgaben zählen wie Arbeitspakete)
+  // Arbeitspakete und Aufgaben, die mir zugewiesen oder vererbt sind oder eigene Checklistenpunkte haben (Aufgaben zählen wie Arbeitspakete)
   const flat = (i: WorkItem): WorkItem[] => [...(i.mine || i.tasks.length ? [i] : []), ...i.subs.flatMap(flat)];
   const aps = all.flatMap((n) => n.lanes.flatMap((l) => l.items.flatMap(flat)));
   const open = aps.filter((x) => !x.ap.done);
@@ -92,10 +90,11 @@ function MyWork({ projectId }: { projectId: string | null }) {
       <div className="mt">
         <OpenForMeList questions={myQuestions} waiting={openForMe.waiting} projectId={projectId} />
         <div className="row mb">
-          <h2 style={{ margin: 0 }}>Meine Arbeit in diesem Projekt</h2>
-          <span className="muted small">{open.length} offen{overdue.length ? ` · ${overdue.length} überfällig` : ''}{tasksOpen ? ` · ${tasksOpen} Tasks` : ''}</span>
+          <h2 className="m-0">Meine Arbeit in diesem Projekt</h2>
+          <span className="muted small">{open.length} offen{overdue.length ? ` · ${overdue.length} überfällig` : ''}{tasksOpen ? ` · ${tasksOpen} Checklistenpunkte` : ''}</span>
           <label className="check small right"><input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> erledigte zeigen</label>
         </div>
+        {!work.data && !work.error && <Loading>Lädt deine Arbeit …</Loading>}
         {work.data && <WorkTree nodes={nodes} reload={work.reload} />}
       </div>
     );
@@ -103,7 +102,7 @@ function MyWork({ projectId }: { projectId: string | null }) {
   return (
     <>
       <div>
-        {work.error && <div className="error mb">{work.error}</div>}
+        {work.error && <div className="error mb" role="alert">{work.error}</div>}
         <div className="kpis mb">
           <Link className="kpi" to={list('')} title="Als Liste öffnen"><div className="v">{open.length}</div><div className="l">offene Arbeitspakete</div></Link>
           <Link className={`kpi ${overdue.length ? 'bad' : 'ok'}`} to={list('&filter=overdue')} title="Als Liste öffnen"><div className="v">{overdue.length}</div><div className="l">überfällig</div></Link>
@@ -120,10 +119,11 @@ function MyWork({ projectId }: { projectId: string | null }) {
         <div className="grid cols-2 mb">
           <div className="card">
             <h2>Soll / Ist je Projekt</h2>
-            {perProject.length === 0 && <div className="muted small">Keine offenen Arbeitspakete.</div>}
+            {!work.data && !work.error && <Loading />}
+            {work.data && perProject.length === 0 && <div className="muted small">Keine offenen Arbeitspakete.</div>}
             {perProject.map((p) => (
               <div key={p.id} className="mb">
-                <div className="row between small"><Link to={`/dashboard?projekt=${p.id}`} title="Projekt-Dashboard"><span className="badge">{p.key}</span> {p.name}</Link><span className="muted">{p.open - p.overdue}/{p.open} im Plan{p.overdue ? <span style={{ color: 'var(--danger)' }}> · {p.overdue} überfällig</span> : ''}</span></div>
+                <div className="row between small"><Link to={`/dashboard?projekt=${p.id}`} title="Projekt-Dashboard"><Badge>{p.key}</Badge> {p.name}</Link><span className="muted">{p.open - p.overdue}/{p.open} im Plan{p.overdue ? <span className="text-danger"> · {p.overdue} überfällig</span> : ''}</span></div>
                 <div className="bar"><div className="done" style={{ width: `${p.open ? ((p.open - p.overdue) / p.open) * 100 : 100}%` }} /><div className="over" style={{ width: `${p.open ? (p.overdue / p.open) * 100 : 0}%` }} /></div>
               </div>
             ))}
@@ -133,25 +133,26 @@ function MyWork({ projectId }: { projectId: string | null }) {
             <h2>Nächste Termine</h2>
             {upcoming.length === 0 ? <div className="muted small">Keine Termine.</div> : (
               <table className="table"><tbody>
-                {upcoming.map(({ ap }) => <tr key={ap.id}><td className="nowrap" style={ap.dueDate! < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</td><td><Link to={`/projekte/${ap.projectId}/board?task=${ap.id}`}>{ap.title}</Link></td></tr>)}
+                {upcoming.map(({ ap }) => <tr key={ap.id}><td className={`nowrap ${ap.dueDate! < t ? 'text-danger fw-600' : ''}`}>{fmtDate(ap.dueDate)}</td><td><Link to={`/projekte/${ap.projectId}/board?task=${ap.id}`}>{ap.title}</Link></td></tr>)}
               </tbody></table>
             )}
           </div>
           <div className="card">
-            <h2>Meldungen {notes.data && notes.data.unread > 0 && <span className="badge warn">{notes.data.unread} neu</span>}</h2>
+            <h2>Meldungen {notes.data && notes.data.unread > 0 && <Badge tone="warn">{notes.data.unread} neu</Badge>}</h2>
+            {!notes.data && !notes.error && <Loading />}
             {sortNotifications(notes.data?.notifications ?? []).slice(0, 6).map((n) => <NotificationRow key={n.id} n={n} onOpened={() => void notes.reload()} />)}
             {notes.data && notes.data.notifications.length === 0 && <div className="muted small">Keine Meldungen.</div>}
           </div>
         </div>
         <div className="row mb">
-          <h2 style={{ margin: 0 }}>Meine Arbeit</h2>
-          <span className="muted small">Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task, nur was dir zugewiesen oder vererbt ist</span>
+          <h2 className="m-0">Meine Arbeit</h2>
+          <span className="muted small">Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Checklistenpunkt, nur was dir zugewiesen oder vererbt ist</span>
           <label className="check small right"><input type="checkbox" checked={showDone} onChange={(e) => setShowDone(e.target.checked)} /> erledigte zeigen</label>
           <Link className="btn sm" to="/dashboard/arbeitspakete">Alle Arbeitspakete</Link>
         </div>
+        {!work.data && !work.error && <Loading>Lädt deine Arbeit …</Loading>}
         {work.data && <WorkTree nodes={nodes} reload={work.reload} />}
       </div>
     </>
   );
 }
-

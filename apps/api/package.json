@@ -17,10 +17,11 @@
     "@electric-sql/pglite": "^0.5.10",
     "@fastify/cookie": "^11.0.2",
     "@fastify/multipart": "^9.0.3",
-    "@fastify/static": "^10.1.6",
+    "@fastify/static": "^10.1.10",
     "@projekttool/shared": "*",
     "@types/pdfkit": "^0.17.6",
     "fastify": "^5.2.1",
+    "fflate": "^0.8.3",
     "imapflow": "^1.0.188",
     "mailparser": "^3.7.2",
     "marked": "^18.1.1",
@@ -28,14 +29,18 @@
     "nodemailer": "^10.1.2",
     "pdfkit": "^0.20.2",
     "pg": "^8.13.1",
+    "sanitize-html": "^2.18.1",
     "turndown": "^7.2.4",
-    "turndown-plugin-gfm": "^1.0.2"
+    "turndown-plugin-gfm": "^1.0.2",
+    "undici": "^7.30.2",
+    "unpdf": "^1.9.1"
   },
   "devDependencies": {
     "@types/mailparser": "^3.4.5",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.11.10",
+    "@types/sanitize-html": "^2.16.2",
     "@types/turndown": "^5.0.6",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3"

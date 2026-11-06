@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { buildApp } from './app.js';
 import { createDb, runMigrations } from './db.js';
 import { MailService } from './mail/service.js';
-import { seedDevMails, seedIfEmpty } from './seed.js';
+import { seedAllowed, seedDevMails, seedIfEmpty } from './seed.js';
 import { ensureBuiltinTemplates } from './docs/service.js';
 import { ensureHtmlContent } from './docs/html.js';
 import { startWorker } from './worker.js';
@@ -14,13 +14,16 @@ async function main() {
   const db = await createDb();
   const applied = await runMigrations(db);
   if (applied.length) console.log('Migrationen angewendet:', applied.join(', '));
-  if (process.env.SEED !== 'false') await seedIfEmpty(db);
+  // Demodaten nur opt-in (SEED=true) und nie in der Produktion
+  const seeding = seedAllowed();
+  if (seeding.reason) console.warn(seeding.reason);
+  if (seeding.allowed && (await seedIfEmpty(db))) console.log('Demodaten angelegt (admin@demo.local / demo1234)');
   await ensureBuiltinTemplates(db);
   const converted = await ensureHtmlContent(db);
   if (converted) console.log(`Doku: ${converted} Inhalte nach HTML konvertiert`);
 
   const mail = new MailService(db);
-  if (process.env.SEED !== 'false' && process.env.NODE_ENV !== 'production') {
+  if (seeding.allowed) {
     await seedDevMails(db, (id, m) => mail.dev.inject(id, m), (id) => mail.syncAccount(id));
   }
   const staticDir = process.env.STATIC_DIR ?? path.resolve(here, '..', '..', 'web', 'dist');

@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { PromptModal } from './ui';
+import { IconThumbsDown, IconThumbsUp } from './icons';
 
 /**
  * Daumen für Antworten und Läufe von Agenten (KI-Feedback): 👍 sofort, 👎 mit optionalem Kommentar, erneuter Klick nimmt zurück.
@@ -8,8 +9,8 @@ import { PromptModal } from './ui';
 export function Thumbs({ value, onRate }: { value: 1 | -1 | null | undefined; onRate: (v: 1 | -1) => void }) {
   return (
     <span className="thumbs" role="group" aria-label="Antwort bewerten">
-      <button type="button" className={`btn sm link ${value === 1 ? 'on' : ''}`} aria-pressed={value === 1} title={value === 1 ? 'Bewertung zurücknehmen' : 'Hilfreich'} onClick={() => onRate(1)}>👍</button>
-      <button type="button" className={`btn sm link ${value === -1 ? 'on' : ''}`} aria-pressed={value === -1} title={value === -1 ? 'Bewertung zurücknehmen' : 'Nicht hilfreich (mit Kommentar)'} onClick={() => onRate(-1)}>👎</button>
+      <button type="button" className={`btn sm link ${value === 1 ? 'on' : ''}`} aria-pressed={value === 1} title={value === 1 ? 'Bewertung zurücknehmen' : 'Hilfreich'} aria-label="Hilfreich" onClick={() => onRate(1)}><IconThumbsUp /></button>
+      <button type="button" className={`btn sm link ${value === -1 ? 'on' : ''}`} aria-pressed={value === -1} title={value === -1 ? 'Bewertung zurücknehmen' : 'Nicht hilfreich (mit Kommentar)'} aria-label="Nicht hilfreich" onClick={() => onRate(-1)}><IconThumbsDown /></button>
     </span>
   );
 }

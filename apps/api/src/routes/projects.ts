@@ -9,7 +9,7 @@ import { notify } from '../notify.js';
 import { assertResponsible, dateStr, mapSubproject, resolveProjectLead } from '../tasks/service.js';
 import { remindersOf } from '../tasks/reminders.js';
 import { applyTemplate, healthOf } from './portfolio.js';
-import { createDefaultFolders } from '../docs/service.js';
+import { scaffoldProject } from '../personalProject.js';
 import { agentUsableIn } from '../ai/client.js';
 import { rightsOf } from '../ai/policy.js';
 import { mapLabel } from './tasks.js';
@@ -18,12 +18,16 @@ import { createReport, reportingOf } from '../docs/report.js';
 import type { ReportingPolicy } from '@projekttool/shared';
 import { externalContacts, profileOf } from '../outbound.js';
 import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.js';
+import { orgAllowsPersonal } from '../auth.js';
 import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
 import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
 import type { AgentMode, AgentPolicy } from '@projekttool/shared';
-import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
+import type { AgentMailMode, MailInquiry, PlanningDepth } from '@projekttool/shared';
+import { PLANNING_DEPTHS } from '@projekttool/shared';
 
-export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
+export { DEFAULT_COLUMNS } from '../personalProject.js';
+/** Gruppenname bereinigt: leer → null */
+export const groupName = (g: unknown): string | null => (typeof g === 'string' && g.trim() ? g.trim().slice(0, 60) : null);
 
 export function mapProject(r: any): Project {
   return {
@@ -35,6 +39,8 @@ export function mapProject(r: any): Project {
     mailAddress: r.mail_address,
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     autoCompleteParent: r.auto_complete_parent !== false,
+    autoDoneAufgabe: r.auto_done_aufgabe !== false,
+    planningDepth: PLANNING_DEPTHS.some((d) => d.key === r.planning_depth) ? r.planning_depth : 'auto',
     aiProfileId: r.ai_profile_id ?? null,
     externalProfile: profileOf(r.external_profile),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
@@ -44,6 +50,8 @@ export function mapProject(r: any): Project {
     health: healthOf(r.health),
     visibility: r.visibility ?? 'members',
     personal: Boolean(r.personal),
+    slim: projectPolicy(r).slim,
+    showAllTabs: Boolean(r.show_all_tabs),
     kind: r.kind === 'workflow' ? 'workflow' : 'project',
     agentUserId: r.agent_user_id ?? null,
     agentMail: (['off', 'triage', 'process'].includes(r.agent_mail) ? r.agent_mail : 'off') as AgentMailMode,
@@ -79,7 +87,7 @@ export async function projectRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     const personal = Boolean(req.body?.personal);
     const policy = projectPolicy({ personal });
-    const denied = createProjectReason(user, personal, Boolean((await db.one(`select settings from orgs where id = $1`, [user.orgId])).settings?.personalProjects));
+    const denied = createProjectReason(user, personal, await orgAllowsPersonal(db, user.orgId));
     if (denied) throw forbidden(denied);
     const { key, name, description, mailAddress, templateId, startDate } = req.body ?? ({} as any);
     if (templateId && !policy.scaffold.template) throw badRequest(TEXT.noTemplate);
@@ -99,13 +107,11 @@ export async function projectRoutes(app: FastifyInstance) {
       `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
       [p.id, user.id]
     );
-    for (const [i, [name, kind]] of DEFAULT_COLUMNS.entries()) {
-      await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
-    }
-    if (policy.scaffold.defaultFolders) await createDefaultFolders(db, p.id);
+    // Persönlich: schlank (zwei Spalten, Ordner „Notizen“, Planungstiefe Checkliste, Eskalation und Reporting aus); sonst Standardspalten und -ordner
+    await scaffoldProject(db, p.id, personal);
     if (template) await applyTemplate(db, p.id, template.spec ?? {}, startDate ?? new Date().toISOString().slice(0, 10));
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, template: template?.name ?? null, personal } });
-    return { project: { ...mapProject(p), myRole: 'pl' } };
+    return { project: { ...mapProject(await db.one(`select * from projects where id = $1`, [p.id])), myRole: 'pl' } };
   });
 
   app.get<{ Params: { id: string } }>('/projects/:id', async (req) => {
@@ -142,10 +148,13 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; autoDoneAufgabe?: boolean; planningDepth?: PlanningDepth; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null; showAllTabs?: boolean } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if (b.showAllTabs !== undefined && typeof b.showAllTabs !== 'boolean') throw badRequest('showAllTabs: true oder false');
+    if (b.autoDoneAufgabe !== undefined && typeof b.autoDoneAufgabe !== 'boolean') throw badRequest('autoDoneAufgabe: true oder false');
+    if (b.planningDepth !== undefined && !PLANNING_DEPTHS.some((d) => d.key === b.planningDepth)) throw badRequest('Planungstiefe: auto, aufgaben oder checkliste');
     if ('mailInquiry' in b) {
       // Mail-Rückfrage je Projekt; null übernimmt wieder die Vorgabe des Mandanten
       let v: MailInquiry | null;
@@ -194,8 +203,9 @@ export async function projectRoutes(app: FastifyInstance) {
     const p = await db.one(
       `update projects set name = coalesce($2, name), description = coalesce($3, description),
          time_tracking_enabled = coalesce($4, time_tracking_enabled), budget_hours = case when $5 then $6::numeric else budget_hours end, visibility = coalesce($7, visibility),
-         auto_complete_parent = coalesce($8, auto_complete_parent) where id = $1 returning *`,
-      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null, b.visibility ?? null, b.autoCompleteParent ?? null]
+         auto_complete_parent = coalesce($8, auto_complete_parent), planning_depth = coalesce($9, planning_depth), show_all_tabs = coalesce($10, show_all_tabs),
+         auto_done_aufgabe = coalesce($11, auto_done_aufgabe) where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null, b.visibility ?? null, b.autoCompleteParent ?? null, b.planningDepth ?? null, b.showAllTabs ?? null, b.autoDoneAufgabe ?? null]
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };
@@ -217,9 +227,10 @@ export async function projectRoutes(app: FastifyInstance) {
     const cur = await db.one(`select agent_user_id from projects where id = $1`, [req.params.id]);
     let agentId: string | null = null;
     if (b.agentUserId) {
-      const a = await db.maybeOne(`select id, kind, active, agent_project_id from users where id = $1 and org_id = $2`, [b.agentUserId, user.orgId]);
+      const a = await db.maybeOne(`select id, kind, active, agent_project_id, agent_role from users where id = $1 and org_id = $2`, [b.agentUserId, user.orgId]);
       if (!a || a.kind !== 'agent') throw badRequest('Projektagent muss ein KI-Agent des Mandanten sein');
       if (!a.active) throw badRequest('Der Agent ist deaktiviert');
+      if (a.agent_role === 'assistant' && a.agent_project_id !== req.params.id) throw forbidden(TEXT.assistantBound);
       if (a.agent_project_id && a.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
       const usable = await agentUsableIn(db, a.id, req.params.id);
       if (!usable.ok) throw badRequest(usable.reason);
@@ -292,7 +303,7 @@ export async function projectRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/projects/:id/reporting/run', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    const result = await createReport(db, app.mail, req.params.id, { userId: user.id, manual: true });
+    const result = await createReport(db, app.mail, req.params.id, { userId: user.id, manual: true, fetchFn: app.fetchFn });
     return { result };
   });
 
@@ -315,10 +326,12 @@ export async function projectRoutes(app: FastifyInstance) {
       await requireProject(db, user, req.params.id, 'pl');
       const b = req.body ?? ({} as any);
       if (!['pl', 'member', 'reader'].includes(b.role)) throw badRequest('Ungültige Projektrolle');
-      const target = await db.maybeOne(`select id, kind, agent_project_id from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
+      const target = await db.maybeOne(`select id, kind, agent_project_id, agent_role from users where id = $1 and org_id = $2 and active`, [req.params.userId, user.orgId]);
       if (!target) throw badRequest('Nur Benutzer des eigenen Mandanten können eingeladen werden');
       const proj = await db.one(`select personal, created_by from projects where id = $1`, [req.params.id]);
       if (projectPolicy(proj).members.onlyOwnerAndAgents && target.kind !== 'agent' && target.id !== proj.created_by) throw forbidden(TEXT.membersOnlyOwnerAndAgents);
+      // Assistent einer Person (agent_role assistant): nur in ihrem persönlichen Projekt, in kein anderes einladbar
+      if (target.agent_role === 'assistant' && target.agent_project_id !== req.params.id) throw forbidden(TEXT.assistantBound);
       if (target.agent_project_id && target.agent_project_id !== req.params.id) throw forbidden('Dieser Agent gehört zu einem anderen Projekt');
       // KI-Agent: Mitglied oder stellvertretende PL (plant dann wie eine PL), nie verantwortliche PL; Mailversand abschaltbar
       const isAgent = target.kind === 'agent';
@@ -448,7 +461,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Board-Spalten
-  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; kind?: string; wipLimit?: number | null }[] } }>('/projects/:id/columns', async (req) => {
+  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; kind?: string; wipLimit?: number | null; group?: string | null }[] } }>('/projects/:id/columns', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const cols = req.body?.columns ?? [];
@@ -459,11 +472,12 @@ export async function projectRoutes(app: FastifyInstance) {
     if (!cols.some((c) => c.kind === 'done' || (!c.kind && c.isDone))) throw badRequest('Eine Spalte muss „Erledigt“ sein');
     for (const [i, c] of cols.entries()) {
       const kind = c.kind && kinds.includes(c.kind) ? c.kind : c.isDone ? 'done' : 'active';
+      const group = groupName(c.group);
       if (c.id) {
-        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6, kind = $7 where id = $1 and project_id = $5`, [c.id, c.name, i, kind === 'done', req.params.id, c.wipLimit || null, kind]);
+        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6, kind = $7, group_name = $8 where id = $1 and project_id = $5`, [c.id, c.name, i, kind === 'done', req.params.id, c.wipLimit || null, kind, group]);
         keep.add(c.id);
       } else {
-        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [req.params.id, c.name, i, kind === 'done', c.wipLimit || null, kind]);
+        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind, group_name) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [req.params.id, c.name, i, kind === 'done', c.wipLimit || null, kind, group]);
         keep.add(r.id);
       }
     }
@@ -722,5 +736,5 @@ export async function projectRoutes(app: FastifyInstance) {
 }
 
 export function mapColumn(r: any) {
-  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, kind: r.kind ?? (r.is_done ? 'done' : 'active'), wipLimit: r.wip_limit ?? null };
+  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, kind: r.kind ?? (r.is_done ? 'done' : 'active'), wipLimit: r.wip_limit ?? null, group: r.group_name ?? null };
 }

@@ -37,6 +37,8 @@ const renderRights = () => render(<MemoryRouter><MyRights /></MemoryRouter>);
 
 describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', () => {
   beforeEach(() => {
+    // Bestätigungsdialoge (ohne DialogProvider fällt useDialog auf window.confirm zurück)
+    window.confirm = () => true;
     personal = false; myMembership = { role: 'pl', isDeputy: false }; ai = null;
     get.mockReset(); put.mockReset(); del.mockReset(); reload.mockClear();
     get.mockResolvedValue({ groups: [{ id: 'g1', name: 'Elektro-Team', memberIds: ['u2', 'u3'], managerIds: [] }, { id: 'g2', name: 'Lenkungskreis', memberIds: ['u1'], managerIds: [] }] });
@@ -76,7 +78,7 @@ describe('Projekteinstellungen: Mitglieder mit Herkunft und Gruppen (Regel M)', 
 
   it('Person hinzufügen: „KI nutzen“ folgt der Rolle (Mitglied an, Leser aus) und wird so gespeichert', async () => {
     renderCard();
-    fireEvent.click(screen.getByRole('button', { name: 'Hinzufügen' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Vorhandenen Benutzer hinzufügen' }));
     expect(screen.getByLabelText('KI nutzen')).toBeChecked();
     fireEvent.change(screen.getByLabelText('Projektrolle'), { target: { value: 'reader' } });
     expect(screen.getByLabelText('KI nutzen (nur Fragen)')).not.toBeChecked();

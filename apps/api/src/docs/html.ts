@@ -2,11 +2,14 @@ import { marked } from 'marked';
 import TurndownService from 'turndown';
 import { gfm } from 'turndown-plugin-gfm';
 import { parse } from 'node-html-parser';
+import sanitize from 'sanitize-html';
 import type { Db } from '../db.js';
 
 const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-', emDelimiter: '*', strongDelimiter: '**' });
 turndown.use(gfm);
 turndown.keep(['u']);
+// Diagramme (SVG der Berichte) haben im Markdown keine Entsprechung: ihre Beschriftungen würden als Textsalat landen
+turndown.remove(['svg'] as any);
 
 /** Markdown → HTML (Vorlagen, Altbestand, Mail-Aktionen). */
 export function mdToHtml(md: string): string {
@@ -26,49 +29,60 @@ export function htmlToText(html: string): string {
   return parse(html ?? '').textContent.replace(/\s+/g, ' ').trim();
 }
 
-/** Links nur relativ oder mit bekanntem Schema; Steuer- und Leerzeichen zählen nicht (Browser entfernen sie, z. B. java&#9;script:). */
-function safeLink(attr: 'href' | 'src', value: string): boolean {
-  const v = String(value ?? '').replace(/[\u0000-\u0020\u007f-\u009f]/g, '');
-  const colon = v.indexOf(':');
-  const delim = v.search(/[/?#]/);
-  if (colon < 0 || (delim >= 0 && delim < colon)) return true;
-  const scheme = v.slice(0, colon).toLowerCase();
-  if (attr === 'src') return scheme === 'http' || scheme === 'https' || /^data:image\/(png|jpe?g|gif|webp);/i.test(v);
-  return ['http', 'https', 'mailto', 'tel'].includes(scheme);
-}
+/** Vektorgrafik der Berichte (Diagramme): nur Grundformen und Text, keine Skripte, Ereignisse oder foreignObject. */
+const SVG_TAGS = ['svg', 'g', 'rect', 'text', 'tspan', 'line', 'circle', 'path'];
+const SVG_PRESENTATION = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'opacity', 'fill-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'dominant-baseline'];
+const SVG_ATTRS: Record<string, string[]> = {
+  svg: ['width', 'height', 'viewbox', 'viewBox', 'xmlns', 'role', 'aria-label', ...SVG_PRESENTATION],
+  g: ['transform', ...SVG_PRESENTATION],
+  rect: ['x', 'y', 'width', 'height', 'rx', 'ry', ...SVG_PRESENTATION],
+  text: ['x', 'y', 'dx', 'dy', ...SVG_PRESENTATION],
+  tspan: ['x', 'y', 'dx', 'dy', ...SVG_PRESENTATION],
+  line: ['x1', 'y1', 'x2', 'y2', ...SVG_PRESENTATION],
+  circle: ['cx', 'cy', 'r', ...SVG_PRESENTATION],
+  path: ['d', ...SVG_PRESENTATION]
+};
+const ALLOWED_TAGS = [...SVG_TAGS, 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'code', 'pre', 'blockquote', 'hr', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col', 'img', 'a', 'span', 'div', 'sup', 'sub', 'mark'];
+/** Beliebiger Wert ohne Verschachtelung oder Funktionsaufrufe (url(), expression()) */
+const STYLE_VALUE = [/^(?!.*(?:url|expression|javascript)\s*\()[^;{}\\<>]+$/i];
+const ALLOWED_STYLES: Record<string, RegExp[]> = Object.fromEntries(['font-size', 'text-align', 'color', 'background-color', 'width', 'min-width', 'font-weight', 'font-style', 'text-decoration'].map((k) => [k, STYLE_VALUE]));
+const DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp);/i;
 
-const ALLOWED_TAGS = new Set(['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'code', 'pre', 'blockquote', 'hr', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col', 'img', 'a', 'span', 'div', 'sup', 'sub', 'mark', 'input', 'label']);
-const ALLOWED_ATTRS = new Set(['href', 'src', 'alt', 'title', 'style', 'colspan', 'rowspan', 'colwidth', 'width', 'height', 'class', 'data-type', 'data-checked', 'type', 'checked', 'start', 'target', 'rel']);
-
-/** Serverseitige Bereinigung: nur bekannte Tags/Attribute, keine Skripte, keine javascript:-Links, nur sichere Stile. */
+/**
+ * Serverseitige Bereinigung (sanitize-html): nur bekannte Tags/Attribute, keine Skripte, keine javascript:-Links, nur sichere
+ * Stile. Bilder nur eigene (relativ, z. B. Anhänge) oder eingebettet als data:image; externe http(s)-Bilder werden entfernt
+ * und durch einen Hinweis ersetzt (Tracking-Pixel, CSP img-src 'self' data: blob:). Links mit target=_blank bekommen
+ * rel="noopener noreferrer". input/label (Checklisten) nutzt der Editor nicht und fallen weg.
+ */
 export function sanitizeHtml(html: string): string {
-  const root = parse(html ?? '', { blockTextElements: { script: true, style: true } });
-  const walk = (node: any) => {
-    for (const child of [...node.childNodes]) {
-      if (child.nodeType === 1) {
-        const tag = child.rawTagName?.toLowerCase();
-        if (!tag || !ALLOWED_TAGS.has(tag)) {
-          if (tag === 'script' || tag === 'style' || tag === 'iframe' || tag === 'object' || tag === 'embed' || tag === 'noscript' || tag === 'template' || tag === 'textarea' || tag === 'title') { child.remove(); continue; }
-          // Unbekanntes Element: Inhalt erst bereinigen, dann ohne das Element behalten
-          walk(child);
-          child.replaceWith(...child.childNodes);
-          continue;
+  return sanitize(html ?? '', {
+    allowedTags: ALLOWED_TAGS,
+    allowedAttributes: { ...SVG_ATTRS, '*': ['style', 'class', 'title', 'data-type'], a: ['href', 'target', 'rel'], img: ['src', 'alt', 'width', 'height'], td: ['colspan', 'rowspan', 'colwidth'], th: ['colspan', 'rowspan', 'colwidth'], col: ['colwidth', 'width'], ol: ['start'] },
+    allowedStyles: { '*': ALLOWED_STYLES },
+    allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+    allowedSchemesByTag: { img: ['data'] },
+    allowProtocolRelative: false,
+    // Unbekannte Elemente: Inhalt behalten, Element weg; Skripte & Co. samt Inhalt weg
+    disallowedTagsMode: 'discard',
+    nonTextTags: ['script', 'style', 'textarea', 'option', 'noscript', 'template', 'title', 'iframe', 'object', 'embed'],
+    transformTags: {
+      a: (tagName, attribs) => {
+        const out = { ...attribs };
+        if (out.target && out.target !== '_blank') delete out.target;
+        if (out.target === '_blank') out.rel = 'noopener noreferrer'; else delete out.rel;
+        return { tagName, attribs: out };
+      },
+      img: (tagName, attribs) => {
+        const src = String(attribs.src ?? '').trim();
+        if (/^https?:/i.test(src)) {
+          let host = ''; try { host = new URL(src).hostname; } catch { /* unlesbar */ }
+          return { tagName: 'span', attribs: { class: 'img-removed', title: src.slice(0, 200) }, text: `[externes Bild entfernt${host ? `: ${host}` : ''}]` };
         }
-        for (const [name, value] of Object.entries(child.attributes as Record<string, string>)) {
-          const n = name.toLowerCase();
-          if (!ALLOWED_ATTRS.has(n) || n.startsWith('on')) { child.removeAttribute(name); continue; }
-          if ((n === 'href' || n === 'src') && !safeLink(n, value)) { child.removeAttribute(name); continue; }
-          if (n === 'style') {
-            const safe = value.split(';').map((s) => s.trim()).filter((s) => /^(font-size|text-align|color|background-color|width|min-width|font-weight|font-style|text-decoration)\s*:/i.test(s)).join('; ');
-            if (safe) child.setAttribute('style', safe); else child.removeAttribute('style');
-          }
-        }
-        walk(child);
+        if (/^data:/i.test(src) && !DATA_IMAGE.test(src)) delete attribs.src;
+        return { tagName, attribs };
       }
     }
-  };
-  walk(root);
-  return root.toString();
+  });
 }
 
 /** Altbestand ohne HTML einmalig aus Markdown erzeugen (Seiten, Versionen, Vorlagen). */

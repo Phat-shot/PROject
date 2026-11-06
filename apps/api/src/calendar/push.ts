@@ -1,5 +1,5 @@
 import { HttpError } from '../errors.js';
-import { outboundUrlError } from '../netGuard.js';
+import { outboundUrlError, pinnedFetch } from '../netGuard.js';
 
 /**
  * Termine in den Kalender einer Person schreiben: Microsoft Graph (persönliches OAuth-Konto im Graph-Modus),
@@ -51,22 +51,42 @@ export function caldavIcs(ev: PushEvent, sequence: number): string {
   return lines.join('\r\n') + '\r\n';
 }
 
+/**
+ * Google und Microsoft 365 akzeptieren für CalDAV keine App-Passwörter (nur OAuth2): vor jedem Netzaufruf abfangen und auf die
+ * OAuth-Anbindung unter Einstellungen › Mail verweisen (danach wird der Kalender direkt angebunden). null = kein Hinweis.
+ */
+export function caldavProviderHint(rawUrl: string): string | null {
+  let host = '';
+  let pathname = '';
+  try { const u = new URL(String(rawUrl ?? '').trim()); host = u.hostname.toLowerCase(); pathname = u.pathname.toLowerCase(); } catch { return null; }
+  const google = host === 'apidata.googleusercontent.com' || host.endsWith('.googleusercontent.com') || host === 'calendar.google.com' || (host === 'www.google.com' && pathname.startsWith('/calendar/dav'));
+  if (google) return 'Google-Kalender geht nicht über CalDAV mit App-Passwort. Unter Einstellungen › Mail „Mit Google verbinden“ (mit Kalender-Berechtigung); danach wird der Google-Kalender direkt angebunden.';
+  const microsoft = host === 'outlook.office365.com' || host === 'outlook.office.com' || host.endsWith('.office365.com') || host.endsWith('.outlook.com') || host === 'outlook.live.com';
+  if (microsoft) return 'Microsoft 365 bietet kein CalDAV mit App-Passwort. Unter Einstellungen › Mail „Mit Microsoft 365 verbinden“; danach wird der Kalender direkt über Microsoft 365 angebunden.';
+  return null;
+}
+
 /** PUT der VEVENT-Datei in die Kalendersammlung; die Datei heißt wie die UID, ein erneuter PUT aktualisiert. */
 export async function pushCaldav(fetchFn: typeof fetch, cfg: CaldavCfg, ev: PushEvent, sequence: number): Promise<string> {
+  const hint = caldavProviderHint(cfg.url);
+  if (hint) throw new HttpError(400, hint);
   const blocked = await outboundUrlError(cfg.url);
   if (blocked) throw new HttpError(400, `CalDAV: ${blocked}`);
   const href = `${cfg.url.replace(/\/$/, '')}/${encodeURIComponent(ev.uid)}.ics`;
-  const r = await fetchFn(href, { method: 'PUT', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), 'content-type': 'text/calendar; charset=utf-8' }, body: caldavIcs(ev, sequence) });
+  // Basic-Auth geht mit: Auflösung gepinnt, keine Weiterleitung (sonst landen die Zugangsdaten bei einem anderen Ziel)
+  const r = await pinnedFetch(fetchFn, href, { method: 'PUT', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), 'content-type': 'text/calendar; charset=utf-8' }, body: caldavIcs(ev, sequence) });
   if (!r.ok && r.status !== 204 && r.status !== 201) throw new HttpError(400, `CalDAV: ${r.status === 401 ? 'Anmeldung abgelehnt (App-Passwort prüfen)' : r.status === 404 ? 'Kalender-Adresse nicht gefunden' : `HTTP ${r.status}`}`);
   return href;
 }
 
 /** Prüft Zugang und Adresse per PROPFIND (Tiefe 0). */
 export async function testCaldav(fetchFn: typeof fetch, cfg: CaldavCfg): Promise<{ ok: boolean; displayName?: string | null; error?: string }> {
+  const hint = caldavProviderHint(cfg.url);
+  if (hint) return { ok: false, error: hint };
   const blocked = await outboundUrlError(cfg.url);
   if (blocked) return { ok: false, error: blocked };
   try {
-    const r = await fetchFn(cfg.url, { method: 'PROPFIND', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), depth: '0', 'content-type': 'application/xml' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>' });
+    const r = await pinnedFetch(fetchFn, cfg.url, { method: 'PROPFIND', headers: { authorization: 'Basic ' + Buffer.from(`${cfg.user}:${cfg.password}`).toString('base64'), depth: '0', 'content-type': 'application/xml' }, body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/><d:resourcetype/></d:prop></d:propfind>' });
     if (r.status === 401) return { ok: false, error: 'Anmeldung abgelehnt (App-Passwort prüfen)' };
     if (r.status === 404) return { ok: false, error: 'Adresse nicht gefunden' };
     if (!r.ok && r.status !== 207) return { ok: false, error: `HTTP ${r.status}` };
@@ -75,6 +95,6 @@ export async function testCaldav(fetchFn: typeof fetch, cfg: CaldavCfg): Promise
     const name = text.match(/<d:displayname[^>]*>([^<]*)<\/d:displayname>/i)?.[1] ?? null;
     return { ok: true, displayName: name };
   } catch (e: any) {
-    return { ok: false, error: String(e?.message ?? e).slice(0, 200) };
+    return { ok: false, error: String(e?.message ?? e).replace(/^CalDAV: /, '').slice(0, 200) };
   }
 }
