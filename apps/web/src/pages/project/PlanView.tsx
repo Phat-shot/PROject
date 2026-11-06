@@ -3,9 +3,9 @@ import type { Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
-import { MilestoneList, SubprojectList } from './planForms';
+import { MilestoneForm, MilestoneList, SubprojectList } from './planForms';
 import { useCreate } from './create';
-import { IconDiamond } from '../../components/icons';
+import { IconDiamond, IconSubitem } from '../../components/icons';
 
 const DAY = 86400_000;
 const ZOOM: [number, string][] = [[2, 'Quartal'], [4, 'Monat'], [10, 'Woche'], [24, 'Tag']];
@@ -90,7 +90,7 @@ export function PlanView() {
     return out;
   }, [range]);
 
-  const rows: { kind: 'sub' | 'task' | 'ms'; id: string; label: string; start: string | null; end: string | null; done?: boolean; conflict?: boolean; resp?: string | null; child?: boolean }[] = [];
+  const rows: { kind: 'sub' | 'task' | 'ms'; id: string; label: string; start: string | null; end: string | null; done?: boolean; conflict?: boolean; resp?: string | null; child?: boolean; reached?: boolean }[] = [];
   const taskRow = (t: Task, child: boolean) => rows.push({ kind: 'task', id: t.id, label: t.title, start: t.startDate, end: t.dueDate, done: t.done, conflict: t.conflicts.length > 0, resp: t.responsible.name ?? t.responsible.email, child });
   // Arbeitspakete, darunter eingerückt ihre Aufgaben
   const spRows = (spId: string | null) => {
@@ -98,7 +98,7 @@ export function PlanView() {
       taskRow(t, false);
       for (const c of tasks.filter((c) => c.parentId === t.id)) taskRow(c, true);
     }
-    for (const m of detail.milestones.filter((m) => m.subprojectId === spId)) rows.push({ kind: 'ms', id: m.id, label: m.name, start: m.date, end: m.date });
+    for (const m of detail.milestones.filter((m) => m.subprojectId === spId)) rows.push({ kind: 'ms', id: m.id, label: m.name, start: m.date, end: m.date, reached: Boolean(m.reachedAt), done: Boolean(m.reachedAt) });
   };
   for (const s of detail.subprojects) {
     const inSp = tasks.filter((t) => t.subprojectId === s.id);
@@ -132,6 +132,19 @@ export function PlanView() {
     }
   }
 
+  // Meilenstein ← verknüpfte Arbeitspakete: gestrichelte Linie vom Ende des AP zur Raute
+  const msLinks: { key: string; x1: number; y1: number; x2: number; y2: number; done: boolean }[] = [];
+  for (const r of rows) {
+    if (r.kind !== 'ms' || !r.start) continue;
+    const m = detail.milestones.find((x) => x.id === r.id); const mi = rowIndex.get('ms' + r.id)!; const mv = shifted(r);
+    for (const tid of m?.taskIds ?? []) {
+      const ti = rowIndex.get('task' + tid); const tr = rows[ti ?? -1]; if (ti === undefined || !tr) continue;
+      const tv = shifted(tr); const end = tv.end ?? tv.start; if (!end) continue;
+      msLinks.push({ key: `${tid}>${r.id}`, x1: x(end) + PX_PER_DAY, y1: ti * ROW_H + ROW_H / 2, x2: x(mv.start!), y2: mi * ROW_H + ROW_H / 2, done: Boolean(tr.done) });
+    }
+  }
+  const [msEdit, setMsEdit] = useState<string | null>(null);
+
   return (
     <div className="content">
       <div className="row mb">
@@ -149,21 +162,22 @@ export function PlanView() {
             ? `M${l.x1},${l.y1} H${mid} V${l.y2} H${l.x2}`
             : `M${l.x1},${l.y1} H${l.x1 + 10} V${l.y1 + (l.y2 > l.y1 ? ROW_H / 2 : -ROW_H / 2)} H${l.x2 - 10} V${l.y2} H${l.x2}`;
             return <path key={l.key} d={d} className={l.bad ? 'bad' : ''} markerEnd={l.bad ? 'url(#arr-bad)' : 'url(#arr)'} />; })}
+          {msLinks.map((l) => <path key={l.key} d={`M${l.x1},${l.y1} H${Math.max(l.x1 + 6, l.x2 - 8)} V${l.y2} H${l.x2 - 8}`} className={`ms-link ${l.done ? 'done' : ''}`} />)}
         </svg>
         <table ref={tableRef}>
           <thead><tr><th className="label">Element</th><th style={{ width }}><div style={{ position: 'relative', height: 24, width }}>{months.map((m) => <div key={m.label + m.left} className="month" style={{ position: 'absolute', left: m.left, width: m.w, top: 0, bottom: 0 }}>{m.label}</div>)}</div></th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
-                <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' || r.kind === 'sub' ? 'pointer' : undefined }} title={r.kind === 'sub' ? 'Teilprojekt öffnen' : undefined} onClick={() => { if (r.kind === 'task') openTask(r.id); else if (r.kind === 'sub') openSubproject(r.id); }}>
-                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && '<IconDiamond size={12} /> '}{r.label}
+                <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind !== 'sub' || r.id !== 'none' ? 'pointer' : undefined }} title={r.kind === 'sub' ? 'Teilprojekt öffnen' : r.kind === 'ms' ? 'Meilenstein: Status und Arbeitspakete' : undefined} onClick={() => { if (r.kind === 'task') openTask(r.id); else if (r.kind === 'sub' && r.id !== 'none') openSubproject(r.id); else if (r.kind === 'ms') setMsEdit(r.id); }}>
+                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted"><IconSubitem size={12} /><span className="sr-only">Aufgabe: </span> </span>}{r.kind === 'ms' && <><span style={{ paddingLeft: 10 }} /><IconDiamond size={12} /> </>}{r.label}{r.kind === 'ms' && r.reached && <span className="badge ok ml-1">erreicht</span>}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
                 </td>
                 <td className="bars" style={{ width }}>
                   {(() => { const v = shifted(r); const isDrag = drag?.id === r.id; const draggable = r.kind === 'task' ? mayDrag(r.id) : r.kind === 'ms' ? canPlan : false; return (
                   <div style={{ position: 'relative', height: ROW_H, width }}>
                     <div className="today" style={{ left: x(today()) }} />
-                    {r.kind === 'ms' && v.start && <div className={`milestone ${draggable ? 'draggable' : ''} ${isDrag ? 'drag' : ''}`} style={{ left: x(v.start) - 8 }} title={`${fmtDate(v.start)}${draggable ? ' · ziehen zum Verschieben' : ''}`} onPointerDown={(e) => startDrag(e, r.id, 'ms')} />}
+                    {r.kind === 'ms' && v.start && <div className={`milestone ${r.reached ? 'reached' : ''} ${draggable ? 'draggable' : ''} ${isDrag ? 'drag' : ''}`} style={{ left: x(v.start) - 8 }} title={`${fmtDate(v.start)}${r.reached ? ' · erreicht' : ' · offen'}${draggable ? ' · ziehen zum Verschieben' : ''}`} onPointerDown={(e) => startDrag(e, r.id, 'ms')} />}
                     {r.kind !== 'ms' && v.start && v.end && v.start <= v.end && (
                       <div className={`bar ${r.kind} ${r.done ? 'done' : ''} ${r.conflict ? 'conflict' : ''} ${draggable ? 'draggable' : ''} ${isDrag ? 'drag' : ''}`} style={{ left: x(v.start), width: Math.max(6, x(v.end) - x(v.start) + PX_PER_DAY) }} title={`${fmtDate(v.start)} – ${fmtDate(v.end)}${draggable ? ' · ziehen verschiebt, rechte Kante ändert die Deadline' : ''}`}
                         onPointerDown={(e) => r.kind === 'task' && startDrag(e, r.id, 'move')} onClick={(e) => { if (r.kind === 'task' && !drag) { e.stopPropagation(); openTask(r.id); } }}>
@@ -181,6 +195,7 @@ export function PlanView() {
         </table>
         </div>
       </div>
+      {msEdit && detail.milestones.some((m) => m.id === msEdit) && <MilestoneForm milestone={detail.milestones.find((m) => m.id === msEdit)!} onClose={() => setMsEdit(null)} />}
       <div className="grid cols-2 mt plan-lists">
         <div className="card"><h2>Teilprojekte</h2><SubprojectList /></div>
         <div className="card"><h2>Meilensteine</h2><MilestoneList /></div>

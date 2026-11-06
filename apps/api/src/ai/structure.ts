@@ -19,7 +19,8 @@ Verschieben (Bitte „verschieben“, „umhängen“, „zuordnen“ heißt: Ak
 - promote_item: itemId aus der Task-Liste wird Aufgabe am AP; title, dueDate, responsible optional; der Task entfällt
 - demote_aufgabe: ref = Kennung einer Aufgabe ohne Zeiten, Mails und offene Fragen, target = Aufgabe, deren Task sie wird (leer = einzige andere offene Aufgabe des AP); ihr Log steht zusammengefasst dort
 - move_item: itemId aus der Task-Liste, target = Kennung der Ziel-Aufgabe
-Rechte wie beim Anlegen; außerhalb deines Bereichs oder bei Bestätigungspflicht (Klasse Umstrukturieren) legt das System die Aktion der PL vor.`;
+Rechte wie beim Anlegen; außerhalb deines Bereichs oder bei Bestätigungspflicht (Klasse Umstrukturieren) legt das System die Aktion der PL vor.
+Meilenstein: link_milestone: milestone = Name aus „Meilensteine“ oder ID, ref = Kennung des AP (leer = dieses); verknüpft das AP mit dem Meilenstein (Rechte wie create_milestone).`;
 
 /** Ein Satz für den variablen Prompt-Kontext: welche Planungstiefe im Projekt gilt. */
 export function planningDepthText(depth: unknown): string {

@@ -15,6 +15,7 @@ import { DataTab } from './Data';
 import { FilesTab } from './Files';
 import { AiView } from '../AiView';
 import { projectPolicy } from '../../../lib/useProjectPolicy';
+import { IconExternal } from '../../../components/icons';
 
 /**
  * Projekt › Einstellungen (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Fristen und Berichte,
@@ -35,7 +36,7 @@ const INTRO: Record<string, { text: ReactNode; chapter: string }> = {
   fristen: { text: <>Wann Verzug, <Term k="stillstand">Stillstand</Term> und Blockaden eskalieren und wie der Statusbericht aussieht.</>, chapter: 'Kapitel 10' },
   planung: { text: 'Teilprojekte, Meilensteine, Spalten des Boards und Ressourcen des Projekts.', chapter: 'Kapitel 4' },
   dateien: { text: 'Ordner aus Nextcloud oder einem WebDAV-Speicher, die in der Doku unter „Dateien“ erscheinen und durchsucht werden; das Tool liest nur.', chapter: 'Kapitel 7' },
-  daten: { text: 'Papierkorb, Audit-Log und Export der Projektdaten.', chapter: 'Kapitel 13' },
+  daten: { text: 'Import von Arbeitspaketen aus CSV, Papierkorb, Audit-Log und Export der Projektdaten.', chapter: 'Kapitel 13' },
   'ki-laeufe': { text: <>Offene KI-Vorschläge zur Freigabe (<Term k="essenz">Essenz</Term> aus Mails, Agenten-Aktionen), Fragen ans Projekt, Agenten-Läufe und der Statusbericht-Entwurf.</>, chapter: 'Kapitel 11' }
 };
 
@@ -48,7 +49,7 @@ function SettingsIntro({ tab }: { tab: string }) {
   const { detail } = useProject();
   const i = (projectPolicy(detail.project).assistant ? INTRO_PERSONAL[tab] : undefined) ?? INTRO[tab];
   if (!i) return null;
-  return <p className="settings-intro"><span>{i.text}</span><Link className="help-link" to="/hilfe/handbuch" title={`Handbuch, ${i.chapter}`}>Hilfe: Handbuch {i.chapter} ↗</Link></p>;
+  return <p className="settings-intro"><span>{i.text}</span><Link className="help-link" to="/hilfe/handbuch" title={`Handbuch, ${i.chapter}`}>Hilfe: Handbuch {i.chapter} <IconExternal size={12} /></Link></p>;
 }
 
 export function ProjectSettingsPage() {

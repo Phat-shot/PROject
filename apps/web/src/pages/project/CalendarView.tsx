@@ -7,6 +7,7 @@ import { useData } from '../../lib/useData';
 import { api } from '../../lib/api';
 import { Calendar, type CalItem } from '../../components/Calendar';
 import { useProject } from '../ProjectPage';
+import { IconBooking, IconDiamond, IconPlay } from '../../components/icons';
 
 /** Projektkalender: Deadlines, Starts und Meilensteine des Projekts. */
 export function CalendarView() {
@@ -43,7 +44,7 @@ export function CalendarView() {
   </>;
   return (
     <div className="content">
-      <Calendar items={items} hint="Deadlines, Starts (▶), Meilensteine (◆), Besprechungen mit Uhrzeit und Belegungen (▭)." occupancy={occupancy} initialMode={params.get('ansicht') === 'belegung' ? 'occupancy' : null} />
+      <Calendar items={items} hint={<>Deadlines, Starts (<IconPlay size={12} />), Meilensteine (<IconDiamond size={12} />), Besprechungen mit Uhrzeit und Belegungen (<IconBooking size={12} />).</>} occupancy={occupancy} initialMode={params.get('ansicht') === 'belegung' ? 'occupancy' : null} />
       {book && <BookingForm projectId={detail.project.id} target={book === 'any' ? null : book.resourceId ? { resourceId: book.resourceId, name: book.name } : { userId: book.userId!, name: book.name }} resources={resources.data?.resources ?? []} persons={persons} canForce={rights.data?.canForce} onClose={() => setBook(null)} onSaved={async () => { setBook(null); await bookings.reload(); }} />}
       <div className="row mt small"><button className="btn sm" onClick={() => void subscribe()}>Als Kalender abonnieren (ICS)</button><Link className="btn sm" to={`/projekte/${detail.project.id}/besprechungen`}>Besprechungen</Link>{msg && <span className="muted">{msg}</span>}</div>
     </div>

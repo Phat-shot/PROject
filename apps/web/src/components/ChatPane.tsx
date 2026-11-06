@@ -5,11 +5,11 @@ import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
 import { IconButton, useDialog } from './ui';
-import { IconChevronDown, IconChevronRight, IconPencil, IconX } from './icons';
+import { IconChevronDown, IconChevronRight, IconCircleCheck, IconCircleX, IconPencil, IconPending, IconX } from './icons';
 import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
-export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe; choices: Rückfrage des Agenten nach dem Thema (Knöpfe) */ card?: 'results' | 'choices'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null; /** choices: Auswahl (value wird als Nachricht gesendet), Ursprungsnachricht, gewählter Wert */ choices?: ChatChoice[]; forMessageId?: string | null; chosen?: string | null } | null }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (Daumen hoch 1, Daumen runter -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe; choices: Rückfrage des Agenten nach dem Thema (Knöpfe) */ card?: 'results' | 'choices'; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null; /** choices: Auswahl (value wird als Nachricht gesendet), Ursprungsnachricht, gewählter Wert */ choices?: ChatChoice[]; forMessageId?: string | null; chosen?: string | null } | null }
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean; /** Agenten, deren Antwort noch aussteht */ busy?: { id: string; name: string }[] }
 interface Member { userId: string; name: string }
 
@@ -122,7 +122,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       </div>
       {editing?.id === m.id
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
-        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? m.body : <MentionText text={m.body} members={members} />}</div>}
+        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? (m.meta?.card === 'results' && m.meta.results?.length ? <ResultLines results={m.meta.results} /> : m.body) : <MentionText text={m.body} members={members} />}</div>}
       {m.fromAgent && !m.deleted && <Thumbs value={m.myRating} onRate={(v) => rating.rate(m.id, m.myRating, v)} />}
       {!m.deleted && m.meta?.link && (system(m) || !('question' in m.meta)) && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
@@ -171,6 +171,14 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
  * „Im AP öffnen“ und „Erledigt“ (fragende Person, Adressat oder PL). Antworten im Thread bleiben möglich.
  */
 /** Karte der Chat-Steuerung (Konzept 7): Rückgängig für einen eben angelegten Auftrag (10 Minuten) und die Freigabekarte zu offenen Bestätigungen. */
+/** Ergebnisse der Chat-Steuerung je Befehl: Status als Symbol (mit Text für Screenreader), abgelehnte Befehle mit „Nicht ausgeführt“. */
+function ResultLines({ results }: { results: NonNullable<NonNullable<ChatMessage['meta']>['results']> }) {
+  return <ul className="result-lines">{results.map((r, i) => <li key={i} className={`result-${r.status}`}>
+    {r.status === 'ok' ? <IconCircleCheck size={14} /> : r.status === 'held' ? <IconPending size={14} /> : <IconCircleX size={14} />}
+    <span>{r.status === 'ok' ? <span className="sr-only">Erledigt: </span> : r.status === 'held' ? <span className="sr-only">Angehalten: </span> : 'Nicht ausgeführt: '}{r.text}</span>
+  </li>)}</ul>;
+}
+
 function ResultsCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }) {
   const [q, setQ] = useState<Question | null>(null);
   const [error, setError] = useState<string | null>(null);

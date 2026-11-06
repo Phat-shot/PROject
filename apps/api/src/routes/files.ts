@@ -66,7 +66,7 @@ export async function fileRoutes(app: FastifyInstance) {
   /** Anzahl nicht gelöschter Dateien der Quelle (Alias s) bzw. unter dem Unterordner der Einbindung (Alias b). */
   const SOURCE_FILES_SQL = `(select count(*)::int from files f where f.source_id = s.id and f.deleted_at is null)`;
   const BINDING_FILES_SQL = `(select count(*)::int from files f where f.source_id = b.source_id and f.deleted_at is null and (coalesce(b.sub_path, '/') = '/' or f.path = b.sub_path or left(f.path, length(b.sub_path) + 1) = b.sub_path || '/'))`;
-  const mapBinding = (b: any) => ({ id: b.id, sourceId: b.source_id, sourceName: b.source_name, scope: b.scope, kind: b.kind, subPath: b.sub_path ?? null, label: b.folder_label, lastSyncAt: b.last_sync_at ?? null, lastError: b.last_error ?? null, active: Boolean(b.ok), files: Number(b.files ?? 0) });
+  const mapBinding = (b: any) => ({ id: b.id, sourceId: b.source_id, sourceName: b.source_name, scope: b.scope, kind: b.kind, subPath: b.sub_path ?? null, label: b.folder_label, lastSyncAt: b.last_sync_at ?? null, lastError: b.last_error ?? null, active: Boolean(b.ok), files: Number(b.files ?? 0), agentEnabled: b.agent_enabled !== false });
 
   // ---- Org-Admin: Quellen der Organisation
   app.get('/file-sources', async (req) => {
@@ -215,6 +215,68 @@ export async function fileRoutes(app: FastifyInstance) {
     if (!r.rows.length && !deletedSource) throw notFound('Keine Einbindung dieser Quelle im Projekt');
     await audit(db, { orgId: user.orgId, projectId: pid, userId: user.id, action: deletedSource ? 'files.source.delete' : 'files.unbind', objectType: 'file_source', objectId: s.id, details: { name: s.name, bindings: r.rows.length } });
     return { ok: true, removed: r.rows.length, deletedSource };
+  });
+
+  // ---- Quellen für den Agenten (Projekt › Einstellungen › KI): Doku-Ordner, Einbindungen, Mails je Schalter; lesen alle
+  // Mitglieder, ändern nur die PL. Wirkt nur auf KI-Agenten (Suche, Lesen, Projektdurchlauf), Menschen sehen alles wie bisher.
+  async function agentSources(pid: string, canEdit: boolean) {
+    const folders = (await db.query(`select f.id, f.name, f.parent_id, f.position, f.agent_access, (select count(*)::int from doc_pages p where p.folder_id = f.id and p.deleted_at is null) as pages from doc_folders f where f.project_id = $1 order by f.position, f.name`, [pid])).rows as any[];
+    // Baum in Anzeige-Reihenfolge (Eltern vor Kindern), Tiefe und „durch übergeordneten Ordner aus“
+    const kids = new Map<string | null, any[]>();
+    for (const f of folders) { const k = folders.some((x) => x.id === f.parent_id) ? f.parent_id : null; if (!kids.has(k)) kids.set(k, []); kids.get(k)!.push(f); }
+    const out: any[] = [];
+    const walk = (parent: string | null, depth: number, off: boolean) => {
+      for (const f of kids.get(parent) ?? []) {
+        if (out.length > 2000 || depth > 20) return;
+        out.push({ id: f.id, name: f.name, parentId: f.parent_id ?? null, depth, pages: Number(f.pages), agentAccess: f.agent_access ?? 'write', inheritedOff: off });
+        walk(f.id, depth + 1, off || f.agent_access === 'none');
+      }
+    };
+    walk(null, 0, false);
+    const bindings = (await db.query(`select b.*, s.name as source_name, ${BINDING_OK_SQL} as ok, ${BINDING_FILES_SQL} as files from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.project_id = $1 order by b.folder_label`, [pid])).rows as any[];
+    const p = await db.one(`select agent_mail_search, (select count(*)::int from mail_views v where v.project_id = projects.id) as views from projects where id = $1`, [pid]);
+    return { canEdit, folders: out, bindings: bindings.map((b) => ({ id: b.id, label: b.folder_label, sourceName: b.source_name, subPath: b.sub_path ?? null, active: Boolean(b.ok), files: Number(b.files ?? 0), agentEnabled: b.agent_enabled !== false })), mails: { enabled: p.agent_mail_search !== false, views: Number(p.views) } };
+  }
+  app.get<{ Params: { id: string } }>('/projects/:id/agent-sources', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id);
+    return agentSources(req.params.id, m.role === 'pl' && user.kind !== 'agent');
+  });
+  app.patch<{ Params: { id: string }; Body: any }>('/projects/:id/agent-sources', async (req) => {
+    const user = requireUser(req);
+    await requireProject(db, user, req.params.id, 'pl');
+    if (user.kind === 'agent') throw forbidden('Agenten ändern ihre Quellen nicht selbst');
+    const pid = req.params.id;
+    const b: any = req.body ?? {};
+    const flag = (v: unknown, what: string) => { if (typeof v !== 'boolean') throw badRequest(`${what}: agentEnabled (true/false) erforderlich`); return v; };
+    const changes: Record<string, unknown> = {};
+    if (b.folders !== undefined) {
+      if (!Array.isArray(b.folders)) throw badRequest('folders: Liste erwartet');
+      for (const f of b.folders) {
+        // Ordner: derselbe Agent-Zugriff wie in der Doku (write/read/none), keine zweite Einstellung
+        const access = f?.agentAccess;
+        if (!['write', 'read', 'none'].includes(access)) throw badRequest('folders: agentAccess (write, read oder none) erforderlich');
+        const r = await db.query(`update doc_folders set agent_access = $3 where id = $1 and project_id = $2 returning name`, [String(f?.id ?? ''), pid, access]);
+        if (!r.rows.length) throw notFound('Ordner nicht gefunden');
+        changes[`folder:${r.rows[0].name}`] = access;
+      }
+    }
+    if (b.bindings !== undefined) {
+      if (!Array.isArray(b.bindings)) throw badRequest('bindings: Liste erwartet');
+      for (const x of b.bindings) {
+        const on = flag(x?.agentEnabled, 'bindings');
+        const r = await db.query(`update file_source_projects set agent_enabled = $3 where id = $1 and project_id = $2 returning folder_label`, [String(x?.id ?? ''), pid, on]);
+        if (!r.rows.length) throw notFound('Einbindung nicht gefunden');
+        changes[`files:${r.rows[0].folder_label}`] = on;
+      }
+    }
+    if (b.mails !== undefined) {
+      if (typeof b.mails !== 'boolean') throw badRequest('mails: true/false erwartet');
+      await db.query(`update projects set agent_mail_search = $2 where id = $1`, [pid, b.mails]);
+      changes.mails = b.mails;
+    }
+    if (Object.keys(changes).length) await audit(db, { orgId: user.orgId, projectId: pid, userId: user.id, action: 'project.agent_sources', objectType: 'project', objectId: pid, details: changes });
+    return agentSources(pid, true);
   });
 
   // ---- Doku › Dateien: Liste aus dem Index (Mitglieder mit Leserecht)

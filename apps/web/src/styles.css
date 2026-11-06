@@ -1194,3 +1194,76 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .file-preview .file-text { max-height: 70vh; overflow: auto; }
 .file-preview pre.file-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-sm); background: var(--pill-bg); padding: 10px; border-radius: var(--r-sm); }
 .sidebar .proj-docs a.proj-sub .icon { vertical-align: -2px; }
+
+/* ---- Eigener Datumswähler (DateInput) ---- */
+.date-input { position: relative; display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; vertical-align: middle; }
+.field > .date-input, label.field .date-input { display: flex; width: 100%; }
+.date-input > input { flex: 1; min-width: 7.5em; width: 100%; padding-right: 26px; }
+.date-input .date-btn { position: absolute; right: 2px; top: 50%; transform: translateY(-50%); border: 0; background: transparent; color: var(--muted); padding: 3px 4px; border-radius: var(--r-sm); cursor: pointer; line-height: 0; }
+.date-input .date-btn:hover:not(:disabled) { color: var(--primary); background: var(--primary-soft); }
+.date-input .date-btn:disabled { cursor: default; opacity: 0.5; }
+.date-input.invalid > input { border-color: var(--danger); background: var(--danger-soft); }
+.date-input .date-week { margin-left: 30px; white-space: nowrap; }
+.date-input.inline-date { padding: 0; }
+.date-input.inline-date > input { border: 0; background: transparent; padding: 3px 24px 3px 4px; font: inherit; font-size: var(--fs-md); min-width: 6.8em; width: 7.6em; }
+.date-pop { position: absolute; z-index: 60; top: calc(100% + 4px); left: 0; background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-pop); padding: 8px; min-width: 268px; }
+.date-pop-head { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-bottom: 4px; }
+.date-grid { border-collapse: collapse; width: 100%; font-size: var(--fs-md); }
+.date-grid th { font-weight: 600; color: var(--muted); font-size: var(--fs-xs); padding: 2px; text-align: center; }
+.date-grid th abbr { text-decoration: none; }
+.date-grid .kw { color: var(--muted); font-weight: 400; font-size: var(--fs-xs); border-right: 1px solid var(--border); padding-right: 4px; }
+.date-grid td { padding: 1px; text-align: center; }
+.date-grid .day { width: 30px; height: 28px; border: 1px solid transparent; border-radius: var(--r-sm); background: transparent; color: var(--text); cursor: pointer; font: inherit; }
+.date-grid .day:hover:not(:disabled) { background: var(--primary-soft); }
+.date-grid .day:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.date-grid .day.other { color: var(--muted); opacity: 0.7; }
+.date-grid .day.we { color: var(--muted); }
+.date-grid .day.today { border-color: var(--primary); font-weight: 700; }
+.date-grid .day.sel { background: var(--primary); color: var(--on-primary, #fff); }
+.date-grid .day:disabled { opacity: 0.3; cursor: default; }
+.date-pop-foot { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+.date-pop-foot .right-text { text-align: right; }
+@media (max-width: 600px) { .date-pop { position: fixed; left: 50%; top: auto; bottom: 12px; transform: translateX(-50%); } }
+
+/* ---- Brotkrumen ---- */
+.crumbs ol { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 0; font-size: var(--fs-sm); color: var(--muted); }
+.crumbs li { display: inline-flex; align-items: center; min-width: 0; max-width: 100%; }
+.crumbs li > a, .crumbs li > span, .crumbs li > button { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 28ch; }
+.crumbs li > a { color: var(--muted); text-decoration: none; }
+.crumbs li > a:hover { color: var(--primary); text-decoration: underline; }
+.crumbs li > button.btn.link { padding: 0; font-size: inherit; color: var(--muted); }
+.crumbs li > button.btn.link:hover { color: var(--primary); }
+.crumbs [aria-current="page"] { color: var(--text); font-weight: 600; }
+.crumbs .sep { margin: 0 6px; color: var(--muted); }
+.topbar-title { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.topbar-title h1 { flex: none; }
+.drawer .drawer-crumbs { margin-bottom: 2px; }
+@media (max-width: 900px) { .crumbs li > a, .crumbs li > span, .crumbs li > button { max-width: 18ch; } }
+
+/* ---- Meilensteine: Raute offen/erreicht, Linien von verknüpften Arbeitspaketen ---- */
+.gantt .milestone { width: 12px; height: 12px; top: 9px; border: 2px solid var(--purple); background: var(--surface); transform: rotate(45deg); border-radius: 2px; margin-left: 2px; }
+.gantt .milestone.reached { background: var(--purple); }
+.gantt-links path.ms-link { stroke: var(--purple); stroke-dasharray: 3 3; opacity: 0.55; stroke-width: 1.2; }
+.gantt-links path.ms-link.done { opacity: 0.9; }
+.ms-diamond { display: inline-block; width: 9px; height: 9px; border: 2px solid var(--purple); transform: rotate(45deg); border-radius: 1px; margin: 0 4px; flex: none; }
+.ms-diamond.reached { background: var(--purple); }
+.ms-row.ms-overdue .grow { color: var(--danger); }
+.reached-ms { padding-left: 4px; list-style: none; }
+
+/* ---- Prüfung ---- */
+.review-line { color: var(--info); margin-top: 2px; }
+.review-notice select { max-width: 220px; }
+.review-who { display: inline-flex; align-items: center; gap: 4px; }
+
+/* ---- CSV-Import ---- */
+.import-mapping { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 6px 12px; }
+.import-mapping .field { margin: 0; }
+.import-preview { max-height: 360px; overflow: auto; }
+.import-preview tr.row-error td { background: var(--danger-soft); }
+.import-preview tr.row-warn td:first-child { box-shadow: inset 3px 0 0 var(--warn-fill); }
+.result-lines { list-style: none; margin: 0; padding: 0; }
+.result-lines li { display: flex; gap: 6px; align-items: flex-start; }
+.result-lines li > .icon { flex: none; margin-top: 2px; }
+.result-lines .result-ok > .icon { color: var(--ok); }
+.result-lines .result-held > .icon { color: var(--warn); }
+.result-lines .result-denied > .icon { color: var(--danger); }

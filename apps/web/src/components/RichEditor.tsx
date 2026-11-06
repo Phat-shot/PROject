@@ -8,6 +8,7 @@ import { Placeholder } from '@tiptap/extensions';
 import { Node } from '@tiptap/core';
 import { api } from '../lib/api';
 import { sanitizeHtml } from './ui';
+import { IconImage, IconLink, IconQuote, IconRedo, IconRule, IconTable, IconUndo, IconX } from './icons';
 
 /**
  * Diagramme der Berichte (SVG aus dem Management-Report) als eigener Block: Tiptap würde unbekannte Elemente verwerfen und
@@ -107,26 +108,26 @@ export function RichEditor({ html, onChange, pageId, uploadUrl, placeholder, min
         <span className="sep" />
         <Btn ed={editor} on={editor.isActive('bulletList')} title="Aufzählung" run={() => editor.chain().focus().toggleBulletList().run()}>• Liste</Btn>
         <Btn ed={editor} on={editor.isActive('orderedList')} title="Nummerierung" run={() => editor.chain().focus().toggleOrderedList().run()}>1. Liste</Btn>
-        <Btn ed={editor} on={editor.isActive('blockquote')} title="Zitat" run={() => editor.chain().focus().toggleBlockquote().run()}>❝</Btn>
-        <Btn ed={editor} title="Trennlinie" run={() => editor.chain().focus().setHorizontalRule().run()}>—</Btn>
+        <Btn ed={editor} on={editor.isActive('blockquote')} title="Zitat" run={() => editor.chain().focus().toggleBlockquote().run()}><IconQuote /></Btn>
+        <Btn ed={editor} title="Trennlinie" run={() => editor.chain().focus().setHorizontalRule().run()}><IconRule /></Btn>
         <span className="sep" />
-        <Btn ed={editor} title="Tabelle einfügen (3×3)" run={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}>▦ Tabelle</Btn>
+        <Btn ed={editor} title="Tabelle einfügen (3×3)" run={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}><IconTable /> Tabelle</Btn>
         {editor.isActive('table') && <>
           <Btn ed={editor} title="Spalte rechts" run={() => editor.chain().focus().addColumnAfter().run()}>+Sp</Btn>
           <Btn ed={editor} title="Zeile unten" run={() => editor.chain().focus().addRowAfter().run()}>+Ze</Btn>
           <Btn ed={editor} title="Spalte löschen" run={() => editor.chain().focus().deleteColumn().run()}>−Sp</Btn>
           <Btn ed={editor} title="Zeile löschen" run={() => editor.chain().focus().deleteRow().run()}>−Ze</Btn>
           <Btn ed={editor} title="Kopfzeile umschalten" run={() => editor.chain().focus().toggleHeaderRow().run()}>Kopf</Btn>
-          <Btn ed={editor} title="Tabelle löschen" run={() => editor.chain().focus().deleteTable().run()}>✕ Tab</Btn>
+          <Btn ed={editor} title="Tabelle löschen" run={() => editor.chain().focus().deleteTable().run()}><IconX /> Tab</Btn>
         </>}
         <span className="sep" />
-        <Btn ed={editor} title="Bild einfügen (auch per Drag & Drop oder Einfügen)" run={() => fileRef.current?.click()}>🖼 Bild</Btn>
+        <Btn ed={editor} title="Bild einfügen (auch per Drag & Drop oder Einfügen)" run={() => fileRef.current?.click()}><IconImage /> Bild</Btn>
         <input className="hidden" ref={fileRef} type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
-        <Btn ed={editor} on={editor.isActive('link')} title="Link" run={() => { const prev = editor.getAttributes('link').href ?? ''; const url = prompt('Link-Adresse', prev); if (url === null) return; url ? editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run() : editor.chain().focus().unsetLink().run(); }}>🔗</Btn>
+        <Btn ed={editor} on={editor.isActive('link')} title="Link" run={() => { const prev = editor.getAttributes('link').href ?? ''; const url = prompt('Link-Adresse', prev); if (url === null) return; url ? editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run() : editor.chain().focus().unsetLink().run(); }}><IconLink /></Btn>
         {!minimal && <>
           <span className="sep" />
-          <Btn ed={editor} title="Rückgängig" run={() => editor.chain().focus().undo().run()}>↶</Btn>
-          <Btn ed={editor} title="Wiederholen" run={() => editor.chain().focus().redo().run()}>↷</Btn>
+          <Btn ed={editor} title="Rückgängig" run={() => editor.chain().focus().undo().run()}><IconUndo /></Btn>
+          <Btn ed={editor} title="Wiederholen" run={() => editor.chain().focus().redo().run()}><IconRedo /></Btn>
         </>}
       </div>
       <div className="editor-content prose"><EditorContent editor={editor} /></div>
@@ -136,7 +137,7 @@ export function RichEditor({ html, onChange, pageId, uploadUrl, placeholder, min
 
 function Btn({ ed, on, title, run, children }: { ed: Editor; on?: boolean; title: string; run: () => void; children: React.ReactNode }) {
   void ed;
-  return <button type="button" className={on ? 'on' : ''} title={title} onMouseDown={(e) => e.preventDefault()} onClick={run}>{children}</button>;
+  return <button type="button" className={on ? 'on' : ''} title={title} aria-label={title} aria-pressed={on === undefined ? undefined : on} onMouseDown={(e) => e.preventDefault()} onClick={run}>{children}</button>;
 }
 
 /** Gespeichertes HTML sicher anzeigen (HTML- und SVG-Profil, damit Berichtsseiten ihre Diagramme zeigen). */

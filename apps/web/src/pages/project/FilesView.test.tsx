@@ -84,6 +84,10 @@ describe('Doku › Dateien', () => {
     expect(get).toHaveBeenCalledWith('/projects/p1/files?binding=b1&path=%2FStatik');
     const crumbs = screen.getByRole('navigation', { name: 'Pfad' });
     expect(within(crumbs).getByRole('link', { name: 'Pläne Halle 3' })).toHaveAttribute('href', '/projekte/p1/doku/dateien/b1');
+    // Brotkrumen: Doku › Dateien › Einbindung › Ordner (letzte Ebene aktuell)
+    expect(within(crumbs).getByRole('link', { name: 'Doku' })).toHaveAttribute('href', '/projekte/p1/doku');
+    expect(within(crumbs).getByRole('link', { name: 'Dateien' })).toHaveAttribute('href', '/projekte/p1/doku/dateien');
+    expect(within(crumbs).getByText('Statik')).toHaveAttribute('aria-current', 'page');
     fireEvent.click(screen.getByRole('button', { name: 'Last.txt' }));
     const txt = await screen.findByRole('dialog', { name: 'Last.txt' });
     const pre = await within(txt).findByText('Lastannahmen <b>roh</b>');

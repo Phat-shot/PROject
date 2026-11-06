@@ -153,6 +153,8 @@ export async function copyRoutes(app: FastifyInstance) {
        where id = $1`,
       [src.id, target.id, opts.columnId, opts.subprojectId, pos.p, resp, opts.parts.has('responsible') ? src.responsible_email : null, opts.parts.has('dates'), Boolean(opts.keepParent)]
     );
+    // Meilenstein-Bezüge ins Quellprojekt lösen (außer Meilensteine des mitgehenden Teilprojekts; Rest räumt der Aufrufer auf)
+    await db.query(`delete from milestone_tasks mt using milestones m where mt.milestone_id = m.id and mt.task_id = $1 and m.project_id <> $2 and m.subproject_id is distinct from $3`, [src.id, target.id, opts.subprojectId]);
     if (!opts.parts.has('checklist')) await db.query(`delete from checklist_items where task_id = $1`, [src.id]);
     else await db.query(`update checklist_items set responsible_user_id = null where task_id = $1 and responsible_user_id is not null and not exists (select 1 from project_members pm where pm.project_id = $2 and pm.user_id = checklist_items.responsible_user_id)`, [src.id, target.id]);
     if (!opts.parts.has('comments')) await db.query(`delete from task_comments where task_id = $1`, [src.id]);
@@ -290,6 +292,7 @@ export async function copyRoutes(app: FastifyInstance) {
     }
     if (parts.has('milestones')) await db.query(`update milestones set project_id = $2 where subproject_id = $1`, [src.id, target.id]);
     else await db.query(`update milestones set subproject_id = null where subproject_id = $1`, [src.id]);
+    await db.query(`delete from milestone_tasks mt using milestones m, tasks t where mt.milestone_id = m.id and mt.task_id = t.id and m.project_id <> t.project_id and $1 in (m.project_id, t.project_id)`, [target.id]);
     await audit(db, { orgId: user.orgId, projectId: target.id, userId: user.id, action: 'subproject.move_project', objectType: 'subproject', objectId: src.id, details: { fromProject: req.params.id, tasks: chosen.size, parts: [...parts] } });
     await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'subproject.move_project', objectType: 'subproject', objectId: src.id, details: { toProject: target.id, tasks: chosen.size } });
     return { ok: true, projectId: target.id, projectKey: target.key, tasks: chosen.size };

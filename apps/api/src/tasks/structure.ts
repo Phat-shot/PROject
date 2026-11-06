@@ -146,7 +146,11 @@ export async function demoteTarget(db: Db, t: any, toTaskId?: string | null): Pr
   return taskRow(db, open.rows[0].id);
 }
 
-/** Aufgabe → Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets: Log und Kommentare werden als ein Log-Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern mit, die Aufgabe wird gelöscht. */
+/**
+ * Aufgabe → Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets: Log und Kommentare werden als ein Log-Eintrag an der
+ * Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern mit. Die Aufgabe kommt in den Papierkorb (wie Löschen, 30 Tage);
+ * tasks.demoted merkt den erzeugten Punkt, die Ziel-Aufgabe und das Mitgewanderte, damit undoDemote sie zurückholt.
+ */
 export async function demoteTask(db: Db, actor: StructureActor, taskId: string, toTaskId?: string | null): Promise<{ itemId: string; apId: string; targetId: string }> {
   const why = await demoteBlocker(db, taskId);
   if (why) throw badRequest(why);
@@ -156,19 +160,43 @@ export async function demoteTask(db: Db, actor: StructureActor, taskId: string, 
   const target = await demoteTarget(db, t, toTaskId);
   const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [target.id]);
   const item = await db.one(`insert into checklist_items (task_id, title, done, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5,$6) returning id`, [target.id, String(t.title).slice(0, 300), Boolean(t.is_done), t.responsible_user_id ?? null, t.responsible_email ?? null, pos.p]);
-  // Eigene Checkliste der Aufgabe: als Punkte an der Ziel-Aufgabe anhängen
-  await db.query(`update checklist_items set task_id = $2, position = position + $3 where task_id = $1`, [t.id, target.id, Number(pos.p) + 1]);
-  await db.query(`update attachments set task_id = $2 where task_id = $1`, [t.id, target.id]);
+  // Eigene Checkliste der Aufgabe: als Punkte an der Ziel-Aufgabe anhängen (Positionen merken für das Zurückholen)
+  const moved = (await db.query(`update checklist_items set task_id = $2, position = position + $3 where task_id = $1 returning id, position - $3 as old_position`, [t.id, target.id, Number(pos.p) + 1])).rows.map((r: any) => ({ id: r.id, position: Number(r.old_position) }));
+  const atts = (await db.query(`update attachments set task_id = $2 where task_id = $1 returning id`, [t.id, target.id])).rows.map((r: any) => r.id as string);
   const comments = await db.query(`select c.body, c.created_at, u.name from task_comments c join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at`, [t.id]);
   const extra = [t.description ? `Beschreibung: ${String(t.description).trim()}` : '', dateStr(t.due_date) ? `Termin ${dateStr(t.due_date)}` : ''].filter(Boolean);
   const summary = comments.rows.map((c: any) => `- ${new Date(c.created_at).toLocaleDateString('de-DE')} ${c.name}: ${String(c.body).replace(/\s+/g, ' ').trim()}`).join('\n');
   const body = `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt von ${code(target)} „${target.title}“ (${who(actor)})${extra.length ? `. ${extra.join('; ')}` : ''}${summary ? `\nLog der Aufgabe:\n${summary}` : ''}`;
   await log(db, actor, target.id, body.length > 4000 ? body.slice(0, 3990) + ' …' : body);
-  await log(db, actor, ap.id, `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt von ${code(target)} „${target.title}“ (${who(actor)})`);
-  await db.query(`delete from tasks where id = $1`, [t.id]);
+  await log(db, actor, ap.id, `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt von ${code(target)} „${target.title}“ (${who(actor)}); die Aufgabe liegt im Papierkorb und lässt sich dort wiederherstellen`);
+  const demoted = { itemId: item.id, targetId: target.id, apId: ap.id, items: moved, attachments: atts, by: who(actor), at: new Date().toISOString() };
+  await db.query(`update tasks set deleted_at = now(), deleted_was_archived = archived_at is not null, archived_at = coalesce(archived_at, now()), demoted = $2, updated_at = now() where id = $1`, [t.id, JSON.stringify(demoted)]);
   await touchTask(db, ap.id); await touchTask(db, target.id);
-  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.demote', objectType: 'task', objectId: target.id, details: { from: t.id, title: t.title, itemId: item.id, apId: ap.id, by: who(actor) } });
+  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.demote', objectType: 'task', objectId: target.id, details: { from: t.id, title: t.title, itemId: item.id, apId: ap.id, by: who(actor), trashed: true } });
   return { itemId: item.id, apId: ap.id, targetId: target.id };
+}
+
+/**
+ * Rückgängig (Wiederherstellen aus dem Papierkorb einer Aufgabe, die Checklistenpunkt wurde): erzeugten Punkt entfernen (falls noch
+ * da), mitgewanderte Punkte und Anhänge zurück, sofern sie noch an der Ziel-Aufgabe hängen. Die Aufgabe selbst stellt der Aufrufer
+ * wieder her (deleted_at). Liefert die Ziel-Aufgabe für Log und Checklisten-Abgleich; null = keine Umwandlung gemerkt.
+ */
+export async function undoDemote(db: Db, actor: StructureActor, taskId: string): Promise<{ targetId: string | null } | null> {
+  const t = await db.maybeOne(`select t.*, p.key as project_key from tasks t join projects p on p.id = t.project_id where t.id = $1`, [taskId]);
+  const d = t?.demoted;
+  if (!d) return null;
+  const target = d.targetId ? await db.maybeOne(`select t.*, p.key as project_key from tasks t join projects p on p.id = t.project_id where t.id = $1`, [d.targetId]) : null;
+  if (d.itemId) await db.query(`delete from checklist_items where id = $1`, [d.itemId]);
+  if (target) {
+    for (const it of (d.items ?? []) as { id: string; position: number }[]) await db.query(`update checklist_items set task_id = $2, position = $3 where id = $1 and task_id = $4`, [it.id, t.id, it.position, target.id]);
+    if ((d.attachments ?? []).length) await db.query(`update attachments set task_id = $2 where id = any($1::uuid[]) and task_id = $3`, [d.attachments, t.id, target.id]);
+    await log(db, actor, target.id, `Checklistenpunkt „${t.title}“ ist wieder die Aufgabe ${code(t)} (wiederhergestellt von ${who(actor)})`);
+    await touchTask(db, target.id);
+  }
+  await db.query(`update tasks set demoted = null where id = $1`, [t.id]);
+  if (t.parent_id) await log(db, actor, t.parent_id, `Aufgabe ${code(t)} „${t.title}“ aus dem Papierkorb wiederhergestellt (war Checklistenpunkt${target ? ` von ${code(target)}` : ''}; ${who(actor)})`);
+  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.undemote', objectType: 'task', objectId: t.id, details: { title: t.title, itemId: d.itemId, targetId: d.targetId ?? null, by: who(actor) } });
+  return { targetId: target?.id ?? null };
 }
 
 /** Checklistenpunkt an eine andere Aufgabe desselben Projekts (Checklistenpunkte gehören zu Aufgaben). */

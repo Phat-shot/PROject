@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, DATA_RULE, SOURCES_RULES, TASK_RULES, mailData } from './sheet.js';
 import { STRUCTURE_RULES, applyPlanningDepth, planningDepthText } from './structure.js';
+import { linkMilestoneTask } from '../tasks/milestones.js';
 import { demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
@@ -71,6 +72,7 @@ export type AgentAction =
   | { type: 'set_dates'; ref?: string | null; startDate?: string | null; dueDate?: string | null }
   | { type: 'create_subproject'; title: string; responsible?: string | null; startDate?: string | null; dueDate?: string | null }
   | { type: 'create_milestone'; title: string; dueDate: string; subproject?: string | null }
+  | { type: 'link_milestone'; milestone: string; ref?: string | null }
   | { type: 'create_event'; title: string; startsAt: string; endsAt?: string | null; location?: string | null; text?: string | null; resources?: string[] | null; attendees?: string[] | null }
   | { type: 'update_event'; meetingId: string; startsAt?: string | null; endsAt?: string | null; location?: string | null; text?: string | null }
   | { type: 'cancel_event'; meetingId: string; reason?: string | null }
@@ -124,7 +126,7 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId', 'target'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'read_mail', 'read_file', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
+        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'link_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'read_mail', 'read_file', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
         text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten, Arbeitspakete, Mails, Dateien); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item/promote_item/move_item: itemId aus der Task-Liste; sonst leer' },
@@ -136,6 +138,7 @@ const SCHEMA = {
         responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign/promote_item: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
         startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; book_resource ganztägig: erster Tag; sonst leer' },
         dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; book_resource ganztägig: letzter Tag; sonst leer' },
+        milestone: { type: 'string', description: 'link_milestone: Name (aus „Meilensteine“) oder ID des Meilensteins; sonst leer' },
         subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; move_ap: Name des Ziel-Teilprojekts, leer = aus dem Teilprojekt heraus; sonst leer' },
         items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe: Tasks (Checkliste der Aufgabe); create_ap: Schritte (werden Aufgaben bzw. Checkliste der Aufgabe „Schritte“); sonst leer' },
         startsAt: { type: 'string', description: 'create_event/book_resource: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); book_resource ganztägig stattdessen startDate/dueDate; sonst leer' },
@@ -901,7 +904,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
   // Weitere Quellen der Suche: Mail-Ansichten mit KI-Recht und Dateiquellen des Projekts (nur Hinweis, Inhalte per search/read_mail/read_file)
   const mailViewsN = (await mailViewScope(db, { projectIds: [task.project_id], agentId: agent.id })).length;
-  const fileRoots = [...new Set((await fileScopes(db, [task.project_id])).map((x) => x.label))];
+  const fileRoots = [...new Set((await fileScopes(db, [task.project_id], { forAgent: true })).map((x) => x.label))];
   const candidates = policy.synergies === 'off' || !dl.candidates ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: dl.candidates });
   const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
   const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };
@@ -943,7 +946,7 @@ Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name}
 Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis eine Person bestätigt): ${resources.rows.map((r: any) => `${r.name} (${{ room: 'Raum', equipment: 'Gerät', scaffold: 'Gerüst', vehicle: 'Fahrzeug', person: 'Person', other: 'Sonstiges' }[String(r.kind)] ?? r.kind}${r.location ? `, ${r.location}` : ''})${Array.isArray(r.busy) && r.busy.length ? ` belegt: ${r.busy.map((b: any) => `${fmtSpan(b.s, b.e, b.a)}${b.t ? ' (vorläufig)' : ''}`).join('; ')}` : ' frei'}`).join('\n  ') || '–'}${apBookings.rows.length ? `\nBelegungen dieses Arbeitspakets: ${apBookings.rows.map((b: any) => `${b.resource_name ?? b.user_name} ${fmtSpan(b.starts_at, b.ends_at, b.all_day)}${b.tentative ? ' (vorläufig)' : ''}`).join('; ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
 ${planningDepthText(task.planning_depth)}
-Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event); Struktur ändern (move_aufgabe, move_ap, promote_item, demote_aufgabe, move_item) ${canPlan ? 'im ganzen Projekt' : 'in deinem Bereich, sonst als Vorschlag an die PL'}. Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine anlegen oder verknüpfen (link_milestone) ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event); Struktur ändern (move_aufgabe, move_ap, promote_item, demote_aufgabe, move_item) ${canPlan ? 'im ganzen Projekt' : 'in deinem Bereich, sonst als Vorschlag an die PL'}. Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
 Agenten-Policy: ${policyText(policy)}
 ${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${lastErr ? `Im letzten Lauf (${new Date(lastErr.created_at).toLocaleDateString('de-DE')}) nicht ausgeführt: ${cut(lastErr.error, 600)}. Mach es diesmal richtig oder wähle einen anderen Weg; wiederhole den Fehler nicht.\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
 
@@ -1092,7 +1095,7 @@ const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
   blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
-  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen',
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', link_milestone: 'Mit Meilenstein verknüpft', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen',
   move_aufgabe: 'Aufgabe verschoben', move_ap: 'Arbeitspaket zugeordnet', promote_item: 'Task wurde Aufgabe', demote_aufgabe: 'Aufgabe wurde Task', move_item: 'Task verschoben'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
@@ -1125,7 +1128,7 @@ async function unreleasedRecipients(db: Db, page: { id: string; project_id: stri
   return to.filter((x) => !allowed.has(x));
 }
 
-const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item'];
+const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'link_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item'];
 const MAX_CREATE = 15;
 
 /**
@@ -1288,6 +1291,25 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: { name: title, date: due } });
       created++;
       return { applied: { type: 'create_milestone', title, dueDate: due, subproject: sp?.name ?? null } };
+    }
+
+    if (a.type === 'link_milestone') {
+      // Arbeitspaket mit einem Meilenstein verknüpfen (Rechte wie create_milestone); Status des Meilensteins prüft das System danach
+      const key = String(a.milestone ?? '').trim();
+      if (!key) return { error: 'link_milestone: Meilenstein fehlt' };
+      const ms = await db.maybeOne(`select id, name from milestones where project_id = $1 and (${/^[0-9a-f-]{36}$/i.test(key) ? 'id = $2::uuid' : 'lower(name) = lower($2)'}) order by date limit 1`, [task.project_id, key]);
+      if (!ms) return { error: `link_milestone: Meilenstein „${key}“ gibt es nicht` };
+      const t = await findTaskByRef(db, task.project_id, a.ref || (task.parent_id ? task.parent_number : task.number));
+      if (!t) return { error: `link_milestone „${ms.name}“: ${a.ref || 'Kennung'} nicht gefunden` };
+      if (t.parent_id) return { error: `link_milestone „${ms.name}“: ${code(t.number)} ist eine Aufgabe; Meilensteine hängen an Arbeitspaketen` };
+      if (!(await canSeeSubproject(db, agent.id, t.subproject_id))) return { error: `link_milestone „${ms.name}“: ${code(t.number)} liegt außerhalb deines Bereichs` };
+      if (!canPlan) return { error: `link_milestone „${ms.name}“ an ${code(t.number)}: nur als stellvertretende PL oder mit Recht „Projektplan ändern“`, hold: 'plan' };
+      let added: boolean;
+      try { added = await linkMilestoneTask(db, ms.id, t.id, agent.id); } catch (e: any) { return { error: `link_milestone „${ms.name}“: ${e?.message ?? e}` }; }
+      if (!added) return { applied: null };
+      await log(t.id, `Mit Meilenstein „${ms.name}“ verknüpft (von ${agent.name})`);
+      await audit(db, { orgId: agent.org_id, projectId: task.project_id, userId: agent.id, action: 'milestone.link', objectType: 'milestone', objectId: ms.id, details: { name: ms.name, taskId: t.id } });
+      return { applied: { type: 'link_milestone', milestone: ms.name, ref: code(t.number), title: ms.name } };
     }
 
     if (a.type === 'book_resource') {

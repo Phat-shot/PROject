@@ -129,6 +129,7 @@ export function classifyAction(a: any, c: ClassifyCtx): AgentActionClass[] {
     case 'doc_send_pdf': out.add('distribute'); break;
     case 'mail': case 'reply_origin': case 'send_invite': out.add('send_external'); break;
     case 'set_status': { if (c.doneColumns.has(String(a.column ?? '').toLowerCase()) && (!c.task.parent_id || c.task.workflow_run_id)) out.add('close'); break; }
+    case 'link_milestone': out.add('plan'); break;
     case 'create_ap': case 'create_subproject': case 'create_milestone': out.add('plan'); if (a.type !== 'create_milestone' && third(a.responsible)) out.add('assign'); break;
     case 'create_aufgabe': if (third(a.responsible)) out.add('assign'); if (!own(a.ref)) out.add('foreign'); break;
     case 'assign': out.add('assign'); if (!own(a.ref)) out.add('foreign'); break;
@@ -157,6 +158,7 @@ export function actionLabel(a: any, c?: { pageTitle?: (id: string) => string | n
     case 'create_aufgabe': return `Aufgabe „${cut(a.title, 60)}“${a.ref ? ` unter ${a.ref}` : ''}${a.responsible ? ` für ${a.responsible}` : ''}`;
     case 'create_subproject': return `Teilprojekt „${cut(a.title, 60)}“`;
     case 'create_milestone': return `Meilenstein „${cut(a.title, 60)}“ am ${a.dueDate ?? '?'}`;
+    case 'link_milestone': return `${a.ref || 'AP'} mit Meilenstein „${cut(a.milestone, 60)}“ verknüpfen`;
     case 'assign': return `${a.ref ?? 'AP'} zuweisen an ${a.responsible || 'niemanden (geerbt)'}`;
     case 'set_dates': return `${a.ref ? `${a.ref}: ` : ''}Termine ${a.startDate ?? '–'} bis ${a.dueDate ?? '–'}`;
     case 'update_event': return `Termin verschieben${a.startsAt ? ` auf ${a.startsAt}` : ''}${a.location ? `, Ort ${cut(a.location, 40)}` : ''}`;
@@ -179,7 +181,10 @@ export function actionFingerprint(a: any): string {
   return parts.join('|');
 }
 
-/** Zugriff der Agenten je Ordner, über die Hierarchie vererbt (die strengste Angabe gilt); Seiten ohne Ordner: write. */
+/**
+ * Zugriff der Agenten je Ordner (doc_folders.agent_access, gesetzt in der Doku oder unter „Quellen für den Agenten“), über die
+ * Hierarchie vererbt (die strengste Angabe gilt); Seiten ohne Ordner: write.
+ */
 export async function folderAccessMap(db: Db, projectId: string): Promise<Map<string, 'write' | 'read' | 'none'>> {
   const rows = await db.query(`select id, parent_id, agent_access from doc_folders where project_id = $1`, [projectId]);
   const by = new Map<string, { parent: string | null; access: 'write' | 'read' | 'none' }>();

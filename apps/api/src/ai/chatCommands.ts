@@ -357,8 +357,8 @@ export async function postResults(ctx: CommandCtx, results: CommandResult[], age
     const settings = typeof u?.settings === 'string' ? JSON.parse(u.settings) : u?.settings ?? {};
     if (settings.chatCards !== 'all') return null;
   }
-  const mark = (r: CommandResult) => (r.status === 'ok' ? '✓' : r.status === 'held' ? '◔' : '✗');
-  const body = results.map((r) => `${mark(r)} ${r.status === 'denied' ? 'Nicht ausgeführt: ' : ''}${r.text}`).join('\n');
+  // Klartext ohne Symbole: der Status steht in meta.results[].status, das Web zeigt ihn als Icon
+  const body = results.map((r) => `${r.status === 'denied' ? 'Nicht ausgeführt: ' : r.status === 'held' ? 'Angehalten: ' : ''}${r.text}`).join('\n');
   const order = results.find((r) => r.type === 'order' && r.status === 'ok');
   const approval = results.find((r) => r.questionId && (r.type === 'approve' || r.type === 'reject'));
   const id = await systemMessage(ctx.db, { channelId: ctx.channelId, threadId: ctx.threadId, body, meta: { card: 'results', results, link: order?.link ?? results.find((r) => r.link)?.link ?? null, taskId: order?.taskId ?? null, undoUntil: order?.undoUntil ?? null, approvalQuestionId: approval?.questionId ?? null } });

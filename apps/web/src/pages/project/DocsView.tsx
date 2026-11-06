@@ -1,17 +1,28 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate, FileListing } from '@projekttool/shared';
+import { AGENT_FOLDER_ACCESS, type AgentFolderAccess } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { IconButton } from '../../components/ui';
-import { IconAlert, IconChevronDown, IconChevronRight, IconCloud, IconMail, IconMore, IconX } from '../../components/icons';
+import { IconAlert, IconChevronDown, IconChevronRight, IconCloud, IconMail, IconMore, IconPlus, IconX } from '../../components/icons';
 import { useUnsavedChanges } from '../../lib/useUnsavedChanges';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { MeetingsView } from './MeetingsView';
 import { FilesView, filesPath } from './FilesView';
+import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { reviewOptsOf } from '../../lib/moveTask';
+
+/** Oberseiten einer Seite (oberste zuerst), ohne Ordnerseiten; bricht bei Zyklen ab. */
+export function ancestors(pages: DocPage[], p: DocPage): DocPage[] {
+  const out: DocPage[] = []; const seen = new Set([p.id]);
+  let cur = pages.find((x) => x.id === p.parentPageId);
+  while (cur && !seen.has(cur.id)) { if (!cur.isFolderPage) out.unshift(cur); seen.add(cur.id); cur = pages.find((x) => x.id === cur!.parentPageId); }
+  return out;
+}
 
 interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTemplate[] }
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
@@ -59,7 +70,7 @@ export function DocsView({ meetings = false, files = false }: { meetings?: boole
     <div key={p.id} className={`page ${pageId === p.id ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => nav(`${base}/${p.id}`)}>
       <span className="t">{(p.childCount ?? 0) > 0 ? <><IconChevronDown size={12} /> </> : ''}{p.title}</span>
       {canWrite && <span className="acts" onClick={(e) => e.stopPropagation()}>
-        <button title="Unterseite anlegen" aria-label={`Unterseite anlegen unter ${p.title}`} onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}>+</button>
+        <button title="Unterseite anlegen" aria-label={`Unterseite anlegen unter ${p.title}`} onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}><IconPlus size={12} /></button>
         <button title="Seiteneinstellungen" aria-label={`Seiteneinstellungen: ${p.title}`} onClick={() => nav(`${base}/${p.id}?einstellungen=1`)}><IconMore size={14} /></button>
       </span>}
       <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
@@ -84,7 +95,7 @@ export function DocsView({ meetings = false, files = false }: { meetings?: boole
             <div className={`folder ${f.pageId && pageId === f.pageId ? 'active' : ''}`}>
               <span className="t" title="Ordnerseite öffnen" onClick={() => void openFolder(f)}>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> <IconMail size={12} /><span className="sr-only">mit Verteiler</span></span>}</span>
               {canWrite && <span className="acts">
-                <button title="Seite in diesem Ordner anlegen" aria-label={`Seite in Ordner ${f.name} anlegen`} onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+</button>
+                <button title="Seite in diesem Ordner anlegen" aria-label={`Seite in Ordner ${f.name} anlegen`} onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}><IconPlus size={12} /></button>
                 {me.role === 'pl' && <button title="Ordner bearbeiten (Name, Verteiler)" aria-label={`Ordner ${f.name} bearbeiten`} onClick={() => setEditFolder(f)}><IconMore size={14} /></button>}
               </span>}
             </div>
@@ -152,9 +163,23 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const newChild = () => (isFolderPage ? onNewInFolder(p.folderId) : onNewChild(p, childTemplate ?? null));
   const canEdit = me.role !== 'reader' && p.status !== 'final' && !p.deletedAt;
   const canFinal = me.role === 'pl' || me.canFinalize;
-  const setStatus = (status: string) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status }); await d.reload(); await reloadTree(); });
+  const setStatus = (status: string, extra: Record<string, unknown> = {}) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status, ...extra }); await d.reload(); await reloadTree(); });
+  const reviewers = reviewOptsOf(detail, p.reviewer?.userId);
+  const isReviewer = p.status === 'review' && p.reviewer?.userId === me.userId;
+  /** Prüfer wählen (Pflicht mit „Prüfer erforderlich“); null = abgebrochen */
+  const askReviewer = async (): Promise<{ reviewerUserId: string | null } | null> => {
+    const v = await dialog.form({ title: 'Zur Prüfung an …', text: 'Die prüfende Person bekommt eine Meldung, sieht die Seite unter „Offen für dich“ und kann freigeben (Final) oder mit Kommentar zurückweisen (Entwurf).', fields: [
+      { key: 'reviewer', label: 'Wer prüft?', type: 'select', required: reviewers.required, value: p.reviewer?.userId ?? (reviewers.required ? reviewers.reviewers[0]?.value ?? '' : ''), options: [...(reviewers.required ? [] : [{ value: '', label: '– ohne benannte Person (PL und „Final setzen“) –' }]), ...reviewers.reviewers] }
+    ], submitLabel: 'Zur Prüfung geben' });
+    return v ? { reviewerUserId: v.reviewer || null } : null;
+  };
+  const reject = async () => {
+    const v = await dialog.form({ title: 'Prüfung zurückweisen', text: 'Die Seite geht auf „Entwurf“ zurück; der Kommentar geht an die verfassende Person.', fields: [{ key: 'comment', label: 'Was fehlt oder ist zu ändern?', required: true }], submitLabel: 'Zurückweisen', danger: true });
+    if (v) await setStatus('draft', { comment: v.comment });
+  };
   const changeStatus = async (status: string) => {
     if (status === p.status) return;
+    if (status === 'review') { const r = await askReviewer(); if (!r) return; await setStatus('review', r); return; }
     if (p.status === 'final') { const ok = await dialog.confirm({ title: 'Finale Seite wieder öffnen', text: 'Es entsteht eine neue Version; die Seite ist danach wieder bearbeitbar.', confirmLabel: 'Wieder öffnen' }); if (!ok) return; }
     if (status === 'final') { const ok = await dialog.confirm({ title: 'Final setzen', text: 'Die Seite wird gesperrt und kann als PDF an den Verteiler gehen. Später lässt sie sich wieder öffnen.', confirmLabel: 'Final setzen' }); if (!ok) return; }
     await setStatus(status);
@@ -165,18 +190,28 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const tplName = (k: string | null | undefined) => docs?.templates.find((t) => t.key === k)?.name ?? k ?? 'leer';
   return (
     <div className="doc-view">
-      <div className="row mb small muted">
-        <Link to={base}>Doku</Link><span>›</span>{folder && !isFolderPage && (folder.pageId ? <Link to={`${base}/${folder.pageId}`}>{folder.name}</Link> : <span>{folder.name}</span>)}{parent && <><span>›</span><Link to={`${base}/${parent.id}`}>{parent.title}</Link></>}{!isFolderPage && <span>›</span>}<span>{isFolderPage ? `Ordner ${p.title}` : p.title}</span>
-      </div>
+      <Breadcrumbs className="mb" items={[
+        { label: detail.project.name, to: `/projekte/${detail.project.id}/board` },
+        { label: 'Doku', to: base },
+        ...(folder && !isFolderPage ? [{ label: folder.name, to: folder.pageId ? `${base}/${folder.pageId}` : undefined }] : []),
+        ...ancestors(docs?.pages ?? [], p).map((x) => ({ label: x.title, to: `${base}/${x.id}` })),
+        { label: isFolderPage ? `Ordner ${p.title}` : p.title }
+      ]} />
       <div className="row mb doc-actions">
         <span className="muted small">Version {p.version} · {p.updatedByName} · {fmtDateTime(p.updatedAt)}</span>
         {me.role === 'reader' ? <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span> : (
-          <select className={`status-select ${p.status}`} value={p.status} disabled={busy} title="Status: Entwurf, In Prüfung (meldet sich bei der Projektleitung), Final (gesperrt, PDF-Versand)" onChange={(e) => void changeStatus(e.target.value)}>
+          <select className={`status-select ${p.status}`} value={p.status} disabled={busy} title="Status: Entwurf, In Prüfung (mit prüfender Person; ohne: PL und „Final setzen“), Final (gesperrt, PDF-Versand)" onChange={(e) => void changeStatus(e.target.value)}>
             <option value="draft">Entwurf</option>
             <option value="review">In Prüfung</option>
-            <option value="final" disabled={!canFinal}>Final</option>
+            <option value="final" disabled={!canFinal && !isReviewer}>Final</option>
           </select>
         )}
+        {p.status === 'review' && <span className="small review-who">{p.reviewer ? <>Prüfung: <strong>{p.reviewer.name ?? '?'}</strong></> : <span className="muted">Prüfung: PL und „Final setzen“</span>}
+          {me.role !== 'reader' && <button className="btn sm link" disabled={busy} title="Andere prüfende Person" onClick={() => void askReviewer().then((r) => { if (r) void setStatus('review', r); })}>ändern</button>}</span>}
+        {p.status === 'review' && (isReviewer || canFinal) && <>
+          <button className="btn sm primary" disabled={busy} title="Freigeben: Seite wird final (gesperrt, PDF-Versand)" onClick={() => void changeStatus('final')}>Freigeben</button>
+          <button className="btn sm" disabled={busy} onClick={() => void reject()}>Zurückweisen …</button>
+        </>}
         {s.kind && <span className="badge">{KIND_LABEL[s.kind]}</span>}
         <span className="right" />
         {edit ? <>
@@ -308,7 +343,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
   const { detail } = useProject();
   const [name, setName] = useState(existing?.name ?? '');
   const [list, setList] = useState(existing?.distributionList.join(', ') ?? '');
-  const [agentAccess, setAgentAccess] = useState<'write' | 'read' | 'none'>(existing?.agentAccess ?? 'write');
+  const [agentAccess, setAgentAccess] = useState<AgentFolderAccess>(existing?.agentAccess ?? 'write');
   const { busy, error, run } = useAsync();
   const dialog = useDialog();
   const nav = useNavigate();
@@ -318,7 +353,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Verteiler (Mail-Adressen, Komma)</span><input type="text" value={list} onChange={(e) => setList(e.target.value)} placeholder="gf@firma.de, kunde@extern.de" /></label>
         <p className="muted small">Finale Seiten dieses Ordners können als PDF an den Verteiler gesendet werden. Versand über das Projektkonto.</p>
-        <label className="field"><span>Zugriff der KI-Agenten</span><select value={agentAccess} onChange={(e) => setAgentAccess(e.target.value as 'write' | 'read' | 'none')}><option value="write">schreiben (Seiten anlegen, ändern, verschieben)</option><option value="read">nur lesen</option><option value="none">kein Zugriff (auch nicht im Kontext der Agenten)</option></select></label>
+        <label className="field"><span>Zugriff der KI-Agenten</span><select value={agentAccess} onChange={(e) => setAgentAccess(e.target.value as AgentFolderAccess)}>{AGENT_FOLDER_ACCESS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select></label>
         <p className="muted small">Gilt auch für Unterordner; die strengste Angabe entlang der Ordner gewinnt.</p>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !name} onClick={() => void run(async () => {

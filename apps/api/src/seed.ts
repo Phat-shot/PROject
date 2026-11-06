@@ -56,7 +56,7 @@ export async function seed(db: Db) {
 
   const cols: Record<string, string> = {};
   // Geplant, Wartet und Zurückgestellt als Gruppe „Nicht in Arbeit“: eine Board-Spalte mit drei Abschnitten
-  for (const [i, [name, kind, group]] of ([['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'active', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]] as const).entries()) {
+  for (const [i, [name, kind, group]] of ([['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'review', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]] as const).entries()) {
     const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind, group_name) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [web.id, name, i, kind === 'done', name === 'In Arbeit' ? 3 : null, kind, group]);
     cols[name] = c.id;
   }
@@ -251,7 +251,7 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
     md: `# Statusbericht KW 41
 
 ## Zusammenfassung
-Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
+Ampel: gelb – Agenturentscheidung steht aus, Wireframes im Plan.
 
 ## Fortschritt seit letztem Bericht
 - Personas abgeschlossen

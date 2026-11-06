@@ -34,7 +34,8 @@ export function mapPage(r: any): DocPage {
     updatedByName: r.updated_by_name ?? undefined,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
-    finalizedAt: r.finalized_at
+    finalizedAt: r.finalized_at,
+    reviewer: r.reviewer_user_id ? { userId: r.reviewer_user_id, name: r.reviewer_name ?? null } : null
   };
 }
 
@@ -83,7 +84,7 @@ export const BUILTIN_TEMPLATES: { key: string; name: string; contentMd: string }
 
 ## Zusammenfassung
 
-Ampel: 🟢
+Ampel: grün
 
 ## Fortschritt seit letztem Bericht
 

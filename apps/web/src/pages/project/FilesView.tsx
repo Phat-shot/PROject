@@ -5,6 +5,8 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Loading, Markdown, Modal } from '../../components/ui';
 import { IconAlert, IconCloud, IconDownload, IconFile, IconFolder, IconUp } from '../../components/icons';
+import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { useProjectOptional } from '../ProjectPage';
 
 type FileItem = Extract<FileEntry, { type: 'file' }>;
 
@@ -93,6 +95,7 @@ function SourceNote({ root }: { root: FileRoot }) {
  */
 export function FilesView({ projectId, base, bindingId, path, canManage }: { projectId: string; base: string; bindingId: string | null; path: string; canManage: boolean }) {
   const nav = useNavigate();
+  const project = useProjectOptional();
   const url = bindingId ? `/projects/${projectId}/files?binding=${encodeURIComponent(bindingId)}&path=${encodeURIComponent(path)}` : `/projects/${projectId}/files`;
   const d = useData<FileListing>(url, [url]);
   const [preview, setPreview] = useState<FileItem | null>(null);
@@ -115,10 +118,13 @@ export function FilesView({ projectId, base, bindingId, path, canManage }: { pro
   const segs = l.path.split('/').filter(Boolean);
   return (
     <div className="doc-view files-view">
-      <nav className="breadcrumb" aria-label="Pfad">
-        <Link to={`${base}/dateien`}>Dateien</Link> / <Link to={filesPath(base, root.bindingId)}>{root.label}</Link>
-        {segs.map((s, i) => <span key={i}> / {i === segs.length - 1 ? <strong>{s}</strong> : <Link to={filesPath(base, root.bindingId, '/' + segs.slice(0, i + 1).join('/'))}>{s}</Link>}</span>)}
-      </nav>
+      <Breadcrumbs label="Pfad" className="breadcrumb" items={[
+        ...(project ? [{ label: project.detail.project.name, to: `/projekte/${project.detail.project.id}/board` }] : []),
+        { label: 'Doku', to: base },
+        { label: 'Dateien', to: `${base}/dateien` },
+        { label: root.label, to: filesPath(base, root.bindingId) },
+        ...segs.map((x, i) => ({ label: x, to: filesPath(base, root.bindingId, '/' + segs.slice(0, i + 1).join('/')) }))
+      ]} />
       <h1>{segs.length ? segs[segs.length - 1] : root.label}</h1>
       <SourceNote root={root} />
       {l.entries.length === 0

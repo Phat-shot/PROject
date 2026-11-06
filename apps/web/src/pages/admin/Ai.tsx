@@ -7,7 +7,8 @@ import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { invalidateAi, useAiStatus } from '../../lib/useAi';
 import { AgentEditorModal, ScopeEditor, rightsSummary } from '../../components/AgentEditor';
-import { IconAlert } from '../../components/icons';
+import { IconAlert, IconThumbsDown, IconThumbsUp } from '../../components/icons';
+import { DateInput } from '../../components/DateInput';
 
 /**
  * Verwaltung › KI: ein Weg von oben nach unten. 1 LLM anlegen und für Projekte freigeben, 2 an jedem LLM seine Agenten anlegen
@@ -95,23 +96,23 @@ function FeedbackCard() {
     <div className="card" id="feedback">
       <div className="row between mb wrap gap-2"><h2 className="m-0">Feedback zu den Agenten</h2>
         <span className="row gap-1"><a className="btn sm" href={`/api/ai/feedback/export?format=jsonl${qs ? `&${qs}` : ''}`} download>Export JSONL</a><a className="btn sm" href={`/api/ai/feedback/export?format=csv${qs ? `&${qs}` : ''}`} download>Export CSV</a></span></div>
-      <p className="muted small">Jede Rückmeldung wird gesichert: 👍/👎 an Chat-Antworten und Läufen sowie automatisch Ablehnungen mit Grund, bearbeitete Vorschläge und Entwürfe (vorher/nachher), ersetzte Behauptungen, nicht ausgeführte Befehle und Fehler. Sichtbar nur hier; der Export (gefiltert) dient dazu, Prompt, KI-Sheet und Agenten zu verbessern.</p>
+      <p className="muted small">Jede Rückmeldung wird gesichert: Daumen hoch oder runter an Chat-Antworten und Läufen sowie automatisch Ablehnungen mit Grund, bearbeitete Vorschläge und Entwürfe (vorher/nachher), ersetzte Behauptungen, nicht ausgeführte Befehle und Fehler. Sichtbar nur hier; der Export (gefiltert) dient dazu, Prompt, KI-Sheet und Agenten zu verbessern.</p>
       {d.data && <div className="row small mb filterbar wrap gap-1">
-        {rating && <span className="badge">Bewertungen: 👍 {rating.up} · 👎 {rating.down}</span>}
+        {rating && <span className="badge">Bewertungen: <IconThumbsUp size={12} /><span className="sr-only">gut</span> {rating.up} · <IconThumbsDown size={12} /><span className="sr-only">schlecht</span> {rating.down}</span>}
         {AI_FEEDBACK_KINDS.filter((k) => k.key !== 'rating' && count(k.key)).map((k) => <button key={k.key} className={`chip ${f.kind === k.key ? 'on' : ''}`} onClick={() => setF({ ...f, kind: f.kind === k.key ? '' : k.key })}>{k.label}: {count(k.key)!.n}</button>)}
         {d.data.counts.length === 0 && <span className="muted">Noch kein Feedback.</span>}
       </div>}
       <div className="row small mb wrap gap-2">
         <select className="w-auto" aria-label="Art" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="">alle Arten</option>{AI_FEEDBACK_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
         <select className="w-auto" aria-label="Agent" value={f.agentId} onChange={(e) => setF({ ...f, agentId: e.target.value })}><option value="">alle Agenten</option>{(agents.data?.agents ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
-        <select className="w-auto" aria-label="Bewertung" value={f.rating} onChange={(e) => setF({ ...f, rating: e.target.value })}><option value="">alles</option><option value="down">nur Probleme (👎 und automatische)</option><option value="up">nur 👍</option></select>
-        <label className="row gap-1">von <input className="w-auto" type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></label>
-        <label className="row gap-1">bis <input className="w-auto" type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></label>
+        <select className="w-auto" aria-label="Bewertung" value={f.rating} onChange={(e) => setF({ ...f, rating: e.target.value })}><option value="">alles</option><option value="down">nur Probleme (Daumen runter und automatische)</option><option value="up">nur Daumen hoch</option></select>
+        <label className="row gap-1">von <DateInput className="w-auto" value={f.from} onChange={(v) => setF({ ...f, from: v })} /></label>
+        <label className="row gap-1">bis <DateInput className="w-auto" value={f.to} onChange={(v) => setF({ ...f, to: v })} /></label>
       </div>
       {d.data && (d.data.items.length === 0 ? <div className="empty">Kein Feedback{qs ? ' für diesen Filter' : ''}.</div> : <table className="table"><thead><tr><th>Zeit</th><th>Art</th><th>Agent</th><th>Projekt</th><th>Kommentar und Kontext</th></tr></thead><tbody>
         {d.data.items.map((x) => <tr key={x.id}>
           <td className="small nowrap">{fmtDateTime(x.updatedAt)}</td>
-          <td className="small">{x.kind === 'rating' ? (x.rating === 1 ? '👍' : '👎') : label(x.kind)}{x.user && <div className="muted">{x.user.name}</div>}</td>
+          <td className="small">{x.kind === 'rating' ? (x.rating === 1 ? <span title="Daumen hoch"><IconThumbsUp size={14} /><span className="sr-only">Daumen hoch</span></span> : <span title="Daumen runter"><IconThumbsDown size={14} /><span className="sr-only">Daumen runter</span></span>) : label(x.kind)}{x.user && <div className="muted">{x.user.name}</div>}</td>
           <td className="small">{x.agent?.name ?? '–'}</td>
           <td className="small">{x.project ?? '–'}</td>
           <td className="small">{x.comment && <div>„{x.comment}“</div>}{typeof x.context.reason === 'string' && x.context.reason !== x.comment && <div className="muted">{x.context.reason}</div>}{typeof x.context.detail === 'string' && <div className="muted">{x.context.detail}</div>}

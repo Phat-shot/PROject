@@ -3,11 +3,11 @@ import { Link } from 'react-router-dom';
 import type { Task } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, useAsync, useDialog } from '../../components/ui';
+import { IconButton, Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject, useProjectOptional } from '../ProjectPage';
 import { contactLabel } from '../../lib/useContacts';
 import type { ProjectContact } from '@projekttool/shared';
-import { IconX } from '../../components/icons';
+import { IconArrowDown, IconArrowUp, IconCheck, IconCircle, IconCircleDot, IconHourglass, IconMail, IconSkip, IconSquare, IconTimer, IconX } from '../../components/icons';
 
 export type StepType = 'task' | 'timer' | 'wait' | 'mail';
 export interface WorkflowStep {
@@ -22,7 +22,8 @@ export interface StepState { key: string; status: 'pending' | 'active' | 'done' 
 export interface WorkflowRun { id: string; defId: string | null; projectId: string; projectKey: string | null; projectName: string | null; projectKind: 'project' | 'workflow'; name: string; defName: string; steps: WorkflowStep[]; state: StepState[]; vars: Record<string, string>; status: 'active' | 'done' | 'cancelled'; currentStep: number; standalone: boolean; columnId: string | null; subprojectId: string | null; startedByName: string | null; startedAt: string; finishedAt: string | null; lastError: string | null; doneSteps: number; totalSteps: number; waitingOn: string | null }
 
 export const STEP_LABEL: Record<StepType, string> = { task: 'Arbeitspaket', timer: 'Timer', wait: 'Warten auf Ereignis', mail: 'Mail senden' };
-const STEP_ICON: Record<StepType, string> = { task: '☐', timer: '⏱', wait: '⏳', mail: '✉' };
+const STEP_ICON: Record<StepType, typeof IconSquare> = { task: IconSquare, timer: IconTimer, wait: IconHourglass, mail: IconMail };
+const STATUS_TEXT: Record<string, string> = { done: 'erledigt', skipped: 'übersprungen', active: 'läuft', pending: 'ausstehend' };
 
 export function stepSummary(s: WorkflowStep): string {
   if (s.type === 'task') return `${s.title} · ${s.responsible === 'starter' ? 'Starter' : s.responsible === 'user' ? 'Benutzer' : s.responsible === 'agent' ? 'KI-Agent' : s.responsible === 'email' ? s.responsibleEmail : s.responsible === 'previous' ? 'Zuständige des vorigen AP' : 'geerbt (PL)'}${s.dueDays != null ? ` · fällig +${s.dueDays} Tage` : ''}${s.waitForDone === false ? ' · ohne Warten' : ''}`;
@@ -79,9 +80,9 @@ export function RunDetail({ runId, backTo }: { runId: string; backTo: string }) 
           const task = st.taskId ? d.data!.tasks.find((t) => t.id === st.taskId) : null;
           return (
             <li key={s.key} className={`wf-step ${st.status} ${i === r.currentStep && r.status === 'active' ? 'current' : ''}`}>
-              <div className="wf-dot">{st.status === 'done' ? '✓' : st.status === 'skipped' ? '↷' : st.status === 'active' ? '●' : '○'}</div>
+              <div className="wf-dot" title={STATUS_TEXT[st.status] ?? st.status}>{st.status === 'done' ? <IconCheck size={12} /> : st.status === 'skipped' ? <IconSkip size={12} /> : st.status === 'active' ? <IconCircleDot size={12} /> : <IconCircle size={12} />}<span className="sr-only">{STATUS_TEXT[st.status] ?? st.status}</span></div>
               <div className="wf-body">
-                <div><span className="wf-icon">{STEP_ICON[s.type]}</span> <strong>{i + 1}. {s.title}</strong> <span className="muted small">{STEP_LABEL[s.type]}</span></div>
+                <div><span className="wf-icon">{(() => { const I = STEP_ICON[s.type]; return <I size={14} />; })()}</span> <strong>{i + 1}. {s.title}</strong> <span className="muted small">{STEP_LABEL[s.type]}</span></div>
                 <div className="small muted">{stepSummary(s)}</div>
                 {task && <div className="small"><button className="btn sm link" onClick={() => openTask(task.id)}><span className="badge tkey-badge">{detail.project.key}-{task.number}</span>{task.title}</button> <span className={`badge ${task.done ? 'ok' : ''}`}>{task.done ? 'erledigt' : detail.columns.find((c) => c.id === task.columnId)?.name ?? ''}</span>{task.responsible.name && <span className="muted"> · {task.responsible.name}</span>}</div>}
                 {st.status === 'active' && s.type === 'timer' && st.waitUntil && <div className="small">läuft bis {fmtDateTime(st.waitUntil)}</div>}
@@ -154,9 +155,9 @@ export function WorkflowEditor({ existing, members, agents = [], contacts, save:
                   <select value={s.type} onChange={(e) => upd(i, { ...newStep(e.target.value as StepType, i + 1), key: s.key, title: s.title })}>{(Object.keys(STEP_LABEL) as StepType[]).map((k) => <option key={k} value={k}>{STEP_LABEL[k]}</option>)}</select>
                 </div>
                 <div className="row gap-1">
-                  <button className="btn sm" title="Nach oben" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
-                  <button className="btn sm" title="Nach unten" disabled={i === steps.length - 1} onClick={() => move(i, 1)}>↓</button>
-                  <button className="btn sm link" title="Entfernen" disabled={steps.length === 1} onClick={() => setSteps((xs) => xs.filter((_, j) => j !== i))} aria-label="Entfernen"><IconX /></button>
+                  <IconButton size="sm" label="Nach oben" disabled={i === 0} onClick={() => move(i, -1)}><IconArrowUp /></IconButton>
+                  <IconButton size="sm" label="Nach unten" disabled={i === steps.length - 1} onClick={() => move(i, 1)}><IconArrowDown /></IconButton>
+                  <IconButton size="sm" variant="link" label="Entfernen" disabled={steps.length === 1} onClick={() => setSteps((xs) => xs.filter((_, j) => j !== i))}><IconX /></IconButton>
                 </div>
               </div>
               <label className="field"><span>{s.type === 'task' ? 'Titel des Arbeitspakets' : 'Bezeichnung'}</span><input type="text" value={s.title} onChange={(e) => upd(i, { title: e.target.value })} placeholder={s.type === 'task' ? 'z. B. Kickoff {{kunde}} vorbereiten' : ''} /></label>

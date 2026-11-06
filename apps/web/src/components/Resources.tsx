@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RESOURCE_KINDS, type Availability, type Group, type Resource, type ResourceBooking, type ResourceKind } from '@projekttool/shared';
 import { api, ApiError, fmtDate, fmtDateTime, today } from '../lib/api';
-import { Modal, useAsync, useDialog } from './ui';
+import { IconButton, Modal, useAsync, useDialog } from './ui';
 import { useData } from '../lib/useData';
-import { IconX } from './icons';
+import { IconChevronLeft, IconChevronRight, IconPlus, IconX } from './icons';
+import { DateInput } from './DateInput';
 
 /**
  * Ressourcen und Personen im Kalender (Konzept 10): Buchungsformular mit Verfügbarkeitsampel und Konfliktbehandlung (409 → vorläufig
@@ -89,7 +90,7 @@ export function BookingForm(p: BookingFormProps) {
           </select></label>}
         {p.target && <div className="field"><span>{'resourceId' in p.target ? 'Ressource' : 'Person'}</span><strong>{p.target.name}</strong></div>}
         <label className="check"><input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} /> ganztägig</label>
-        {allDay ? <div className="row"><label className="field"><span>Von</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><label className="field"><span>Bis (einschließlich)</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label></div>
+        {allDay ? <div className="row"><label className="field"><span>Von</span><DateInput value={startDate} onChange={(v) => setStartDate(v)} /></label><label className="field"><span>Bis (einschließlich)</span><DateInput value={dueDate} onChange={(v) => setDueDate(v)} /></label></div>
           : <div className="row"><label className="field"><span>Beginn</span><input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} /></label><label className="field"><span>Ende</span><input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} /></label></div>}
         {p.taskId && allDay && <label className="check" title="Die Belegung folgt Start und Termin des Arbeitspakets, wenn sie verschoben werden"><input type="checkbox" checked={followTask} onChange={(e) => setFollowTask(e.target.checked)} /> folgt dem Arbeitspaket</label>}
         <label className="field"><span>Titel</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={p.taskId ? 'leer = Titel des Arbeitspakets' : 'z. B. Fassade einrüsten'} /></label>
@@ -120,9 +121,9 @@ export function Occupancy({ bookings, rows, start, onPick, onBook }: { bookings:
   return (
     <div className="occupancy">
       <div className="row mb">
-        <button className="btn sm" onClick={() => setCursor(addDays(cursor, -7))}>‹</button>
+        <IconButton size="sm" label="Eine Woche zurück" onClick={() => setCursor(addDays(cursor, -7))}><IconChevronLeft /></IconButton>
         <strong>{fmtDate(iso(days[0]))} – {fmtDate(iso(days[13]))}</strong>
-        <button className="btn sm" onClick={() => setCursor(addDays(cursor, 7))}>›</button>
+        <IconButton size="sm" label="Eine Woche weiter" onClick={() => setCursor(addDays(cursor, 7))}><IconChevronRight /></IconButton>
         <button className="btn sm" onClick={() => { const d = new Date(); d.setHours(0, 0, 0, 0); setCursor(addDays(d, -((d.getDay() + 6) % 7))); }}>Heute</button>
         <span className="muted small">vorläufig gestrichelt · Konflikt rot · fremde Projekte nur „belegt“</span>
       </div>
@@ -131,7 +132,7 @@ export function Occupancy({ bookings, rows, start, onPick, onBook }: { bookings:
         {days.map((d) => <div key={iso(d)} className={`hd ${iso(d) === t ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'we' : ''}`}>{d.toLocaleDateString('de-DE', { weekday: 'short' })} {d.getDate()}.</div>)}
         {rows.length === 0 && <div className="empty" style={{ gridColumn: '1 / -1' }}>Keine Ressourcen oder Personen zum Anzeigen.</div>}
         {rows.map((r) => <>
-          <div key={`${r.key}-l`} className="rl"><span title={r.kind ? kindLabel(r.kind) : undefined}>{r.label}</span>{onBook && <button className="btn sm link" title="Buchen" onClick={() => onBook(r)}>+</button>}</div>
+          <div key={`${r.key}-l`} className="rl"><span title={r.kind ? kindLabel(r.kind) : undefined}>{r.label}</span>{onBook && <IconButton size="sm" variant="link" label={`${r.label} buchen`} onClick={() => onBook(r)}><IconPlus size={12} /></IconButton>}</div>
           {days.map((d) => { const k = iso(d); const bs = cell(r, k); return (
             <div key={`${r.key}-${k}`} className={`c ${k === t ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'we' : ''}`}>
               {bs.map((b) => <span key={b.id} className={`bk ${b.tentative ? 'tent' : ''} ${b.conflict ? 'conf' : ''} ${b.masked ? 'mask' : ''} ${b.kind}`} title={`${bookingTitle(b)} · ${spanText(b)}${b.projectKey ? ` · ${b.projectKey}` : ''}${b.tentative ? ' · vorläufig' : ''}${b.conflict ? ' · Konflikt' : ''}`} onClick={() => onPick?.(b)}>{b.allDay ? '' : `${new Date(b.startsAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} `}{bookingTitle(b)}</span>)}

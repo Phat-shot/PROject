@@ -10,6 +10,8 @@ export interface Waiting {
   tasks: { id: string; number: number; title: string; projectId: string; projectKey: string; blocked: boolean; escalationLevel: number }[];
   proposals?: { projectId: string; projectKey: string; count: number }[];
   mailSuggestions?: { mailId: string; subject: string; projectId: string; projectKey: string }[];
+  /** Arbeitspakete, für die die Person als prüfende Person benannt ist (Spalte „In Prüfung“) */
+  tasksInReview?: { id: string; number: number; title: string; projectId: string; projectKey: string }[];
 }
 export interface OpenForMe { questions: Question[]; waiting: Waiting | null; total: number; byProject: Record<string, number> }
 
@@ -18,7 +20,7 @@ export function openProjectIds(questions: Question[], w: Waiting | null): string
   return [
     ...questions.map((q) => q.projectId),
     ...(w?.proposals ?? []).map((x) => x.projectId), ...(w?.drafts ?? []).map((x) => x.projectId), ...(w?.mailSuggestions ?? []).map((x) => x.projectId),
-    ...(w?.tasks ?? []).map((x) => x.projectId), ...(w?.pagesInReview ?? []).map((x) => x.projectId)
+    ...(w?.tasks ?? []).map((x) => x.projectId), ...(w?.pagesInReview ?? []).map((x) => x.projectId), ...(w?.tasksInReview ?? []).map((x) => x.projectId)
   ];
 }
 

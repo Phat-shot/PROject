@@ -7,6 +7,7 @@ import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
 import { IconX } from '../../components/icons';
+import { DateInput } from '../../components/DateInput';
 
 const KIND_LABEL: Record<RaidKind, string> = { risk: 'Risiko', assumption: 'Annahme', issue: 'Issue', decision: 'Entscheidung' };
 const STATUS_LABEL = { open: 'offen', mitigated: 'in Behandlung', closed: 'geschlossen' } as const;
@@ -63,7 +64,7 @@ export function RaidView() {
                   <td>{x.score != null && <span className={`badge ${scoreClass(x.score) === 'high' ? 'danger' : scoreClass(x.score) === 'mid' ? 'warn' : 'ok'}`}>{x.score}</span>}</td>
                   <td><select className="inline-select" value={x.status} disabled={!canEdit} onChange={(e) => void patch(x, { status: e.target.value as RaidItem['status'] })}>{Object.entries(STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></td>
                   <td><select className="inline-select" value={x.ownerUserId ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { ownerUserId: e.target.value || null })}><option value="">–</option>{members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select></td>
-                  <td className="nowrap"><input type="date" className="inline-date" value={x.dueDate ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { dueDate: e.target.value || null })} /></td>
+                  <td className="nowrap"><DateInput className="inline-date" value={x.dueDate ?? ''} disabled={!canEdit} onChange={(v) => void patch(x, { dueDate: v || null })} /></td>
                   <td className="nowrap"><DetailButton item={x} canEdit={canEdit} onSave={(body) => patch(x, body)} />{me.role === 'pl' && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Eintrag löschen', text: `„${x.title}“ löschen? Zum Behalten der Historie besser auf „geschlossen“ setzen.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/raid/${x.id}`); await d.reload(); }); })} aria-label="Löschen"><IconX /></button>}</td>
                 </tr>
               ))}
@@ -98,7 +99,7 @@ function DetailButton({ item: x, canEdit, onSave }: { item: RaidItem; canEdit: b
           <div className="form">
             <label className="field"><span>Beschreibung</span><textarea value={f.description} readOnly={!canEdit} onChange={(e) => setF({ ...f, description: e.target.value })} /></label>
             <label className="field"><span>{x.kind === 'decision' ? 'Begründung und Konsequenzen' : x.kind === 'assumption' ? 'Wie wird die Annahme geprüft?' : 'Maßnahme'}</span><textarea value={f.mitigation} readOnly={!canEdit} onChange={(e) => setF({ ...f, mitigation: e.target.value })} /></label>
-            {x.kind === 'decision' && <label className="field"><span>Entschieden am</span><input type="date" value={f.decidedOn} readOnly={!canEdit} onChange={(e) => setF({ ...f, decidedOn: e.target.value })} /></label>}
+            {x.kind === 'decision' && <label className="field"><span>Entschieden am</span><DateInput value={f.decidedOn} disabled={!canEdit} onChange={(v) => setF({ ...f, decidedOn: v })} /></label>}
             <div className="muted small">Angelegt {fmtDate(x.createdAt.slice(0, 10))}, zuletzt geändert {fmtDate(x.updatedAt.slice(0, 10))}</div>
             {canEdit && <div className="row"><button className="btn sm primary" onClick={() => void onSave({ description: f.description || null, mitigation: f.mitigation || null, decidedOn: f.decidedOn || null }).then(() => setOpen(false))}>Speichern</button><button className="btn sm" onClick={() => setOpen(false)}>Abbrechen</button></div>}
           </div>
@@ -123,7 +124,7 @@ function CreateDialog({ kind, onClose, onCreated }: { kind: RaidKind; onClose: (
           <label className="field"><span>Auswirkung (1 gering … 5 hoch)</span><select value={f.impact} onChange={(e) => setF({ ...f, impact: e.target.value })}><option value="">–</option>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select></label>
         </>}
         <label className="field"><span>Verantwortlich</span><select value={f.ownerUserId} onChange={(e) => setF({ ...f, ownerUserId: e.target.value })}><option value="">–</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select></label>
-        <label className="field"><span>{kind === 'decision' ? 'Entschieden am' : 'Termin'}</span><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></label>
+        <label className="field"><span>{kind === 'decision' ? 'Entschieden am' : 'Termin'}</span><DateInput value={f.dueDate} onChange={(v) => setF({ ...f, dueDate: v })} /></label>
         <label className="field full"><span>{kind === 'decision' ? 'Begründung und Konsequenzen' : kind === 'assumption' ? 'Wie wird die Annahme geprüft?' : 'Maßnahme'}</span><textarea value={f.mitigation} onChange={(e) => setF({ ...f, mitigation: e.target.value })} /></label>
         <label className="field full"><span>Bezug zu Arbeitspaket (optional)</span><select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}><option value="">–</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{detail.project.key}-{t.number} {t.title}</option>)}</select></label>
         {error && <div className="error full">{error}</div>}

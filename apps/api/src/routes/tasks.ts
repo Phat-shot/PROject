@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import { syncTaskBookings } from '../resources/service.js';
-import type { TaskPriority } from '@projekttool/shared';
+import type { ImportField, TaskPriority } from '@projekttool/shared';
+import { importCsv } from '../tasks/importCsv.js';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
@@ -15,7 +16,9 @@ import type { Recurrence } from '../tasks/recurrence.js';
 import { dispatch } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
-import { convertApChecklist, demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
+import { enterTaskReview, leaveTaskReview } from '../tasks/review.js';
+import { setTaskMilestones, syncMilestonesOf } from '../tasks/milestones.js';
+import { convertApChecklist, demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, undoDemote, type StructureActor } from '../tasks/structure.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -46,6 +49,10 @@ interface TaskBody {
   autoComplete?: boolean | null;
   /** Alias für autoComplete an Aufgaben */
   autoDone?: boolean | null;
+  /** Meilensteine des Arbeitspakets (PL bzw. „Projektplan ändern“) */
+  milestoneIds?: string[];
+  /** Prüfende Person (Spalte der Art „In Prüfung“) */
+  reviewerUserId?: string | null;
 }
 
 export async function taskRoutes(app: FastifyInstance) {
@@ -58,6 +65,15 @@ export async function taskRoutes(app: FastifyInstance) {
     const archived = req.query.archived === '1';
     const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is null and t.archived_at is ${archived ? 'not' : ''} null and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
     return { tasks };
+  });
+
+  // CSV-Import von Arbeitspaketen, Aufgaben und Checklistenpunkten: Trockenlauf (dryRun) zeigt Fehler je Zeile, sonst alles in einer Transaktion
+  app.post<{ Params: { id: string }; Body: { csv: string; mapping?: ImportField[] | null; dryRun?: boolean } }>('/projects/:id/import', async (req) => {
+    const user = requireUser(req);
+    const m = await requireProject(db, user, req.params.id, 'member');
+    if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Importieren darf die PL oder wer „Projektplan ändern“ darf');
+    if (typeof req.body?.csv !== 'string' || !req.body.csv.trim()) throw badRequest('CSV-Inhalt fehlt');
+    return importCsv(db, { csv: req.body.csv, mapping: req.body.mapping ?? null, dryRun: req.body.dryRun !== false }, { projectId: req.params.id, user });
   });
 
   // Labels je Projekt
@@ -84,13 +100,16 @@ export async function taskRoutes(app: FastifyInstance) {
   });
 
   // Sortieren / Verschieben per Drag & Drop
-  app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null; wait?: { reason?: string; until?: string | null } } }>('/tasks/:id/move', async (req) => {
+  app.post<{ Params: { id: string }; Body: { columnId: string; index?: number | null; wait?: { reason?: string; until?: string | null }; review?: { reviewerUserId?: string | null } } }>('/tasks/:id/move', async (req) => {
     const user = requireUser(req);
     const { task: existing } = await requireTask(db, user, req.params.id, 'member');
     const col = await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2`, [req.body?.columnId, existing.project_id]);
     if (!col) throw badRequest('Spalte gehört nicht zum Projekt');
     const prevCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
-    await moveTask(db, existing.id, col.id, req.body?.index ?? null);
+    // „In Prüfung“: prüfende Person setzen (Pflicht mit „Prüfer erforderlich“), heraus: Prüfzustand endet
+    if (col.kind === 'review') await enterTaskReview(db, existing, prevCol, req.body?.review?.reviewerUserId ?? null, user);
+    else if (prevCol.kind === 'review' || existing.reviewer_user_id) await leaveTaskReview(db, existing.id);
+    await moveTask(db, existing.id, col.id, req.body?.index ?? null, user.id);
     // „Wartet“ von Hand: worauf und bis wann (Frist ohne Lösung → Zurückgestellt); heraus von Hand: Wartezustand endet
     if (col.kind === 'waiting') {
       const until = req.body?.wait?.until ? new Date(String(req.body.wait.until).length === 10 ? `${req.body.wait.until}T18:00:00` : String(req.body.wait.until)) : null;
@@ -107,6 +126,35 @@ export async function taskRoutes(app: FastifyInstance) {
       await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.move', objectType: 'task', objectId: existing.id, details: { from: prevCol.name, to: col.name } });
       if (col.is_done && !prevCol.is_done) await onTaskDone(existing, user);
     }
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  // Prüfung entscheiden: Freigeben (→ erste Erledigt-Spalte) oder Zurückweisen mit Kommentar (→ Spalte vor der Prüfung); Prüfer oder PL
+  app.post<{ Params: { id: string }; Body: { decision: 'approve' | 'reject'; comment?: string } }>('/tasks/:id/review', async (req) => {
+    const user = requireUser(req);
+    const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
+    const decision = req.body?.decision;
+    if (decision !== 'approve' && decision !== 'reject') throw badRequest('decision: approve oder reject');
+    const cur = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
+    if (cur.kind !== 'review') throw badRequest('Das Arbeitspaket ist nicht in Prüfung');
+    if (existing.reviewer_user_id !== user.id && m.role !== 'pl') throw forbidden('Freigeben oder zurückweisen darf die prüfende Person oder die PL');
+    const comment = String(req.body?.comment ?? '').trim();
+    if (decision === 'reject' && !comment) throw badRequest('Zurückweisen braucht einen Kommentar: was fehlt?');
+    const target = decision === 'approve'
+      ? await db.maybeOne(`select * from board_columns where project_id = $1 and is_done order by position limit 1`, [existing.project_id])
+      : (existing.review_return_column_id ? await db.maybeOne(`select * from board_columns where id = $1 and project_id = $2 and kind not in ('review', 'done')`, [existing.review_return_column_id, existing.project_id]) : null)
+        ?? await db.maybeOne(`select * from board_columns where project_id = $1 and kind = 'active' order by position limit 1`, [existing.project_id]);
+    if (!target) throw badRequest('Keine passende Zielspalte im Board');
+    await leaveTaskReview(db, existing.id);
+    await moveTask(db, existing.id, target.id, null, user.id);
+    await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [existing.id, user.id, decision === 'approve' ? `Prüfung freigegeben${comment ? `: ${comment}` : ''} (Status → ${target.name})` : `Prüfung zurückgewiesen: ${comment} (Status → ${target.name})`]);
+    await touchTask(db, existing.id);
+    await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: decision === 'approve' ? 'task.review_approve' : 'task.review_reject', objectType: 'task', objectId: existing.id, details: { to: target.name, comment: comment || null } });
+    const t = (await loadTask(db, existing.id))!;
+    if (t.responsible.userId && t.responsible.userId !== user.id) {
+      await dispatch(db, { event: 'info', projectId: existing.project_id, taskId: existing.id, users: [t.responsible.userId], type: 'task.review_result', title: `${decision === 'approve' ? 'Freigegeben' : 'Zurückgewiesen'}: ${existing.title}`, body: `${user.name}${comment ? `: ${comment.slice(0, 200)}` : ''}`, link: `/projekte/${existing.project_id}/board?task=${existing.id}`, ref: { type: 'task', id: existing.id }, actorId: user.id, logged: true });
+    }
+    if (decision === 'approve' && target.is_done) await onTaskDone(existing, user);
     return { task: await loadTask(db, existing.id) };
   });
 
@@ -173,7 +221,7 @@ export async function taskRoutes(app: FastifyInstance) {
   app.get('/my/waiting', async (req) => {
     const user = requireUser(req);
     const ms = await db.query(`select m.*, p.key, p.name from project_members m join projects p on p.id = m.project_id where m.user_id = $1 and p.status = 'active'`, [user.id]);
-    const drafts: any[] = []; const pages: any[] = []; const tasksOut: any[] = []; const proposals: any[] = []; const mailSuggestions: any[] = [];
+    const drafts: any[] = []; const pages: any[] = []; const tasksOut: any[] = []; const proposals: any[] = []; const mailSuggestions: any[] = []; const tasksInReview: any[] = [];
     for (const m of ms.rows) {
       // KI-Vorschläge zur Freigabe (PL oder Recht „Freigeben“) und offene Vorschläge der Mail-KI (PL, persönliche Konten: Eigentümer)
       if (m.role === 'pl' || m.can_approve) {
@@ -189,14 +237,18 @@ export async function taskRoutes(app: FastifyInstance) {
         const c = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [m.project_id]);
         if (c.c > 0) drafts.push({ projectId: m.project_id, projectKey: m.key, count: c.c });
       }
-      if (m.role === 'pl' || m.can_finalize) {
-        const r = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' and deleted_at is null order by updated_at desc limit 5`, [m.project_id]);
-        for (const p of r.rows) pages.push({ id: p.id, title: p.title, projectId: m.project_id, projectKey: m.key, updatedAt: p.updated_at });
+      // Seiten in Prüfung: mit benannter prüfender Person nur bei ihr, sonst bei PL und „Final setzen“
+      {
+        const r = await db.query(`select id, title, updated_at, reviewer_user_id from doc_pages where project_id = $1 and status = 'review' and deleted_at is null
+          and (reviewer_user_id = $2 or (reviewer_user_id is null and $3)) order by updated_at desc limit 5`, [m.project_id, user.id, m.role === 'pl' || m.can_finalize]);
+        for (const p of r.rows) pages.push({ id: p.id, title: p.title, projectId: m.project_id, projectKey: m.key, updatedAt: p.updated_at, mine: p.reviewer_user_id === user.id });
       }
+      const rv = await db.query(`select t.id, t.number, t.title from tasks t join board_columns c on c.id = t.column_id where t.project_id = $1 and t.reviewer_user_id = $2 and c.kind = 'review' and t.archived_at is null and t.deleted_at is null and ${visibleSubprojectSql(2)} order by t.updated_at desc limit 10`, [m.project_id, user.id]);
+      for (const t of rv.rows) tasksInReview.push({ id: t.id, number: t.number, title: t.title, projectId: m.project_id, projectKey: m.key });
       const esc = await loadTasks(db, `t.project_id = $1 and t.archived_at is null and (t.blocked or t.escalation_level > 0)`, [m.project_id]);
       for (const t of esc) if (!t.done && (m.role === 'pl' || t.responsible.userId === user.id)) tasksOut.push({ id: t.id, number: t.number, title: t.title, projectId: t.projectId, projectKey: m.key, blocked: t.blocked, escalationLevel: t.escalationLevel });
     }
-    return { drafts, pagesInReview: pages, tasks: tasksOut, proposals, mailSuggestions };
+    return { drafts, pagesInReview: pages, tasks: tasksOut, proposals, mailSuggestions, tasksInReview };
   });
 
   // Meine Arbeit: Projekte, Teilprojekte, Arbeitspakete und Tasks, geklammert nach Hierarchie; nur eigene bzw. geerbte Zuständigkeit (Filter im Client)
@@ -317,6 +369,17 @@ export async function taskRoutes(app: FastifyInstance) {
       throw forbidden('Termine ändern erfordert das Recht „Projektplan ändern“ oder die Zuständigkeit für die Arbeitspaket');
     }
     if ('externalBrief' in b && m.role !== 'pl' && !m.canEditPlan) throw forbidden('Die Außenbeschreibung pflegt die PL oder wer „Projektplan ändern“ darf');
+    if ('milestoneIds' in b && m.role !== 'pl' && !m.canEditPlan) throw forbidden('Meilensteine verknüpft die PL oder wer „Projektplan ändern“ darf');
+    if ('milestoneIds' in b) await setTaskMilestones(db, existing.id, existing.project_id, b.milestoneIds);
+    // Prüfung: Wechsel in eine Prüfspalte (oder anderer Prüfer in der Prüfspalte) vor dem Speichern prüfen
+    const curCol = await db.one(`select * from board_columns where id = $1`, [existing.column_id]);
+    const nextCol = b.columnId && b.columnId !== existing.column_id ? await db.one(`select * from board_columns where id = $1`, [b.columnId]) : null;
+    if (nextCol?.kind === 'review') await enterTaskReview(db, existing, curCol, b.reviewerUserId ?? null, user);
+    else if (nextCol && (curCol.kind === 'review' || existing.reviewer_user_id)) await leaveTaskReview(db, existing.id);
+    else if (!nextCol && 'reviewerUserId' in b) {
+      if (curCol.kind !== 'review') throw badRequest('Prüfer gibt es nur in einer Spalte der Art „In Prüfung“');
+      await enterTaskReview(db, existing, curCol, b.reviewerUserId ?? null, user);
+    }
     await db.query(
       `update tasks set
          title = coalesce($2, title),
@@ -347,6 +410,7 @@ export async function taskRoutes(app: FastifyInstance) {
     if ('autoComplete' in b) await db.query(`update tasks set auto_complete = $2 where id = $1`, [req.params.id, b.autoComplete == null ? null : Boolean(b.autoComplete)]);
     // Statuswechsel von Hand: nicht mehr „von der Automatik erledigt“
     if (b.columnId && b.columnId !== existing.column_id) await db.query(`update tasks set auto_done_at = null, auto_done_from_column_id = null where id = $1`, [req.params.id]);
+    if (b.columnId && b.columnId !== existing.column_id) await syncMilestonesOf(db, req.params.id, user.id);
     if ('externalBrief' in b) await db.query(`update tasks set external_brief = $2 where id = $1`, [req.params.id, String(b.externalBrief ?? '').trim().slice(0, 4000) || null]);
     if ('blocked' in b && Boolean(b.blocked) !== existing.blocked) {
       await db.query(`update tasks set blocked = $2, blocked_reason = $3, blocked_at = case when $2 then now() else null end where id = $1`, [req.params.id, Boolean(b.blocked), b.blocked ? b.blockedReason?.trim() || null : null]);
@@ -370,6 +434,7 @@ export async function taskRoutes(app: FastifyInstance) {
     }
     const changed: Record<string, unknown> = {};
     for (const k of Object.keys(b)) if (k !== 'sourceMailId' && k !== 'note') changed[k] = (b as any)[k];
+    delete b.milestoneIds; delete b.reviewerUserId;
     if (b.sourceMailId) {
       // Arbeitspaket anpassen mit Mail als Beleg: verknüpfen und Änderung im Log festhalten.
       const mail = await db.maybeOne(`select id, subject, from_addr, date from mails where id = $1`, [b.sourceMailId]);
@@ -412,7 +477,10 @@ export async function taskRoutes(app: FastifyInstance) {
     if (existing.deleted_at) {
       // Aufgaben, die mit dem Arbeitspaket in den Papierkorb gingen, kommen mit zurück
       await db.query(`update tasks set deleted_at = null, archived_at = case when deleted_was_archived then archived_at else null end, deleted_was_archived = false, updated_at = now() where id = $1 or (parent_id = $1 and deleted_at = $2)`, [existing.id, existing.deleted_at]);
-      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.restore', objectType: 'task', objectId: existing.id, details: { title: existing.title } });
+      // War die Aufgabe zum Checklistenpunkt gemacht worden: Punkt entfernen, Mitgewandertes zurück (Rückgängig der Umwandlung)
+      const undone = existing.demoted ? await undoDemote(db, actorOf(user), existing.id) : null;
+      if (undone?.targetId) await syncChecklistDone(db, app.mail, undone.targetId, user);
+      await audit(db, { orgId: user.orgId, projectId: existing.project_id, userId: user.id, action: 'task.restore', objectType: 'task', objectId: existing.id, details: { title: existing.title, undemote: Boolean(undone) } });
     }
     return { task: await loadTask(db, existing.id) };
   });
@@ -425,7 +493,10 @@ export async function taskRoutes(app: FastifyInstance) {
     // Aufgaben, deren Arbeitspaket selbst im Papierkorb liegt, kommen mit diesem zurück und stehen nicht einzeln da
     const tasks = await loadTasks(db, `t.project_id = $1 and t.deleted_at is not null and (pt.id is null or pt.deleted_at is null) and ${visibleSubprojectSql(2)}`, [req.params.id, user.id], lead);
     const pages = await db.query(`select id, title, status, deleted_at, folder_id from doc_pages where project_id = $1 and deleted_at is not null order by deleted_at desc`, [req.params.id]);
-    return { tasks, pages: pages.rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, deletedAt: p.deleted_at, folderId: p.folder_id })), purgeAfterDays: 30 };
+    // Aufgaben, die zum Checklistenpunkt wurden: Ziel-Aufgabe nennen (Wiederherstellen entfernt den Punkt dort)
+    const dem = tasks.length ? (await db.query(`select t.id, x.number, x.title from tasks t left join tasks x on x.id = (t.demoted->>'targetId')::uuid where t.id = any($1::uuid[]) and t.demoted is not null`, [tasks.map((x: any) => x.id)])).rows : [];
+    const demoted = Object.fromEntries(dem.map((r: any) => [r.id, { number: r.number ?? null, title: r.title ?? null }]));
+    return { tasks, pages: pages.rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, deletedAt: p.deleted_at, folderId: p.folder_id })), purgeAfterDays: 30, demoted };
   });
 
   // W7: Nachfolger verschieben – Vorschau und Ausführung
@@ -592,7 +663,8 @@ export async function taskRoutes(app: FastifyInstance) {
     const r = await demoteTask(db, actorOf(user), existing.id, req.body?.toTaskId ?? null);
     await syncChecklistDone(db, app.mail, r.targetId, user);
     if (user.kind !== 'agent') queueAgentRun(r.apId, 'task_changed');
-    return { task: await loadTask(db, r.targetId), ap: await loadTask(db, r.apId), itemId: r.itemId };
+    // Die Aufgabe liegt im Papierkorb: trashedId für „Rückgängig“ (POST /tasks/:id/restore)
+    return { task: await loadTask(db, r.targetId), ap: await loadTask(db, r.apId), itemId: r.itemId, trashedId: existing.id };
   });
 
   // Checklistenpunkt an ein anderes Arbeitspaket oder eine andere Aufgabe

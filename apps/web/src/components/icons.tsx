@@ -6,7 +6,8 @@ import type { ComponentType, SVGProps } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Cloud, Copy, Archive, CornerLeftUp, Download, FileText, Folder, Bell, Check, CheckSquare, ChevronDown, ChevronRight, ChevronUp, Circle, Clock, CornerDownLeft,
   Diamond, Hourglass, Link2, Lock, LockOpen, Mail, Menu, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, RotateCw, Scissors, Search, Settings, Star,
-  ThumbsDown, ThumbsUp, Trash2, X
+  ThumbsDown, ThumbsUp, Trash2, X, Calendar, ChevronLeft, Upload,
+  Play, RectangleHorizontal, Quote, Table, Image, Undo2, Redo2, SkipForward, Timer, ListChecks, CornerDownRight, ExternalLink, ChevronsLeft, CircleDot, CircleCheck, CircleX, CircleDashed, Square, Ban, Minus
 } from 'lucide-react';
 
 type Props = SVGProps<SVGSVGElement> & { size?: number };
@@ -57,3 +58,26 @@ export const IconFolder = wrap(Folder);
 export const IconFile = wrap(FileText);
 export const IconDownload = wrap(Download);
 export const IconUp = wrap(CornerLeftUp);
+export const IconCalendar = wrap(Calendar);
+export const IconChevronLeft = wrap(ChevronLeft);
+export const IconUpload = wrap(Upload);
+export const IconPlay = wrap(Play);
+export const IconBooking = wrap(RectangleHorizontal);
+export const IconQuote = wrap(Quote);
+export const IconTable = wrap(Table);
+export const IconImage = wrap(Image);
+export const IconUndo = wrap(Undo2);
+export const IconRedo = wrap(Redo2);
+export const IconSkip = wrap(SkipForward);
+export const IconTimer = wrap(Timer);
+export const IconChecklist = wrap(ListChecks);
+export const IconSubitem = wrap(CornerDownRight);
+export const IconExternal = wrap(ExternalLink);
+export const IconCollapse = wrap(ChevronsLeft);
+export const IconCircleDot = wrap(CircleDot);
+export const IconCircleCheck = wrap(CircleCheck);
+export const IconCircleX = wrap(CircleX);
+export const IconPending = wrap(CircleDashed);
+export const IconSquare = wrap(Square);
+export const IconBan = wrap(Ban);
+export const IconRule = wrap(Minus);

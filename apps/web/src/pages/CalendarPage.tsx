@@ -6,6 +6,7 @@ import { Occupancy, bookingTitle } from '../components/Resources';
 import { useData } from '../lib/useData';
 import { TopBar } from '../components/Layout';
 import { Calendar, type CalItem } from '../components/Calendar';
+import { IconBooking } from '../components/icons';
 
 interface CalMilestone { id: string; name: string; date: string; projectId: string; projectKey: string }
 interface CalMeeting { id: string; title: string; startsAt: string; endsAt: string; projectId: string; projectKey: string; tentative?: boolean }
@@ -37,7 +38,7 @@ export function CalendarPage() {
       <TopBar title="Kalender" />
       <div className="content">
         {(tasks.error || ms.error) && <div className="error mb">{tasks.error ?? ms.error}</div>}
-        <Calendar items={items} hint="Alle Projekte: offene Arbeitspakete mit Termin, Meilensteine, Besprechungen und eigene Belegungen (▭)." occupancy={occupancy} initialMode={params.get('ansicht') === 'belegung' ? 'occupancy' : null} />
+        <Calendar items={items} hint={<>Alle Projekte: offene Arbeitspakete mit Termin, Meilensteine, Besprechungen und eigene Belegungen (<IconBooking size={12} />).</>} occupancy={occupancy} initialMode={params.get('ansicht') === 'belegung' ? 'occupancy' : null} />
       </div>
     </>
   );

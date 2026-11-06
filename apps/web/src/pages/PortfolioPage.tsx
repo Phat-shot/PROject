@@ -8,6 +8,7 @@ import { useData } from '../lib/useData';
 import { Button, Modal, SafeHtml, useAsync } from '../components/ui';
 import { reportQuery } from '../components/ReportBlocks';
 import { IconArrowUpRight, IconDiamond } from '../components/icons';
+import { DateInput } from '../components/DateInput';
 
 interface Row {
   id: string; key: string; name: string; description: string | null; myRole: string; leadName: string | null;
@@ -114,7 +115,7 @@ function TimeAcrossProjects({ projectId }: { projectId: string | null }) {
       <div className="card">
         <h2>Zeiten über Projekte <span className="muted small fw-400">{fmtDate(t.from)} – {fmtDate(t.to)} · {hours(t.total)}</span></h2>
         <div className="row small">
-          <span className="muted">Zeitraum</span><input className="w-auto" type="date" value={range.from || t.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input className="w-auto" type="date" value={range.to || t.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          <span className="muted">Zeitraum</span><DateInput className="w-auto" value={range.from || t.from} onChange={(v) => setRange({ ...range, from: v })} /><DateInput className="w-auto" value={range.to || t.to} onChange={(v) => setRange({ ...range, to: v })} />
           <button className="btn sm" onClick={() => downloadCsv(`zeiten_projekte_${t.from}_${t.to}.csv`, ['Projekt', 'Person', 'Minuten'], t.projects.flatMap((p) => p.people.map((x) => [p.key, x.name, x.minutes])))}>CSV</button>
         </div>
         {t.projects.length === 0 && <div className="muted small mt">Keine Buchungen im Zeitraum.</div>}

@@ -53,6 +53,8 @@ describe('Projekt › Einstellungen › Dateien', () => {
     const link = await screen.findByRole('link', { name: 'Projektordner' });
     expect(link).toHaveAttribute('href', '/projekte/p1/doku/dateien/b1');
     expect(within(link.closest('tr') as HTMLElement).getAllByRole('cell')[3]).toHaveTextContent(/^7$/);
+    // Badge „KI: an/aus“ je Einbindung (Schalter unter Einstellungen › KI)
+    expect(within(link.closest('tr') as HTMLElement).getByRole('link', { name: 'KI: an' })).toHaveAttribute('href', '/projekte/p1/einstellungen/ki');
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 

@@ -47,7 +47,7 @@ const OPEN_KINDS = ['backlog', 'waiting', 'parked'];
 export function ColumnsForm({ onClose }: { onClose: () => void }) {
   const { detail, reload, reloadTasks } = useProject();
   const [cols, setCols] = useState(detail.columns.map((c) => ({ id: c.id as string | undefined, name: c.name, isDone: c.isDone, kind: c.kind, wipLimit: c.wipLimit, group: c.group ?? null })));
-  const KIND: Record<string, string> = { backlog: 'Geplant (noch nicht aktiv)', active: 'In Bearbeitung', waiting: 'Wartet (mit Frist, danach Zurückgestellt)', parked: 'Zurückgestellt (ruht)', done: 'Erledigt' };
+  const KIND: Record<string, string> = { backlog: 'Geplant (noch nicht aktiv)', active: 'In Bearbeitung', review: 'In Prüfung (mit prüfender Person)', waiting: 'Wartet (mit Frist, danach Zurückgestellt)', parked: 'Zurückgestellt (ruht)', done: 'Erledigt' };
   const { busy, error, run } = useAsync();
   const names = groupNames(cols);
   const canMerge = cols.some((c) => OPEN_KINDS.includes(c.kind) && c.group !== OPEN_GROUP);
@@ -103,10 +103,12 @@ export function PlanningTab() {
       <SettingsCard title="Teilprojekte" hint="Klick öffnet die Maske: Verantwortung (sonst die PL), Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine und Arbeitspakete. Auch über den Kopf der Swimlane im Board und die Zeile im Plan.">
         <SubprojectList />
       </SettingsCard>
-      <SettingsCard title="Meilensteine" hint="Nach Datum; mit Teilprojekt auch in dessen Maske.">
+      <SettingsCard title="Meilensteine" hint="Nach Datum; mit Teilprojekt auch in dessen Maske. Verknüpfte Arbeitspakete: sind alle erledigt, schlägt der Meilenstein „erreicht“ vor und die PL bestätigt.">
+        <ProjectSwitch field="milestoneAutoReach" label="Meilenstein automatisch erreichen, wenn alle verknüpften Arbeitspakete erledigt sind" hint="sonst Vorschlag an die PL, die im Plan bestätigt" />
         <MilestoneList />
       </SettingsCard>
       <SettingsCard title="Board" action={isPl && <button className="btn sm" onClick={() => setColumns(true)}>Spalten bearbeiten</button>}>
+        <ProjectSwitch field="reviewRequired" label="Prüfer erforderlich" hint="beim Wechsel in „In Prüfung“ (Spaltenart) und bei Doku-Seiten muss eine prüfende Person gewählt werden" />
         <div className="row mb gap-2">{detail.columns.map((c) => <span key={c.id} className="badge" title={`${c.kind}${c.group ? ` · Gruppe ${c.group}` : ''}`}>{c.group ? `${c.group} › ` : ''}{c.name}{c.wipLimit != null ? ` · WIP ${c.wipLimit}` : ''}</span>)}</div>
         <h3>Labels</h3>
         {!isPl && <ReadOnlyNote who="PL (anlegen dürfen alle Mitglieder im Board)" />}
@@ -117,5 +119,18 @@ export function PlanningTab() {
         <ResourcesTable projectId={detail.project.id} canEdit={detail.project.myMembership.role !== 'reader'} canDelete={isPl} />
       </SettingsCard>
     </>
+  );
+}
+
+/** Schalter einer Projekteinstellung (PL), speichert sofort. */
+function ProjectSwitch({ field, label, hint }: { field: 'milestoneAutoReach' | 'reviewRequired'; label: string; hint?: string }) {
+  const { detail, reload } = useProject();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const { busy, error, run } = useAsync({ toast: true });
+  return (
+    <div className="mb">
+      <label className="check"><input type="checkbox" checked={Boolean(detail.project[field])} disabled={!isPl || busy} onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { [field]: e.target.checked }); await reload(); })} /> {label}{hint && <span className="muted small"> ({hint})</span>}</label>
+      {error && <div className="error small">{error}</div>}
+    </div>
   );
 }

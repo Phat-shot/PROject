@@ -546,11 +546,11 @@ test('Spaltengruppen: Standard gruppiert Geplant, Wartet und Zurückgestellt als
   // Demoprojekt und neues Projekt ohne Vorlage: Gruppe „Nicht in Arbeit“ an den drei Arten, sonst keine
   for (const id of [t.ids.projects.web, (await t.api(pl).post('/projects', { key: 'GRP', name: 'Gruppen' })).json().project.id]) {
     const cols = (await t.api(pl).get(`/projects/${id}`)).json().columns;
-    assert.deepEqual(cols.map((c: any) => [c.kind, c.group]), [['backlog', 'Nicht in Arbeit'], ['active', null], ['active', null], ['active', null], ['waiting', 'Nicht in Arbeit'], ['parked', 'Nicht in Arbeit'], ['done', null]]);
+    assert.deepEqual(cols.map((c: any) => [c.kind, c.group]), [['backlog', 'Nicht in Arbeit'], ['active', null], ['active', null], ['review', null], ['waiting', 'Nicht in Arbeit'], ['parked', 'Nicht in Arbeit'], ['done', null]]);
   }
   const p = (await t.api(pl).post('/projects', { key: 'GRP2', name: 'Gruppen 2' })).json().project;
   const cols = (await t.api(pl).get(`/projects/${p.id}`)).json().columns;
-  const body = cols.map((c: any) => ({ id: c.id, name: c.name, kind: c.kind, wipLimit: c.wipLimit, group: c.kind === 'active' ? ' Arbeit ' : c.kind === 'done' ? '' : null }));
+  const body = cols.map((c: any) => ({ id: c.id, name: c.name, kind: c.kind, wipLimit: c.wipLimit, group: c.kind === 'active' || c.kind === 'review' ? ' Arbeit ' : c.kind === 'done' ? '' : null }));
   body.push({ name: 'Später', kind: 'backlog', wipLimit: null, group: 'Nicht in Arbeit' });
   const r = await t.api(pl).put(`/projects/${p.id}/columns`, { columns: body });
   assert.equal(r.statusCode, 200, r.body);

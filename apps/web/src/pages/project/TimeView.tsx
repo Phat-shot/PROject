@@ -5,6 +5,7 @@ import { useData } from '../../lib/useData';
 import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { IconX } from '../../components/icons';
+import { DateInput } from '../../components/DateInput';
 
 interface TimeData {
   enabled: boolean;
@@ -67,7 +68,7 @@ export function TimeView() {
           <h3>Zeit buchen</h3>
           <div className="row">
             <select className="w-280" value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}><option value="">– ohne Arbeitspaket –</option>{tasks.filter((t) => !t.done).map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select>
-            <input className="w-150" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+            <DateInput className="w-150" value={f.date} onChange={(v) => setF({ ...f, date: v })} />
             <input className="w-70" type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
             <input className="w-70" type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} />
             <input className="grow" type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
@@ -79,9 +80,9 @@ export function TimeView() {
       <div className="card">
         <div className="row mb">
           <h3 className="m-0">Buchungen</h3>
-          <input className="w-150" type="date" value={range.from} onChange={(e) => setRange({ ...range, from: e.target.value })} />
+          <DateInput className="w-150" value={range.from} onChange={(v) => setRange({ ...range, from: v })} />
           <span className="muted">bis</span>
-          <input className="w-150" type="date" value={range.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          <DateInput className="w-150" value={range.to} onChange={(v) => setRange({ ...range, to: v })} />
           {me.role === 'pl' && <select className="w-auto" value={range.userId} onChange={(e) => setRange({ ...range, userId: e.target.value })}><option value="">Alle Personen</option>{detail.members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select>}
           <button className="btn sm right" onClick={csv}>CSV-Export</button>
         </div>

@@ -409,7 +409,7 @@ export interface BoardColumn {
   position: number;
   isDone: boolean;
   /** backlog = Geplant, active = in Bearbeitung, parked = Zurückgestellt, done = Erledigt */
-  kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done';
+  kind: 'backlog' | 'active' | 'review' | 'waiting' | 'parked' | 'done';
   wipLimit: number | null;
   /** Spaltengruppe: Spalten mit gleichem Namen erscheinen im Board als eine Spalte mit Abschnitten untereinander */
   group: string | null;
@@ -1259,7 +1259,7 @@ export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label:
 export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** Freigabe für persönliche Projekte: none (Standard), all, users (personalUserIds); personalScope = (personalUse === 'all') bleibt lesend für ältere Oberflächen */ personalUse?: PersonalUse; personalUserIds?: string[]; personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
-export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
+export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (Daumen hoch 1, Daumen runter -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
 
 /** Dateiquelle (Nextcloud-Freigabelink oder WebDAV-Konto, nur lesend); Geheimnis nie, nur hasSecret. */
 export type FileSourceKind = 'nextcloud_share' | 'webdav';
@@ -1277,10 +1277,10 @@ export interface FileSource {
   active: boolean; lastSyncAt: string | null; lastError: string | null;
   lastStats: FileSyncStats | null; files: number; bindings: FileSourceBindingRef[]; createdAt: string;
 }
-export interface FileSyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; truncated: boolean; error?: string | null }
+export interface FileSyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; /** Dateien mit Texterkennung (OCR) in diesem Lauf */ ocr?: number; truncated: boolean; error?: string | null }
 /** Org-Quelle aus Sicht der PL (ohne Adresse und Zugangsdaten) */
 export interface FileSourceAvailable { id: string; name: string; kind: FileSourceKind; scope: 'org' | 'project'; rootPath: string; lastSyncAt: string | null; lastError: string | null; /** nicht gelöschte Dateien der Quelle */ files: number }
-export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean; /** nicht gelöschte Dateien unter dem Unterordner der Einbindung */ files: number }
+export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean; /** nicht gelöschte Dateien unter dem Unterordner der Einbindung */ files: number; /** Schalter „für KI-Agenten“ (Quellen für den Agenten) */ agentEnabled: boolean }
 export interface FileRoot { bindingId: string; sourceId: string; label: string; sourceName: string; kind: FileSourceKind; scope: 'org' | 'project'; subPath: string | null; lastSyncAt: string | null; lastError: string | null }
 export type FileEntry =
   | { type: 'folder'; name: string; path: string; bindingId: string; /** Dateien darunter (rekursiv) */ files?: number }
@@ -1289,3 +1289,96 @@ export type FileEntry =
 export interface FileListing { binding: FileRoot | null; path: string; parent: string | null; roots: FileRoot[]; entries: FileEntry[] }
 /** GET /files/:id/text */
 export interface FileText { id: string; name: string; path: string; projectId: string; bindingId: string; displayPath: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; textNote: string | null; text: string | null }
+/** Projekt › Einstellungen › KI › Quellen für den Agenten: was KI-Agenten durchsuchen und lesen dürfen (Menschen sehen alles). */
+/** Zugriff der KI-Agenten auf einen Doku-Ordner (eine Quelle der Wahrheit: Doku › Ordner und Einstellungen › KI › Quellen für den Agenten) */
+export type AgentFolderAccess = 'write' | 'read' | 'none';
+export const AGENT_FOLDER_ACCESS: { key: AgentFolderAccess; label: string }[] = [
+  { key: 'write', label: 'schreiben (Seiten anlegen, ändern, verschieben)' },
+  { key: 'read', label: 'nur lesen' },
+  { key: 'none', label: 'kein Zugriff (auch nicht im Kontext der Agenten)' }
+];
+export interface AgentSourceFolder { id: string; name: string; parentId: string | null; depth: number; pages: number; /** Agent-Zugriff des Ordners (derselbe Wert wie in der Doku) */ agentAccess: AgentFolderAccess; /** durch einen übergeordneten Ordner mit „kein Zugriff“ ausgeschlossen */ inheritedOff: boolean }
+export interface AgentSourceBinding { id: string; label: string; sourceName: string; subPath: string | null; active: boolean; files: number; agentEnabled: boolean }
+export interface AgentSources { canEdit: boolean; folders: AgentSourceFolder[]; bindings: AgentSourceBinding[]; mails: { enabled: boolean; views: number } }
+export interface AgentSourcesPatch { folders?: { id: string; agentAccess: AgentFolderAccess }[]; bindings?: { id: string; agentEnabled: boolean }[]; mails?: boolean }
+
+/* ---- Meilensteine mit Status und Bezug zu Arbeitspaketen; benannte Prüfung; CSV-Import ---- */
+
+/** Meilenstein: offen oder erreicht (wann, durch wen); verknüpfte Arbeitspakete (n:m) */
+export interface Milestone {
+  id: string;
+  projectId: string;
+  subprojectId: string | null;
+  name: string;
+  date: string;
+  /** erreicht am (ISO-Zeitpunkt); null = offen */
+  reachedAt?: string | null;
+  reachedBy?: { userId: string; name: string | null } | null;
+  /** alle verknüpften Arbeitspakete erledigt, PL wurde gefragt (noch nicht bestätigt) */
+  reachSuggestedAt?: string | null;
+  taskIds?: string[];
+  /** verknüpfte Arbeitspakete: erledigt / gesamt */
+  tasksDone?: number;
+  tasksTotal?: number;
+}
+export type MilestoneStatus = 'open' | 'reached';
+/** Status eines Meilensteins: erreicht, überfällig (Datum vorbei, nicht erreicht), bereit (alle APs erledigt), offen */
+export function milestoneState(m: Pick<Milestone, 'reachedAt' | 'date' | 'tasksDone' | 'tasksTotal'>, today: string): 'reached' | 'ready' | 'overdue' | 'open' {
+  if (m.reachedAt) return 'reached';
+  if ((m.tasksTotal ?? 0) > 0 && m.tasksDone === m.tasksTotal) return 'ready';
+  if (m.date < today) return 'overdue';
+  return 'open';
+}
+
+export interface Task {
+  /** Meilensteine, zu denen das Arbeitspaket gehört */
+  milestoneIds?: string[];
+  /** Benannte prüfende Person (Spalte der Art „In Prüfung“) */
+  reviewer?: { userId: string; name: string | null } | null;
+}
+export interface DocPage {
+  /** Benannte prüfende Person, solange die Seite „In Prüfung“ ist */
+  reviewer?: { userId: string; name: string | null } | null;
+}
+export interface Project {
+  /** Meilenstein automatisch erreichen, wenn alle verknüpften Arbeitspakete erledigt sind (sonst Vorschlag an die PL) */
+  milestoneAutoReach?: boolean;
+  /** Prüfer beim Wechsel in „In Prüfung“ Pflicht (Arbeitspakete und Doku-Seiten) */
+  reviewRequired?: boolean;
+}
+
+/** CSV-Import von Arbeitspaketen, Aufgaben und Checklistenpunkten (Projekt › Einstellungen › Daten) */
+export type ImportField = 'kind' | 'key' | 'title' | 'description' | 'subproject' | 'responsible' | 'start' | 'due' | 'priority' | 'labels' | 'parent' | 'level' | 'status' | 'ignore';
+export const IMPORT_FIELDS: { key: ImportField; label: string; hint: string; aliases: string[] }[] = [
+  { key: 'kind', label: 'Art', hint: 'Arbeitspaket, Aufgabe oder Checklistenpunkt (leer: aus Ebene bzw. Übergeordnet)', aliases: ['art', 'typ', 'type', 'kind'] },
+  { key: 'key', label: 'Kennung', hint: 'eigene Kennung der Zeile, z. B. WEB-12 oder 1.2; auf sie verweist „Übergeordnet“', aliases: ['kennung', 'id', 'nr', 'nummer', 'key'] },
+  { key: 'title', label: 'Titel', hint: 'Pflicht', aliases: ['titel', 'title', 'name', 'bezeichnung', 'arbeitspaket', 'aufgabe'] },
+  { key: 'description', label: 'Beschreibung', hint: 'Text', aliases: ['beschreibung', 'description', 'details', 'text'] },
+  { key: 'subproject', label: 'Teilprojekt', hint: 'Name; fehlt es, wird es angelegt', aliases: ['teilprojekt', 'subproject', 'phase'] },
+  { key: 'responsible', label: 'Zuständig', hint: 'E-Mail oder Name eines Mitglieds; sonst E-Mail als externe Zuständigkeit', aliases: ['zuständig', 'zustaendig', 'verantwortlich', 'responsible', 'assignee', 'owner'] },
+  { key: 'start', label: 'Start', hint: 'TT.MM.JJJJ oder JJJJ-MM-TT', aliases: ['start', 'beginn', 'startdatum', 'start date'] },
+  { key: 'due', label: 'Deadline', hint: 'TT.MM.JJJJ oder JJJJ-MM-TT', aliases: ['deadline', 'fällig', 'faellig', 'ende', 'due', 'enddatum', 'due date', 'frist'] },
+  { key: 'priority', label: 'Priorität', hint: 'niedrig, normal, hoch, kritisch', aliases: ['priorität', 'prioritaet', 'priority', 'prio'] },
+  { key: 'labels', label: 'Labels', hint: 'durch Komma getrennt; fehlende werden angelegt', aliases: ['labels', 'label', 'tags', 'schlagworte'] },
+  { key: 'parent', label: 'Übergeordnet', hint: 'Kennung der übergeordneten Zeile (oder eines bestehenden Arbeitspakets, z. B. WEB-12)', aliases: ['übergeordnet', 'uebergeordnet', 'eltern', 'parent', 'eltern-kennung', 'arbeitspaket-kennung'] },
+  { key: 'level', label: 'Ebene', hint: '1 = Arbeitspaket, 2 = Aufgabe, 3 = Checklistenpunkt (gehört zur Zeile darüber)', aliases: ['ebene', 'level', 'stufe', 'gliederung'] },
+  { key: 'status', label: 'Status', hint: 'Name einer Spalte; „ja“ in „Erledigt“ setzt erledigt', aliases: ['status', 'spalte', 'erledigt'] },
+  { key: 'ignore', label: '– nicht übernehmen –', hint: '', aliases: [] }
+];
+export interface ImportRowResult {
+  /** Zeilennummer in der Datei (1 = erste Datenzeile) */
+  line: number;
+  /** subproject = Zeile „Teilprojekt“ (Plan-Export: gilt für die folgenden Zeilen), skip = wird nicht übernommen (z. B. Meilenstein) */
+  kind: 'ap' | 'aufgabe' | 'item' | 'subproject' | 'skip';
+  title: string;
+  parentLine: number | null;
+  errors: string[];
+  warnings: string[];
+}
+export interface ImportResult {
+  dryRun: boolean;
+  rows: ImportRowResult[];
+  counts: { ap: number; aufgabe: number; item: number; errors: number; subprojects: number; labels: number };
+  /** angelegte Arbeitspakete und Aufgaben (nur ohne Trockenlauf) */
+  created?: { ap: number; aufgabe: number; item: number };
+}

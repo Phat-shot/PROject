@@ -11,7 +11,7 @@ import { createDefaultFolders } from './docs/service.js';
  */
 
 /** Standardspalten neuer Projekte: Geplant, Wartet und Zurückgestellt bilden die Gruppe „Nicht in Arbeit“ (eine Board-Spalte mit drei Abschnitten) */
-export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done', string | null][] = [['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'active', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]];
+export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'review' | 'waiting' | 'parked' | 'done', string | null][] = [['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'review', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]];
 
 /** Initialen eines Namens als Kürzel (Großbuchstaben, mindestens zwei Zeichen: „Max Keller“ → MK, „Max“ → MP). */
 export function initialsOf(name: string): string {

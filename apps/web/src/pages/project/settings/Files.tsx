@@ -117,7 +117,8 @@ export function FilesTab() {
           <thead><tr><th>Ordner</th><th>Quelle</th><th>Unterordner</th><th>Dateien</th><th>Sync</th><th /></tr></thead>
           <tbody>{bindings.map((b) => (
             <tr key={b.id}>
-              <td><Link to={`${docs}/${b.id}`}>{b.label}</Link>{!b.active && <span className="badge ml-1" title="Quelle deaktiviert oder nicht mehr freigegeben">ruht</span>}</td>
+              <td><Link to={`${docs}/${b.id}`}>{b.label}</Link>{!b.active && <span className="badge ml-1" title="Quelle deaktiviert oder nicht mehr freigegeben">ruht</span>}
+                <Link to={`/projekte/${pid}/einstellungen/ki`} className={`badge ml-1${b.agentEnabled === false ? ' muted' : ''}`} title="Dürfen KI-Agenten diesen Ordner durchsuchen und lesen? Einstellen unter Einstellungen › KI › Quellen für den Agenten">KI: {b.agentEnabled === false ? 'aus' : 'an'}</Link></td>
               <td>{b.sourceName} <span className="muted small">· {b.scope === 'org' ? 'Organisation' : 'eigene'}</span></td>
               <td>{b.subPath ?? '/'}</td>
               <td>{b.files ?? own.get(b.sourceId)?.files ?? '–'}</td>

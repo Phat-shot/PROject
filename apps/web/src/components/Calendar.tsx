@@ -1,6 +1,8 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { today } from '../lib/api';
 import { useIsMobile } from '../lib/useMedia';
+import { IconBooking, IconChevronLeft, IconChevronRight, IconDiamond, IconPlay } from './icons';
+import { IconButton } from './ui';
 
 export interface CalItem {
   id: string;
@@ -27,7 +29,7 @@ const monday = (d: Date) => addDays(new Date(d.getFullYear(), d.getMonth(), d.ge
  * Kalender mit Monat, Woche und Agenda. Deadlines und Meilensteine stehen am Tag, Arbeitspakete mit Start
  * erscheinen am Starttag (▶) und in der Wochenansicht an jedem laufenden Tag; Besprechungen mit Uhrzeit. Auf dem Telefon startet die Agenda.
  */
-export function Calendar({ items, hint, occupancy, initialMode }: { items: CalItem[]; hint?: string; /** Modus „Belegung“ (Konzept 10): Ressourcen und Personen je Tag */ occupancy?: ReactNode; initialMode?: 'occupancy' | null }) {
+export function Calendar({ items, hint, occupancy, initialMode }: { items: CalItem[]; hint?: ReactNode; /** Modus „Belegung“ (Konzept 10): Ressourcen und Personen je Tag */ occupancy?: ReactNode; initialMode?: 'occupancy' | null }) {
   const mobile = useIsMobile();
   const [mode, setMode] = useState<Mode>(() => { if (initialMode === 'occupancy' && occupancy) return 'occupancy'; try { const m = (localStorage.getItem('pt_cal_mode') as Mode) || (mobile ? 'agenda' : 'month'); return m === 'occupancy' && !occupancy ? 'month' : m; } catch { return mobile ? 'agenda' : 'month'; } });
   const setModeKeep = (m: Mode) => { setMode(m); try { localStorage.setItem('pt_cal_mode', m); } catch { /* ignore */ } };
@@ -56,7 +58,7 @@ export function Calendar({ items, hint, occupancy, initialMode }: { items: CalIt
   const Ev = ({ item, role }: { item: CalItem; role: 'due' | 'start' | 'running' }) => (
     <span className={`ev ${item.kind} ${role} ${item.done ? 'done' : ''} ${!item.done && item.kind === 'task' && item.date < t && role === 'due' ? 'overdue' : ''}`}
       title={`${item.title}${item.start ? ` · ${item.start.split('-').reverse().join('.')} – ${item.date.split('-').reverse().join('.')}` : ''}`} onClick={item.onOpen}>
-      {role === 'start' ? '▶ ' : role === 'running' ? '· ' : item.kind === 'ms' ? '◆ ' : item.kind === 'meeting' ? `${item.time ?? ''} ` : item.kind === 'booking' ? `▭ ${item.time ?? ''}` : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
+      {role === 'start' ? <><IconPlay size={10} /><span className="sr-only">Start: </span> </> : role === 'running' ? '· ' : item.kind === 'ms' ? <><IconDiamond size={10} /><span className="sr-only">Meilenstein: </span> </> : item.kind === 'meeting' ? `${item.time ?? ''} ` : item.kind === 'booking' ? <><IconBooking size={10} /><span className="sr-only">Belegung</span> {item.time ?? ''}</> : ''}{item.projectKey && <b>{item.projectKey} </b>}{item.title}
     </span>
   );
 
@@ -64,9 +66,9 @@ export function Calendar({ items, hint, occupancy, initialMode }: { items: CalIt
   return (
     <div className="calendar">
       <div className="row mb">
-        <button className="btn sm" onClick={() => step(-1)}>‹</button>
+        <IconButton size="sm" label={mode === 'week' ? 'Vorige Woche' : 'Voriger Monat'} onClick={() => step(-1)}><IconChevronLeft /></IconButton>
         <strong className="min-w-160 text-center">{range.label}</strong>
-        <button className="btn sm" onClick={() => step(1)}>›</button>
+        <IconButton size="sm" label={mode === 'week' ? 'Nächste Woche' : 'Nächster Monat'} onClick={() => step(1)}><IconChevronRight /></IconButton>
         <button className="btn sm" onClick={() => { const d = new Date(); setCursor(new Date(d.getFullYear(), d.getMonth(), d.getDate())); }}>Heute</button>
         <span className="row gap-1">{[...MODES, ...(occupancy ? [['occupancy', 'Belegung'] as [Mode, string]] : [])].map(([m, l]) => <button key={m} className={`chip ${mode === m ? 'on' : ''}`} onClick={() => setModeKeep(m)}>{l}</button>)}</span>
         {hint && <span className="muted small">{hint}</span>}

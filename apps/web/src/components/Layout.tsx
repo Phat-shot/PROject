@@ -186,7 +186,7 @@ function ProjectDocsNav({ projectId }: { projectId: string }) {
 export interface TopTab { to: string; label: string; end?: boolean; /** Zähler am Reiter */ badge?: number; badgeTitle?: string; /** Pfad, unter dem der Reiter nicht aktiv ist (eigener Reiter) */ exclude?: string }
 
 /** Kopfzeile; tabsBelow legt viele Reiter (Projektbereiche) in eine eigene Zeile unter Titel, Suche und Glocke. */
-export function TopBar({ title, children, tabs, tabsBelow = false }: { title: ReactNode; children?: ReactNode; tabs?: TopTab[]; tabsBelow?: boolean }) {
+export function TopBar({ title, children, tabs, tabsBelow = false, crumbs }: { title: ReactNode; children?: ReactNode; tabs?: TopTab[]; tabsBelow?: boolean; /** Brotkrumen über dem Titel (z. B. Projekte › Projekt › Bereich) */ crumbs?: ReactNode }) {
   const openMenu = useContext(MenuCtx);
   const loc = useLocation();
   const tabsRef = useRef<HTMLDivElement>(null);
@@ -204,7 +204,7 @@ export function TopBar({ title, children, tabs, tabsBelow = false }: { title: Re
   return (
     <header className="topbar">
       <button className="menu-btn" title="Menü" aria-label="Menü öffnen" onClick={openMenu}><IconMenu size={20} /></button>
-      <h1>{title}</h1>
+      {crumbs ? <div className="topbar-title">{crumbs}<h1>{title}</h1></div> : <h1>{title}</h1>}
       {tabs && (
         <nav className={`tabs ${tabsBelow ? 'below' : ''} ${scroll !== 'none' ? 'scrollable' : ''} ${scroll === 'end' ? 'at-end' : ''}`} ref={tabsRef} aria-label="Bereiche">
           {tabs.map((t) => (

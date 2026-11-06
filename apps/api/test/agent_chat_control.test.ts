@@ -74,7 +74,7 @@ test('Auftrag der PL per Chat: AP mit Auftraggeber, Agent zuständig, Log, Beric
   assert.ok(rule, 'Berichtswunsch'); assert.equal(rule.timing.every, 'each'); assert.equal(rule.channels.mail, 'now');
   const card = await lastCard(dmPl);
   assert.ok(card, 'Systemkarte');
-  assert.match(card.body, /✓ Angelegt: WEB-\d+ „Backup-Elektriker Edertal: Entscheidungsvorlage“ · zuständig Morton · Auftraggeber Petra Lenz/);
+  assert.match(card.body, /Angelegt: WEB-\d+ „Backup-Elektriker Edertal: Entscheidungsvorlage“ · zuständig Morton · Auftraggeber Petra Lenz/);
   assert.equal(card.meta.taskId, task.id); assert.ok(card.meta.undoUntil);
   const detail = (await t.api(pl).get(`/tasks/${task.id}`)).json().task;
   assert.equal(detail.requestedBy.userId, t.ids.users.pl);
@@ -92,7 +92,7 @@ test('Auftrag mit geratener Kennung: unbekanntes Über-AP wird eigenes AP, Folge
   const task = await t.db.one(`select * from tasks where title = 'Termin AirGPU 6.–8.11.'`);
   assert.equal(task.parent_id, null, 'kein Über-AP');
   const card = await lastCard(dmPl);
-  assert.match(card.body, /✓ Angelegt: WEB-\d+ „Termin AirGPU 6\.–8\.11\.“.*\(Über-AP WEB-0 gibt es nicht: als eigenes Arbeitspaket\)/);
+  assert.match(card.body, /Angelegt: WEB-\d+ „Termin AirGPU 6\.–8\.11\.“.*\(Über-AP WEB-0 gibt es nicht: als eigenes Arbeitspaket\)/);
   assert.doesNotMatch(card.body, /nicht gefunden/, 'report und priority treffen den neuen Auftrag');
   assert.ok(await t.db.maybeOne(`select 1 from notification_rules where task_id = $1 and event = 'progress'`, [task.id]), 'report am neuen AP');
   const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
@@ -107,7 +107,7 @@ test('Auftrag mit geratener Kennung: unbekanntes Über-AP wird eigenes AP, Folge
   nextCommands = [C({ type: 'order', title: 'Kabel AirGPU', text: 'Kabel', subproject: 'Gibtsnicht' })];
   await say(pl, dmPl, 'Bitte Kabel');
   assert.ok(await t.db.maybeOne(`select 1 from tasks where title = 'Kabel AirGPU'`));
-  assert.match((await lastCard(dmPl)).body, /✓ Angelegt: .*\(Teilprojekt „Gibtsnicht“ gibt es nicht: ohne Teilprojekt\)/);
+  assert.match((await lastCard(dmPl)).body, /Angelegt: .*\(Teilprojekt „Gibtsnicht“ gibt es nicht: ohne Teilprojekt\)/);
   await t.db.query(`update tasks set archived_at = now() where title in ('Rack-Plan AirGPU', 'Kabel AirGPU')`);
 });
 
@@ -129,7 +129,7 @@ test('Mitglied ohne Auftragsrecht: Vorschlag als Frage order_request an die PL; 
   nextCommands = [C({ type: 'order', title: 'Lampen bestellen', text: 'Lampen für den Flur' })];
   await say(max, dmMax, 'Bestell bitte Lampen für den Flur.');
   let card = await lastCard(dmMax);
-  assert.match(card.body, /◔ Vorschlag an die Projektleitung weitergegeben/);
+  assert.match(card.body, /Angehalten: Vorschlag an die Projektleitung weitergegeben/);
   const q = await t.db.one(`select * from questions where kind = 'order_request' and status = 'open'`);
   assert.equal(q.asked_by, agent.id); assert.equal(q.addressee_id, t.ids.users.pl);
   assert.match(q.body, /Max Keller möchte beauftragen: Lampen bestellen/);
@@ -145,7 +145,7 @@ test('Mitglied ohne Auftragsrecht: Vorschlag als Frage order_request an die PL; 
   nextCommands = [C({ type: 'order', title: 'Lampen bestellen', text: 'nochmal' })];
   await say(max, dmMax, 'Lampen bestellen!');
   card = await lastCard(dmMax);
-  assert.match(card.body, /✗ Nicht ausgeführt: „Lampen bestellen“ gibt es schon offen als WEB-\d+ – dort weiter\?/);
+  assert.match(card.body, /Nicht ausgeführt: „Lampen bestellen“ gibt es schon offen als WEB-\d+ – dort weiter\?/);
   assert.equal((await t.db.one(`select count(*)::int as c from tasks where title = 'Lampen bestellen'`)).c, 1);
 });
 
@@ -164,7 +164,7 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   assert.equal(tk.priority, 'high'); assert.equal(tk.agent_policy.mode, 'confirm_all');
   assert.ok(await t.db.maybeOne(`select 1 from notification_rules where task_id = $1 and user_id = $2 and event = 'progress' and timing->>'every' = 'daily'`, [task.id, t.ids.users.pl]));
   let card = await lastCard(dmPl);
-  assert.match(card.body, /✓ WEB-\d+: im Log vermerkt \(Petra Lenz\)/); assert.match(card.body, /✓ WEB-\d+: Priorität high/); assert.match(card.body, /Selbstständigkeit confirm_all/); assert.match(card.body, /Zwischenstände daily/);
+  assert.match(card.body, /WEB-\d+: im Log vermerkt \(Petra Lenz\)/); assert.match(card.body, /WEB-\d+: Priorität high/); assert.match(card.body, /Selbstständigkeit confirm_all/); assert.match(card.body, /Zwischenstände daily/);
   const reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
   assert.equal(reply.body, 'Ich habe das vermerkt und die Priorität gesetzt.', 'keine Ersetzung bei ausgeführten Befehlen');
   // Standard (nur wenn nötig): die Notiz wird ausgeführt, aber ohne Karte
@@ -179,8 +179,8 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   nextCommands = [C({ type: 'policy', ref, mode: 'auto' }), C({ type: 'pause', ref })];
   await say(max, dmMax, `${ref} auf selbstständig und pausieren`);
   card = await lastCard(dmMax);
-  assert.match(card.body, /✗ Nicht ausgeführt: WEB-\d+: die Selbstständigkeit setzt nur die PL/);
-  assert.match(card.body, /✓ WEB-\d+: Agent pausiert/, 'Max ist Auftraggeber dieses AP');
+  assert.match(card.body, /Nicht ausgeführt: WEB-\d+: die Selbstständigkeit setzt nur die PL/);
+  assert.match(card.body, /WEB-\d+: Agent pausiert/, 'Max ist Auftraggeber dieses AP');
   assert.equal((await t.db.one(`select agent_paused from tasks where id = $1`, [task.id])).agent_paused, true);
   nextCommands = [C({ type: 'resume', ref })];
   await say(pl, dmPl, `${ref} weiter`);
@@ -194,7 +194,7 @@ test('Steuerbefehle: note (Autor ist die Person), pause/resume, priority, policy
   nextCommands = [C({ type: 'approve', ref })];
   await say(pl, dmPl, `${ref} ok, mach`);
   card = await lastCard(dmPl);
-  assert.match(card.body, /◔ WEB-\d+: offene Bestätigung – bitte auf der Karte entscheiden/);
+  assert.match(card.body, /Angehalten: WEB-\d+: offene Bestätigung – bitte auf der Karte entscheiden/);
   assert.equal(card.meta.approvalQuestionId, q.id);
   assert.match(prompts.at(-1) ?? '', /Offene Bestätigungen von dir/);
   // stop: Fragen abbrechen, Vorschläge zurückziehen
@@ -224,7 +224,7 @@ test('Nachfassen gehört zum Arbeitspaket: run statt neuer Aufgabe, fällige Fri
   assert.match(ctx, /du wartest auf: Sven meldet sich bis Freitag \(Nachfassen 23\.10\., Eskalation 26\.10\.\)/);
   assert.match(ctx, /Agent pausiert/);
   assert.match(ctx, /Offene Tasks: .*sven@airgpu\.example/);
-  assert.match((await lastCard(dmPl)).body, /✓ WEB-\d+: Agent läuft jetzt \(Pause aufgehoben\)/);
+  assert.match((await lastCard(dmPl)).body, /WEB-\d+: Agent läuft jetzt \(Pause aufgehoben\)/);
   assert.equal((await t.db.one(`select agent_paused from tasks where id = $1`, [task.id])).agent_paused, false);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Lauf per Chat angestoßen (Pause aufgehoben): Bei Sven nachfassen'`, [task.id]));
   assert.equal((await t.db.one(`select count(*)::int as n from tasks where parent_id = $1`, [task.id])).n, 0, 'keine neue Aufgabe');
@@ -263,7 +263,7 @@ test('Chat-Befehl move: Aufgabe unter ein anderes AP und AP ins Teilprojekt (PL)
   nextCommands = [C({ type: 'move', ref: `WEB-${a.number}`, to: `WEB-${ap2.number}` })];
   await say(max, dmMax, `Verschiebe die Aufgabe WEB-${a.number} unter das Arbeitspaket WEB-${ap2.number}.`);
   let card = await lastCard(dmMax);
-  assert.match(card.body, /✗ Nicht ausgeführt: WEB-\d+: Verschieben erfordert das Auftragsrecht/);
+  assert.match(card.body, /Nicht ausgeführt: WEB-\d+: Verschieben erfordert das Auftragsrecht/);
   await t.db.query(`update project_members set can_edit_plan = true where project_id = $1 and user_id = $2`, [web(), t.ids.users.max]);
   assert.equal((await t.db.one(`select parent_id from tasks where id = $1`, [a.id])).parent_id, ap1.id);
   // PL: Aufgabe umhängen, Karte mit Link, Log an Quelle und Ziel; die Antwort darf „verschoben“ sagen
@@ -271,7 +271,7 @@ test('Chat-Befehl move: Aufgabe unter ein anderes AP und AP ins Teilprojekt (PL)
   nextReply = 'Ich habe die Aufgabe verschoben.';
   await say(pl, dmPl, `Verschiebe die Aufgabe WEB-${a.number} unter das Arbeitspaket WEB-${ap2.number}.`);
   card = await lastCard(dmPl);
-  assert.match(card.body, new RegExp(`✓ WEB-${a.number} „Chat Schritt“ verschoben unter WEB-${ap2.number} „Chat Ziel“`));
+  assert.match(card.body, new RegExp(`WEB-${a.number} „Chat Schritt“ verschoben unter WEB-${ap2.number} „Chat Ziel“`));
   assert.equal(card.meta.results[0].link, `/projekte/${web()}/board?task=${a.id}`);
   assert.equal((await t.db.one(`select parent_id from tasks where id = $1`, [a.id])).parent_id, ap2.id);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like '%hierher verschoben (Petra Lenz)'`, [ap2.id]));
@@ -281,8 +281,8 @@ test('Chat-Befehl move: Aufgabe unter ein anderes AP und AP ins Teilprojekt (PL)
   nextCommands = [C({ type: 'move', ref: `WEB-${ap2.number}`, subproject: 'Chat-TP' }), C({ type: 'move', ref: `WEB-${ap1.number}`, to: `WEB-${a.number}` })];
   await say(pl, dmPl, `WEB-${ap2.number} ins Teilprojekt Chat-TP`);
   card = await lastCard(dmPl);
-  assert.match(card.body, /✓ WEB-\d+ „Chat Ziel“ dem Teilprojekt „Chat-TP“ zugeordnet/);
-  assert.match(card.body, /✗ Nicht ausgeführt: WEB-\d+: WEB-\d+ ist eine Aufgabe; Ziel muss ein Arbeitspaket sein/);
+  assert.match(card.body, /WEB-\d+ „Chat Ziel“ dem Teilprojekt „Chat-TP“ zugeordnet/);
+  assert.match(card.body, /Nicht ausgeführt: WEB-\d+: WEB-\d+ ist eine Aufgabe; Ziel muss ein Arbeitspaket sein/);
   assert.equal((await t.db.one(`select subproject_id from tasks where id = $1`, [ap2.id])).subproject_id, sp.id);
   assert.equal((await t.db.one(`select subproject_id from tasks where id = $1`, [a.id])).subproject_id, sp.id, 'Aufgabe folgt');
   // Behauptung ohne Befehl: ersetzt
