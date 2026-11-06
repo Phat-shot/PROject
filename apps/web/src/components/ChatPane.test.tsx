@@ -71,4 +71,16 @@ describe('ChatPane', () => {
     expect(chosenBtn.className).toContain('primary');
     expect(screen.getByRole('button', { name: 'Allgemein (kein Projekt)' })).toBeDisabled();
   });
+
+  it('zeigt bei ausstehender Agentenantwort Spinner und Name statt „denkt nach“; Screenreader hören „Morton denkt nach“', async () => {
+    get.mockImplementation(async () => ({ messages: [msg('m1', 'Hi Morton, was steht an?')], hasMore: false, canWrite: true, busy: [{ id: 'a1', name: 'Morton' }] }));
+    const { container } = render(<ChatPane channelId="c1" members={[]} />);
+    await flush();
+    const status = screen.getByRole('status', { name: 'Morton denkt nach' });
+    expect(status).toHaveTextContent('Morton …');
+    expect(status).not.toHaveTextContent('denkt nach');
+    expect(status.querySelector('.spinner')).not.toBeNull();
+    expect(status.querySelector('svg.chat-busy-still')).not.toBeNull();
+    expect(container.querySelectorAll('.chat-busy')).toHaveLength(1);
+  });
 });

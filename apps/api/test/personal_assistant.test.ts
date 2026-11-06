@@ -9,13 +9,14 @@ import { flushAgentRuns } from '../src/ai/agentEvents.js';
  */
 let chatReply: { reply: string; commands: any[] } = { reply: 'Mache ich.', commands: [] };
 let runActions: any[] = [];
+let chatSystem = '';
 const C = (x: Record<string, unknown>) => ({ type: 'order', ref: '', text: '', title: '', parent: '', subproject: '', dueDate: '', deliverables: [], every: '', level: '', mode: '', depth: '', reason: '', mail: false, ...x });
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
   const system = body.messages?.[0]?.content ?? '';
   let content = 'bereit';
-  if (body.response_format && system.includes('Man erreicht dich im Chat')) { content = JSON.stringify({ ...chatReply, notes: [], answers: [] }); chatReply = { reply: 'Mache ich.', commands: [] }; }
+  if (body.response_format && system.includes('Man erreicht dich im Chat')) { chatSystem = system; content = JSON.stringify({ ...chatReply, notes: [], answers: [] }); chatReply = { reply: 'Mache ich.', commands: [] }; }
   else if (body.response_format && body.messages?.[1]?.content?.includes('Auftrag deines Eigentümers')) { content = JSON.stringify({ note: 'Assistent', actions: runActions }); runActions = []; }
   else if (body.response_format) content = JSON.stringify({ note: 'nichts', actions: [{ type: 'none', reason: 'Test' }] });
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 10, completion_tokens: 5 } }), { status: 200 });
@@ -53,6 +54,7 @@ test('Unspezifischer Auftrag: im persönlichen Projekt angelegt und sofort ausge
   await flushAgentRuns(); await flushAgentRuns();
   const task = await t.db.one(`select * from tasks where title = 'Sven nach dem Stand fragen'`);
   assert.equal(task.project_id, pid, 'persönliches Projekt');
+  assert.ok(!chatSystem.includes('# Persönlicher Assistent'), 'Selbstbild-Block nur bei agent_role assistant');
   assert.ok(await t.db.maybeOne(`select 1 from notification_rules where task_id = $1 and event = 'progress' and timing->>'every' = 'each'`, [task.id]), 'jeder Schritt im Chat');
   const draft = await t.db.one(`select * from mail_drafts where task_id = $1`, [task.id]);
   assert.equal(draft.status, 'pending_approval');

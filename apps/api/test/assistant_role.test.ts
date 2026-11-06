@@ -5,6 +5,8 @@ import { flushAgentRuns } from '../src/ai/agentEvents.js';
 import { aiAllowed } from '../src/ai/policy.js';
 import { TEXT } from '../src/projectPolicy.js';
 import { initialsOf } from '../src/personalProject.js';
+import { berlinWeek, isGreeting, isStatusQuestion, stripGreeting } from '../src/ai/agentChat.js';
+import { ASSISTANT_RULES } from '../src/ai/sheet.js';
 
 /**
  * Persönlicher Assistent („Jarvis“) je Benutzer: Einladung mit Opt-out-Haken legt bei Annahme das persönliche Projekt an;
@@ -13,12 +15,13 @@ import { initialsOf } from '../src/personalProject.js';
  * ignoriert Kanal-Erwähnungen, Direktnachricht gilt ohne Rückfrage als persönlich; persönliches Projekt schlank.
  */
 const prompts: string[] = [];
+const systems: string[] = [];
 const fakeFetch: typeof fetch = async (input, init) => {
   const body = init?.body ? JSON.parse(String(init.body)) : {};
   if (String(input) !== 'http://llm.local:8000/v1/chat/completions') return new Response('{}', { status: 404 });
   const system = body.messages?.[0]?.content ?? '';
   let content = 'bereit';
-  if (body.response_format && system.includes('Man erreicht dich im Chat')) { prompts.push(String(body.messages?.[1]?.content ?? '')); content = JSON.stringify({ reply: 'Gern, hier die Antwort.', notes: [], answers: [], commands: [] }); }
+  if (body.response_format && system.includes('Man erreicht dich im Chat')) { prompts.push(String(body.messages?.[1]?.content ?? '')); systems.push(system); content = JSON.stringify({ reply: 'Gern, hier die Antwort.', notes: [], answers: [], commands: [] }); }
   else if (body.response_format) content = JSON.stringify({ note: 'nichts zu tun', actions: [{ type: 'none', reason: 'Test' }] });
   return new Response(JSON.stringify({ model: 'qwen', choices: [{ message: { role: 'assistant', content } }], usage: { prompt_tokens: 100, completion_tokens: 20 } }), { status: 200 });
 };
@@ -256,4 +259,47 @@ test('Mail des Assistenten nur über eigene Konten der Person (ownOnly): zentral
   assert.ok(!r.bindable.some((a: any) => a.id === c.json().account.id), 'zentrales Postfach nicht wählbar');
   assert.ok(r.bindable.every((a: any) => (a.managedBy.kind === 'user' && a.managedBy.userId === t.ids.users.max) || (a.managedBy.kind === 'project' && a.managedBy.projectId === maxPid)), JSON.stringify(r.bindable));
   assert.equal((await t.api(max).post(`/mail/accounts/${c.json().account.id}/uses`, { use: 'project', projectId: maxPid })).statusCode, 403);
+});
+
+test('Statusfrage erkannt, auch mit Gruß und Namen davor; reiner Gruß', () => {
+  assert.equal(stripGreeting('Hi Morton, was steht an?', ['Morton']), 'was steht an?');
+  for (const b of ['Hi Morton, was steht an?', 'Hi was steht an?', 'Hallo @Morton: was steht heute an?', 'Guten Morgen Morton, gibt es was zu tun?', 'Moin, was liegt diese Woche bei mir an?']) assert.ok(isStatusQuestion(b, ['Morton']), b);
+  assert.ok(!isStatusQuestion('Hi Morton, schreib Sven eine Mail wegen des Angebots', ['Morton']));
+  for (const b of ['Hi', 'Hallo Morton', 'Guten Morgen!']) assert.ok(isGreeting(b, ['Morton']), b);
+  for (const b of ['Danke', 'Hi Morton, was steht an?', 'Tschüss']) assert.ok(!isGreeting(b, ['Morton']), b);
+});
+
+test('Assistent: Selbstbild im Systemprompt; Statusfrage mit Gruß bekommt den Abschnitt „Statusfrage“ (leer: nichts offen; sonst Überfälliges und Termine)', async () => {
+  const say = async (body: string) => { const n = prompts.length; const r = await t.api(max).post(`/chat/channels/${dm}/messages`, { body }); assert.equal(r.statusCode, 200, r.body); await flushAgentRuns(); assert.equal(prompts.length - n, 1); return { prompt: prompts.at(-1)!, system: systems.at(-1)! }; };
+  // Leeres persönliches Projekt: nichts offen, Vorschlag statt „keine konkrete Frage“
+  await t.db.query(`update tasks set archived_at = now() where project_id = $1 and archived_at is null`, [maxPid]);
+  let r = await say('Hi Jarvis, was steht an?');
+  assert.ok(r.system.includes(ASSISTANT_RULES), 'Selbstbild-Block');
+  assert.match(r.system, /# Du\nDu bist „Jarvis“, persönlicher Assistent von Max Keller \(Inhaber\)/);
+  assert.match(r.prompt, /# Statusfrage\n/);
+  assert.match(r.prompt, /– nichts offen –/);
+  assert.match(r.prompt, /Gerade steht nichts an/);
+  // Überfälliges AP und Termin heute
+  const { today } = berlinWeek(new Date());
+  const yesterday = new Date(Date.parse(`${today}T12:00:00Z`) - 86400_000).toISOString().slice(0, 10);
+  const cols = new Map<string, string>((await t.db.query(`select id, name from board_columns where project_id = $1`, [maxPid])).rows.map((c: any) => [c.name, c.id]));
+  const late = (await t.api(max).post(`/projects/${maxPid}/tasks`, { title: 'Steuererklärung abgeben', columnId: cols.get('Offen'), dueDate: yesterday })).json().task;
+  assert.ok(late?.number, 'AP angelegt');
+  await t.api(max).post(`/projects/${maxPid}/tasks`, { title: 'Ohne Termin notiert', columnId: cols.get('Offen') });
+  await t.db.query(`insert into meetings (project_id, title, starts_at, ends_at, created_by) values ($1, 'Zahnarzt', ($2::date + time '15:00') at time zone 'Europe/Berlin', ($2::date + time '16:00') at time zone 'Europe/Berlin', $3)`, [maxPid, today, t.ids.users.max]);
+  r = await say('Hi Jarvis, was steht an?');
+  const key = (await t.db.one(`select key from projects where id = $1`, [maxPid])).key;
+  assert.match(r.prompt, new RegExp(`Überfällig:\\n- ${key}-${late.number} „Steuererklärung abgeben“ · fällig ${yesterday.slice(8, 10)}\\.${yesterday.slice(5, 7)}\\.`));
+  assert.match(r.prompt, /Ohne Termin:\n- .*„Ohne Termin notiert“/);
+  assert.match(r.prompt, /Termine heute und morgen:\n- heute 15:00–16:00 „Zahnarzt“/);
+  assert.match(r.prompt, /Überfälliges und heute Fälliges zuerst/);
+  assert.doesNotMatch(r.prompt, /– nichts offen –/);
+  // Reiner Gruß: kurz grüßen und Überfälliges in einem Satz nennen
+  r = await say('Hallo Jarvis');
+  assert.match(r.prompt, /# Statusfrage/);
+  assert.match(r.prompt, /reiner Gruß: grüß kurz zurück und nenne in einem Satz, was überfällig oder heute fällig ist/);
+  // Gewöhnliche Bitte: kein Abschnitt Statusfrage, Selbstbild bleibt
+  r = await say('Notier mir bitte, dass ich Milch kaufen muss');
+  assert.doesNotMatch(r.prompt, /# Statusfrage/);
+  assert.ok(r.system.includes(ASSISTANT_RULES));
 });

@@ -4,8 +4,8 @@ import type { ChatChoice, MailDraft, Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
-import { IconButton, useDialog } from './ui';
-import { IconChevronDown, IconChevronRight, IconCircleCheck, IconCircleX, IconPencil, IconPending, IconX } from './icons';
+import { IconButton, Spinner, useDialog } from './ui';
+import { IconChevronDown, IconChevronRight, IconCircleCheck, IconCircleX, IconHourglass, IconPencil, IconPending, IconX } from './icons';
 import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
@@ -155,7 +155,11 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           {msgs.length === 0 && <div className="muted small center pad-24">{emptyText ?? 'Noch keine Nachrichten.'}</div>}
           {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}{threads && thread === m.id && inlineThread(m.id)}</div>; })}
           {threads && thread && !msgs.some((m) => m.id === thread) && <div className="muted small center">Der Thread gehört zu einer älteren Nachricht: „Ältere laden“.</div>}
-          {busy.length > 0 && <div className="muted small chat-busy" role="status">{busy.map((b) => b.name).join(', ')} {busy.length > 1 ? 'denken' : 'denkt'} nach … <span title="Lokale Modelle antworten bei belegter GPU später; die Antwort erscheint hier von selbst">(kann dauern)</span></div>}
+          {busy.length > 0 && <div className="muted small chat-busy" role="status" aria-label={`${busy.map((b) => b.name).join(', ')} ${busy.length > 1 ? 'denken' : 'denkt'} nach`}>
+            <Spinner /><IconHourglass className="chat-busy-still" />
+            <span aria-hidden="true">{busy.map((b) => b.name).join(', ')} …</span>
+            <span className="chat-busy-hint" aria-hidden="true" title="Lokale Modelle antworten bei belegter GPU später; die Antwort erscheint hier von selbst">(kann dauern)</span>
+          </div>}
         </div>
         {canWrite ? <div className="chat-compose">
           <MentionInput value={text} onChange={setText} members={members} placeholder={placeholder ?? 'Nachricht … (Enter sendet, Umschalt+Enter neue Zeile, @Name erwähnt)'} onSubmit={() => void send(text, null)} enterSends />
