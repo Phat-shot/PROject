@@ -8,6 +8,7 @@ import { Modal, useAsync, useDialog } from '../../components/ui';
 import { invalidateAi, useAiStatus } from '../../lib/useAi';
 import { AgentEditorModal, ScopeEditor, rightsSummary } from '../../components/AgentEditor';
 import { IconAlert } from '../../components/icons';
+import { DateInput } from '../../components/DateInput';
 
 /**
  * Verwaltung › KI: ein Weg von oben nach unten. 1 LLM anlegen und für Projekte freigeben, 2 an jedem LLM seine Agenten anlegen
@@ -105,8 +106,8 @@ function FeedbackCard() {
         <select className="w-auto" aria-label="Art" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value })}><option value="">alle Arten</option>{AI_FEEDBACK_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
         <select className="w-auto" aria-label="Agent" value={f.agentId} onChange={(e) => setF({ ...f, agentId: e.target.value })}><option value="">alle Agenten</option>{(agents.data?.agents ?? []).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
         <select className="w-auto" aria-label="Bewertung" value={f.rating} onChange={(e) => setF({ ...f, rating: e.target.value })}><option value="">alles</option><option value="down">nur Probleme (👎 und automatische)</option><option value="up">nur 👍</option></select>
-        <label className="row gap-1">von <input className="w-auto" type="date" value={f.from} onChange={(e) => setF({ ...f, from: e.target.value })} /></label>
-        <label className="row gap-1">bis <input className="w-auto" type="date" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} /></label>
+        <label className="row gap-1">von <DateInput className="w-auto" value={f.from} onChange={(v) => setF({ ...f, from: v })} /></label>
+        <label className="row gap-1">bis <DateInput className="w-auto" value={f.to} onChange={(v) => setF({ ...f, to: v })} /></label>
       </div>
       {d.data && (d.data.items.length === 0 ? <div className="empty">Kein Feedback{qs ? ' für diesen Filter' : ''}.</div> : <table className="table"><thead><tr><th>Zeit</th><th>Art</th><th>Agent</th><th>Projekt</th><th>Kommentar und Kontext</th></tr></thead><tbody>
         {d.data.items.map((x) => <tr key={x.id}>

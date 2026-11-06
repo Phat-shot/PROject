@@ -138,6 +138,15 @@ Vor einem Update ein Backup ziehen (Abschnitt 6). Zurück auf eine ältere Versi
 - **Konto:** `https://host/remote.php/dav/files/<benutzer>/` mit Benutzername und **App-Passwort** (Nextcloud: Einstellungen › Sicherheit › Geräte & Sitzungen). Am besten ein eigenes technisches Konto, dem die Ordner nur lesend freigegeben sind. Passwörter liegen verschlüsselt (`enc2`, Schlüssel `SECRET_KEY` bzw. `secret.key`).
 - **Netz:** Alle Aufrufe laufen durch den SSRF-Schutz (keine internen Adressen, DNS-Pinning, keine Weiterleitungen, Zeitlimit 30 s je PROPFIND, 60 s je Textauszug). Eine Nextcloud im eigenen Netz muss in `OUTBOUND_ALLOW_HOSTS` stehen; leitet der Server um (z. B. http → https), die endgültige Adresse eintragen.
 - **Last:** Nur geänderte Dateien (ETag) werden geladen, je Abgleich höchstens 300 Textauszüge, der Rest folgt im nächsten Lauf. Fehler stehen an der Quelle (`last_error`) und im Server-Log (`[worker] Dateiquelle …`).
+- **Texterkennung (OCR):** PDFs ohne Textebene (weniger als ~20 Zeichen je Seite) und Bilder (png, jpg, tiff) liest das Tool mit `tesseract.js` (WebAssembly in einem eigenen Worker-Thread, keine Systempakete), Sprachen Deutsch und Englisch. Die Sprachdaten kommen aus den npm-Paketen `@tesseract.js-data/deu` und `/eng` (im Image enthalten, Modell `4.0.0_best_int`) und werden nie aus dem Netz geladen; beim ersten Lauf kopiert der Server sie in den Temp-Ordner (ca. 6 MB). PDF-Seiten rendert `unpdf` (pdf.js) mit `@napi-rs/canvas` (vorkompiliert für glibc und musl, x64 und arm64; läuft auf `node:22-alpine`). Die Seiten werden nacheinander erkannt (Faktor 2, ca. 150 dpi; ca. 0,3–1 s je Seite auf einem aktuellen Kern), zwischen den Seiten gibt der Server die Ereignisschleife frei. Speicher: der OCR-Worker braucht während des Abgleichs etwa 150–250 MB zusätzlich und wird danach beendet. Ergebnis: `text_status = ok` mit Hinweis „per Texterkennung (OCR)“ (bei Kürzung „…, erste 30 von N Seiten“), Fehler `error` mit Grund (z. B. „kein gültiges Bild“, Zeitlimit). Dateien, die vor dem Einschalten als „PDF ohne Textebene (Scan?)“ bzw. ohne Textauszug indiziert wurden, holt der nächste Abgleich nach, ohne dass sie als neue Dateien gelten.
+
+| Variable | Standard | Bedeutung |
+|---|---|---|
+| `FILE_OCR` | an | `off` schaltet die Texterkennung ab (Scans und Bilder dann nur über den Namen) |
+| `FILE_OCR_MAX_PAGES` | `30` | höchstens so viele Seiten je PDF |
+| `FILE_OCR_PER_RUN` | `20` | höchstens so viele Dateien mit OCR je Abgleich (über alle Quellen), der Rest folgt im nächsten Lauf |
+| `FILE_OCR_TIMEOUT_MS` | `120000` | Zeitlimit je Datei; danach `error` mit Grund |
+| `FILE_OCR_LANG_PATH` | – | eigener Ordner mit `deu.traineddata.gz` und `eng.traineddata.gz` statt der npm-Pakete |
 
 ## 6. Backup und Restore
 

@@ -10,6 +10,7 @@ import { cancelQuestions } from '../questions.js';
 import { dispatch } from '../notify.js';
 import { onWorkflowTaskDone } from '../workflows/engine.js';
 import { nextDueDate, type Recurrence } from './recurrence.js';
+import { syncMilestonesOf } from './milestones.js';
 
 /** Zuständige Person eines Arbeitspakets: aktives Mitglied des Projekts; KI-Agenten weist nur die PL zu. */
 export async function assertResponsible(db: Db, projectId: string, membership: { role: string }, userId: string | null | undefined): Promise<void> {
@@ -95,7 +96,9 @@ const TASK_SELECT = `
     (select coalesce(sum(minutes), 0)::int from time_entries x where x.task_id = t.id) as logged_minutes,
     (select count(*)::int from checklist_items x where x.task_id = t.id and x.done) as checklist_done,
     (select count(*)::int from checklist_items x where x.task_id = t.id) as checklist_total,
-    coalesce((select json_agg(json_build_object('id', p.id, 'title', p.title, 'due', p.due_date)) from task_dependencies d join tasks p on p.id = d.predecessor_id where d.successor_id = t.id), '[]'::json) as predecessors
+    coalesce((select json_agg(json_build_object('id', p.id, 'title', p.title, 'due', p.due_date)) from task_dependencies d join tasks p on p.id = d.predecessor_id where d.successor_id = t.id), '[]'::json) as predecessors,
+    coalesce((select json_agg(mt.milestone_id) from milestone_tasks mt where mt.task_id = t.id), '[]'::json) as milestone_ids,
+    (select name from users where id = t.reviewer_user_id) as reviewer_name
   from tasks t
   join board_columns c on c.id = t.column_id
   left join users ru on ru.id = t.responsible_user_id
@@ -212,6 +215,8 @@ export function mapTask(r: any, lead: LeadInfo): Task {
     done: r.is_done,
     conflicts,
     predecessorIds: predIds,
+    milestoneIds: (typeof r.milestone_ids === 'string' ? JSON.parse(r.milestone_ids) : r.milestone_ids) ?? [],
+    reviewer: r.reviewer_user_id ? { userId: r.reviewer_user_id, name: r.reviewer_name ?? null } : null,
     createdAt: r.created_at,
     updatedAt: r.updated_at
   };
@@ -219,7 +224,8 @@ export function mapTask(r: any, lead: LeadInfo): Task {
 
 
 /** Reiht ein Arbeitspaket in einer Spalte an Position index ein und nummeriert die Spalte neu (nur Geschwister derselben Ebene). */
-export async function moveTask(db: Db, taskId: string, columnId: string, index: number | null) {
+export async function moveTask(db: Db, taskId: string, columnId: string, index: number | null, actorId: string | null = null) {
+  const before = await db.maybeOne(`select column_id from tasks where id = $1`, [taskId]);
   const others = await db.query(
     `select id from tasks where column_id = $1 and id <> $2 and archived_at is null and parent_id is not distinct from (select parent_id from tasks where id = $2) order by position, created_at`,
     [columnId, taskId]
@@ -232,6 +238,8 @@ export async function moveTask(db: Db, taskId: string, columnId: string, index: 
   for (const [i, id] of ids.entries()) {
     await db.query(`update tasks set position = $2, column_id = $3, updated_at = case when id = $4 then now() else updated_at end where id = $1`, [id, i, columnId, taskId]);
   }
+  // Statuswechsel: verknüpfte Meilensteine prüfen (Vorschlag „erreicht“ an die PL bzw. automatisch erreichen)
+  if (before && before.column_id !== columnId) await syncMilestonesOf(db, taskId, actorId);
 }
 
 /**

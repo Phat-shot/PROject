@@ -8,7 +8,9 @@ interface Overview {
   time: { enabled: boolean; loggedMinutes: number; estimateMinutes: number; budgetHours: number | null };
   counts: { open: number; done: number; overdue: number; due_week: number; no_due: number };
   perSubproject: { id: string; name: string; total: number; done: number; overdue: number }[];
-  milestones: { id: string; name: string; date: string; subprojectId: string | null }[];
+  milestones: { id: string; name: string; date: string; subprojectId: string | null; reachSuggestedAt?: string | null; tasksDone?: number; tasksTotal?: number }[];
+  /** in den letzten 30 Tagen erreicht */
+  reachedMilestones?: { id: string; name: string; date: string; subprojectId: string | null; reachedAt: string; reachedBy: { userId: string; name: string | null } | null }[];
   raid: { id: string; number: number; kind: string; title: string; score: number | null; status: string; dueDate: string | null }[];
   pendingDrafts: number;
   pagesInReview: { id: string; title: string; updated_at: string }[];
@@ -125,7 +127,8 @@ export function OverviewView() {
         <div className="stack">
           <div className="card">
             <h2>Nächste Meilensteine</h2>
-            {o.milestones.length === 0 ? <p className="muted small">Keine anstehenden Meilensteine.</p> : <ul>{o.milestones.map((m) => <li key={m.id}><strong>{fmtDate(m.date)}</strong> {m.name} <span className="muted small">{detail.subprojects.find((s) => s.id === m.subprojectId)?.name}</span></li>)}</ul>}
+            {o.milestones.length === 0 ? <p className="muted small">Keine anstehenden Meilensteine.</p> : <ul>{o.milestones.map((m) => <li key={m.id}><strong className={m.date < new Date().toISOString().slice(0, 10) ? 'text-danger' : undefined}>{fmtDate(m.date)}</strong> {m.name} <span className="muted small">{detail.subprojects.find((s) => s.id === m.subprojectId)?.name}</span>{(m.tasksTotal ?? 0) > 0 && <span className="badge ml-1" title="verknüpfte Arbeitspakete erledigt / gesamt">{m.tasksDone}/{m.tasksTotal} AP</span>}{m.reachSuggestedAt && <Link className="badge warn ml-1" to={`${base}/plan?ms=${m.id}`} title="Alle verknüpften Arbeitspakete erledigt">bestätigen</Link>}</li>)}</ul>}
+            {(o.reachedMilestones?.length ?? 0) > 0 && <><h3>Erreicht</h3><ul className="reached-ms">{o.reachedMilestones!.map((m) => <li key={m.id}><span className="ms-diamond reached" aria-hidden="true" /> {m.name} <span className="muted small">erreicht {fmtDate(m.reachedAt.slice(0, 10))}{m.reachedBy?.name ? ` · ${m.reachedBy.name}` : ''} (geplant {fmtDate(m.date)})</span></li>)}</ul></>}
           </div>
           <div className="card">
             <h2>Auslastung (offene Arbeitspakete je Person)</h2>

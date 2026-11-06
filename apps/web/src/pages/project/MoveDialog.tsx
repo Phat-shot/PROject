@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import type { ChecklistItem, Task } from '@projekttool/shared';
 import { api } from '../../lib/api';
-import { Modal, useAsync } from '../../components/ui';
+import { Modal, useAsync, useToast } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 
 /**
@@ -115,12 +115,17 @@ export function PromoteItemDialog({ task, item, members, onClose, onDone }: { ta
   );
 }
 
+const TRASH_DAYS = 30;
+/** Hinweis nach der Umwandlung (gleich dem Toast in TaskDrawer, damit nur einer stehen bleibt). */
+export const DEMOTED_TEXT = 'Aufgabe ist jetzt ein Checklistenpunkt.';
 /**
  * Aufgabe wird Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets (POST /tasks/:id/demote {toTaskId}).
- * Gibt es genau eine andere Aufgabe, ist sie vorausgewählt; ohne andere Aufgabe geht es nicht.
+ * Gibt es genau eine andere Aufgabe, ist sie vorausgewählt; ohne andere Aufgabe geht es nicht. Die Aufgabe liegt danach im
+ * Papierkorb; der Toast bietet „Rückgängig“ (POST /tasks/:id/restore entfernt den Punkt und stellt die Aufgabe wieder her).
  */
 export function DemoteDialog({ task, onClose, onDone }: { task: Task; onClose: () => void; onDone: (r: { task: Task; ap: Task; itemId: string }) => Promise<void> | void }) {
-  const { detail, tasks } = useProject();
+  const { detail, tasks, reloadTasks } = useProject();
+  const toast = useToast();
   const others = useMemo(() => tasks.filter((x) => x.parentId === task.parentId && x.id !== task.id && !x.archivedAt && !x.deletedAt)
     .sort((a, b) => Number(a.done) - Number(b.done) || a.position - b.position || a.number - b.number), [tasks, task.id, task.parentId]);
   const [target, setTarget] = useState(others.length === 1 ? others[0].id : '');
@@ -142,10 +147,19 @@ export function DemoteDialog({ task, onClose, onDone }: { task: Task; onClose: (
                 ))}
               </div>
             </div>
-            <p className="muted small m-0">„{task.title}“ wird Checklistenpunkt der Aufgabe {sel ? `„${sel.title}“` : '…'}. Verloren gehen eigener Status, Termin, Beschreibung und Labels; Log und Kommentare werden als ein Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern dorthin. Nicht möglich mit Zeitbuchungen, verknüpften Mails oder offenen Fragen.</p>
+            <p className="muted small m-0">„{task.title}“ wird Checklistenpunkt der Aufgabe {sel ? `„${sel.title}“` : '…'}. Log und Kommentare werden als ein Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern dorthin. Die Aufgabe selbst landet im Papierkorb ({TRASH_DAYS} Tage) und ist dort wiederherstellbar: dann verschwindet der Checklistenpunkt wieder und Checkliste und Anhänge kommen zurück. Nicht möglich mit Zeitbuchungen, verknüpften Mails oder offenen Fragen.</p>
           </>}
         {error && <div className="error">{error}</div>}
-        <div className="row"><button className="btn primary danger" disabled={busy || !target} onClick={() => void run(async () => { const r = await api.post<{ task: Task; ap: Task; itemId: string }>(`/tasks/${task.id}/demote`, { toTaskId: target }); await onDone(r); onClose(); })}>Zu Checklistenpunkt machen</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+        <div className="row"><button className="btn primary danger" disabled={busy || !target} onClick={() => void run(async () => {
+          const r = await api.post<{ task: Task; ap: Task; itemId: string; trashedId?: string }>(`/tasks/${task.id}/demote`, { toTaskId: target });
+          await onDone(r);
+          // Gleicher Text wie der Hinweis des Aufrufers: der Toast ersetzt ihn (gleicher Text und Art) und bringt „Rückgängig“ mit
+          toast.show(DEMOTED_TEXT, { kind: 'ok', action: { label: 'Rückgängig', onClick: async () => {
+            try { const u = await api.post<{ task: Task }>(`/tasks/${r.trashedId ?? task.id}/restore`); await reloadTasks(); toast.ok(`„${u.task.title}“ ist wieder eine Aufgabe.`); }
+            catch (e: any) { toast.error(`Rückgängig nicht möglich: ${e?.message ?? e}`); }
+          } } });
+          onClose();
+        })}>Zu Checklistenpunkt machen</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
     </Modal>
   );

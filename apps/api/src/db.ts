@@ -15,9 +15,16 @@ export interface Db {
   /** Mehrere Anweisungen in einem Skript (Migrationen). */
   exec(sql: string): Promise<void>;
   close(): Promise<void>;
+  /** Alles in fn in einer Transaktion (eigene Verbindung); Fehler → Rollback. Fehlt bei Test-Doubles. */
+  transaction?<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
 }
 
-function wrap(kind: Db['kind'], raw: { query: (sql: string, params?: unknown[]) => Promise<any>; exec?: (sql: string) => Promise<any> }, close: () => Promise<void>): Db {
+/** Transaktion, wenn die Datenbank sie anbietet; sonst direkt (Test-Doubles). */
+export async function withTransaction<T>(db: Db, fn: (tx: Db) => Promise<T>): Promise<T> {
+  return db.transaction ? db.transaction(fn) : fn(db);
+}
+
+function wrap(kind: Db['kind'], raw: { query: (sql: string, params?: unknown[]) => Promise<any>; exec?: (sql: string) => Promise<any> }, close: () => Promise<void>, transaction?: Db['transaction']): Db {
   const db: Db = {
     kind,
     async query(sql, params = []) {
@@ -37,7 +44,8 @@ function wrap(kind: Db['kind'], raw: { query: (sql: string, params?: unknown[]) 
       if (raw.exec) await raw.exec(sql);
       else await raw.query(sql);
     },
-    close
+    close,
+    transaction
   };
   return db;
 }
@@ -52,14 +60,27 @@ export async function createDb(): Promise<Db> {
   if (url && url !== 'memory') {
     const { default: pg } = await import('pg');
     const pool = new pg.Pool({ connectionString: url });
-    return wrap('pg', pool, () => pool.end());
+    const transaction = async <T,>(fn: (tx: Db) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      try {
+        await client.query('begin');
+        const r = await fn(wrap('pg', client, async () => undefined));
+        await client.query('commit');
+        return r;
+      } catch (e) {
+        await client.query('rollback').catch(() => undefined);
+        throw e;
+      } finally { client.release(); }
+    };
+    return wrap('pg', pool, () => pool.end(), transaction);
   }
   const { PGlite } = await import('@electric-sql/pglite');
   const dataDir = url === 'memory' ? undefined : path.join(process.env.DATA_DIR ?? '.data', 'pglite');
   if (dataDir) await mkdir(dataDir, { recursive: true });
   const lite = dataDir ? new PGlite(dataDir) : new PGlite();
   await lite.waitReady;
-  return wrap('pglite', lite as any, () => lite.close());
+  const transaction = <T,>(fn: (tx: Db) => Promise<T>): Promise<T> => lite.transaction((t) => fn(wrap('pglite', t as any, async () => undefined))) as Promise<T>;
+  return wrap('pglite', lite as any, () => lite.close(), transaction);
 }
 
 const here = path.dirname(fileURLToPath(import.meta.url));

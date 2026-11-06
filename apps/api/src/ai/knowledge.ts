@@ -69,11 +69,13 @@ const excerptOf = (text: string, terms: string[], n = 800) => { const low = text
  * (Agent der Ansicht, Projektagent für Projektkonten oder Recht der Ansicht mit Lesen und KI); persönliche Konten nur, wenn
  * die fragende Person der Eigentümer ist oder nur der Eigentümer Mensch im Projekt ist; persönliche Projekte nur eigene
  * Postfächer (mail.ownOnly). Mit viewerId zusätzlich nur Ansichten, die diese Person lesen darf; allMembers (Projektkanal: alle
- * Mitglieder lesen mit) nur Ansichten, die die Rollen Mitglied und Leser lesen dürfen, ohne persönliche Konten.
+ * Mitglieder lesen mit) nur Ansichten, die die Rollen Mitglied und Leser lesen dürfen, ohne persönliche Konten. Projekte mit
+ * ausgeschaltetem Schalter „Mails für KI-Agenten durchsuchbar“ liefern keine Ansicht (Suche, read_mail, Treffer im Chat).
  */
 export async function mailViewScope(db: Db, q: { projectIds: string[]; agentId: string; viewerId?: string | null; allMembers?: boolean }): Promise<string[]> {
   if (!q.projectIds.length) return [];
-  const views = (await db.query(`select v.id, v.project_id, v.account_id, v.agent_user_id, u.use, u.user_id as use_user_id, p.agent_user_id as project_agent, p.agent_mail from mail_views v join mail_account_uses u on u.id = v.use_id join projects p on p.id = v.project_id where v.project_id = any($1::uuid[]) and p.status = 'active'`, [q.projectIds])).rows as any[];
+  // Schalter je Projekt „Mails für KI-Agenten durchsuchbar“ (agent_mail_search): aus = keine Ansicht des Projekts
+  const views = (await db.query(`select v.id, v.project_id, v.account_id, v.agent_user_id, u.use, u.user_id as use_user_id, p.agent_user_id as project_agent, p.agent_mail from mail_views v join mail_account_uses u on u.id = v.use_id join projects p on p.id = v.project_id where v.project_id = any($1::uuid[]) and p.status = 'active' and p.agent_mail_search`, [q.projectIds])).rows as any[];
   const out: string[] = [];
   const memo = new Map<string, any>();
   const member = async (projectId: string, userId: string) => { const k = `${projectId}|${userId}`; if (!memo.has(k)) memo.set(k, await getMembership(db, projectId, userId)); return memo.get(k); };
@@ -136,7 +138,7 @@ export async function searchSources(db: Db, q: { projectIds: string[]; agentId: 
   if (kinds.has('mails')) out.mails = await searchMails(db, { viewIds: await mailViewScope(db, { projectIds: [...new Set(q.projectIds)], agentId: q.agentId, viewerId: q.viewerId, allMembers: q.allMembers }), terms, from: q.from, since, until, limit: q.max ?? 8 });
   if (kinds.has('files')) {
     const agentProjects = (await db.query(`select project_id from project_members where user_id = $1 and project_id = any($2::uuid[])`, [q.agentId, projectIds])).rows.map((r: any) => r.project_id as string);
-    const scopes = await fileScopes(db, agentProjects);
+    const scopes = await fileScopes(db, agentProjects, { forAgent: true });
     const rows = await searchFiles(db, { scopes, terms, since, until, limit: q.max ?? 8 });
     out.files = rows.map((f: any) => ({ kind: 'file' as const, id: f.id, ref: `file:${f.id}`, title: f.name, from: displayPath(scopes, f.source_id, f.path), date: d10(f.modified_at), excerpt: f.text_head ? excerptOf(String(f.text_head), terms, 400) : null, score: Number(f.score) }));
   }

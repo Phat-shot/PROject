@@ -179,11 +179,14 @@ export function actionFingerprint(a: any): string {
   return parts.join('|');
 }
 
-/** Zugriff der Agenten je Ordner, über die Hierarchie vererbt (die strengste Angabe gilt); Seiten ohne Ordner: write. */
+/**
+ * Zugriff der Agenten je Ordner, über die Hierarchie vererbt (die strengste Angabe gilt); Seiten ohne Ordner: write. Ein Ordner,
+ * der in „Quellen für den Agenten“ ausgeschaltet ist (agent_enabled = false), zählt samt Unterordnern als none.
+ */
 export async function folderAccessMap(db: Db, projectId: string): Promise<Map<string, 'write' | 'read' | 'none'>> {
-  const rows = await db.query(`select id, parent_id, agent_access from doc_folders where project_id = $1`, [projectId]);
+  const rows = await db.query(`select id, parent_id, agent_access, agent_enabled from doc_folders where project_id = $1`, [projectId]);
   const by = new Map<string, { parent: string | null; access: 'write' | 'read' | 'none' }>();
-  for (const r of rows.rows) by.set(r.id, { parent: r.parent_id, access: r.agent_access ?? 'write' });
+  for (const r of rows.rows) by.set(r.id, { parent: r.parent_id, access: r.agent_enabled === false ? 'none' : r.agent_access ?? 'write' });
   const rank = { write: 0, read: 1, none: 2 } as const;
   const out = new Map<string, 'write' | 'read' | 'none'>();
   for (const [id] of by) {

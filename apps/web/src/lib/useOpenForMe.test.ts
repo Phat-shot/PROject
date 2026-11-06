@@ -9,3 +9,10 @@ describe('Offen für dich: Zählung', () => {
     expect(ids.sort()).toEqual(['a', 'a', 'a', 'b', 'b']);
   });
 });
+
+describe('Offen für dich: Prüfungen', () => {
+  it('Arbeitspakete, für die man als prüfende Person benannt ist, zählen je Zeile', () => {
+    const ids = openProjectIds([], { drafts: [], pagesInReview: [{ id: 's', title: 'Konzept', projectId: 'a', projectKey: 'A' }], tasks: [], tasksInReview: [{ id: 't1', number: 4, title: 'Angebot', projectId: 'b', projectKey: 'B' }, { id: 't2', number: 5, title: 'Texte', projectId: 'b', projectKey: 'B' }] });
+    expect(ids.sort()).toEqual(['a', 'b', 'b']);
+  });
+});

@@ -4,7 +4,8 @@ import type { Resource, ResourceBooking, Task, TaskComment, TaskRelation } from 
 import { BookingForm, BookingRow } from '../../components/Resources';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
 import { Badge, Button, Drawer, Dropdown, FieldError, IconButton, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
-import { IconArrowLeft, IconArrowUpRight, IconCheck, IconChevronDown, IconChevronRight, IconHourglass, IconX } from '../../components/icons';
+import { IconArrowUpRight, IconCheck, IconChevronDown, IconChevronRight, IconDiamond, IconHourglass, IconX } from '../../components/icons';
+import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
@@ -17,7 +18,7 @@ import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
 import { DemoteDialog, MoveItemDialog, MoveTaskDialog, PromoteItemDialog, SUBTASK_DRAG, type MoveMode } from './MoveDialog';
-import { moveTaskTo } from '../../lib/moveTask';
+import { moveTaskTo, reviewOptsOf } from '../../lib/moveTask';
 import { useCreate } from './create';
 import { contactLabel, useContacts } from '../../lib/useContacts';
 import { today } from '../../lib/api';
@@ -25,6 +26,7 @@ import { ReportWish } from '../../components/NotifyRules';
 import { useOpenChat } from '../../components/Messenger';
 import type { Question, WebSource } from '@projekttool/shared';
 import { ApprovalCard, TaskPolicyInline } from '../../components/AgentPolicy';
+import { DateInput } from '../../components/DateInput';
 
 interface TaskMail { id: string; subject: string; fromAddr: string; fromName: string | null; to: string[]; date: string; snippet: string; outgoing: boolean; copied: boolean; checklistItemId: string | null; accountId: string; origin: boolean; answered: boolean }
 
@@ -51,7 +53,7 @@ export function TaskDrawer({ taskId, onClose }: { taskId: string; onClose: () =>
 
 /** Arbeitspaket oder Aufgabe: alle Felder direkt editierbar, Speichern bei Änderung bzw. beim Verlassen eines Textfelds. */
 function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: string; expand: string | null; full: boolean; onClose: () => void; onView: (v: DrawerView) => void }) {
-  const { detail, users, tasks, reloadTasks, openTask, ai } = useProject();
+  const { detail, users, tasks, reloadTasks, openTask, openSubproject, ai } = useProject();
   const { timeTracking } = useAuth();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [shift, setShift] = useState<{ changes: any[] } | null>(null);
@@ -117,8 +119,17 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   const inheritedName = t.responsible.inherited ? t.responsible.name ?? t.responsible.email ?? 'PL' : null;
   const inheritedFrom = t.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : t.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL';
   const sp = detail.subprojects.find((s) => s.id === t.subprojectId);
+  const col = detail.columns.find((c) => c.id === t.columnId);
+  const inReview = col?.kind === 'review';
+  const mayDecide = inReview && (t.reviewer?.userId === me.userId || me.role === 'pl');
+  const crumbs = <Breadcrumbs className="drawer-crumbs" items={[
+    { label: detail.project.name, to: `/projekte/${detail.project.id}/board`, title: 'Board des Projekts' },
+    ...(sp ? [{ label: sp.name, onClick: () => openSubproject(sp.id), title: 'Teilprojekt öffnen' }] : []),
+    ...(t.parent ? [{ label: `${detail.project.key}-${t.parent.number} ${t.parent.title}`, onClick: () => onView({ id: t.parent!.id, expand: t.id, full: false }), title: 'Zurück zum Arbeitspaket' }] : []),
+    { label: t.parentId ? t.title : `${detail.project.key}-${t.number} ${t.title}` }
+  ]} />;
   return (
-    <Drawer title={<>{!t.parentId && <span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span>}<TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} />{t.done && t.autoDoneAt && <AutoDoneBadge at={t.autoDoneAt} />}</>} onClose={onClose}
+    <Drawer crumbs={crumbs} title={<>{!t.parentId && <span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span>}<TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} />{t.done && t.autoDoneAt && <AutoDoneBadge at={t.autoDoneAt} />}</>} onClose={onClose}
       actions={<>
         {saved && <span className="save-state" role="status">gespeichert</span>}
         {saveError && <span className="save-state error" role="alert">Nicht gespeichert: {saveError.msg}</span>}
@@ -126,7 +137,6 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
         {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <Button size="sm" variant="primary" loading={busy} icon={<IconCheck />} title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>Erledigt</Button>}
       </>}>
       {error && <div className="error mb" role="alert">{error}</div>}
-      {t.parent && <p className="small mb mt-0"><button className="btn sm link" title="Zurück zum Arbeitspaket" onClick={() => onView({ id: t.parent!.id, expand: t.id, full: false })}><IconArrowLeft /> {t.parent.title}</button></p>}
       {moveMode && <MoveTaskDialog task={t} mode={moveMode} onClose={() => setMoveMode(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok(moveMode === 'reparent' ? 'Aufgabe verschoben.' : moveMode === 'promote' ? 'Jetzt ein eigenes Arbeitspaket.' : 'Teilprojekt geändert.'); if (moveMode === 'promote') onView({ id: t.id, expand: null, full: true }); }} />}
       {itemAction?.kind === 'move' && t.checklist?.find((i) => i.id === itemAction.itemId) && <MoveItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt verschoben.'); }} />}
       {itemAction?.kind === 'promote' && t.checklist?.find((i) => i.id === itemAction.itemId) && <PromoteItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} members={members} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt ist jetzt eine Aufgabe.'); }} />}
@@ -158,6 +168,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           </div>
         </div>
       )}
+      {inReview && <ReviewNotice task={t} canEdit={canEdit} mayDecide={mayDecide} onChanged={async () => { await load(); await reloadTasks(); }} />}
       {t.conflicts.length > 0 && (
         <div className="notice mb">
           <strong>Terminkonflikt</strong>
@@ -168,7 +179,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
 
       <div className="form cols-3 task-core">
         <label className="field"><span>Status</span>
-          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) { await load(); await reloadTasks(); } }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small"><IconHourglass size={12} /> {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}<FieldError error={saveErr('columnId')} /></label>
+          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c, null, reviewOptsOf(detail, t.reviewer?.userId))) { await load(); await reloadTasks(); } }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small"><IconHourglass size={12} /> {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}<FieldError error={saveErr('columnId')} /></label>
         <label className="field"><span>Zuständig</span>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
@@ -176,7 +187,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
             {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
           </select><FieldError error={saveErr('responsibleUserId', 'responsibleEmail')} /></label>
-        <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('dueDate')) || undefined} onChange={(e) => void patch({ dueDate: e.target.value || null })} /><FieldError error={saveErr('dueDate')} /></label>
+        <label className="field"><span>Deadline</span><DateInput value={t.dueDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('dueDate')) || undefined} onChange={(v) => void patch({ dueDate: v || null })} /><FieldError error={saveErr('dueDate')} /></label>
       </div>
         {respAgent && <div className="field full task-agent"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || t.agentRunning || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); setAgentMsg(null); await load(); })}>{t.agentRunning ? 'Läuft …' : 'Jetzt laufen lassen'}</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small mt-1">Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' (erledigt)' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' (erledigt)' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentRun && !agentRun.allowed && <div className="small mt-1 text-warn">Läuft nicht: {agentRun.reason}</div>}{t.agentRunning && <div className="small muted mt-1">{respAgent.name} arbeitet; du kannst das Fenster schließen, das Ergebnis steht danach im Log.</div>}{agentMsg && <div className="small mt-1">{agentMsg}</div>}</div>}
       {!canDates && canEdit && <p className="muted small m-0 mt-1">Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
@@ -188,7 +199,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' (eingeschränkt sichtbar)' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select><FieldError error={saveErr('subprojectId')} /></label>
         <label className="field"><span>Priorität</span>
           <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><FieldError error={saveErr('priority')} /></label>
-        <label className="field"><span>Start</span><input type="date" value={t.startDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('startDate')) || undefined} onChange={(e) => void patch({ startDate: e.target.value || null })} /><FieldError error={saveErr('startDate')} /></label>
+        <label className="field"><span>Start</span><DateInput value={t.startDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('startDate')) || undefined} onChange={(v) => void patch({ startDate: v || null })} /><FieldError error={saveErr('startDate')} /></label>
         <div className="field"><span>Labels</span>{canEdit ? <><LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /><FieldError error={saveErr('labelIds')} /></> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color} mr-1`}>{l.name}</span> : null; })}</span>}</div>
         <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
@@ -206,6 +217,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
         </> : null}
         </div>
         <TextArea label="Außenbeschreibung (für Externe)" value={t.externalBrief ?? ''} canEdit={canEdit && canPlan} empty="Keine. KI-Agenten schreiben Externen nur, was hier, in Log-Einträgen „für Externe sichtbar“ und in freigegebenen Seiten steht; die Beschreibung oben nur, wenn das AP dem Externen zugewiesen ist." onSave={(v) => patch({ externalBrief: v || null })} />
+        {!t.parentId && <MilestonePicker task={t} canEdit={canEdit && canPlan} onChange={(ids) => patch({ milestoneIds: ids })} />}
         <div className="form cols-2 mt">
           <PredecessorPicker task={t} all={tasks} projectKey={detail.project.key} canEdit={canEdit && canPlan} onChange={(ids) => patch({ predecessorIds: ids })} />
           {!t.parentId && <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />}
@@ -234,7 +246,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       </details>
 
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
-      <FieldError error={saveErr('description', 'externalBrief', 'recurrence', 'predecessorIds', 'autoComplete', 'estimateMinutes')} />
+      <FieldError error={saveErr('description', 'externalBrief', 'recurrence', 'predecessorIds', 'autoComplete', 'estimateMinutes', 'milestoneIds')} />
 
       {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} expand={expand} onFull={(id) => onView({ id, expand: null, full: true })} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
@@ -344,7 +356,7 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
   const doneCol = detail.columns.find((c) => c.kind === 'done') ?? detail.columns.find((c) => c.isDone);
   const openCol = detail.columns.find((c) => c.kind === 'active') ?? detail.columns.find((c) => !c.isDone);
   const t0 = today();
-  const move = (x: Task, colId: string | undefined) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, x.id, col))) await onChanged(); });
+  const move = (x: Task, colId: string | undefined) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, x.id, col, null, reviewOptsOf(detail, x.reviewer?.userId)))) await onChanged(); });
   const create = useCreate();
   const add = () => run(async () => {
     const t = title.trim();
@@ -411,7 +423,7 @@ function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; 
     <div className="st-panel">
       {error && <div className="error small">{error}</div>}
       <div className="row small gap-2 items-center">
-        <label className="row gap-1 items-center"><span className="muted">Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}`, { dueDate: e.target.value || null }); await changed(); })} /></label>
+        <label className="row gap-1 items-center"><span className="muted">Deadline</span><DateInput value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(v) => void run(async () => { await api.patch(`/tasks/${t.id}`, { dueDate: v || null }); await changed(); })} /></label>
         {t.done && t.autoDoneAt && <AutoDoneBadge at={t.autoDoneAt} />}
         <button className="btn sm link right" onClick={onFull}>Alle Details <IconArrowUpRight size={12} /></button>
       </div>
@@ -427,6 +439,56 @@ function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; 
         <div className="grow"><MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar zur Aufgabe … (Strg+Enter)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} /></div>
         <button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Senden</button>
       </div>}
+    </div>
+  );
+}
+
+/**
+ * Prüfung (Spalte der Art „In Prüfung“): wer prüft, Prüfer wechseln; die prüfende Person oder die PL gibt frei (→ Erledigt)
+ * oder weist mit Kommentar zurück (→ Spalte vor der Prüfung).
+ */
+function ReviewNotice({ task, canEdit, mayDecide, onChanged }: { task: Task; canEdit: boolean; mayDecide: boolean; onChanged: () => Promise<void> }) {
+  const { detail } = useProject();
+  const [reject, setReject] = useState(false);
+  const { busy, error, run } = useAsync();
+  const opts = reviewOptsOf(detail, task.reviewer?.userId);
+  const decide = (decision: 'approve' | 'reject', comment?: string) => run(async () => { await api.post(`/tasks/${task.id}/review`, { decision, comment }); await onChanged(); });
+  return (
+    <div className="notice info mb review-notice" role="region" aria-label="Prüfung">
+      <strong>In Prüfung{task.reviewer ? ` bei ${task.reviewer.name ?? '?'}` : ' (ohne benannte prüfende Person)'}</strong>
+      <div className="row mt small gap-2">
+        {canEdit && <label className="row gap-1 items-center"><span className="muted">Prüfer</span>
+          <select className="inline-select" value={task.reviewer?.userId ?? ''} disabled={busy} aria-label="Prüfende Person" onChange={(e) => void run(async () => { await api.patch(`/tasks/${task.id}`, { reviewerUserId: e.target.value || null }); await onChanged(); })}>
+            {(!opts.required || !task.reviewer) && <option value="">– ohne –</option>}
+            {opts.reviewers.map((r) => <option key={r.value} value={r.value}>{r.label}</option>)}
+          </select></label>}
+        {mayDecide && <><Button size="sm" variant="primary" loading={busy} icon={<IconCheck />} onClick={() => void decide('approve')}>Freigeben</Button><Button size="sm" onClick={() => setReject(true)}>Zurückweisen …</Button></>}
+      </div>
+      {error && <div className="error small mt-1" role="alert">{error}</div>}
+      {reject && <PromptModal title="Prüfung zurückweisen" label="Was fehlt oder ist zu ändern?" placeholder="Kommentar (Pflicht)" hint="Das Arbeitspaket geht in die Spalte vor der Prüfung zurück; der Kommentar steht im Log, die Zuständigen bekommen eine Meldung." submitLabel="Zurückweisen" onClose={() => setReject(false)} onSubmit={(v) => { if (v) void decide('reject', v); }} />}
+    </div>
+  );
+}
+
+/** Meilensteine des Arbeitspakets (Mehrfach): durchsuchbare Liste mit Häkchen; Status erreicht/offen sichtbar. */
+export function MilestonePicker({ task, canEdit, onChange }: { task: Task; canEdit: boolean; onChange: (ids: string[]) => Promise<void> }) {
+  const { detail } = useProject();
+  const [q, setQ] = useState('');
+  const sel = new Set(task.milestoneIds ?? []);
+  const needle = q.trim().toLowerCase();
+  const all = detail.milestones ?? [];
+  const list = [...all].sort((a, b) => a.date.localeCompare(b.date)).filter((m) => sel.has(m.id) || !needle || m.name.toLowerCase().includes(needle));
+  const toggle = (id: string) => { const n = new Set(sel); if (n.has(id)) n.delete(id); else n.add(id); void onChange([...n]); };
+  if (all.length === 0) return null;
+  return (
+    <div className="field full mt"><span>Meilenstein{sel.size > 0 && <span className="muted"> · {sel.size} gewählt</span>}</span>
+      <div className="pred-picker">
+        {all.length > 6 && <input type="text" placeholder="Meilenstein filtern …" aria-label="Meilensteine filtern" value={q} onChange={(e) => setQ(e.target.value)} disabled={!canEdit} />}
+        <div className="list">
+          {list.map((m) => <label key={m.id} className={`check small ${sel.has(m.id) ? 'on' : ''}`}><input type="checkbox" checked={sel.has(m.id)} disabled={!canEdit} onChange={() => toggle(m.id)} /> <IconDiamond size={12} /> {m.name} <span className="muted">· {fmtDate(m.date)}{m.reachedAt ? ' · erreicht' : ''}</span></label>)}
+        </div>
+      </div>
+      {!canEdit && <span className="muted small">Meilensteine verknüpft die PL oder wer „Projektplan ändern“ darf.</span>}
     </div>
   );
 }
@@ -581,7 +643,7 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
       <h3 className="mt">Zeiten {data && <span className="badge">{fmtH(data.totalMinutes)}</span>}</h3>
       {data && data.entries.length > 0 && <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap small">{fmtDate(e.date)}</td><td className="small">{e.userName}</td><td className="nowrap small">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td><td>{(e.userId === detail.project.myMembership.userId || detail.project.myMembership.role === 'pl') && <IconButton label="Zeitbuchung löschen" size="sm" variant="link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await load(); await onChanged(); })}><IconX /></IconButton>}</td></tr>)}</tbody></table>}
       {canEdit && <div className="row mt">
-        <input className="w-140" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+        <DateInput className="w-140" value={f.date} onChange={(v) => setF({ ...f, date: v })} />
         <input className="w-64" type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
         <input className="w-64" type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} />
         <input className="grow" type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />

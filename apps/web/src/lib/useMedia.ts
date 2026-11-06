@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 export function useIsMobile(query = '(max-width: 900px)'): boolean {
   const [m, setM] = useState(() => (typeof window !== 'undefined' && window.matchMedia ? window.matchMedia(query).matches : false));
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
     const q = window.matchMedia(query);
     const h = () => setM(q.matches);
     q.addEventListener('change', h);

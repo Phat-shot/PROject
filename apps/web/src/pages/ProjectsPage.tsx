@@ -8,6 +8,7 @@ import { TopBar } from '../components/Layout';
 import { Button, FieldError, Loading, Modal, roleLabel, useAsync, useDirty } from '../components/ui';
 import { IconDiamond } from '../components/icons';
 import { useProjectPolicy } from '../lib/useProjectPolicy';
+import { DateInput } from '../components/DateInput';
 
 export function ProjectsPage() {
   const { user } = useAuth();
@@ -80,7 +81,7 @@ function CreateProject({ personalOnly = false, onClose, onCreated }: { personalO
         <label className="field"><span>Beschreibung</span><textarea value={description} onChange={(e) => setDescription(e.target.value)} /><FieldError error={fieldErrors.description} /></label>
         {policy.scaffold.template && templates.data && templates.data.templates.length > 0 && <div className="grid cols-2">
           <label className="field"><span>Vorlage</span><select value={templateId} onChange={(e) => setTemplateId(e.target.value)}><option value="">– keine, Standardspalten –</option>{templates.data.templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-          {tpl && <label className="field"><span>Projektstart (Termine der Vorlage sind relativ dazu)</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>}
+          {tpl && <label className="field"><span>Projektstart (Termine der Vorlage sind relativ dazu)</span><DateInput value={startDate} onChange={(v) => setStartDate(v)} /></label>}
         </div>}
         {policy.scaffold.template && tpl && <p className="muted small">{tpl.description ? `${tpl.description} · ` : ''}{tpl.spec.columns?.length ?? 0} Spalten, {tpl.spec.subprojects?.length ?? 0} Teilprojekte, {tpl.spec.milestones?.length ?? 0} Meilensteine, {tpl.spec.labels?.length ?? 0} Labels, {tpl.spec.folders?.length ?? 0} Doku-Ordner</p>}
         {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}

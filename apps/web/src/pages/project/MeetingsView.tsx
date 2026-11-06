@@ -6,6 +6,7 @@ import { api, fmtDateTime, today } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { DateInput } from '../../components/DateInput';
 
 const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 const toLocalInput = (iso: string) => { const d = new Date(iso); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`; };
@@ -102,7 +103,7 @@ function ActionItems({ m, onChanged }: { m: Meeting; onChanged: () => Promise<vo
       <form className="row small" onSubmit={(e) => { e.preventDefault(); if (!title.trim()) return; void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { title, responsibleUserId: resp || null, dueDate: due || null }); setTitle(''); setDue(''); await onChanged(); }); }}>
         <input className="grow min-w-180" type="text" placeholder="Neuer Aktionspunkt …" value={title} onChange={(e) => setTitle(e.target.value)} />
         <select className="w-auto" value={resp} onChange={(e) => setResp(e.target.value)}><option value="">Zuständig …</option>{members.map((x) => <option key={x.userId} value={x.userId}>{x.name}</option>)}</select>
-        <input className="w-auto" type="date" value={due} min={today()} onChange={(e) => setDue(e.target.value)} />
+        <DateInput className="w-auto" value={due} min={today()} onChange={(v) => setDue(v)} />
         <button className="btn sm primary" disabled={busy || !title.trim()}>Anlegen</button>
       </form>
       {linkable.length > 0 && <div className="row small mt"><select className="w-auto max-w-320" value={link} onChange={(e) => setLink(e.target.value)}><option value="">Bestehendes Arbeitspaket verknüpfen …</option>{linkable.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select><button className="btn sm" disabled={busy || !link} onClick={() => void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { taskId: link }); setLink(''); await onChanged(); })}>Verknüpfen</button></div>}

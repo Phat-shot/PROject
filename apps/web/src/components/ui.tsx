@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { ApiError, fieldErrorsOf } from '../lib/api';
 import { IconMore, IconX } from './icons';
+import { DateInput } from './DateInput';
 
 /* ---------------------------------------------------------------------------------------------------------------
  * Primitives: Button, IconButton, Badge, Spinner, Loading, Term, Dropdown
@@ -97,8 +98,9 @@ export function Dropdown({ label = 'Mehr', items, size = 'sm', icon = true }: { 
  * ------------------------------------------------------------------------------------------------------------- */
 
 export type ToastKind = 'error' | 'ok' | 'info';
-export interface ToastOptions { kind?: ToastKind; /** ms, 0 = bleibt */ timeout?: number }
-interface ToastItem { id: number; text: string; kind: ToastKind }
+/** action: Knopf im Toast (z. B. „Rückgängig“); ein Klick führt ihn aus und schließt den Toast. */
+export interface ToastOptions { kind?: ToastKind; /** ms, 0 = bleibt */ timeout?: number; action?: { label: string; onClick: () => void | Promise<void> } }
+interface ToastItem { id: number; text: string; kind: ToastKind; action?: ToastOptions['action'] }
 type ToastFn = (text: string, o?: ToastOptions) => void;
 const listeners = new Set<ToastFn>();
 /** Toast auch außerhalb von Komponenten (z. B. nach einem Drop) – wirkt, sobald ein ToastProvider gerendert ist. */
@@ -117,8 +119,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const show = useCallback<ToastFn>((text, o) => {
     const kind = o?.kind ?? 'info';
     const id = ++seq.current;
-    setItems((l) => [...l.filter((x) => !(x.text === text && x.kind === kind)), { id, text, kind }].slice(-5));
-    const ms = o?.timeout ?? (kind === 'error' ? 8000 : 4000);
+    setItems((l) => [...l.filter((x) => !(x.text === text && x.kind === kind)), { id, text, kind, action: o?.action }].slice(-5));
+    const ms = o?.timeout ?? (kind === 'error' || o?.action ? 8000 : 4000);
     if (ms > 0) setTimeout(() => remove(id), ms);
   }, [remove]);
   useEffect(() => { listeners.add(show); return () => { listeners.delete(show); }; }, [show]);
@@ -128,6 +130,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const render = (x: ToastItem) => (
     <div key={x.id} className={`toast ${x.kind}`}>
       <span>{x.text}</span>
+      {x.action && <Button size="sm" variant="link" onClick={() => { remove(x.id); void x.action!.onClick(); }}>{x.action.label}</Button>}
       <IconButton label="Meldung schließen" size="sm" variant="link" onClick={() => remove(x.id)}><IconX /></IconButton>
     </div>
   );
@@ -230,7 +233,7 @@ function useRequestClose(onClose: () => void, dirty?: boolean) {
   };
 }
 
-export function Drawer({ title, onClose, children, actions, dirty }: LayerProps & { actions?: ReactNode }) {
+export function Drawer({ title, onClose, children, actions, dirty, crumbs }: LayerProps & { actions?: ReactNode; /** Brotkrumen über dem Titel (Projekt › Teilprojekt › Arbeitspaket › Aufgabe) */ crumbs?: ReactNode }) {
   const ref = useRef<HTMLElement>(null);
   const titleId = useId();
   const close = useRequestClose(onClose, dirty);
@@ -241,6 +244,7 @@ export function Drawer({ title, onClose, children, actions, dirty }: LayerProps 
       <aside className="drawer" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} tabIndex={-1}>
         {/* Titel volle Breite (darf umbrechen), Schließen daneben; Aktionen in einer Zeile darunter (mobil seitlich scrollbar) */}
         <header>
+          {crumbs}
           <div className="drawer-title"><h2 id={titleId}>{title}</h2><IconButton label="Schließen" size="sm" className="drawer-close" onClick={() => void close()}><IconX /></IconButton></div>
           {actions && <div className="drawer-actions">{actions}</div>}
         </header>
@@ -416,6 +420,7 @@ function FormDialog({ o, onDone }: { o: FormOptions; onDone: (v: Record<string, 
           ? <label key={f.key} className="check"><input type="checkbox" checked={v[f.key] === '1'} onChange={(e) => setV({ ...v, [f.key]: e.target.checked ? '1' : '' })} /> {f.label}</label>
           : <label key={f.key} className="field"><span className={f.required ? 'req' : ''}>{f.label}</span>{f.type === 'select'
           ? <select value={v[f.key]} aria-required={f.required || undefined} onChange={(e) => setV({ ...v, [f.key]: e.target.value })}>{(f.options ?? []).map((x) => <option key={x.value} value={x.value}>{x.label}</option>)}</select>
+          : f.type === 'date' ? <DateInput autoFocus={i === 0} required={f.required} value={v[f.key]} onChange={(x) => setV({ ...v, [f.key]: x })} />
           : <input type={f.type ?? 'text'} autoFocus={i === 0} aria-required={f.required || undefined} value={v[f.key]} placeholder={f.placeholder} onChange={(e) => setV({ ...v, [f.key]: e.target.value })} />}</label>)}
         <div className="row"><Button type="submit" variant={o.danger ? 'danger' : 'primary'} disabled={!ok}>{o.submitLabel ?? 'Übernehmen'}</Button><Button variant="link" onClick={() => onDone(null)}>Abbrechen</Button></div>
       </form>

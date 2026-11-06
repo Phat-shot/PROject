@@ -13,7 +13,7 @@ import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
 import { fileHitsText, mailHitsText, search as knowledgeSearch, searchSources, searchText, tokens, type SearchHit } from './knowledge.js';
 import { SQL } from '../projectPolicy.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
-import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
+import { effectiveAgentPolicy, folderAccessMap, policyText } from './agentPolicy.js';
 import { projectAccount } from '../mail/accounts.js';
 import { webAvailable } from './web.js';
 import { recordFeedback } from './feedback.js';
@@ -608,7 +608,9 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   let personalDocs = '';
   if (scope.intent === 'personal' && scope.projectIds.length === 1) {
     const found = await knowledgeSearch(db, { projectId: scope.projectIds[0], agentId: agent.id, query: msg.body, viewerId: msg.user_id, maxTitles: 8, maxExcerpts: 3 });
-    const pages = found.pages.length ? found.pages : (await db.query(`select p.id, p.title, p.status, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 8`, [scope.projectIds[0]])).rows.map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null as string | null }));
+    // Neueste Seiten nur aus Ordnern, die der Agent sehen darf (Agent-Zugriff und Schalter „für KI-Agenten“)
+    const access = found.pages.length ? null : await folderAccessMap(db, scope.projectIds[0]);
+    const pages = found.pages.length ? found.pages : (await db.query(`select p.id, p.title, p.status, p.folder_id, f.name as folder from doc_pages p left join doc_folders f on f.id = p.folder_id where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc limit 30`, [scope.projectIds[0]])).rows.filter((p: any) => !p.folder_id || access!.get(p.folder_id) !== 'none').slice(0, 8).map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null as string | null }));
     personalDocs = pages.length ? `Doku im persönlichen Projekt (${found.pages.length ? 'passend zur Nachricht' : 'neueste Seiten'}; Auskunft nur daraus und aus den Arbeitspaketen unten):\n${pages.map((p) => `- „${p.title}“ (${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 600)}` : ''}`).join('\n')}\n` : '';
   }
   // Wissen zur Zuordnung (Direktnachricht): Treffer der Inhaltssuche je Projekt und eine Übersicht aller gemeinsamen Projekte

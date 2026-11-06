@@ -136,7 +136,8 @@ test('Checklistenpunkt → Aufgabe, Aufgabe → Checklistenpunkt einer Aufgabe (
   assert.equal(de.json().task.id, nt2.id); assert.equal(de.json().ap.id, ap.id);
   const items = (await t.api(pl).get(`/tasks/${nt2.id}`)).json().task.checklist;
   assert.ok(items.some((i: any) => i.title === 'Elektriker anfragen' && i.responsibleUserId === t.ids.users.max));
-  assert.equal((await t.db.maybeOne(`select 1 from tasks where id = $1`, [nt.id])), null, 'Aufgabe gelöscht');
+  assert.ok((await t.db.one(`select deleted_at from tasks where id = $1`, [nt.id])).deleted_at, 'Aufgabe im Papierkorb');
+  assert.equal(de.json().trashedId, nt.id);
   assert.ok((await logOf(nt2.id)).some((x) => x.includes('wurde Checklistenpunkt') && x.includes('Angebot liegt vor')), 'Log zusammengefasst');
   assert.ok((await logOf(ap.id)).some((x) => x.includes('wurde Checklistenpunkt von WEB-')), 'Vermerk am AP');
   assert.equal((await t.api(pl).get(`/tasks/${ap.id}`)).json().task.checklistTotal, 0, 'nichts am AP');
@@ -153,6 +154,48 @@ test('Checklistenpunkt → Aufgabe, Aufgabe → Checklistenpunkt einer Aufgabe (
   assert.equal(mv.json().target.checklistTotal, 1);
   assert.ok((await logOf(otherA.id)).some((x) => x.includes('hierher verschoben')));
   assert.equal((await t.api(pl).post(`/tasks/${nt2.id}/checklist/${it.id}/move`, { toTaskId: otherA.id })).statusCode, 400, 'Punkt hängt nicht mehr hier');
+});
+
+test('Aufgabe → Checklistenpunkt umkehrbar: Papierkorb, Wiederherstellen entfernt den Punkt und holt Checkliste und Anhänge zurück', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'AP Rückgängig' })).json().task;
+  const a = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Gerüst bestellen', parentId: ap.id, responsibleUserId: t.ids.users.anna })).json().task;
+  const b = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Material', parentId: ap.id })).json().task;
+  await t.api(pl).post(`/tasks/${b.id}/checklist`, { title: 'Schrauben' });
+  await t.api(pl).post(`/tasks/${a.id}/checklist`, { title: 'Angebot einholen' });
+  await t.api(pl).post(`/tasks/${a.id}/checklist`, { title: 'Termin abstimmen' });
+  await t.api(pl).post(`/tasks/${a.id}/comments`, { body: 'Lieferant Müller angefragt' });
+  const att = await t.db.one(`insert into attachments (project_id, task_id, filename, mime, size, storage_path) values ($1,$2,'plan.pdf','application/pdf',1,'x') returning id`, [web(), a.id]);
+  const de = await t.api(pl).post(`/tasks/${a.id}/demote`, { toTaskId: b.id });
+  assert.equal(de.statusCode, 200, de.body);
+  assert.deepEqual(de.json().task.checklist.map((i: any) => i.title), ['Schrauben', 'Gerüst bestellen', 'Angebot einholen', 'Termin abstimmen']);
+  assert.equal((await t.db.one(`select task_id from attachments where id = $1`, [att.id])).task_id, b.id);
+  // Papierkorb: die Aufgabe steht dort und ist nicht mehr am AP
+  const trash = (await t.api(pl).get(`/projects/${web()}/trash`)).json();
+  assert.ok(trash.tasks.some((x: any) => x.id === a.id), 'im Papierkorb');
+  assert.deepEqual(trash.demoted[a.id], { number: b.number, title: 'Material' }, 'Papierkorb nennt die Ziel-Aufgabe');
+  assert.equal((await t.api(pl).get(`/tasks/${ap.id}`)).json().task.subtasks?.some?.((x: any) => x.id === a.id) ?? false, false);
+  // Punkt wurde inzwischen umbenannt: bleibt erkennbar über die ID und wird trotzdem entfernt
+  await t.db.query(`update checklist_items set title = 'Gerüst bestellen (geändert)' where id = $1`, [de.json().itemId]);
+  const re = await t.api(pl).post(`/tasks/${a.id}/restore`);
+  assert.equal(re.statusCode, 200, re.body);
+  const restored = re.json().task;
+  assert.equal(restored.parentId, ap.id, 'am alten AP');
+  assert.equal(restored.deletedAt ?? null, null);
+  assert.deepEqual(restored.checklist.map((i: any) => i.title), ['Angebot einholen', 'Termin abstimmen'], 'eigene Checkliste zurück');
+  assert.equal(restored.responsibleUserId, t.ids.users.anna);
+  assert.deepEqual((await t.api(pl).get(`/tasks/${b.id}`)).json().task.checklist.map((i: any) => i.title), ['Schrauben'], 'erzeugter Punkt entfernt');
+  assert.equal((await t.db.one(`select task_id from attachments where id = $1`, [att.id])).task_id, a.id, 'Anhang zurück');
+  assert.ok((await logOf(a.id)).includes('Lieferant Müller angefragt'), 'eigenes Log blieb erhalten');
+  assert.ok((await logOf(b.id)).some((x) => x.includes('ist wieder die Aufgabe')));
+  assert.ok((await logOf(ap.id)).some((x) => x.includes('aus dem Papierkorb wiederhergestellt')));
+  assert.equal((await t.db.one(`select demoted from tasks where id = $1`, [a.id])).demoted, null);
+  // Punkt vorher von Hand gelöscht: Wiederherstellen klappt trotzdem
+  const de2 = await t.api(pl).post(`/tasks/${a.id}/demote`, { toTaskId: b.id });
+  await t.db.query(`delete from checklist_items where id = $1`, [de2.json().itemId]);
+  assert.equal((await t.api(pl).post(`/tasks/${a.id}/restore`)).statusCode, 200);
+  assert.deepEqual((await t.api(pl).get(`/tasks/${b.id}`)).json().task.checklist.map((i: any) => i.title), ['Schrauben']);
+  assert.equal((await t.db.one(`select count(*)::int as n from audit_log where action = 'task.undemote' and object_id = $1`, [a.id])).n, 2);
 });
 
 let agent: any;
@@ -200,6 +243,13 @@ test('Agent: move_aufgabe, move_ap, promote_item, move_item, demote_aufgabe (Sel
   const log = await logOf(own.id);
   assert.ok(log.some((x) => x.includes('nach WEB-') && x.includes('verschoben (Struktura (KI-Agent))')), 'Log an der Quelle vom Agenten');
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'task.reparent' and user_id = $1`, [agent.id]));
+  // demote_aufgabe des Agenten geht denselben Weg: Aufgabe im Papierkorb, Wiederherstellen holt sie zurück
+  const trashed = await t.db.one(`select deleted_at, demoted from tasks where id = $1`, [a2.id]);
+  assert.ok(trashed.deleted_at); assert.ok(trashed.demoted?.itemId);
+  const re = await t.api(pl).post(`/tasks/${a2.id}/restore`);
+  assert.equal(re.statusCode, 200, re.body);
+  assert.equal(re.json().task.parentId, own.id);
+  assert.equal(await t.db.maybeOne(`select 1 from checklist_items where id = $1`, [trashed.demoted.itemId]), null, 'Punkt entfernt');
 });
 
 test('Agent: Rückfrage bei wichtigen Schritten hält Verschieben an (Klasse Umstrukturieren) und führt nach Bestätigung aus', async () => {

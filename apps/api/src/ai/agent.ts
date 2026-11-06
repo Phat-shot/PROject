@@ -901,7 +901,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
   // Weitere Quellen der Suche: Mail-Ansichten mit KI-Recht und Dateiquellen des Projekts (nur Hinweis, Inhalte per search/read_mail/read_file)
   const mailViewsN = (await mailViewScope(db, { projectIds: [task.project_id], agentId: agent.id })).length;
-  const fileRoots = [...new Set((await fileScopes(db, [task.project_id])).map((x) => x.label))];
+  const fileRoots = [...new Set((await fileScopes(db, [task.project_id], { forAgent: true })).map((x) => x.label))];
   const candidates = policy.synergies === 'off' || !dl.candidates ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: dl.candidates });
   const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
   const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };

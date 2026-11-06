@@ -7,12 +7,15 @@ import { strToU8, zipSync } from 'fflate';
 import { composeEcho, testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
 import { runAgentOnTask } from '../src/ai/agent.js';
-import { runProjectReview, searchSources } from '../src/ai/knowledge.js';
-import { runFileSync, searchCounters } from '../src/files/service.js';
+import { readFileText, readMailText, runProjectReview, search as knowledgeSearch, searchSources } from '../src/ai/knowledge.js';
+import { changedFiles, runFileSync, searchCounters } from '../src/files/service.js';
+import { ocrAvailable } from '../src/files/ocr.js';
 import { parseMultistatus, parseSourceUrl } from '../src/files/webdav.js';
 
 // Fake-WebDAV (Nextcloud): Freigabelink unter /public.php/webdav (Basic abc123:sharepw), Konto unter /remote.php/dav/files/alice (alice:apppw)
 process.env.OUTBOUND_ALLOW_HOSTS = '127.0.0.1';
+// OCR nur im eigenen Test unten (Foto.png ist absichtlich kein gültiges Bild)
+process.env.FILE_OCR = 'off';
 type Node = { data: Buffer; etag: string; mtime: Date; type: string };
 const trees: Record<string, { auth: string; files: Map<string, Node> }> = {
   '/public.php/webdav': { auth: 'Basic ' + Buffer.from('abc123:sharepw').toString('base64'), files: new Map() },
@@ -398,4 +401,109 @@ test('Projektdurchlauf: „Neue Dateien seit letztem Lauf“ und neue Datei lös
   assert.equal(r3.status, 'ok', r3.error);
   const p = prompts.at(-1)!;
   assert.ok(p.includes('Verträge/Kündigung Altvertrag.txt') && !p.includes('Rahmenvertrag Nordcloud.txt ('), p.slice(-600));
+});
+
+test('Quellen für den Agenten: Einbindung, Doku-Ordner und Mails ausschließbar (auch Titel), nur PL ändert; Menschen sehen alles', async () => {
+  const pl = await t.login('pl@demo.local');
+  const max = await t.login('max@demo.local');
+  const src0 = (await t.api(pl).get(`/projects/${web()}/agent-sources`)).json();
+  assert.equal(src0.canEdit, true); assert.equal(src0.mails.enabled, true);
+  const vertraege = src0.bindings.find((b: any) => b.label === 'Verträge');
+  assert.ok(vertraege?.agentEnabled && src0.bindings.find((b: any) => b.label === 'Nachträge')?.agentEnabled);
+  assert.equal((await t.api(max).get(`/projects/${web()}/agent-sources`)).json().canEdit, false);
+  assert.equal((await t.api(max).patch(`/projects/${web()}/agent-sources`, { mails: false })).statusCode, 403, 'nur PL');
+  assert.equal((await t.api(pl).patch(`/projects/${web()}/agent-sources`, { bindings: [{ id: vertraege.id }] })).statusCode, 400);
+
+  // Einbindung „Verträge“ aus: Rahmenvertrag weder in Suche, read_file noch „neue Dateien“; „Nachträge“ bleibt
+  const off = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { bindings: [{ id: vertraege.id, agentEnabled: false }] });
+  assert.equal(off.statusCode, 200, off.body);
+  assert.equal(off.json().bindings.find((b: any) => b.id === vertraege.id).agentEnabled, false);
+  const fid = await fileId('Rahmenvertrag Nordcloud.txt');
+  const r = await searchSources(t.db, { projectIds: [web()], agentId: agent.id, query: 'Nordcloud', source: 'files' });
+  assert.ok(!r.files!.some((f) => f.title === 'Rahmenvertrag Nordcloud.txt'), 'nicht in der Suche');
+  assert.ok(r.files!.some((f) => f.title === 'Nachtrag Nordcloud.md'), 'andere Einbindung bleibt');
+  assert.equal((await readFileText(t.db, { projectIds: [web()], agentId: agent.id, id: `file:${fid}` })).ok, false);
+  assert.ok(!(await changedFiles(t.db, web(), new Date(0))).some((f) => f.id === fid), 'nicht in „neue Dateien“');
+  // ERP bindet die ganze Quelle weiter für den Agenten ein
+  assert.equal((await readFileText(t.db, { projectIds: [erp()], agentId: agent.id, id: `file:${fid}` })).ok, true);
+  // Menschen: Liste, Textauszug und Badge wie bisher
+  assert.equal((await t.api(pl).get(`/files/${fid}/text`)).statusCode, 200);
+  assert.ok((await t.api(pl).get(`/projects/${web()}/files`)).json().roots.some((x: any) => x.bindingId === vertraege.id));
+  assert.equal((await t.api(pl).get(`/projects/${web()}/file-sources`)).json().bindings.find((b: any) => b.id === vertraege.id).agentEnabled, false);
+
+  // Mails aus: Suche und read_mail leer, Mensch liest weiter
+  const mail = (await searchSources(t.db, { projectIds: [web()], agentId: agent.id, query: 'Shootingtage', source: 'mails' })).mails![0];
+  assert.ok(mail);
+  assert.equal((await t.api(pl).patch(`/projects/${web()}/agent-sources`, { mails: false })).json().mails.enabled, false);
+  assert.equal((await searchSources(t.db, { projectIds: [web()], agentId: agent.id, query: 'Shootingtage', source: 'mails' })).mails!.length, 0);
+  assert.equal((await readMailText(t.db, { projectIds: [web()], agentId: agent.id, id: mail.ref })).ok, false);
+  assert.equal((await t.api(pl).get(`/mail/mails/${mail.id}`)).statusCode, 200, 'Mensch liest weiter');
+
+  // Doku-Ordner aus (samt Unterordner): Seiten fehlen in Suche, Seitenliste des Laufs und read_page
+  const f1 = (await t.api(pl).post(`/projects/${web()}/docs/folders`, { name: 'Vertraulich' })).json().folder;
+  const f2 = (await t.api(pl).post(`/projects/${web()}/docs/folders`, { name: 'Vertraulich Unter', parentId: f1.id })).json().folder;
+  const p1 = (await t.api(pl).post(`/projects/${web()}/docs/pages`, { title: 'Gehaltsliste Zauberwort', folderId: f1.id, contentMd: 'Zauberwort Gehälter' })).json().page;
+  const p2 = (await t.api(pl).post(`/projects/${web()}/docs/pages`, { title: 'Bonusplan Zauberwort', folderId: f2.id, contentMd: 'Zauberwort Bonus' })).json().page;
+  const docs = async () => (await knowledgeSearch(t.db, { projectId: web(), agentId: agent.id, query: 'Zauberwort', source: 'docs' })).pages.map((x) => x.title).sort();
+  assert.deepEqual(await docs(), ['Bonusplan Zauberwort', 'Gehaltsliste Zauberwort']);
+  const fo = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentEnabled: false }] });
+  assert.equal(fo.statusCode, 200, fo.body);
+  const sub = fo.json().folders.find((x: any) => x.id === f2.id);
+  assert.equal(sub.inheritedOff, true); assert.equal(sub.depth, 1);
+  assert.deepEqual(await docs(), [], 'Ordner samt Unterordner ausgeschlossen');
+  queue = [{ actions: [{ type: 'read_page', pageId: p1.id }] }, { actions: [{ type: 'comment', text: 'ok' }] }];
+  const run = await runAgentOnTask(t.db, t.mail, fakeFetch, { id: agent.id, name: agent.name, org_id: t.ids.org, persona: null }, task.id, 'manual');
+  assert.equal(run.status, 'ok', run.error ?? '');
+  const first = prompts.at(-2)!; const second = prompts.at(-1)!;
+  assert.ok(!first.includes('Gehaltsliste') && !first.includes('Bonusplan') && !first.includes('Vertraulich'), 'keine Titel im Prompt');
+  assert.ok(!first.includes('„Verträge“'), 'ausgeschlossene Einbindung nicht als Quelle genannt');
+  assert.ok(second.includes(`pageId ${p1.id}: kein Zugriff`) && !second.includes('Zauberwort Gehälter'));
+  assert.equal((await t.api(pl).get(`/docs/pages/${p2.id}`)).statusCode, 200, 'Mensch sieht die Seite');
+
+  // Wieder an
+  const on = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentEnabled: true }], bindings: [{ id: vertraege.id, agentEnabled: true }], mails: true });
+  assert.equal(on.statusCode, 200);
+  assert.deepEqual(await docs(), ['Bonusplan Zauberwort', 'Gehaltsliste Zauberwort']);
+  assert.equal((await readFileText(t.db, { projectIds: [web()], agentId: agent.id, id: `file:${fid}` })).ok, true);
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'project.agent_sources' and project_id = $1`, [web()]));
+});
+
+test('OCR: Scan-PDF und Bild per Texterkennung (deu+eng, offline), Budget je Lauf, Nachholen ohne „neue Datei“', async (tc) => {
+  const av = await ocrAvailable();
+  if (!av.ok) { tc.skip(`OCR-Laufzeit fehlt in dieser Umgebung: ${av.reason}`); return; }
+  const { createCanvas } = await import('@napi-rs/canvas');
+  const c = createCanvas(1200, 260); const g = c.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, 1200, 260); g.fillStyle = '#000'; g.font = '48px sans-serif';
+  g.fillText('Prüfbericht Brückenlager 4711', 40, 110); g.fillText('Abnahme Gerüst Süd', 40, 200);
+  const png = await c.encode('png');
+  const doc = new PDFDocument({ size: 'A4' }); const chunks: Buffer[] = []; doc.on('data', (b) => chunks.push(b));
+  const done = new Promise((res) => doc.on('end', res)); doc.image(png, 40, 40, { width: 520 }); doc.end(); await done;
+  const scanPdf = Buffer.concat(chunks);
+  // 1) OCR aus: Scan ohne Textebene → skipped wie bisher
+  process.env.FILE_OCR = 'off';
+  put('/public.php/webdav', '/Plaene/Scan Pruefbericht.pdf', scanPdf, 'application/pdf');
+  await runFileSync(t.db, fakeFetch);
+  const before = await t.db.one(`select text_status, text_note, changed_at from files where name = 'Scan Pruefbericht.pdf'`);
+  assert.equal(before.text_status, 'skipped'); assert.equal(before.text_note, 'PDF ohne Textebene (Scan?)');
+  // 2) OCR an, eine Datei je Lauf: Bild neu, Scan wartet bzw. umgekehrt
+  process.env.FILE_OCR = 'on'; process.env.FILE_OCR_PER_RUN = '1';
+  try {
+    put('/public.php/webdav', '/Plaene/Foto Lieferschein.png', png, 'image/png');
+    await runFileSync(t.db, fakeFetch);
+    const rows1 = (await t.db.query(`select name, text_status, text_note from files where name in ('Scan Pruefbericht.pdf', 'Foto Lieferschein.png') and deleted_at is null`)).rows;
+    assert.equal(rows1.filter((x: any) => x.text_note === 'per Texterkennung (OCR)').length, 1, JSON.stringify(rows1));
+    assert.equal(rows1.filter((x: any) => x.text_status === 'skipped').length, 1, 'die andere folgt im nächsten Lauf');
+    await runFileSync(t.db, fakeFetch);
+    const rows = (await t.db.query(`select name, text_status, text_note, text_content, changed_at from files where name in ('Scan Pruefbericht.pdf', 'Foto Lieferschein.png') and deleted_at is null order by name`)).rows;
+    for (const x of rows) { assert.equal(x.text_status, 'ok', `${x.name}: ${x.text_note}`); assert.equal(x.text_note, 'per Texterkennung (OCR)'); assert.match(x.text_content, /Brückenlager/); }
+    assert.equal(new Date(rows.find((x: any) => x.name === 'Scan Pruefbericht.pdf').changed_at).getTime(), new Date(before.changed_at).getTime(), 'Nachholen zählt nicht als neue Datei');
+    // Agent findet den erkannten Text (ERP bindet die ganze Quelle)
+    const hits = await searchSources(t.db, { projectIds: [erp()], agentId: agent.id, query: 'Brückenlager', source: 'files' });
+    assert.deepEqual(hits.files!.map((f) => f.title).sort(), ['Foto Lieferschein.png', 'Scan Pruefbericht.pdf']);
+    // Defektes Bild: Fehler mit Grund, Prozess läuft weiter
+    put('/public.php/webdav', '/Plaene/Kaputt.jpg', Buffer.from('kein Bild'), 'image/jpeg');
+    await runFileSync(t.db, fakeFetch);
+    const bad = await t.db.one(`select text_status, text_note from files where name = 'Kaputt.jpg'`);
+    assert.equal(bad.text_status, 'error'); assert.match(bad.text_note, /kein gültiges Bild/);
+  } finally { process.env.FILE_OCR = 'off'; delete process.env.FILE_OCR_PER_RUN; }
 });

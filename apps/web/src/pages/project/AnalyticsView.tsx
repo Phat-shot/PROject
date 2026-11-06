@@ -3,6 +3,7 @@ import { downloadCsv, fmtDate } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { useProject } from '../ProjectPage';
+import { DateInput } from '../../components/DateInput';
 
 interface Analytics {
   from: string; to: string;
@@ -34,8 +35,8 @@ export function AnalyticsView() {
   return (
     <div className="content">
       <div className="row mb">
-        <label className="field m-0"><span>Von</span><input type="date" value={range.from || a.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /></label>
-        <label className="field m-0"><span>Bis</span><input type="date" value={range.to || a.to} onChange={(e) => setRange({ ...range, to: e.target.value })} /></label>
+        <label className="field m-0"><span>Von</span><DateInput value={range.from || a.from} onChange={(v) => setRange({ ...range, from: v })} /></label>
+        <label className="field m-0"><span>Bis</span><DateInput value={range.to || a.to} onChange={(v) => setRange({ ...range, to: v })} /></label>
         <span className="row gap-1 self-end">
           {[['4 Wochen', 28], ['12 Wochen', 84], ['Quartal', 91], ['Jahr', 365]].map(([l, n]) => <button key={l} className="chip" onClick={() => { const to = new Date(); const from = new Date(to.getTime() - Number(n) * 86400_000); setRange({ from: from.toISOString().slice(0, 10), to: to.toISOString().slice(0, 10) }); }}>{l}</button>)}
         </span>

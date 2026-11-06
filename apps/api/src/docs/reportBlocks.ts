@@ -288,13 +288,18 @@ const blockedBlock: Renderer = async (data, block) => {
 const milestonesBlock: Renderer = async (data, block, ctx) => {
   const limit = block.limit ?? 5;
   const { since, label } = periodRange(block.period, block.days, ctx.lastRunOn, ctx.today);
-  const rows = (await data.db.query(`select m.name, m.date, s.name as sub from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 and m.date >= $2 order by m.date`, [data.project.id, since])).rows
-    .map((m: any) => ({ name: m.name as string, date: iso(m.date).slice(0, 10), sub: (m.sub ?? null) as string | null }));
-  const upcoming = rows.filter((m) => m.date >= ctx.today).slice(0, limit).map((m) => ({ ...m, days: daysBetween(ctx.today, m.date) }));
-  const reached = rows.filter((m) => m.date < ctx.today).map((m) => ({ ...m, days: -daysBetween(m.date, ctx.today) }));
+  // Status „erreicht“ (reached_at) geht vor dem Datum: erreicht im Zeitraum = bestätigt im Zeitraum; offene mit Datum in der
+  // Vergangenheit sind überfällig (nicht erreicht). Ohne Status (Altbestand) zählt wie bisher das Datum.
+  const anyStatus = Boolean(await data.db.maybeOne(`select 1 from milestones where project_id = $1 and reached_at is not null limit 1`, [data.project.id]));
+  const rows = (await data.db.query(`select m.name, m.date, m.reached_at, s.name as sub from milestones m left join subprojects s on s.id = m.subproject_id where m.project_id = $1 and (m.date >= $2 or m.reached_at >= $2::date or (m.reached_at is null and m.date < $3)) order by m.date`, [data.project.id, since, ctx.today])).rows
+    .map((m: any) => ({ name: m.name as string, date: iso(m.date).slice(0, 10), sub: (m.sub ?? null) as string | null, reachedOn: m.reached_at ? iso(m.reached_at).slice(0, 10) : null as string | null }));
+  const upcoming = rows.filter((m) => !m.reachedOn && m.date >= ctx.today).slice(0, limit).map((m) => ({ ...m, days: daysBetween(ctx.today, m.date) }));
+  const reached = rows.filter((m) => (m.reachedOn ? m.reachedOn >= since : !anyStatus && m.date >= since && m.date < ctx.today))
+    .map((m) => ({ ...m, days: -daysBetween(m.reachedOn ?? m.date, ctx.today) }));
+  const missed = anyStatus ? rows.filter((m) => !m.reachedOn && m.date < ctx.today).map((m) => ({ ...m, days: -daysBetween(m.date, ctx.today) })) : [];
   let html = '';
-  if (ctx.graphic !== false && block.chart !== false && (upcoming.length || reached.length)) {
-    const all = [...reached, ...upcoming];
+  if (ctx.graphic !== false && block.chart !== false && (upcoming.length || reached.length || missed.length)) {
+    const all = [...reached, ...missed, ...upcoming].sort((a, b) => a.date.localeCompare(b.date));
     const W = 600, H = 70;
     const from = all[0].date < ctx.today ? all[0].date : ctx.today, to = all[all.length - 1].date > ctx.today ? all[all.length - 1].date : ctx.today;
     const span = Math.max(1, daysBetween(from, to));
@@ -302,12 +307,13 @@ const milestonesBlock: Renderer = async (data, block, ctx) => {
     let svg = svgOpen(W, H, 'Meilensteine auf dem Zeitstrahl');
     svg += line(20, 36, W - 20, 36, '#9aa7bd', 2);
     svg += line(px(ctx.today), 22, px(ctx.today), 50, COLOR.accent, 1.5, '3,2') + text(px(ctx.today), 62, 'heute', { anchor: 'middle', size: 9, fill: COLOR.accent });
-    all.forEach((m, i) => { const x = px(m.date); svg += circle(x, 36, 6, m.date < ctx.today ? COLOR.done : COLOR.yellow) + text(x, i % 2 ? 54 : 18, cutLabel(`${m.name} ${dShort(m.date)}`, 26), { anchor: 'middle', size: 9 }); });
+    all.forEach((m, i) => { const x = px(m.date); const isReached = reached.includes(m as any); svg += circle(x, 36, 6, isReached ? COLOR.done : m.date < ctx.today ? COLOR.red : COLOR.yellow) + text(x, i % 2 ? 54 : 18, cutLabel(`${m.name} ${dShort(m.date)}`, 26), { anchor: 'middle', size: 9 }); });
     html += chart(svg + '</svg>');
   }
   html += `<h3>Nächste Meilensteine</h3>${table(['Datum', 'Meilenstein', 'Teilprojekt', 'In Tagen'], upcoming.map((m) => [d10(m.date), esc(m.name), esc(m.sub ?? '–'), String(m.days)]))}`;
-  html += `<h3>Erreicht (${label})</h3>${table(['Datum', 'Meilenstein', 'Teilprojekt', 'Vor Tagen'], reached.map((m) => [d10(m.date), esc(m.name), esc(m.sub ?? '–'), String(-m.days)]))}`;
-  return { html, facts: { upcoming, reached } };
+  html += `<h3>Erreicht (${label})</h3>${table(['Geplant', 'Erreicht am', 'Meilenstein', 'Teilprojekt'], reached.map((m) => [d10(m.date), m.reachedOn ? d10(m.reachedOn) : '–', esc(m.name), esc(m.sub ?? '–')]))}`;
+  if (missed.length) html += `<h3>Überfällig, nicht erreicht (${missed.length})</h3>${table(['Datum', 'Meilenstein', 'Teilprojekt', 'Seit Tagen'], missed.map((m) => [d10(m.date), esc(m.name), esc(m.sub ?? '–'), String(-m.days)]))}`;
+  return { html, facts: { upcoming, reached, missed } };
 };
 
 const subprojectsBlock: Renderer = async (data, block, ctx) => {

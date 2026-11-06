@@ -17,6 +17,7 @@ import { htmlToPdf, type PageLayout } from '../docs/pdfHtml.js';
 import { htmlToMd, mdToHtml, sanitizeHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
 import { accountBoundToProject, projectAccount } from '../mail/accounts.js';
+import { assertReviewer, resolveReviewNotes, reviewRequired } from '../tasks/review.js';
 
 const TRANSITIONS: Record<DocStatus, DocStatus[]> = { draft: ['review', 'final'], review: ['draft', 'final'], final: ['draft'] };
 
@@ -50,6 +51,7 @@ export async function docRoutes(app: FastifyInstance) {
     const folders = await db.query(`select * from doc_folders where project_id = $1 order by position, name`, [req.params.id]);
     const pages = await db.query(
       `select p.id, p.project_id, p.folder_id, p.parent_page_id, p.title, p.status, p.version, p.template_key, p.settings, p.created_by, p.updated_by, p.created_at, p.updated_at, p.finalized_at, '' as content_md, '' as content_html, u.name as updated_by_name,
+              p.reviewer_user_id, (select name from users where id = p.reviewer_user_id) as reviewer_name,
               (select count(*)::int from doc_pages c where c.parent_page_id = p.id and c.deleted_at is null) as child_count,
               exists (select 1 from doc_folders f where f.page_id = p.id) as is_folder_page
        from doc_pages p left join users u on u.id = p.updated_by where p.project_id = $1 and p.deleted_at is null order by p.title`,
@@ -159,7 +161,7 @@ export async function docRoutes(app: FastifyInstance) {
 
   app.get<{ Params: { pid: string } }>('/docs/pages/:pid', async (req) => {
     const user = requireUser(req);
-    const r = await db.maybeOne(`select p.*, u.name as updated_by_name from doc_pages p left join users u on u.id = p.updated_by where p.id = $1`, [req.params.pid]);
+    const r = await db.maybeOne(`select p.*, u.name as updated_by_name, (select name from users where id = p.reviewer_user_id) as reviewer_name from doc_pages p left join users u on u.id = p.updated_by where p.id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     await requireProject(db, user, r.project_id);
     const versions = await db.query(
@@ -239,20 +241,42 @@ export async function docRoutes(app: FastifyInstance) {
   });
 
   // Status: Entwurf → In Prüfung → Final; Final sperrt und versioniert.
-  app.post<{ Params: { pid: string }; Body: { status: DocStatus } }>('/docs/pages/:pid/status', async (req) => {
+  app.post<{ Params: { pid: string }; Body: { status: DocStatus; reviewerUserId?: string | null; comment?: string } }>('/docs/pages/:pid/status', async (req) => {
     const user = requireUser(req);
     const r = await db.maybeOne(`select * from doc_pages where id = $1`, [req.params.pid]);
     if (!r) throw notFound('Seite nicht gefunden');
     const m = await requireProject(db, user, r.project_id, 'member');
     const to = req.body?.status;
-    if (!to || !TRANSITIONS[r.status as DocStatus]?.includes(to)) throw badRequest(`Übergang ${r.status} → ${to} nicht erlaubt`);
-    if ((to === 'final' || r.status === 'final') && m.role !== 'pl' && !m.canFinalize) throw forbidden('Final setzen erfordert das Recht „Dokument final setzen“');
+    // In Prüfung → anderer Prüfer: gleicher Status, nur die prüfende Person wechselt
+    const reassign = to === 'review' && r.status === 'review' && 'reviewerUserId' in (req.body ?? {});
+    if (!to || (!reassign && !TRANSITIONS[r.status as DocStatus]?.includes(to))) throw badRequest(`Übergang ${r.status} → ${to} nicht erlaubt`);
+    // Die benannte prüfende Person darf ihre Seite freigeben (final) oder zurückweisen (Entwurf), auch ohne „Final setzen“
+    const isReviewer = r.status === 'review' && r.reviewer_user_id === user.id;
+    if ((to === 'final' || r.status === 'final') && m.role !== 'pl' && !m.canFinalize && !(isReviewer && to === 'final')) throw forbidden('Final setzen erfordert das Recht „Dokument final setzen“');
+    let reviewer: { id: string; name: string } | null = null;
+    if (to === 'review') {
+      const rid = req.body?.reviewerUserId || null;
+      if (!rid && (await reviewRequired(db, r.project_id))) throw badRequest('Prüfer erforderlich: Wer prüft die Seite? (Projekteinstellung „Prüfer erforderlich“)');
+      reviewer = rid ? await assertReviewer(db, r.project_id, rid) : null;
+    }
+    const comment = String(req.body?.comment ?? '').trim().slice(0, 2000);
     const u = await db.one(
-      `update doc_pages set status = $2, finalized_at = case when $2 = 'final' then now() else null end, updated_by = $3, updated_at = now() where id = $1 returning *`,
-      [r.id, to, user.id]
+      `update doc_pages set status = $2, finalized_at = case when $2 = 'final' then now() else null end, updated_by = $3, updated_at = now(), reviewer_user_id = $4 where id = $1 returning *`,
+      [r.id, to, user.id, reviewer?.id ?? null]
     );
+    await resolveReviewNotes(db, 'page', r.id);
+    if (reassign) {
+      if (reviewer) await dispatch(db, { event: 'review', projectId: r.project_id, users: [reviewer.id], type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
+      await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: 'page.reviewer', objectType: 'doc_page', objectId: r.id, details: { reviewer: reviewer?.name ?? null } });
+      return { page: mapPage({ ...u, reviewer_name: reviewer?.name ?? null }) };
+    }
+    // Zurückgewiesen (In Prüfung → Entwurf mit Kommentar): Verfasser informieren
+    if (r.status === 'review' && to === 'draft' && comment) {
+      const author = r.updated_by && r.updated_by !== user.id ? r.updated_by : r.created_by;
+      if (author && author !== user.id) await dispatch(db, { event: 'info', projectId: r.project_id, users: [author], type: 'page.review_result', title: `Zurückgewiesen: ${u.title}`, body: `${user.name}: ${comment.slice(0, 300)}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
+    }
     await db.query(`update doc_page_versions set status = $3 where page_id = $1 and version = $2`, [u.id, u.version, to]);
-    await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: `page.${to}`, objectType: 'doc_page', objectId: r.id, details: { from: r.status, version: u.version } });
+    await audit(db, { orgId: user.orgId, projectId: r.project_id, userId: user.id, action: `page.${to}`, objectType: 'doc_page', objectId: r.id, details: { from: r.status, version: u.version, ...(reviewer ? { reviewer: reviewer.name } : {}), ...(comment ? { comment } : {}) } });
     // Arbeitspakete, deren Log diese Seite nennt (z. B. ein Agent wartet auf die Freigabe): Statuswechsel ins Log, Agent läuft
     const linked = await db.query(
       `select distinct t.id from task_comments c join tasks t on t.id = c.task_id
@@ -266,9 +290,9 @@ export async function docRoutes(app: FastifyInstance) {
       queueAgentRun(l.id, 'task_changed');
     }
     if (to === 'review') {
-      await dispatch(db, { event: 'review', projectId: r.project_id, users: await usersWithRight(db, r.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
+      await dispatch(db, { event: 'review', projectId: r.project_id, users: reviewer ? [reviewer.id] : await usersWithRight(db, r.project_id, 'can_finalize'), type: 'page.review', title: `Zur Prüfung: ${u.title}`, body: `von ${user.name}${reviewer ? ` · prüfen: ${reviewer.name}` : ''}`, link: `/projekte/${r.project_id}/doku/${u.id}`, ref: { type: 'page', id: u.id }, actorId: user.id });
     }
-    return { page: mapPage(u) };
+    return { page: mapPage({ ...u, reviewer_name: reviewer?.name ?? null }) };
   });
 
   // Löschen = Papierkorb; Unterseiten rücken eine Ebene hoch. ?permanent=1 löscht endgültig.

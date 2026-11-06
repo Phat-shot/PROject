@@ -12,6 +12,16 @@ import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { MeetingsView } from './MeetingsView';
 import { FilesView, filesPath } from './FilesView';
+import { Breadcrumbs } from '../../components/Breadcrumbs';
+import { reviewOptsOf } from '../../lib/moveTask';
+
+/** Oberseiten einer Seite (oberste zuerst), ohne Ordnerseiten; bricht bei Zyklen ab. */
+export function ancestors(pages: DocPage[], p: DocPage): DocPage[] {
+  const out: DocPage[] = []; const seen = new Set([p.id]);
+  let cur = pages.find((x) => x.id === p.parentPageId);
+  while (cur && !seen.has(cur.id)) { if (!cur.isFolderPage) out.unshift(cur); seen.add(cur.id); cur = pages.find((x) => x.id === cur!.parentPageId); }
+  return out;
+}
 
 interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTemplate[] }
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
@@ -152,9 +162,23 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const newChild = () => (isFolderPage ? onNewInFolder(p.folderId) : onNewChild(p, childTemplate ?? null));
   const canEdit = me.role !== 'reader' && p.status !== 'final' && !p.deletedAt;
   const canFinal = me.role === 'pl' || me.canFinalize;
-  const setStatus = (status: string) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status }); await d.reload(); await reloadTree(); });
+  const setStatus = (status: string, extra: Record<string, unknown> = {}) => run(async () => { await api.post(`/docs/pages/${p.id}/status`, { status, ...extra }); await d.reload(); await reloadTree(); });
+  const reviewers = reviewOptsOf(detail, p.reviewer?.userId);
+  const isReviewer = p.status === 'review' && p.reviewer?.userId === me.userId;
+  /** Prüfer wählen (Pflicht mit „Prüfer erforderlich“); null = abgebrochen */
+  const askReviewer = async (): Promise<{ reviewerUserId: string | null } | null> => {
+    const v = await dialog.form({ title: 'Zur Prüfung an …', text: 'Die prüfende Person bekommt eine Meldung, sieht die Seite unter „Offen für dich“ und kann freigeben (Final) oder mit Kommentar zurückweisen (Entwurf).', fields: [
+      { key: 'reviewer', label: 'Wer prüft?', type: 'select', required: reviewers.required, value: p.reviewer?.userId ?? (reviewers.required ? reviewers.reviewers[0]?.value ?? '' : ''), options: [...(reviewers.required ? [] : [{ value: '', label: '– ohne benannte Person (PL und „Final setzen“) –' }]), ...reviewers.reviewers] }
+    ], submitLabel: 'Zur Prüfung geben' });
+    return v ? { reviewerUserId: v.reviewer || null } : null;
+  };
+  const reject = async () => {
+    const v = await dialog.form({ title: 'Prüfung zurückweisen', text: 'Die Seite geht auf „Entwurf“ zurück; der Kommentar geht an die verfassende Person.', fields: [{ key: 'comment', label: 'Was fehlt oder ist zu ändern?', required: true }], submitLabel: 'Zurückweisen', danger: true });
+    if (v) await setStatus('draft', { comment: v.comment });
+  };
   const changeStatus = async (status: string) => {
     if (status === p.status) return;
+    if (status === 'review') { const r = await askReviewer(); if (!r) return; await setStatus('review', r); return; }
     if (p.status === 'final') { const ok = await dialog.confirm({ title: 'Finale Seite wieder öffnen', text: 'Es entsteht eine neue Version; die Seite ist danach wieder bearbeitbar.', confirmLabel: 'Wieder öffnen' }); if (!ok) return; }
     if (status === 'final') { const ok = await dialog.confirm({ title: 'Final setzen', text: 'Die Seite wird gesperrt und kann als PDF an den Verteiler gehen. Später lässt sie sich wieder öffnen.', confirmLabel: 'Final setzen' }); if (!ok) return; }
     await setStatus(status);
@@ -165,18 +189,28 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const tplName = (k: string | null | undefined) => docs?.templates.find((t) => t.key === k)?.name ?? k ?? 'leer';
   return (
     <div className="doc-view">
-      <div className="row mb small muted">
-        <Link to={base}>Doku</Link><span>›</span>{folder && !isFolderPage && (folder.pageId ? <Link to={`${base}/${folder.pageId}`}>{folder.name}</Link> : <span>{folder.name}</span>)}{parent && <><span>›</span><Link to={`${base}/${parent.id}`}>{parent.title}</Link></>}{!isFolderPage && <span>›</span>}<span>{isFolderPage ? `Ordner ${p.title}` : p.title}</span>
-      </div>
+      <Breadcrumbs className="mb" items={[
+        { label: detail.project.name, to: `/projekte/${detail.project.id}/board` },
+        { label: 'Doku', to: base },
+        ...(folder && !isFolderPage ? [{ label: folder.name, to: folder.pageId ? `${base}/${folder.pageId}` : undefined }] : []),
+        ...ancestors(docs?.pages ?? [], p).map((x) => ({ label: x.title, to: `${base}/${x.id}` })),
+        { label: isFolderPage ? `Ordner ${p.title}` : p.title }
+      ]} />
       <div className="row mb doc-actions">
         <span className="muted small">Version {p.version} · {p.updatedByName} · {fmtDateTime(p.updatedAt)}</span>
         {me.role === 'reader' ? <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span> : (
-          <select className={`status-select ${p.status}`} value={p.status} disabled={busy} title="Status: Entwurf, In Prüfung (meldet sich bei der Projektleitung), Final (gesperrt, PDF-Versand)" onChange={(e) => void changeStatus(e.target.value)}>
+          <select className={`status-select ${p.status}`} value={p.status} disabled={busy} title="Status: Entwurf, In Prüfung (mit prüfender Person; ohne: PL und „Final setzen“), Final (gesperrt, PDF-Versand)" onChange={(e) => void changeStatus(e.target.value)}>
             <option value="draft">Entwurf</option>
             <option value="review">In Prüfung</option>
-            <option value="final" disabled={!canFinal}>Final</option>
+            <option value="final" disabled={!canFinal && !isReviewer}>Final</option>
           </select>
         )}
+        {p.status === 'review' && <span className="small review-who">{p.reviewer ? <>Prüfung: <strong>{p.reviewer.name ?? '?'}</strong></> : <span className="muted">Prüfung: PL und „Final setzen“</span>}
+          {me.role !== 'reader' && <button className="btn sm link" disabled={busy} title="Andere prüfende Person" onClick={() => void askReviewer().then((r) => { if (r) void setStatus('review', r); })}>ändern</button>}</span>}
+        {p.status === 'review' && (isReviewer || canFinal) && <>
+          <button className="btn sm primary" disabled={busy} title="Freigeben: Seite wird final (gesperrt, PDF-Versand)" onClick={() => void changeStatus('final')}>Freigeben</button>
+          <button className="btn sm" disabled={busy} onClick={() => void reject()}>Zurückweisen …</button>
+        </>}
         {s.kind && <span className="badge">{KIND_LABEL[s.kind]}</span>}
         <span className="right" />
         {edit ? <>

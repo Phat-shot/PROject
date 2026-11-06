@@ -35,7 +35,7 @@ const INTRO: Record<string, { text: ReactNode; chapter: string }> = {
   fristen: { text: <>Wann Verzug, <Term k="stillstand">Stillstand</Term> und Blockaden eskalieren und wie der Statusbericht aussieht.</>, chapter: 'Kapitel 10' },
   planung: { text: 'Teilprojekte, Meilensteine, Spalten des Boards und Ressourcen des Projekts.', chapter: 'Kapitel 4' },
   dateien: { text: 'Ordner aus Nextcloud oder einem WebDAV-Speicher, die in der Doku unter „Dateien“ erscheinen und durchsucht werden; das Tool liest nur.', chapter: 'Kapitel 7' },
-  daten: { text: 'Papierkorb, Audit-Log und Export der Projektdaten.', chapter: 'Kapitel 13' },
+  daten: { text: 'Import von Arbeitspaketen aus CSV, Papierkorb, Audit-Log und Export der Projektdaten.', chapter: 'Kapitel 13' },
   'ki-laeufe': { text: <>Offene KI-Vorschläge zur Freigabe (<Term k="essenz">Essenz</Term> aus Mails, Agenten-Aktionen), Fragen ans Projekt, Agenten-Läufe und der Statusbericht-Entwurf.</>, chapter: 'Kapitel 11' }
 };
 

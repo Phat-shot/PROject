@@ -15,6 +15,7 @@ import { useAssistAgent } from '../../components/AssistAgent';
 import { aiBlocked } from '../../lib/useAi';
 import { refreshMailUnread, useMailUnread } from '../../lib/useMailUnread';
 import { MailAiBox } from './MailAi';
+import { DateInput } from '../../components/DateInput';
 
 export type ViewRow = MailViewT & { canManage?: boolean };
 
@@ -415,7 +416,7 @@ function AdjustTaskDialog({ mailId, onClose, onDone }: { mailId: string; onClose
         <p className="muted small">Status oder Deadline ändern; die Mail wird verknüpft und die Änderung mit Bezug im Arbeitspaket-Log festgehalten.</p>
         <label className="field"><span>Arbeitspaket</span><select value={taskId} onChange={(e) => pick(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
         <label className="field"><span>Status</span><select value={columnId} onChange={(e) => setColumnId(e.target.value)}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
-        <label className="field"><span>Deadline</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label>
+        <label className="field"><span>Deadline</span><DateInput value={dueDate} onChange={(v) => setDueDate(v)} /></label>
         <label className="field"><span>Begründung (optional)</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>
         {error && <div className="error">{error}</div>}
         <div><button className="btn primary" disabled={busy || !taskId} onClick={() => void run(async () => {
@@ -481,7 +482,7 @@ function CreateTaskFromMail({ mail, askConfirm, onClose, onCreated }: { mail: Ma
       <div className="form cols-2">
         <label className="field full"><span>Titel</span><input type="text" value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
         <label className="field"><span>Teilprojekt</span><select value={f.subprojectId} onChange={(e) => setF({ ...f, subprojectId: e.target.value })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
-        <label className="field"><span>Deadline</span><input type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} /></label>
+        <label className="field"><span>Deadline</span><DateInput value={f.dueDate} onChange={(v) => setF({ ...f, dueDate: v })} /></label>
         <label className="field"><span>Zuständig</span><select value={f.responsibleUserId} onChange={(e) => setF({ ...f, responsibleUserId: e.target.value })}><option value="">– geerbt –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
         <label className="field"><span>oder extern</span><input type="email" value={f.responsibleEmail} onChange={(e) => setF({ ...f, responsibleEmail: e.target.value })} placeholder={mail.fromAddr} /></label>
         <label className="check full"><input type="checkbox" checked={f.copy} onChange={(e) => setF({ ...f, copy: e.target.checked })} /> Mail als Kopie in das Arbeitspaket übernehmen (dann gelten die Arbeitspaketrechte)</label>
@@ -735,7 +736,7 @@ export function NewView({ onClose, onCreated }: { onClose: () => void; onCreated
         <label className="field"><span>Betreff enthält</span><input type="text" value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></label>
         <label className="field"><span>Stichwort im Text</span><input type="text" value={f.keyword} onChange={(e) => setF({ ...f, keyword: e.target.value })} /></label>
         <label className="field"><span>Ordner (leer = INBOX)</span><input type="text" value={f.folders} onChange={(e) => setF({ ...f, folders: e.target.value })} placeholder="INBOX, Sent" /></label>
-        <label className="field"><span>Ab Datum</span><input type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} /></label>
+        <label className="field"><span>Ab Datum</span><DateInput value={f.since} onChange={(v) => setF({ ...f, since: v })} /></label>
         <div className="full"><strong className="small">Rechte für Rollen</strong> <span className="muted small">(du selbst erhältst alle Rechte; über eine persönliche Bindung sendest nur du)</span></div>
         <label className="check"><input type="checkbox" checked={f.memberRead} onChange={(e) => setF({ ...f, memberRead: e.target.checked })} /> Mitglieder lesen</label>
         <label className="check"><input type="checkbox" checked={f.memberDraft} onChange={(e) => setF({ ...f, memberDraft: e.target.checked })} /> Mitglieder entwerfen</label>
@@ -808,7 +809,7 @@ export function FilterEditor({ view, onClose, onSaved }: { view: ViewRow; onClos
         <label className="field"><span>Betreff</span><input type="text" value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></label>
         <label className="field"><span>Stichwort</span><input type="text" value={f.keyword} onChange={(e) => setF({ ...f, keyword: e.target.value })} /></label>
         <label className="field"><span>Ordner</span><input type="text" value={f.folders} onChange={(e) => setF({ ...f, folders: e.target.value })} /></label>
-        <label className="field"><span>Ab Datum</span><input type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} /></label>
+        <label className="field"><span>Ab Datum</span><DateInput value={f.since} onChange={(v) => setF({ ...f, since: v })} /></label>
         <p className="muted small full">Nach dem Speichern werden die Treffer neu berechnet; Mails, die keine Ansicht mehr treffen, werden gelöscht (Kopien in Arbeitspaketen bleiben).</p>
         {error && <div className="error full">{error}</div>}
         <div className="full"><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.patch(`/mail/views/${view.id}`, { name: f.name, filter: { folders: f.folders, from: f.from, to: f.to, subject: f.subject, keyword: f.keyword, since: f.since || null } }); onSaved(); })}>Speichern</button></div>

@@ -6,10 +6,11 @@ import { Drawer, Initials, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { InlineText, TextArea } from './TaskDrawer';
 import { CopyMoveDialog } from './CopyMove';
-import { useMembers, useTransferQuestion } from './planForms';
+import { MilestoneList, useMembers, useTransferQuestion } from './planForms';
 import { useCreate } from './create';
 import { InlineCreate } from './BoardView';
-import { IconDiamond, IconLock, IconX } from '../../components/icons';
+import { IconLock, IconX } from '../../components/icons';
+import { DateInput } from '../../components/DateInput';
 
 /**
  * Maske eines Teilprojekts, aufgebaut wie die des Arbeitspakets: Kopf mit Name und Aktionen, Felder (Verantwortung, Zeitraum),
@@ -44,7 +45,6 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
   const aps = tasks.filter((x) => x.subprojectId === s.id && !x.parentId && !x.archivedAt && !x.deletedAt).sort((a, b) => Number(a.done) - Number(b.done) || (a.dueDate ?? '9').localeCompare(b.dueDate ?? '9'));
   const open = aps.filter((x) => !x.done);
   const overdue = open.filter((x) => x.dueDate && x.dueDate < today()).length;
-  const milestones = detail.milestones.filter((m) => m.subprojectId === s.id).sort((a, b) => a.date.localeCompare(b.date));
   const colName = (id: string) => detail.columns.find((c) => c.id === id)?.name ?? '';
   // Mit Haken gehen die Arbeitspakete samt Aufgaben in den Papierkorb (wiederherstellbar), sonst stehen sie unter „Ohne Teilprojekt“
   const remove = () => void dialog.form({ title: 'Teilprojekt löschen', text: `„${s.name}“ löschen? Ohne Haken bleiben die Arbeitspakete erhalten und stehen danach unter „Ohne Teilprojekt“.`, submitLabel: 'Löschen', danger: true,
@@ -69,23 +69,14 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
             <option value="">{s.responsible.inherited ? `${s.responsible.name ?? 'PL'} (geerbt vom PL)` : '– geerbt vom PL –'}</option>
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select></label>
-        <label className="field"><span>Start</span><input type="date" value={s.startDate ?? ''} disabled={!canPlan || busy} onChange={(e) => void save({ startDate: e.target.value || null })} /></label>
-        <label className="field"><span>Ende</span><input type="date" value={s.endDate ?? ''} disabled={!canPlan || busy} onChange={(e) => void save({ endDate: e.target.value || null })} /></label>
+        <label className="field"><span>Start</span><DateInput value={s.startDate ?? ''} disabled={!canPlan || busy} onChange={(v) => void save({ startDate: v || null })} /></label>
+        <label className="field"><span>Ende</span><DateInput value={s.endDate ?? ''} disabled={!canPlan || busy} onChange={(v) => void save({ endDate: v || null })} /></label>
       </div>
       <TextArea label="Beschreibung (Ziel, Abgrenzung)" value={s.description ?? ''} canEdit={canPlan} empty="Keine Beschreibung. Ziel und Abgrenzung helfen dem Team und den Agenten bei der Zuordnung." onSave={async (description) => { await save({ description: description || null }); }} />
       <Visibility s={s} isPl={isPl} onSave={save} />
 
       <h3 className="mt">Meilensteine</h3>
-      {milestones.length === 0 && <p className="muted small">Keine.</p>}
-      {milestones.map((m) => (
-        <div key={m.id} className="row inline-row gap-2">
-          <span><IconDiamond size={12} /></span>
-          {canPlan ? <InlineText value={m.name} canEdit onSave={(name) => void run(async () => { await api.patch(`/projects/${pid}/milestones/${m.id}`, { name }); await reload(); })} /> : <span>{m.name}</span>}
-          {canPlan ? <input type="date" className="inline-date" value={m.date} onChange={(e) => { if (e.target.value) void run(async () => { await api.patch(`/projects/${pid}/milestones/${m.id}`, { date: e.target.value }); await reload(); }); }} /> : <span className="muted small">{fmtDate(m.date)}</span>}
-          {canPlan && <button className="btn sm link right" title="Meilenstein löschen" onClick={() => void dialog.confirm({ title: 'Meilenstein löschen', text: `„${m.name}“ (${fmtDate(m.date)}) löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/milestones/${m.id}`); await reload(); }); })} aria-label="Meilenstein löschen"><IconX /></button>}
-        </div>
-      ))}
-      {canPlan && <button className="btn sm link" onClick={() => void run(async () => { await create.milestone(s.id); })}>+ Meilenstein</button>}
+      <MilestoneList subprojectId={s.id} />
 
       <h3 className="mt">Arbeitspakete <span className="count">{open.length}/{aps.length}</span></h3>
       {aps.length === 0 && <p className="muted small">Noch keine.</p>}

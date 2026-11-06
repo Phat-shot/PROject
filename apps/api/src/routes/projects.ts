@@ -24,6 +24,7 @@ import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentP
 import type { AgentMode, AgentPolicy } from '@projekttool/shared';
 import type { AgentMailMode, MailInquiry, PlanningDepth } from '@projekttool/shared';
 import { PLANNING_DEPTHS } from '@projekttool/shared';
+import { loadMilestone, loadMilestones, setMilestoneTasks, setReached } from '../tasks/milestones.js';
 
 export { DEFAULT_COLUMNS } from '../personalProject.js';
 /** Gruppenname bereinigt: leer → null */
@@ -40,6 +41,8 @@ export function mapProject(r: any): Project {
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     autoCompleteParent: r.auto_complete_parent !== false,
     autoDoneAufgabe: r.auto_done_aufgabe !== false,
+    milestoneAutoReach: Boolean(r.milestone_auto_reach),
+    reviewRequired: Boolean(r.review_required),
     planningDepth: PLANNING_DEPTHS.some((d) => d.key === r.planning_depth) ? r.planning_depth : 'auto',
     aiProfileId: r.ai_profile_id ?? null,
     externalProfile: profileOf(r.external_profile),
@@ -134,7 +137,7 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     // Meilensteine eingeschränkter Teilprojekte nur mit Sicht darauf (wie die Teilprojekte oben)
     const visible = new Set(subprojects.rows.map((r: any) => r.id as string));
-    const milestones = (await db.query(`select * from milestones where project_id = $1 order by date`, [p.id])).rows.filter((r: any) => !r.subproject_id || visible.has(r.subproject_id));
+    const milestones = (await loadMilestones(db, p.id)).filter((r) => !r.subprojectId || visible.has(r.subprojectId));
     const lead = await resolveProjectLead(db, p.id);
     const labels = await db.query(`select * from labels where project_id = $1 order by position, name`, [p.id]);
     return {
@@ -144,16 +147,19 @@ export async function projectRoutes(app: FastifyInstance) {
       groups: await projectGroups(p.id),
       columns: columns.rows.map(mapColumn),
       subprojects: subprojects.rows.map((r: any) => mapSubproject(r, lead)),
-      milestones: milestones.map((r: any) => ({ id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) }))
+      milestones
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; autoDoneAufgabe?: boolean; planningDepth?: PlanningDepth; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null; showAllTabs?: boolean } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; autoDoneAufgabe?: boolean; milestoneAutoReach?: boolean; reviewRequired?: boolean; planningDepth?: PlanningDepth; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null; showAllTabs?: boolean } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
     if (b.showAllTabs !== undefined && typeof b.showAllTabs !== 'boolean') throw badRequest('showAllTabs: true oder false');
     if (b.autoDoneAufgabe !== undefined && typeof b.autoDoneAufgabe !== 'boolean') throw badRequest('autoDoneAufgabe: true oder false');
+    if (b.milestoneAutoReach !== undefined && typeof b.milestoneAutoReach !== 'boolean') throw badRequest('milestoneAutoReach: true oder false');
+    if (b.reviewRequired !== undefined && typeof b.reviewRequired !== 'boolean') throw badRequest('reviewRequired: true oder false');
+    if (b.milestoneAutoReach !== undefined || b.reviewRequired !== undefined) await db.query(`update projects set milestone_auto_reach = coalesce($2, milestone_auto_reach), review_required = coalesce($3, review_required) where id = $1`, [req.params.id, b.milestoneAutoReach ?? null, b.reviewRequired ?? null]);
     if (b.planningDepth !== undefined && !PLANNING_DEPTHS.some((d) => d.key === b.planningDepth)) throw badRequest('Planungstiefe: auto, aufgaben oder checkliste');
     if ('mailInquiry' in b) {
       // Mail-Rückfrage je Projekt; null übernimmt wieder die Vorgabe des Mandanten
@@ -468,7 +474,7 @@ export async function projectRoutes(app: FastifyInstance) {
     if (cols.length < 2) throw badRequest('Mindestens zwei Spalten');
     const existing = await db.query(`select id from board_columns where project_id = $1`, [req.params.id]);
     const keep = new Set<string>();
-    const kinds = ['backlog', 'active', 'waiting', 'parked', 'done'];
+    const kinds = ['backlog', 'active', 'review', 'waiting', 'parked', 'done'];
     if (!cols.some((c) => c.kind === 'done' || (!c.kind && c.isDone))) throw badRequest('Eine Spalte muss „Erledigt“ sein');
     for (const [i, c] of cols.entries()) {
       const kind = c.kind && kinds.includes(c.kind) ? c.kind : c.isDone ? 'done' : 'active';
@@ -584,25 +590,31 @@ export async function projectRoutes(app: FastifyInstance) {
     return { ok: true, trashed };
   });
 
-  // Meilensteine
-  app.post<{ Params: { id: string }; Body: { name: string; date: string; subprojectId?: string | null } }>('/projects/:id/milestones', async (req) => {
+  // Meilensteine: Name, Datum, Teilprojekt, verknüpfte Arbeitspakete (taskIds), Status erreicht (reached); PL oder „Projektplan ändern“
+  type MilestoneBody = { name?: string; date?: string; subprojectId?: string | null; taskIds?: string[]; reached?: boolean };
+  app.post<{ Params: { id: string }; Body: MilestoneBody }>('/projects/:id/milestones', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
-    const b = req.body ?? ({} as any);
-    if (!b.name || !b.date) throw badRequest('Name und Datum erforderlich');
-    const r = await db.one(`insert into milestones (project_id, subproject_id, name, date) values ($1,$2,$3,$4) returning *`, [req.params.id, b.subprojectId ?? null, b.name, b.date]);
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: b });
-    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) } };
+    const b = req.body ?? ({} as MilestoneBody);
+    if (!b.name?.trim() || !b.date) throw badRequest('Name und Datum erforderlich');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(b.date)) throw badRequest('Datum als YYYY-MM-DD');
+    if (b.subprojectId && !(await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]))) throw badRequest('Teilprojekt gehört nicht zum Projekt');
+    const r = await db.one(`insert into milestones (project_id, subproject_id, name, date) values ($1,$2,$3,$4) returning *`, [req.params.id, b.subprojectId ?? null, b.name.trim(), b.date]);
+    if (b.taskIds) await setMilestoneTasks(db, r.id, req.params.id, b.taskIds);
+    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.create', objectType: 'milestone', objectId: r.id, details: b as Record<string, unknown> });
+    if (b.reached) await setReached(db, r.id, true, { id: user.id, orgId: user.orgId, name: user.name });
+    return { milestone: await loadMilestone(db, r.id) };
   });
 
-  app.patch<{ Params: { id: string; mid: string }; Body: { name?: string; date?: string; subprojectId?: string | null } }>('/projects/:id/milestones/:mid', async (req) => {
+  app.patch<{ Params: { id: string; mid: string }; Body: MilestoneBody }>('/projects/:id/milestones/:mid', async (req) => {
     const user = requireUser(req);
     const m = await requireProject(db, user, req.params.id, 'member');
     if (m.role !== 'pl' && !m.canEditPlan) throw forbidden('Erfordert das Recht „Projektplan ändern“');
     const b = req.body ?? {};
     if (b.name !== undefined && !b.name.trim()) throw badRequest('Name erforderlich');
     if (b.date !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(b.date)) throw badRequest('Datum als YYYY-MM-DD');
+    if (b.reached !== undefined && typeof b.reached !== 'boolean') throw badRequest('reached: true oder false');
     if (b.subprojectId) {
       const s = await db.maybeOne(`select id from subprojects where id = $1 and project_id = $2`, [b.subprojectId, req.params.id]);
       if (!s) throw badRequest('Teilprojekt gehört nicht zum Projekt');
@@ -613,8 +625,11 @@ export async function projectRoutes(app: FastifyInstance) {
       [req.params.mid, req.params.id, b.name?.trim() ?? null, b.date ?? null, 'subprojectId' in b, b.subprojectId ?? null]
     );
     if (!r) throw notFound('Meilenstein nicht gefunden');
-    await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.update', objectType: 'milestone', objectId: r.id, details: b });
-    return { milestone: { id: r.id, projectId: r.project_id, subprojectId: r.subproject_id, name: r.name, date: dateStr(r.date) } };
+    if (b.taskIds) await setMilestoneTasks(db, r.id, req.params.id, b.taskIds);
+    const { reached, ...rest } = b;
+    if (Object.keys(rest).length) await audit(db, { orgId: user.orgId, projectId: req.params.id, userId: user.id, action: 'milestone.update', objectType: 'milestone', objectId: r.id, details: rest as Record<string, unknown> });
+    if (reached !== undefined) await setReached(db, r.id, reached, { id: user.id, orgId: user.orgId, name: user.name });
+    return { milestone: await loadMilestone(db, r.id) };
   });
 
   app.delete<{ Params: { id: string; mid: string } }>('/projects/:id/milestones/:mid', async (req) => {
@@ -649,7 +664,11 @@ export async function projectRoutes(app: FastifyInstance) {
     );
     // Eingeschränkte Teilprojekte nur mit Sicht darauf: Kennzahlen je Teilprojekt, Meilensteine und Eskalationen
     const subs = await visibleSubIds(pid, user.id);
-    const milestones = (await db.query(`select * from milestones where project_id = $1 and date >= $2 order by date`, [pid, today])).rows.filter((r: any) => !r.subproject_id || subs.has(r.subproject_id)).slice(0, 5);
+    // Offene Meilensteine (auch überfällige, noch nicht erreicht) und in den letzten 30 Tagen erreichte
+    const allMs = (await loadMilestones(db, pid)).filter((r) => !r.subprojectId || subs.has(r.subprojectId));
+    const milestones = allMs.filter((r) => !r.reachedAt).slice(0, 5);
+    const since30 = new Date(Date.now() - 30 * 86400_000).toISOString();
+    const reachedMilestones = allMs.filter((r) => r.reachedAt && r.reachedAt >= since30).sort((x, y) => String(y.reachedAt).localeCompare(String(x.reachedAt))).slice(0, 5);
     const pending = await db.one(`select count(*)::int as c from mail_drafts where project_id = $1 and status = 'pending_approval'`, [pid]);
     const review = await db.query(`select id, title, updated_at from doc_pages where project_id = $1 and status = 'review' and deleted_at is null order by updated_at desc limit 5`, [pid]);
     const activity = await db.query(
@@ -680,7 +699,8 @@ export async function projectRoutes(app: FastifyInstance) {
       escalations: esc.filter((e) => e.targetLevel > 0 || e.level > 0).slice(0, 10),
       time: { enabled: proj.time_tracking_enabled, loggedMinutes: time.logged, estimateMinutes: est.est, budgetHours: proj.budget_hours == null ? null : Number(proj.budget_hours) },
       counts, perSubproject: perSub.rows.filter((r: any) => subs.has(r.id)),
-      milestones: milestones.map((r: any) => ({ id: r.id, name: r.name, date: dateStr(r.date), subprojectId: r.subproject_id })),
+      milestones: milestones.map((r) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subprojectId, reachSuggestedAt: r.reachSuggestedAt, tasksDone: r.tasksDone, tasksTotal: r.tasksTotal })),
+      reachedMilestones: reachedMilestones.map((r) => ({ id: r.id, name: r.name, date: r.date, subprojectId: r.subprojectId, reachedAt: r.reachedAt, reachedBy: r.reachedBy })),
       pendingDrafts: pending.c, pagesInReview: review.rows, conflicts, overdue,
       workload: [...load.entries()].map(([userId, v]) => ({ userId, ...v })).sort((a, b) => b.open - a.open),
       activity: activity.rows.map((a: any) => ({ action: a.action, objectType: a.object_type, objectId: a.object_id, details: a.details, createdAt: a.created_at, userName: a.user_name }))

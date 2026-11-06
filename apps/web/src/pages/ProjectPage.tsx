@@ -22,7 +22,9 @@ import { useAiStatus } from '../lib/useAi';
 import { useRefresh } from '../lib/useRefresh';
 import { Loading } from '../components/ui';
 
-export interface Milestone { id: string; projectId: string; subprojectId: string | null; name: string; date: string }
+export type { Milestone } from '@projekttool/shared';
+import type { Milestone } from '@projekttool/shared';
+import { Breadcrumbs } from '../components/Breadcrumbs';
 export interface MemberRow extends Membership { name: string; email: string; kind?: 'person' | 'agent' }
 export interface ProjectDetail {
   project: Project & { myMembership: Membership };
@@ -128,9 +130,11 @@ function ProjectBody() {
   const settingsTabs = [...PROJECT_SETTINGS_TABS, ...(ai ? [{ key: 'ki-laeufe', label: 'KI-Läufe' }] : [])];
   const taskId = params.get('task');
   const spId = params.get('sp');
+  const SECTION: Record<string, string> = { board: 'Board', plan: 'Plan', doku: 'Doku', raid: 'Risiken', zeiten: 'Zeiten', auswertung: 'Auswertung', einstellungen: 'Einstellungen' };
+  const crumbs = <Breadcrumbs className="topbar-crumbs" items={[{ label: 'Projekte', to: '/projekte' }, { label: p.name, to: `${base}/board`, title: `${p.key} · Board` }, ...(SECTION[sub] ? [{ label: SECTION[sub], to: `${base}/${sub}` }] : [])]} />;
   return (
     <>
-      <TopBar title={<><Link to={`/dashboard?projekt=${id}`} className="title-link" title="Dashboard dieses Projekts"><span className="badge mr-2">{p.key}</span>{p.name}</Link>{badge && <span className="badge ml-2" title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge ml-2">archiviert</span>}</>} tabs={tabs} tabsBelow />
+      <TopBar crumbs={crumbs} title={<><Link to={`/dashboard?projekt=${id}`} className="title-link" title="Dashboard dieses Projekts"><span className="badge mr-2">{p.key}</span>{p.name}</Link>{badge && <span className="badge ml-2" title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge ml-2">archiviert</span>}</>} tabs={tabs} tabsBelow />
       {sub === 'einstellungen' && <nav className="subtabs" aria-label="Einstellungen">{settingsTabs.map((t) => <NavLink key={t.key} to={`${base}/einstellungen/${t.key}`}>{t.label}{t.key === 'ki-laeufe' && openProposals > 0 && <span className="badge warn ml-1" title="offene KI-Vorschläge">{openProposals}</span>}</NavLink>)}</nav>}
       {sub === 'plan' && <nav className="subtabs" aria-label="Plan"><NavLink to={`${base}/plan`} end>Gantt und Listen</NavLink><NavLink to={`${base}/plan/kalender`}>Kalender</NavLink></nav>}
       <Routes>

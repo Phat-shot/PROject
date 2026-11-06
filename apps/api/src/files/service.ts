@@ -4,7 +4,8 @@ import { audit } from '../audit.js';
 import { effectiveMembership } from '../rights.js';
 import { SQL } from '../projectPolicy.js';
 import { unseal } from '../secrets.js';
-import { MAX_EXTRACT_BYTES, extractText, extractable } from './extract.js';
+import { MAX_EXTRACT_BYTES, extractText, extractable, ocrCandidate } from './extract.js';
+import { OCR_PENDING_NOTES, OcrSession, ocrEnabled } from './ocr.js';
 import { getFile, listRecursive, normPath, readLimited, underPath, type DavTarget } from './webdav.js';
 
 /**
@@ -34,9 +35,10 @@ export interface FileScope { sourceId: string; subPath: string; label: string; p
  * mehreren Projekten oder überlappende Unterordner) werden zusammengefasst: ein Paar, das in einem breiteren derselben Quelle
  * liegt, entfällt (keine Doppelsuche, keine Doppeltreffer).
  */
-export async function fileScopes(db: Db, projectIds: string[]): Promise<FileScope[]> {
+export async function fileScopes(db: Db, projectIds: string[], o: { forAgent: boolean }): Promise<FileScope[]> {
   if (!projectIds.length) return [];
-  const rows = (await db.query(`select b.id, b.source_id, b.project_id, coalesce(b.sub_path, '') as sub_path, b.folder_label from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.project_id = any($1::uuid[]) and ${BINDING_OK_SQL} order by b.created_at`, [projectIds])).rows as any[];
+  // forAgent: nur Einbindungen mit Schalter „für KI-Agenten“ (agent_enabled); ausgeschlossene sieht der Agent gar nicht
+  const rows = (await db.query(`select b.id, b.source_id, b.project_id, coalesce(b.sub_path, '') as sub_path, b.folder_label from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.project_id = any($1::uuid[]) and ${BINDING_OK_SQL}${o.forAgent ? ' and b.agent_enabled' : ''} order by b.created_at`, [projectIds])).rows as any[];
   const all: FileScope[] = rows.map((r) => ({ sourceId: r.source_id, subPath: r.sub_path === '/' ? '' : r.sub_path, label: r.folder_label, projectId: r.project_id, bindingId: r.id }));
   const covers = (o: FileScope, a: FileScope) => o.sourceId === a.sourceId && (o.subPath === '' || a.subPath === o.subPath || a.subPath.startsWith(o.subPath + '/'));
   return all.filter((a, i) => !all.some((o, j) => j !== i && covers(o, a) && (o.subPath !== a.subPath || j < i)));
@@ -60,11 +62,11 @@ export async function fileForUser(db: Db, user: User, fileId: string): Promise<{
   return null;
 }
 
-/** Ist die Datei über ein Projekt der Liste erreichbar (Agent/Chat: Projekte vorher auf Mitgliedschaft geprüft)? */
+/** Ist die Datei über ein Projekt der Liste erreichbar (Agent/Chat: Projekte vorher auf Mitgliedschaft geprüft; nur Einbindungen für KI-Agenten)? */
 export async function fileInProjects(db: Db, fileId: string, projectIds: string[]): Promise<{ file: any; scopes: FileScope[] } | null> {
   const file = await db.maybeOne(`select f.*, s.name as source_name from files f join file_sources s on s.id = f.source_id where f.id = $1 and f.deleted_at is null`, [fileId]);
   if (!file) return null;
-  const scopes = await fileScopes(db, projectIds);
+  const scopes = await fileScopes(db, projectIds, { forAgent: true });
   return scopes.some((s) => s.sourceId === file.source_id && underPath(file.path, s.subPath || null)) ? { file, scopes } : null;
 }
 
@@ -116,29 +118,42 @@ export async function listProjectFiles(db: Db, projectId: string, bindingId: str
   return { binding: mapRoot(b), path: rel, parent: rel === '/' ? null : normPath(rel.split('/').slice(0, -1).join('/')), roots: roots.map(mapRoot), entries };
 }
 
-export interface SyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; truncated: boolean; error?: string | null }
+export interface SyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; ocr: number; truncated: boolean; error?: string | null }
 /**
  * Synchronisation einer Quelle: rekursive Liste (Grenzen siehe listRecursive), Änderungen per etag, Textauszug für neue und
  * geänderte Dateien (höchstens 20 MB, je Lauf höchstens maxExtract Dateien; der Rest folgt im nächsten Lauf), gelöschte
  * Dateien deleted_at. Fehler stehen in last_error; ist die Liste unvollständig, wird nichts als gelöscht markiert.
+ * Texterkennung (OCR) für Scans und Bilder über die Sitzung o.ocr (runFileSync: eine je Lauf; sonst eine eigene). Unveränderte
+ * Dateien, die noch auf OCR warten (Hinweis in OCR_PENDING_NOTES), werden erneut verarbeitet, ohne als „neu“ zu gelten.
  */
-export async function syncSource(db: Db, fetchFn: typeof fetch, sourceId: string, o: { maxFiles?: number; maxExtract?: number } = {}): Promise<SyncStats> {
+export async function syncSource(db: Db, fetchFn: typeof fetch, sourceId: string, o: { maxFiles?: number; maxExtract?: number; ocr?: OcrSession | null } = {}): Promise<SyncStats> {
   const s = await db.maybeOne(`select * from file_sources where id = $1`, [sourceId]);
-  const stats: SyncStats = { files: 0, added: 0, changed: 0, deleted: 0, extracted: 0, truncated: false };
+  const stats: SyncStats = { files: 0, added: 0, changed: 0, deleted: 0, extracted: 0, ocr: 0, truncated: false };
   if (!s) return { ...stats, error: 'Quelle nicht gefunden' };
+  const ownOcr = o.ocr === undefined && ocrEnabled() ? new OcrSession() : null;
+  const ocr = o.ocr === undefined ? ownOcr : o.ocr;
+  try { return await syncSourceWith(db, fetchFn, s, o, ocr, stats); } finally { if (ownOcr) await ownOcr.close(); }
+}
+
+async function syncSourceWith(db: Db, fetchFn: typeof fetch, s: any, o: { maxFiles?: number; maxExtract?: number }, ocr: OcrSession | null, stats: SyncStats): Promise<SyncStats> {
+  const sourceId = s.id as string;
   const t = targetOf(s);
   const root = normPath(s.root_path);
   try {
     const list = await listRecursive(fetchFn, t, root, { maxFiles: o.maxFiles ?? Number(process.env.FILE_SYNC_MAX_FILES ?? 5000) });
     stats.truncated = list.truncated; stats.files = list.files.length;
-    const existing = new Map<string, any>(((await db.query(`select id, path, etag, deleted_at, text_status from files where source_id = $1`, [sourceId])).rows as any[]).map((r) => [r.path, r]));
+    const existing = new Map<string, any>(((await db.query(`select id, path, etag, deleted_at, text_status, text_note from files where source_id = $1`, [sourceId])).rows as any[]).map((r) => [r.path, r]));
     let budget = o.maxExtract ?? 300;
     const seen = new Set<string>();
     for (const e of list.files) {
       const rel = root === '/' ? e.path : e.path.slice(root.length) || '/';
       seen.add(rel);
       const cur = existing.get(rel);
-      if (cur && !cur.deleted_at && cur.etag && e.etag && cur.etag === e.etag) continue;
+      const same = Boolean(cur && !cur.deleted_at && cur.etag && e.etag && cur.etag === e.etag);
+      // Unverändert, aber noch ohne Texterkennung (Scan/Bild vor OCR oder Budget erschöpft): erneut verarbeiten, sobald OCR läuft
+      const ocrRetry = same && Boolean(ocr) && cur.text_status === 'skipped' && OCR_PENDING_NOTES.has(cur.text_note) && ocrCandidate(e.name);
+      if (same && !ocrRetry) continue;
+      if (ocrRetry && (!ocr!.left || budget <= 0)) continue;
       let text: string | null = null; let status: 'ok' | 'skipped' | 'error' = 'skipped'; let note: string | null = null; let etag = e.etag;
       if (!extractable(e.name)) note = 'Dateityp ohne Textauszug';
       else if (e.size != null && e.size > MAX_EXTRACT_BYTES) note = 'größer als 20 MB';
@@ -147,10 +162,17 @@ export async function syncSource(db: Db, fetchFn: typeof fetch, sourceId: string
         budget--;
         try {
           const r = await getFile(fetchFn, t, e.path, 60_000);
-          const x = await extractText(e.name, await readLimited(r, MAX_EXTRACT_BYTES));
+          const before = ocr?.used ?? 0;
+          const x = await extractText(e.name, await readLimited(r, MAX_EXTRACT_BYTES), ocr);
           status = x.status; text = x.text; note = x.note ?? null;
           if (x.status === 'ok') stats.extracted++;
+          if ((ocr?.used ?? 0) > before) stats.ocr++;
         } catch (err: any) { status = 'error'; note = String(err?.message ?? err).slice(0, 200); }
+      }
+      if (ocrRetry) {
+        // nur der Textauszug ist neu: changed_at bleibt (keine „neue Datei“ für den Projektdurchlauf)
+        await db.query(`update files set text_content = $2, text_status = $3, text_note = $4, indexed_at = now() where id = $1`, [cur.id, text, status, note]);
+        continue;
       }
       await db.query(
         `insert into files (source_id, path, name, mime, size, etag, modified_at, text_content, text_status, text_note, indexed_at, changed_at, deleted_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now(),now(),null)
@@ -176,16 +198,20 @@ export async function syncSource(db: Db, fetchFn: typeof fetch, sourceId: string
 /** Worker: alle aktiven Quellen mit mindestens einer Einbindung synchronisieren (Intervall FILE_SYNC_INTERVAL_MS, Standard 15 min). */
 export async function runFileSync(db: Db, fetchFn: typeof fetch): Promise<number> {
   const rows = (await db.query(`select s.id from file_sources s where s.active and exists (select 1 from file_source_projects b where b.source_id = s.id) order by s.last_sync_at nulls first`)).rows as any[];
-  for (const r of rows) {
-    const st = await syncSource(db, fetchFn, r.id);
-    if (st.error) console.warn(`[worker] Dateiquelle ${r.id}: ${st.error}`);
-  }
+  // Eine OCR-Sitzung für den ganzen Lauf: FILE_OCR_PER_RUN gilt über alle Quellen
+  const ocr = ocrEnabled() ? new OcrSession() : null;
+  try {
+    for (const r of rows) {
+      const st = await syncSource(db, fetchFn, r.id, { ocr });
+      if (st.error) console.warn(`[worker] Dateiquelle ${r.id}: ${st.error}`);
+    }
+  } finally { await ocr?.close(); }
   return rows.length;
 }
 
-/** Neue oder geänderte Dateien seit einem Zeitpunkt in den Einbindungen eines Projekts (für den Projektdurchlauf). */
+/** Neue oder geänderte Dateien seit einem Zeitpunkt in den Einbindungen eines Projekts, die für KI-Agenten an sind (Projektdurchlauf). */
 export async function changedFiles(db: Db, projectId: string, since: Date | null, limit = 20): Promise<{ id: string; label: string; modifiedAt: string | null }[]> {
-  const scopes = await fileScopes(db, [projectId]);
+  const scopes = await fileScopes(db, [projectId], { forAgent: true });
   if (!scopes.length) return [];
   const r = await db.query(
     `with allowed as (select * from unnest($1::uuid[], $2::text[]) as a(source_id, sub_path))

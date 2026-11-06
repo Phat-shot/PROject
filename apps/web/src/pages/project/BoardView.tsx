@@ -5,7 +5,7 @@ import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Badge, Button, IconButton, Initials, keyboardShortcutsBlocked, Loading, Modal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
 import { IconAlert, IconCheck, IconCheckSquare, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
-import { moveTaskTo } from '../../lib/moveTask';
+import { moveTaskTo, reviewOptsOf } from '../../lib/moveTask';
 import { SUBTASK_DRAG } from './MoveDialog';
 import { useCreate } from './create';
 import { useData } from '../../lib/useData';
@@ -132,7 +132,7 @@ export function BoardView() {
     try {
       if (task.parentId) {
         const col = detail.columns.find((c) => c.id === colId);
-        if (col && col.id !== task.columnId && (await moveTaskTo(dialog.form, task.id, col))) await reloadTasks();
+        if (col && col.id !== task.columnId && (await moveTaskTo(dialog.form, task.id, col, null, reviewOptsOf(detail, task.reviewer?.userId)))) await reloadTasks();
         return;
       }
       // Zielindex innerhalb der Spalte bestimmen (Swimlane → Position im Gesamt der Spalte)
@@ -142,7 +142,7 @@ export function BoardView() {
       const anchor = laneTasks[idxInLane];
       const index = anchor ? colTasks.indexOf(anchor) : colTasks.length;
       const col = detail.columns.find((c) => c.id === colId);
-      if (!col || !(await moveTaskTo(dialog.form, task.id, col, index))) return;
+      if (!col || !(await moveTaskTo(dialog.form, task.id, col, index, reviewOptsOf(detail, task.reviewer?.userId)))) return;
       if (laneKey !== 'all' && (task.subprojectId ?? 'none') !== laneKey) await api.patch(`/tasks/${task.id}`, { subprojectId: laneKey === 'none' ? null : laneKey });
       await reloadTasks();
     } catch (e: any) {
@@ -190,7 +190,7 @@ export function BoardView() {
         <label className="check small right" title="Aufgaben in den Karten aufgeklappt zeigen (sonst nur der Zähler; je Karte umschaltbar)"><input type="checkbox" checked={showSubs} onChange={(e) => setShowSubs(e.target.checked)} /> Aufgaben aufgeklappt</label>
         <label className="check small"><input type="checkbox" checked={lanes} onChange={(e) => setLanes(e.target.checked)} /> Swimlanes</label>
         <span className="muted small" aria-label={`${filtered.length} von ${source.length} Arbeitspaketen`}>{filtered.length}/{source.length}</span>
-        <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '']))}>CSV</button>
+        <button className="chip" title="Gefilterte Arbeitspakete als CSV (Excel)" onClick={() => downloadCsv(`board_${detail.project.key}.csv`, ['Kennung', 'Titel', 'Status', 'Teilprojekt', 'Zuständig', 'Start', 'Fällig', 'Priorität', 'Labels', 'Blockiert', 'Erledigt', 'Übergeordnet'], filtered.map((x) => [x.number ? `${detail.project.key}-${x.number}` : '', x.title, detail.columns.find((c) => c.id === x.columnId)?.name ?? '', detail.subprojects.find((s) => s.id === x.subprojectId)?.name ?? '', x.responsible?.name ?? x.responsible?.email ?? '', x.startDate, x.dueDate, x.priority, (x.labelIds ?? []).map((id) => detail.labels.find((l) => l.id === id)?.name ?? '').filter(Boolean).join(', '), x.blocked ? 'ja' : '', x.done ? 'ja' : '', x.parent ? `${detail.project.key}-${x.parent.number}` : '']))}>CSV</button>
       </div>
       )}
       {f.archived && <div className="notice mb small">Archiv: erledigte und archivierte Arbeitspakete. Wiederherstellen im Arbeitspaket.{!archived && <> <Loading /></>}</div>}
@@ -212,7 +212,7 @@ export function BoardView() {
                   onDragLeave: (e: React.DragEvent) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDrop(null); },
                   onDrop: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); void onDrop(laneKey, c.id); }
                 };
-                const kindHint = <>{c.kind === 'backlog' && <span className="kind"><Term k="stillstand">geplant</Term></span>}{c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{c.kind === 'waiting' && <span className="kind" title="Wartet auf Rückmeldung mit Frist; ohne Lösung bis zur Frist → Zurückgestellt">Frist</span>}{c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</>;
+                const kindHint = <>{c.kind === 'backlog' && <span className="kind"><Term k="stillstand">geplant</Term></span>}{c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{c.kind === 'waiting' && <span className="kind" title="Wartet auf Rückmeldung mit Frist; ohne Lösung bis zur Frist → Zurückgestellt">Frist</span>}{c.kind === 'review' && <span className="kind" title="In Prüfung: beim Hineinziehen wird die prüfende Person gewählt; sie gibt frei oder weist zurück">Prüfung</span>}{c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</>;
                 const body = <>
                   {!isCollapsed && inCol.map((x, i) => (
                     <TaskCard key={x.id} task={x} t={t} soon={soon} canEdit={canEdit}
@@ -341,6 +341,7 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
       {(selectable || selected) && <input type="checkbox" className="select-box" checked={selected} readOnly tabIndex={-1} aria-label="Auswählen" />}
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
+      {x.reviewer && <div className="review-line small" title="Benannte prüfende Person">Prüfung: {x.reviewer.name ?? '?'}</div>}
       {x.wait && <div className={`wait-line small ${x.wait.expiredAt ? 'expired' : ''}`} title={x.wait.expiredAt ? 'Frist ohne Lösung abgelaufen: zurückgestellt' : 'Wartet; ohne Lösung bis zur Frist → Zurückgestellt'}><IconHourglass size={12} /> {x.wait.reason}{x.wait.until ? ` · bis ${fmtDate(x.wait.until.slice(0, 10))}` : ''}{x.wait.expiredAt ? ' · Frist abgelaufen' : ''}</div>}
       <div className="badges">
         <span className="tkey" title="Kennung">{detail.project.key}-{x.number}</span>
@@ -375,7 +376,7 @@ function StatusMenu({ task }: { task: Task }) {
   const { busy, error, run } = useAsync({ toast: true });
   const done = detail.columns.find((c) => c.isDone);
   const dialog = useDialog();
-  const move = (columnId: string) => void run(async () => { setOpen(false); if (await moveTaskTo(dialog.form, task.id, detail.columns.find((c) => c.id === columnId)!, 0)) await reloadTasks(); });
+  const move = (columnId: string) => void run(async () => { setOpen(false); if (await moveTaskTo(dialog.form, task.id, detail.columns.find((c) => c.id === columnId)!, 0, reviewOptsOf(detail, task.reviewer?.userId))) await reloadTasks(); });
   return (
     <div className="status-menu" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') setOpen(false); }}>
       <button className="btn sm link status-btn" aria-label="Status ändern" aria-haspopup="menu" aria-expanded={open} title="Status ändern" onClick={() => setOpen((o) => !o)}>→</button>
@@ -484,7 +485,7 @@ function CardSubtasks({ kids, open: initial, canEdit }: { kids: Task[]; open: bo
   const done = kids.filter((k) => k.done).length;
   const doneCol = detail.columns.find((c) => c.kind === 'done') ?? detail.columns.find((c) => c.isDone);
   const openCol = detail.columns.find((c) => c.kind === 'active') ?? detail.columns.find((c) => !c.isDone);
-  const move = (k: Task, colId: string) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, k.id, col))) await reloadTasks(); });
+  const move = (k: Task, colId: string) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, k.id, col, null, reviewOptsOf(detail, k.reviewer?.userId)))) await reloadTasks(); });
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div className="card-subs" onClick={stop} onMouseDown={stop} onKeyDown={stop} onDragStart={(e) => { e.stopPropagation(); if (!(e.target as HTMLElement).closest('[data-subtask]')) e.preventDefault(); }} draggable={false}>

@@ -44,6 +44,8 @@ Fachbegriffe und Anglizismen, wie sie in der Oberfläche vorkommen:
 - Was auf dich wartet, steht im Dashboard unter **Offen für dich**; die Zahl zeigt die Leiste bei „PROject“ und je Projekt.
 - Global: **Chat**, **Postfach** (alle Postfächer, Filter nach Projekt, „Zur Freigabe“ für KI-Entwürfe), **Kalender** (mit Modus **Belegung** für Ressourcen und Personen), **Workflows**; unter Einstellungen **Meine Einstellungen** und (für Org-Admins und Org-Rechte) **Verwaltung**.
 - Oben in jeder Seite: Suche (auch nach Kennung wie `WEB-12`) und die Glocke mit Benachrichtigungen. Unten links: Abmelden, Tutorial, Hilfe.
+- **Brotkrumen** über dem Titel und im Kopf eines Arbeitspakets (Projekt › Teilprojekt › Arbeitspaket › Aufgabe) führen eine Ebene zurück.
+- **Datumsfelder** zeigen TT.MM.JJJJ; tippen geht auch kurz: „12.11.“, „morgen“, „+3“, „Fr“. Das Kalendersymbol öffnet den Kalender mit Kalenderwochen.
 
 ## Täglich arbeiten
 
@@ -51,7 +53,9 @@ Fachbegriffe und Anglizismen, wie sie in der Oberfläche vorkommen:
 2. **Board:** Karte ziehen oder „→“ auf der Karte = Status ändern (auch am Handy). „+ Arbeitspaket“ in der Spalte bzw. `n` (Titel genügt, dann öffnet die Maske), „⚙ Teilprojekt“ im Swimlane-Kopf konfiguriert das Teilprojekt, „Wartet“ fragt nach Grund und Frist, `f` filtern, `q` nur meine, `x` Filter löschen.
 3. **Karte öffnen:** Felder direkt ändern, Aufgaben anlegen und darin Checklistenpunkte (am AP selbst gibt es keine Checkliste mehr; Altbestand: „In Aufgabe überführen“), „✓ Erledigt“ oben, Log schreiben (`@Name` erwähnt jemanden).
 4. **Blockiert?** „Als blockiert melden“ mit Grund; die Teilprojekt-Verantwortung wird informiert.
-5. **Stand festhalten:** jede Entscheidung und Rückmeldung ins Log des AP. Das Log ist die gemeinsame Quelle.
+5. **Zur Prüfung?** In die Spalte „In Prüfung“ ziehen und die prüfende Person wählen. Sie findet das AP unter „Offen für dich“ und gibt frei oder weist mit Kommentar zurück.
+6. **Meilensteine:** Im Plan „Bearbeiten“ am Meilenstein wählt die Arbeitspakete dazu; sind alle erledigt, bestätigt die PL „erreicht“.
+7. **Stand festhalten:** jede Entscheidung und Rückmeldung ins Log des AP. Das Log ist die gemeinsame Quelle.
 
 ## Kommunikation
 

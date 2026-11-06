@@ -4,6 +4,7 @@ import { api, ApiError, fmtDate, fmtDateTime, today } from '../lib/api';
 import { Modal, useAsync, useDialog } from './ui';
 import { useData } from '../lib/useData';
 import { IconX } from './icons';
+import { DateInput } from './DateInput';
 
 /**
  * Ressourcen und Personen im Kalender (Konzept 10): Buchungsformular mit Verfügbarkeitsampel und Konfliktbehandlung (409 → vorläufig
@@ -89,7 +90,7 @@ export function BookingForm(p: BookingFormProps) {
           </select></label>}
         {p.target && <div className="field"><span>{'resourceId' in p.target ? 'Ressource' : 'Person'}</span><strong>{p.target.name}</strong></div>}
         <label className="check"><input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} /> ganztägig</label>
-        {allDay ? <div className="row"><label className="field"><span>Von</span><input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><label className="field"><span>Bis (einschließlich)</span><input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} /></label></div>
+        {allDay ? <div className="row"><label className="field"><span>Von</span><DateInput value={startDate} onChange={(v) => setStartDate(v)} /></label><label className="field"><span>Bis (einschließlich)</span><DateInput value={dueDate} onChange={(v) => setDueDate(v)} /></label></div>
           : <div className="row"><label className="field"><span>Beginn</span><input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} /></label><label className="field"><span>Ende</span><input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} /></label></div>}
         {p.taskId && allDay && <label className="check" title="Die Belegung folgt Start und Termin des Arbeitspakets, wenn sie verschoben werden"><input type="checkbox" checked={followTask} onChange={(e) => setFollowTask(e.target.checked)} /> folgt dem Arbeitspaket</label>}
         <label className="field"><span>Titel</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={p.taskId ? 'leer = Titel des Arbeitspakets' : 'z. B. Fassade einrüsten'} /></label>

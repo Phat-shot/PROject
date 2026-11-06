@@ -11,6 +11,7 @@ import { useData } from '../../../lib/useData';
 import { ReadOnlyNote, SettingsCard } from '../../../components/settings/Settings';
 import { rightsText } from './People';
 import { projectPolicy } from '../../../lib/useProjectPolicy';
+import { AgentSourcesCard } from './AgentSources';
 
 type OwnLlm = { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; webSearch?: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null };
 type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: OwnLlm[]; canAddOwn: boolean; addOwnReason?: string | null; ownLlmAllowed?: boolean };
@@ -341,7 +342,7 @@ function AssistantEditModal({ assistant, profiles, onClose, onSaved }: { assista
 
 /**
  * Projekt › Einstellungen › KI: im persönlichen Projekt zuerst der Assistent; dann Agenten im Projekt (einladen, einschränken),
- * Projektagent, Agenten-Policy, eigenes LLM mit seinen Agenten, eigene Rechte.
+ * Projektagent, Agenten-Policy, eigenes LLM mit seinen Agenten, Quellen für den Agenten, eigene Rechte.
  */
 export function AiTab() {
   const { detail } = useProject();
@@ -360,6 +361,7 @@ export function AiTab() {
             <ProjectAgentPolicy />
           </>}
           <OwnLlmCard assistantMode />
+          <AgentSourcesCard section />
         </AssistantCard>}
         {others.length > 0 && <SettingsCard title="Weitere Agenten" hint="Aus der Zeit vor dem Assistenten. Im persönlichen Projekt arbeitet nur noch dein Assistent; du kannst diese Agenten entfernen."><AgentsInProject readOnly={!isPl} noInvite /></SettingsCard>}
       </> : <>
@@ -372,6 +374,7 @@ export function AiTab() {
         </dl>
         {isPl && <OwnLlmCard />}
       </SettingsCard>
+      <AgentSourcesCard />
       <SettingsCard title="Deine Rechte" hint="Rolle, Einzelrechte und je KI-Funktion erlaubt oder die Begründung (KI nutzen, Agent im Projekt mit dem Recht)."><MyRights /></SettingsCard>
       </>}
     </>

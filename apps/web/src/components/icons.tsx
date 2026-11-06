@@ -6,7 +6,7 @@ import type { ComponentType, SVGProps } from 'react';
 import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Cloud, Copy, Archive, CornerLeftUp, Download, FileText, Folder, Bell, Check, CheckSquare, ChevronDown, ChevronRight, ChevronUp, Circle, Clock, CornerDownLeft,
   Diamond, Hourglass, Link2, Lock, LockOpen, Mail, Menu, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, RotateCw, Scissors, Search, Settings, Star,
-  ThumbsDown, ThumbsUp, Trash2, X
+  ThumbsDown, ThumbsUp, Trash2, X, Calendar, ChevronLeft, Upload
 } from 'lucide-react';
 
 type Props = SVGProps<SVGSVGElement> & { size?: number };
@@ -57,3 +57,6 @@ export const IconFolder = wrap(Folder);
 export const IconFile = wrap(FileText);
 export const IconDownload = wrap(Download);
 export const IconUp = wrap(CornerLeftUp);
+export const IconCalendar = wrap(Calendar);
+export const IconChevronLeft = wrap(ChevronLeft);
+export const IconUpload = wrap(Upload);
