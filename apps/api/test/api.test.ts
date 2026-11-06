@@ -613,7 +613,8 @@ test('Benutzereinstellungen: Theme, Name, Passwort; Org-Admin verwaltet Projekt-
 
 test('Tasks mit externer Zuständigkeit', async () => {
   const pl = await t.login('pl@demo.local');
-  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit externem Task' })).json().task;
+  const ap = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit externem Task' })).json().task;
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'Angebot einholen', parentId: ap.id })).json().task;
   const r = await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot liefern', responsibleEmail: 'Lieferant@Extern.de' });
   assert.equal(r.statusCode, 200, r.body);
   const item = r.json().task.checklist[0];
@@ -634,7 +635,8 @@ test('Globales Postfach: Ansichten über alle Projekte, Zeiterfassung mandantenw
 
 test('Mails zu Tasks: Nachfrage wird dem Task zugeordnet, Antwort erbt die Zuordnung', async () => {
   const pl = await t.login('pl@demo.local');
-  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit Nachfrage' })).json().task;
+  const ap = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'AP mit Nachfrage' })).json().task;
+  const task = (await t.api(pl).post(`/projects/${t.ids.projects.web}/tasks`, { title: 'Angebot nachfragen', parentId: ap.id })).json().task;
   const item = (await t.api(pl).post(`/tasks/${task.id}/checklist`, { title: 'Angebot', responsibleEmail: 'lieferant@extern.de' })).json().task.checklist[0];
   const r = await t.api(pl).post('/mail/drafts', { viewId: t.ids.views.project, projectId: t.ids.projects.web, taskId: task.id, checklistItemId: item.id, to: ['lieferant@extern.de'], subject: 'Stand zu Angebot', body: 'Wie ist der Stand?', send: true });
   assert.equal(r.statusCode, 200, r.body);

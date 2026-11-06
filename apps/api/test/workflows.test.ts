@@ -49,7 +49,9 @@ test('Workflow: Definition prüfen und anlegen; Lauf: Arbeitspaket → Timer →
   assert.equal(t1.columnId, col.id);
   assert.equal(t1.subprojectId, sp.id);
   assert.equal(t1.workflowRunId, run.id);
-  assert.equal(t1.checklistTotal, 2);
+  // Checkliste des Schritts als Aufgabe „Checkliste“ am Arbeitspaket
+  assert.equal(t1.subtaskTotal, 1);
+  assert.equal((await t.db.one(`select count(*)::int as c from checklist_items i join tasks x on x.id = i.task_id where x.parent_id = $1 and x.title = 'Checkliste'`, [t1.id])).c, 2);
   assert.ok(t1.dueDate);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Aus Workflow%'`, [t1.id]));
   // Timer startet erst nach Erledigung

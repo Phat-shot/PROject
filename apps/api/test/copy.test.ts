@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { testApp } from './helpers.js';
+import { legacyItem, testApp } from './helpers.js';
 
 const t = await testApp();
 test.after(() => t.close());
@@ -11,7 +11,7 @@ test('Arbeitspaket kopieren: im Projekt mit allem; in anderes Projekt nur mit au
   const web = t.ids.projects.web;
   const erp = t.ids.projects.erp;
   const src = (await t.api(pl).get(`/tasks/${t.ids.tasks.t4}`)).json().task;
-  await t.api(pl).post(`/tasks/${src.id}/checklist`, { title: 'Preis vergleichen' });
+  await legacyItem(t.db, src.id, 'Preis vergleichen');
   await t.api(pl).post(`/tasks/${src.id}/comments`, { body: 'Angebot liegt vor.' });
   const items = await t.db.query(`select id from checklist_items where task_id = $1`, [src.id]);
   await t.db.query(`update checklist_items set done = true where id = $1`, [items.rows[0].id]);

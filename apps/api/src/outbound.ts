@@ -172,7 +172,8 @@ export async function externalContext(db: Db, taskId: string | null, aud: Audien
     if (t.external_brief?.trim()) lines.push(`Beschreibung für Externe: ${cut(t.external_brief, 2000)}`);
     const assigned = all((e) => normAddr(t.responsible_email) === e);
     if (assigned && t.description?.trim()) lines.push(`Beschreibung: ${cut(t.description, 2000)}`);
-    const items = (await db.query(`select title, done, responsible_email from checklist_items where task_id = $1 order by position`, [t.id])).rows.filter((i: any) => assigned || all((e) => normAddr(i.responsible_email) === e));
+    // Checklistenpunkte gehören zu Aufgaben: am Arbeitspaket die eigenen (Altbestand) und die seiner Aufgaben
+    const items = (await db.query(`select i.title, i.done, i.responsible_email from checklist_items i join tasks x on x.id = i.task_id where i.task_id = $1 or (x.parent_id = $1 and x.deleted_at is null) order by (i.task_id = $1) desc, x.position, i.position`, [t.id])).rows.filter((i: any) => assigned || all((e) => normAddr(i.responsible_email) === e));
     if (items.length) lines.push(`Tasks für die Empfänger:\n${items.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title}`).join('\n')}`);
     const log = await db.query(`select body, created_at from task_comments where task_id = $1 and visibility = 'external' order by created_at desc limit 10`, [t.id]);
     if (log.rows.length) lines.push(`Mitteilungen für Externe (aus dem Log):\n${log.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')}: ${cut(x.body, 600)}`).join('\n')}`);

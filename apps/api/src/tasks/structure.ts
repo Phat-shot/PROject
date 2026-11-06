@@ -8,7 +8,8 @@ import { dateStr, insertTask, moveTask, touchTask } from './service.js';
 /**
  * Struktur ändern (Konzept: Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Checklistenpunkt): Aufgaben unter ein anderes
  * Arbeitspaket hängen oder zum Arbeitspaket machen, Arbeitspakete einem Teilprojekt zuordnen, Checklistenpunkte zu Aufgaben
- * machen, verschieben oder Aufgaben wieder zu Checklistenpunkten machen. Nutzen Routen (Personen) und Agenten (Aktionen)
+ * machen, verschieben oder Aufgaben wieder zu Checklistenpunkten machen. Checklistenpunkte gehören zu Aufgaben: Ziel von
+ * Verschieben und Umwandeln ist immer eine Aufgabe; Punkte am Arbeitspaket (Altbestand) wandern per convert in eine Aufgabe. Nutzen Routen (Personen) und Agenten (Aktionen)
  * gleichermaßen; Rechte prüft der Aufrufer. Alles hängt am Arbeitspaket über task_id (Checkliste, Anhänge, Log, Zeiten,
  * Mails, Buchungen), deshalb nimmt eine Aufgabe beim Umhängen alles mit; nur das Teilprojekt folgt dem neuen Arbeitspaket.
  */
@@ -133,30 +134,44 @@ export async function demoteBlocker(db: Db, taskId: string): Promise<string | nu
   return null;
 }
 
-/** Aufgabe → Checklistenpunkt am Arbeitspaket: Log und Kommentare werden als ein Log-Eintrag am Arbeitspaket zusammengefasst, Anhänge und Checkliste wandern mit, die Aufgabe wird gelöscht. */
-export async function demoteTask(db: Db, actor: StructureActor, taskId: string): Promise<{ itemId: string; apId: string }> {
+/** Ziel-Aufgabe für demote: ausdrücklich (Aufgabe desselben Arbeitspakets) oder die einzige andere offene Aufgabe des Arbeitspakets. */
+export async function demoteTarget(db: Db, t: any, toTaskId?: string | null): Promise<any> {
+  if (toTaskId) {
+    const to = await taskRow(db, toTaskId);
+    if (!to || to.id === t.id || to.parent_id !== t.parent_id) throw badRequest('Ziel muss eine andere Aufgabe desselben Arbeitspakets sein');
+    return to;
+  }
+  const open = await db.query(`select x.id from tasks x join board_columns c on c.id = x.column_id where x.parent_id = $1 and x.id <> $2 and x.deleted_at is null and x.archived_at is null and not c.is_done`, [t.parent_id, t.id]);
+  if (open.rows.length !== 1) throw badRequest(open.rows.length ? 'Wähle die Aufgabe, an die der Checklistenpunkt kommt (toTaskId)' : 'Checklistenpunkte gehören zu Aufgaben: das Arbeitspaket hat keine andere offene Aufgabe');
+  return taskRow(db, open.rows[0].id);
+}
+
+/** Aufgabe → Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets: Log und Kommentare werden als ein Log-Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern mit, die Aufgabe wird gelöscht. */
+export async function demoteTask(db: Db, actor: StructureActor, taskId: string, toTaskId?: string | null): Promise<{ itemId: string; apId: string; targetId: string }> {
   const why = await demoteBlocker(db, taskId);
   if (why) throw badRequest(why);
   const t = await taskRow(db, taskId);
   const ap = await taskRow(db, t.parent_id);
   if (!ap) throw badRequest('Arbeitspaket nicht gefunden');
-  const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [ap.id]);
-  const item = await db.one(`insert into checklist_items (task_id, title, done, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5,$6) returning id`, [ap.id, String(t.title).slice(0, 300), Boolean(t.is_done), t.responsible_user_id ?? null, t.responsible_email ?? null, pos.p]);
-  // Eigene Checkliste der Aufgabe: als Punkte am Arbeitspaket anhängen
-  await db.query(`update checklist_items set task_id = $2, position = position + $3 where task_id = $1`, [t.id, ap.id, Number(pos.p) + 1]);
-  await db.query(`update attachments set task_id = $2 where task_id = $1`, [t.id, ap.id]);
+  const target = await demoteTarget(db, t, toTaskId);
+  const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [target.id]);
+  const item = await db.one(`insert into checklist_items (task_id, title, done, responsible_user_id, responsible_email, position) values ($1,$2,$3,$4,$5,$6) returning id`, [target.id, String(t.title).slice(0, 300), Boolean(t.is_done), t.responsible_user_id ?? null, t.responsible_email ?? null, pos.p]);
+  // Eigene Checkliste der Aufgabe: als Punkte an der Ziel-Aufgabe anhängen
+  await db.query(`update checklist_items set task_id = $2, position = position + $3 where task_id = $1`, [t.id, target.id, Number(pos.p) + 1]);
+  await db.query(`update attachments set task_id = $2 where task_id = $1`, [t.id, target.id]);
   const comments = await db.query(`select c.body, c.created_at, u.name from task_comments c join users u on u.id = c.user_id where c.task_id = $1 order by c.created_at`, [t.id]);
   const extra = [t.description ? `Beschreibung: ${String(t.description).trim()}` : '', dateStr(t.due_date) ? `Termin ${dateStr(t.due_date)}` : ''].filter(Boolean);
   const summary = comments.rows.map((c: any) => `- ${new Date(c.created_at).toLocaleDateString('de-DE')} ${c.name}: ${String(c.body).replace(/\s+/g, ' ').trim()}`).join('\n');
-  const body = `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt (${who(actor)})${extra.length ? `. ${extra.join('; ')}` : ''}${summary ? `\nLog der Aufgabe:\n${summary}` : ''}`;
-  await log(db, actor, ap.id, body.length > 4000 ? body.slice(0, 3990) + ' …' : body);
+  const body = `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt von ${code(target)} „${target.title}“ (${who(actor)})${extra.length ? `. ${extra.join('; ')}` : ''}${summary ? `\nLog der Aufgabe:\n${summary}` : ''}`;
+  await log(db, actor, target.id, body.length > 4000 ? body.slice(0, 3990) + ' …' : body);
+  await log(db, actor, ap.id, `Aufgabe ${code(t)} „${t.title}“ wurde Checklistenpunkt von ${code(target)} „${target.title}“ (${who(actor)})`);
   await db.query(`delete from tasks where id = $1`, [t.id]);
-  await touchTask(db, ap.id);
-  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.demote', objectType: 'task', objectId: ap.id, details: { from: t.id, title: t.title, itemId: item.id, by: who(actor) } });
-  return { itemId: item.id, apId: ap.id };
+  await touchTask(db, ap.id); await touchTask(db, target.id);
+  await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'task.demote', objectType: 'task', objectId: target.id, details: { from: t.id, title: t.title, itemId: item.id, apId: ap.id, by: who(actor) } });
+  return { itemId: item.id, apId: ap.id, targetId: target.id };
 }
 
-/** Checklistenpunkt an ein anderes Arbeitspaket oder eine andere Aufgabe desselben Projekts. */
+/** Checklistenpunkt an eine andere Aufgabe desselben Projekts (Checklistenpunkte gehören zu Aufgaben). */
 export async function moveItem(db: Db, actor: StructureActor, taskId: string, itemId: string, toTaskId: string): Promise<void> {
   const t = await taskRow(db, taskId);
   if (!t) throw badRequest('Arbeitspaket nicht gefunden');
@@ -165,6 +180,7 @@ export async function moveItem(db: Db, actor: StructureActor, taskId: string, it
   const to = await taskRow(db, toTaskId);
   if (!to || to.project_id !== t.project_id) throw badRequest('Ziel gehört nicht zum Projekt');
   if (to.id === t.id) return;
+  if (!to.parent_id) throw badRequest(`${code(to)} ist ein Arbeitspaket; Checklistenpunkte gehören zu Aufgaben (Ziel muss eine Aufgabe sein)`);
   const pos = await db.one(`select coalesce(max(position), -1) + 1 as p from checklist_items where task_id = $1`, [to.id]);
   await db.query(`update checklist_items set task_id = $2, position = $3 where id = $1`, [item.id, to.id, pos.p]);
   await db.query(`update mail_task_links set checklist_item_id = null where checklist_item_id = $1 and task_id <> $2`, [item.id, to.id]);
@@ -172,4 +188,29 @@ export async function moveItem(db: Db, actor: StructureActor, taskId: string, it
   await log(db, actor, to.id, `Checklistenpunkt „${item.title}“ aus ${code(t)} „${t.title}“ hierher verschoben (${who(actor)})`);
   await touchTask(db, t.id); await touchTask(db, to.id);
   await audit(db, { orgId: actor.orgId, projectId: t.project_id, userId: actor.id, action: 'checklist.move', objectType: 'task', objectId: to.id, details: { from: t.id, item: item.title, by: who(actor) } });
+}
+
+/**
+ * Altbestand: alle Checklistenpunkte eines Arbeitspakets in EINE neue Aufgabe (Titel aus dem Aufruf, sonst „Checkliste“).
+ * Die Aufgabe steht in der Spalte des Arbeitspakets (alle Punkte erledigt: erste Erledigt-Spalte); Mail-Bezüge zu den Punkten
+ * bleiben am Arbeitspaket ohne Punktbezug. Log am Arbeitspaket und an der Aufgabe, Audit checklist.convert.
+ */
+export async function convertApChecklist(db: Db, actor: StructureActor, apId: string, title?: string | null): Promise<{ id: string; number: number; title: string; count: number }> {
+  const ap = await taskRow(db, apId);
+  if (!ap) throw badRequest('Arbeitspaket nicht gefunden');
+  if (ap.parent_id) throw badRequest(`${code(ap)} ist eine Aufgabe; ihre Checkliste gehört schon zu ihr`);
+  const items = (await db.query(`select id, title, done from checklist_items where task_id = $1 order by position, title`, [ap.id])).rows;
+  if (!items.length) throw badRequest('Das Arbeitspaket hat keine Checklistenpunkte');
+  const name = String(title ?? '').trim().slice(0, 200) || 'Checkliste';
+  const allDone = items.every((i: any) => i.done);
+  const doneCol = allDone || ap.is_done ? (await db.maybeOne(`select id from board_columns where project_id = $1 and is_done order by position limit 1`, [ap.project_id]))?.id ?? null : null;
+  const r = await insertTask(db, { projectId: ap.project_id, subprojectId: ap.subproject_id, columnId: allDone ? doneCol : ap.is_done ? null : ap.column_id, title: name, createdBy: actor.id, parentId: ap.id });
+  for (const [i, it] of items.entries()) await db.query(`update checklist_items set task_id = $2, position = $3 where id = $1`, [it.id, r.id, i]);
+  await db.query(`update mail_task_links set checklist_item_id = null where task_id = $1 and checklist_item_id = any($2::uuid[])`, [ap.id, items.map((i: any) => i.id)]);
+  const ref = code({ number: r.number }, ap.project_key);
+  await log(db, actor, ap.id, `${items.length} Checklistenpunkte in die Aufgabe ${ref} „${name}“ überführt (${who(actor)})`);
+  await log(db, actor, r.id, `Entstanden aus der Checkliste von ${code(ap)} (${items.length} Punkte, ${who(actor)})`);
+  await touchTask(db, ap.id);
+  await audit(db, { orgId: actor.orgId, projectId: ap.project_id, userId: actor.id, action: 'checklist.convert', objectType: 'task', objectId: r.id, details: { from: ap.id, count: items.length, title: name, by: who(actor) } });
+  return { id: r.id, number: r.number, title: name, count: items.length };
 }

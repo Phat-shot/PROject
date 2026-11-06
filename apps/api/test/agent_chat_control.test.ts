@@ -66,7 +66,8 @@ test('Auftrag der PL per Chat: AP mit Auftraggeber, Agent zuständig, Log, Beric
   assert.equal(task.origin_message_id, mid);
   assert.equal(task.responsible_user_id, agent.id, 'Agent zuständig');
   assert.match(task.description, /^3 Elektriker aus dem Edertal recherchieren, vergleichen, Entscheidungsvorlage\.\n\n\*\*Auftrag von Petra Lenz im Wortlaut:\*\*\n> Bitte 3 Elektriker/, 'Fassung des Modells und Wortlaut');
-  assert.equal((await t.db.one(`select count(*)::int as c from checklist_items where task_id = $1`, [task.id])).c, 3);
+  // Lieferergebnisse werden Aufgaben des AP (Planungstiefe auto; Checklistenpunkte gehören zu Aufgaben)
+  assert.deepEqual((await t.db.query(`select title from tasks where parent_id = $1 order by position, created_at`, [task.id])).rows.map((r: any) => r.title), ['3 Betriebe recherchieren', 'Vergleich', 'Entscheidungsvorlage']);
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and user_id = $2 and source = 'chat' and body like 'Auftrag von Petra Lenz per Chat:%'`, [task.id, t.ids.users.pl]));
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and trigger = 'order'`, [task.id]), 'Lauf mit Anlass order');
   const rule = await t.db.maybeOne(`select * from notification_rules where task_id = $1 and user_id = $2 and event = 'progress'`, [task.id, t.ids.users.pl]);

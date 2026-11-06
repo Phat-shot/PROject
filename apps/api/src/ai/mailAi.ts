@@ -55,7 +55,7 @@ const SCHEMA = {
         responsible: { type: 'string', description: 'create_ap/create_aufgabe: E-Mail eines Mitglieds oder leer' },
         startDate: { type: 'string', description: 'YYYY-MM-DD oder leer' },
         dueDate: { type: 'string', description: 'YYYY-MM-DD oder leer' },
-        items: { type: 'array', items: { type: 'string' }, description: 'create_ap/create_aufgabe: Tasks; sonst leer' },
+        items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe: Tasks der Aufgabe; create_ap: Schritte (werden Aufgaben bzw. Checkliste einer Aufgabe „Schritte“); sonst leer' },
         startsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM; sonst leer' },
         endsAt: { type: 'string', description: 'create_event: YYYY-MM-DDTHH:MM oder leer (eine Stunde)' },
         location: { type: 'string', description: 'create_event: Ort oder leer' },

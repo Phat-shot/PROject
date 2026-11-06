@@ -108,18 +108,40 @@ export async function findTaskByRef(db: Db, projectId: string, ref: unknown): Pr
   return rows.rows.length === 1 ? rows.rows[0] : null;
 }
 
-/** Anlegen mit Tasks (Checkliste), Log am Arbeitspaket (bei Aufgaben) bzw. am auslösenden Arbeitspaket, Audit, Benachrichtigung der zuständigen Person. */
-export async function createPlannedTask(db: Db, actor: PlanActor, p: { projectId: string; projectKey: string; title: string; description?: string | null; parentId?: string | null; subprojectId?: string | null; startDate?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; responsibleKind?: string | null; items?: unknown; logTaskId?: string | null }): Promise<{ id: string; number: number; title: string }> {
+/**
+ * Anlegen mit Tasks, Log am Arbeitspaket (bei Aufgaben) bzw. am auslösenden Arbeitspaket, Audit, Benachrichtigung der zuständigen
+ * Person. Checklistenpunkte gehören zu Aufgaben: bei einer Aufgabe werden items ihre Checkliste; bei einem neuen Arbeitspaket je
+ * nach Planungstiefe des Projekts eine Aufgabe „Schritte“ mit den items als Checkliste (checkliste) oder je item eine Aufgabe
+ * (auto, aufgaben). steps sagt, was daraus wurde (für Log und Hinweise der Aufrufer).
+ */
+export async function createPlannedTask(db: Db, actor: PlanActor, p: { projectId: string; projectKey: string; title: string; description?: string | null; parentId?: string | null; subprojectId?: string | null; startDate?: string | null; dueDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null; responsibleKind?: string | null; items?: unknown; logTaskId?: string | null }): Promise<{ id: string; number: number; title: string; steps: null | { as: 'checkliste' | 'aufgaben'; count: number; aufgabe?: string } }> {
   const title = p.title.trim().slice(0, 200);
   const t = await insertTask(db, { projectId: p.projectId, subprojectId: p.subprojectId ?? null, title, description: p.description?.trim() || null, startDate: p.startDate ?? null, dueDate: p.dueDate ?? null, responsibleUserId: p.responsibleUserId ?? null, responsibleEmail: p.responsibleEmail ?? null, createdBy: actor.id, parentId: p.parentId ?? null });
   const items = (Array.isArray(p.items) ? p.items : []).map((x) => String(x ?? '').trim().slice(0, 300)).filter(Boolean).slice(0, 15);
-  for (const [i, it] of items.entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [t.id, it, i + 1]);
   const code = `${p.projectKey}-${t.number}`;
+  let steps: null | { as: 'checkliste' | 'aufgaben'; count: number; aufgabe?: string } = null;
+  if (p.parentId || !items.length) {
+    for (const [i, it] of items.entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [t.id, it, i + 1]);
+  } else {
+    const depth = (await db.maybeOne(`select planning_depth from projects where id = $1`, [p.projectId]))?.planning_depth;
+    if (depth === 'checkliste') {
+      const a = await insertTask(db, { projectId: p.projectId, subprojectId: p.subprojectId ?? null, title: 'Schritte', createdBy: actor.id, parentId: t.id });
+      for (const [i, it] of items.entries()) await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [a.id, it, i + 1]);
+      await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [t.id, actor.id, `Aufgabe angelegt: ${p.projectKey}-${a.number} „Schritte“ mit ${items.length} Checklistenpunkten`]);
+      steps = { as: 'checkliste', count: items.length, aufgabe: `${p.projectKey}-${a.number}` };
+    } else {
+      for (const it of items) {
+        const a = await insertTask(db, { projectId: p.projectId, subprojectId: p.subprojectId ?? null, title: it.slice(0, 200), createdBy: actor.id, parentId: t.id });
+        await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [t.id, actor.id, `Aufgabe angelegt: ${p.projectKey}-${a.number} „${it.slice(0, 200)}“`]);
+      }
+      steps = { as: 'aufgaben', count: items.length };
+    }
+  }
   const logOn = p.parentId ?? p.logTaskId ?? null;
   if (logOn) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [logOn, actor.id, `${p.parentId ? 'Aufgabe' : 'Arbeitspaket'} angelegt: ${code} „${title}“${p.dueDate ? `, Termin ${p.dueDate}` : ''}`]);
-  await audit(db, { orgId: actor.orgId, projectId: p.projectId, userId: actor.id, action: 'task.create', objectType: 'task', objectId: t.id, details: { title, by: actor.label, ...(p.parentId ? { parentId: p.parentId } : {}) } });
+  await audit(db, { orgId: actor.orgId, projectId: p.projectId, userId: actor.id, action: 'task.create', objectType: 'task', objectId: t.id, details: { title, by: actor.label, ...(p.parentId ? { parentId: p.parentId } : {}), ...(steps ? { steps } : {}) } });
   await afterAssign(db, actor, p.projectId, t.id, title, p.responsibleUserId ?? null, p.responsibleKind ?? null);
-  return { id: t.id, number: t.number, title };
+  return { id: t.id, number: t.number, title, steps };
 }
 
 /** Zuweisung wirksam machen: Personen benachrichtigen (Klasse assigned, Empfänger nach Regel N), andere Agenten starten (eigene Arbeit nimmt der Worker beim nächsten Takt auf). */

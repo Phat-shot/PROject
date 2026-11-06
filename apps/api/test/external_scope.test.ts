@@ -122,8 +122,9 @@ test('Außenkontext bei mehreren Empfängern: nur, was für alle gilt (Tasks, Be
   const a = 'trockenbau@extern.example';
   const b = 'maler@extern.example';
   const flur = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Trockenbau Flur abstimmen' })).json().task;
-  await t.api(pl).post(`/tasks/${flur.id}/checklist`, { title: 'Ständerwerk stellen', responsibleEmail: a });
-  await t.api(pl).post(`/tasks/${flur.id}/checklist`, { title: 'Wände streichen', responsibleEmail: b });
+  const flurA = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Ausbau Flur', parentId: flur.id })).json().task;
+  await t.api(pl).post(`/tasks/${flurA.id}/checklist`, { title: 'Ständerwerk stellen', responsibleEmail: a });
+  await t.api(pl).post(`/tasks/${flurA.id}/checklist`, { title: 'Wände streichen', responsibleEmail: b });
   const both = await aud(flur.id, [a, b]);
   assert.equal(both.audience, 'task_external');
   // Besprechungen: mit beiden bzw. nur mit einem
@@ -212,8 +213,9 @@ test('Agenten-Mail an Externe (strict): Neuformulierung kennt nur den Außenkont
   other = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Elektroinstallation Küche planen' })).json().task;
   next = [A({ type: 'none', reason: 'Start' })];
   ap = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Fliesenarbeiten Bad koordinieren', responsibleUserId: agent.id, description: 'Intern: Budget 8.000 EUR, Elektro muss vorher fertig sein.' })).json().task;
-  await t.api(pl).post(`/tasks/${ap.id}/checklist`, { title: 'Fliesen liefern lassen', responsibleEmail: 'fliesen@extern.example' });
-  await t.api(pl).post(`/tasks/${ap.id}/checklist`, { title: 'Silikonfugen prüfen (intern)' });
+  const apA = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Material', parentId: ap.id })).json().task;
+  await t.api(pl).post(`/tasks/${apA.id}/checklist`, { title: 'Fliesen liefern lassen', responsibleEmail: 'fliesen@extern.example' });
+  await t.api(pl).post(`/tasks/${apA.id}/checklist`, { title: 'Silikonfugen prüfen (intern)' });
   await flushAgentRuns();
 
   compose = () => JSON.stringify({ subject: 'Lieferung Fliesen', text: 'Guten Tag,\n\npasst Ihnen die Lieferung am 12.11.?\n\nViele Grüße\nAußendienst', withheld: ['Verweis auf ein anderes Arbeitspaket', 'Budget', 'interne Adresse'] });

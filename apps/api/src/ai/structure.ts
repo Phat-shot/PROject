@@ -8,17 +8,17 @@ import { PLANNING_DEPTHS } from '@projekttool/shared';
  * zusätzlich durch (applyPlanningDepth), damit der Agent nicht mal Aufgaben, mal Checklistenpunkte anlegt.
  */
 export const STRUCTURE_RULES = `# Struktur: Aufgabe oder Task (Checklistenpunkt)
-Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task. Nie beides für dieselbe Sache. Die Planungstiefe des Projekts (im Prompt) entscheidet:
-- auto: Aufgabe = eigener Schritt mit eigener Zuständigkeit, eigenem Termin oder eigenem Status/Log (mehr als ein Arbeitstag, delegierbar, von außen nachverfolgbar). Task = kurzer Prüf- oder Erledigungspunkt ohne eigenen Termin und ohne andere Zuständigkeit, den die zuständige Person des AP bzw. der Aufgabe selbst abhakt. Ein AP ohne Aufgaben bekommt Tasks; sobald ein Schritt eine andere Person oder einen eigenen Termin braucht, wird er Aufgabe.
+Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task. Checklistenpunkte (Tasks) hängen an Aufgaben. Am Arbeitspaket legst du Aufgaben an. Ist der letzte Checklistenpunkt erledigt, schließt die Aufgabe automatisch; sind alle Aufgaben erledigt, das Arbeitspaket. Nie beides für dieselbe Sache. Die Planungstiefe des Projekts (im Prompt) entscheidet:
+- auto: Aufgabe = eigener Schritt mit eigener Zuständigkeit, eigenem Termin oder eigenem Status/Log (delegierbar, von außen nachverfolgbar). Task = kurzer Prüf- oder Erledigungspunkt einer Aufgabe ohne eigenen Termin und ohne andere Zuständigkeit.
 - aufgaben: Schritte immer als Aufgaben (create_aufgabe); Tasks nur als Checkliste einer Aufgabe.
-- checkliste: Schritte immer als Tasks (add_item, items); Aufgaben nur auf ausdrücklichen Wunsch oder mit Termin bzw. anderer Zuständigkeit.
-Das System setzt die Regel um (Aufgabe ohne Termin und Zuständigkeit wird Task und umgekehrt) und vermerkt das im Log.
+- checkliste: wenige Aufgaben, Schritte als ihre Tasks (create_aufgabe mit items, add_item an der Aufgabe); create_ap mit items bekommt eine Aufgabe „Schritte“.
+add_item am AP: das System hängt den Task an die einzige offene Aufgabe oder legt eine Aufgabe mit dem Text an und vermerkt das im Log.
 Verschieben (Bitte „verschieben“, „umhängen“, „zuordnen“ heißt: Aktion angeben, nicht nur antworten):
 - move_aufgabe: ref = Kennung der Aufgabe, target = Kennung des Ziel-AP (gleiches Projekt); nimmt Tasks, Anhänge, Log und Zeiten mit
 - move_ap: ref = Kennung des AP, subproject = Name des Teilprojekts (leer = aus dem Teilprojekt heraus)
 - promote_item: itemId aus der Task-Liste wird Aufgabe am AP; title, dueDate, responsible optional; der Task entfällt
-- demote_aufgabe: ref = Kennung einer Aufgabe ohne Zeiten, Mails und offene Fragen; sie wird Task am AP, ihr Log steht zusammengefasst dort
-- move_item: itemId aus der Task-Liste, target = Kennung des Ziel-AP oder der Ziel-Aufgabe
+- demote_aufgabe: ref = Kennung einer Aufgabe ohne Zeiten, Mails und offene Fragen, target = Aufgabe, deren Task sie wird (leer = einzige andere offene Aufgabe des AP); ihr Log steht zusammengefasst dort
+- move_item: itemId aus der Task-Liste, target = Kennung der Ziel-Aufgabe
 Rechte wie beim Anlegen; außerhalb deines Bereichs oder bei Bestätigungspflicht (Klasse Umstrukturieren) legt das System die Aktion der PL vor.`;
 
 /** Ein Satz für den variablen Prompt-Kontext: welche Planungstiefe im Projekt gilt. */
@@ -35,15 +35,18 @@ export function normDepth(v: unknown): PlanningDepth {
 const has = (v: unknown) => Boolean(String(v ?? '').trim());
 
 /**
- * Struktur-Regel durchsetzen, bevor Aktionen laufen. isAp = der Lauf hängt an einem Arbeitspaket (add_item landet dort);
- * an einer Aufgabe bleibt add_item ihre Checkliste. Jede Umsetzung liefert einen Hinweis für Log und Lauf-Protokoll.
+ * Struktur-Regel durchsetzen, bevor Aktionen laufen. Checklistenpunkte gehören zu Aufgaben. isAp = der Lauf hängt an einem
+ * Arbeitspaket; soleAufgabe = Kennung der einzigen offenen Aufgabe dieses AP (sonst null). Jede Umsetzung liefert einen Hinweis
+ * für Log und Lauf-Protokoll. add_item am AP ohne passende Aufgabe setzt der Lauf selbst um (Aufgabe anlegen, agent.ts).
  * - aufgaben: add_item am AP → create_aufgabe (ohne Termin/Zuständigkeit, Titel = Text)
- * - checkliste: create_aufgabe ohne Termin und Zuständigkeit → add_item am Ziel-AP (ref), items hängen als weitere add_item an
- * - auto: create_aufgabe ohne Termin, ohne Zuständigkeit, Titel unter 60 Zeichen, ohne items → add_item am Ziel-AP
+ * - checkliste: create_aufgabe ohne Termin, Zuständigkeit und items für dieses AP bzw. diese Aufgabe → add_item an der Aufgabe
+ *   (am AP: an der einzigen offenen Aufgabe); mit items bleibt sie Aufgabe mit Checkliste
+ * - auto: wie checkliste, nur bei Titel unter 60 Zeichen
  */
-export function applyPlanningDepth<A extends { type: string }>(actions: A[], o: { depth: unknown; isAp: boolean }): { actions: A[]; notes: string[] } {
+export function applyPlanningDepth<A extends { type: string }>(actions: A[], o: { depth: unknown; isAp: boolean; soleAufgabe?: string | null; ownRef?: number | null }): { actions: A[]; notes: string[] } {
   const depth = normDepth(o.depth);
   const out: A[] = []; const notes: string[] = [];
+  const own = (ref: unknown) => !has(ref) || (o.ownRef != null && Number(String(ref).trim().split('-').pop()) === o.ownRef);
   for (const a0 of actions) {
     const a: any = a0;
     if (depth === 'aufgaben' && a.type === 'add_item' && o.isAp && has(a.text) && !has(a.ref)) {
@@ -51,14 +54,14 @@ export function applyPlanningDepth<A extends { type: string }>(actions: A[], o: 
       notes.push(`„${String(a.text).trim().slice(0, 80)}“ als Aufgabe angelegt, weil die Planungstiefe des Projekts „Immer Aufgaben“ ist`);
       continue;
     }
-    if (a.type === 'create_aufgabe' && has(a.title) && !has(a.dueDate) && !has(a.startDate) && !has(a.responsible)) {
+    if (depth !== 'aufgaben' && a.type === 'create_aufgabe' && has(a.title) && !has(a.dueDate) && !has(a.startDate) && !has(a.responsible) && own(a.ref)) {
       const items = Array.isArray(a.items) ? a.items.map((x: unknown) => String(x ?? '').trim()).filter(Boolean) : [];
       const title = String(a.title).trim();
-      const auto = depth === 'auto' && title.length < 60 && !items.length;
-      if (depth === 'checkliste' || auto) {
-        out.push({ type: 'add_item', text: title.slice(0, 300), ref: a.ref ?? '' } as any);
-        for (const it of items) out.push({ type: 'add_item', text: String(it).slice(0, 300), ref: a.ref ?? '' } as any);
-        notes.push(`„${title.slice(0, 80)}“ als Checklistenpunkt angelegt, weil ${depth === 'checkliste' ? 'die Planungstiefe des Projekts „Immer Checklistenpunkte“ ist' : 'der Schritt weder Termin noch eigene Zuständigkeit hat (Planungstiefe „Automatisch“)'}${items.length ? `; ${items.length} Tasks dazu ebenfalls` : ''}`);
+      const fits = !items.length && (depth === 'checkliste' || title.length < 60);
+      const target = o.isAp ? o.soleAufgabe ?? null : '';
+      if (fits && target !== null) {
+        out.push({ type: 'add_item', text: title.slice(0, 300), ref: target } as any);
+        notes.push(`„${title.slice(0, 80)}“ als Checklistenpunkt ${o.isAp ? `der Aufgabe ${target}` : 'dieser Aufgabe'} angelegt, weil ${depth === 'checkliste' ? 'die Planungstiefe des Projekts „Immer Checklistenpunkte“ ist' : 'der Schritt weder Termin noch eigene Zuständigkeit hat (Planungstiefe „Automatisch“)'}`);
         continue;
       }
     }

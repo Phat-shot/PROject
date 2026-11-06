@@ -5,7 +5,7 @@ import { audit } from '../audit.js';
 import { supersedeDrafts } from '../mail/supersede.js';
 export { supersedeDrafts } from '../mail/supersede.js';
 import { dispatch, dmChannel, notify, systemMessage, usersWithRight } from '../notify.js';
-import { completeParentIfDone, contactChain, dateStr, touchTask } from '../tasks/service.js';
+import { completeParentIfDone, contactChain, dateStr, syncChecklistDone, touchTask } from '../tasks/service.js';
 import { aiConfigFor, completeJson } from './client.js';
 import { agentBudgetLeft, aiAllowed } from './policy.js';
 import { htmlToMd, mdToHtml } from '../docs/html.js';
@@ -54,7 +54,7 @@ export type AgentAction =
   | { type: 'resolve'; questionId: string; text?: string | null; reason?: string | null }
   | { type: 'refer'; text: string; subject?: string | null; to?: string[] | null }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
-  | { type: 'add_item'; text: string; /** Kennung eines anderen Arbeitspakets (Struktur-Regel: Aufgabe wird Task am Ziel-AP); leer = dieses */ ref?: string | null }
+  | { type: 'add_item'; text: string; /** Kennung einer Aufgabe oder eines Arbeitspakets (dort: einzige offene Aufgabe oder neue Aufgabe); leer = dieses */ ref?: string | null }
   | { type: 'update_item'; itemId: string; text: string }
   | { type: 'doc_create'; title: string; folder?: string | null; text: string }
   | { type: 'doc_append'; pageId: string; text: string }
@@ -125,16 +125,16 @@ const SCHEMA = {
         text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item/promote_item/move_item: itemId aus der Task-Liste; sonst leer' },
-        target: { type: 'string', description: 'move_aufgabe: Kennung des Ziel-Arbeitspakets; move_item: Kennung des Ziel-Arbeitspakets oder der Ziel-Aufgabe; sonst leer' },
+        target: { type: 'string', description: 'move_aufgabe: Kennung des Ziel-Arbeitspakets; move_item: Kennung der Ziel-Aufgabe; demote_aufgabe: Kennung der Aufgabe, deren Task sie wird (leer = die einzige andere offene Aufgabe des AP); sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
         status: { type: 'string', description: 'doc_status: draft, review oder final; sonst leer' },
         title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; promote_item: Titel der neuen Aufgabe (leer = Text des Tasks); sonst leer' },
-        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; move_aufgabe/demote_aufgabe: Kennung der Aufgabe; move_ap: Kennung des Arbeitspakets; sonst leer' },
+        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; add_item: Kennung der Aufgabe, leer = diese bzw. dieses AP (am AP hängt das System den Task an die einzige offene Aufgabe oder legt eine Aufgabe an); read_task/relate/withdraw: Kennung des anderen Arbeitspakets; move_aufgabe/demote_aufgabe: Kennung der Aufgabe; move_ap: Kennung des Arbeitspakets; sonst leer' },
         responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign/promote_item: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
         startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; book_resource ganztägig: erster Tag; sonst leer' },
         dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; book_resource ganztägig: letzter Tag; sonst leer' },
         subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; move_ap: Name des Ziel-Teilprojekts, leer = aus dem Teilprojekt heraus; sonst leer' },
-        items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe/create_ap: Tasks (Checkliste); sonst leer' },
+        items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe: Tasks (Checkliste der Aufgabe); create_ap: Schritte (werden Aufgaben bzw. Checkliste der Aufgabe „Schritte“); sonst leer' },
         startsAt: { type: 'string', description: 'create_event/book_resource: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); book_resource ganztägig stattdessen startDate/dueDate; sonst leer' },
         endsAt: { type: 'string', description: 'create_event/book_resource: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
         resource: { type: 'string', description: 'book_resource: Name der Ressource aus der Liste „Ressourcen“; sonst leer' },
@@ -197,7 +197,9 @@ export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
  */
 export async function loadRunCtx(db: Db, mail: MailService, fetchFn: typeof fetch, agent: { id: string; name: string; org_id: string; persona?: string | null }, task: any, m: any, cfg: AiConfig, trigger: string, now: Date): Promise<RunCtx> {
   const columns = await db.query(`select name, is_done from board_columns where project_id = $1 and kind <> 'waiting' order by position`, [task.project_id]);
-  const items = await db.query(`select id, title, done, responsible_email from checklist_items where task_id = $1 order by position`, [task.id]);
+  // Tasks: eigene Checkliste; am Arbeitspaket dazu die Checklisten seiner Aufgaben (Checklistenpunkte gehören zu Aufgaben)
+  const items = await db.query(`select i.id, i.title, i.done, i.responsible_email, i.task_id, x.number as task_number from checklist_items i join tasks x on x.id = i.task_id
+    where i.task_id = $1 or (x.parent_id = $1 and x.deleted_at is null and x.archived_at is null) order by (i.task_id = $1) desc, x.position, x.created_at, i.position`, [task.id]);
   const members = await db.query(`select m.user_id, u.name, u.email, m.role, m.is_deputy, u.kind from project_members m join users u on u.id = m.user_id where m.project_id = $1`, [task.project_id]);
   const folderAccess = await folderAccessMap(db, task.project_id);
   const foldersAll = await db.query(`select id, name from doc_folders where project_id = $1 order by position`, [task.project_id]);
@@ -298,7 +300,8 @@ export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], op
   const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
   const errors: string[] = [];
   // Struktur-Regel des Projekts (Planungstiefe): Aufgabe ↔ Task umsetzen, bevor Rechte und Policy greifen; jede Umsetzung steht im Log
-  const depth = applyPlanningDepth(actions0, { depth: task.planning_depth, isAp: !task.parent_id });
+  const sole = task.parent_id ? null : await db.query(`select x.number from tasks x join board_columns c on c.id = x.column_id where x.parent_id = $1 and x.deleted_at is null and x.archived_at is null and not c.is_done`, [task.id]);
+  const depth = applyPlanningDepth(actions0, { depth: task.planning_depth, isAp: !task.parent_id, soleAufgabe: sole?.rows.length === 1 ? `${task.project_key}-${sole.rows[0].number}` : null, ownRef: task.number });
   const actions = depth.actions;
   const notes = depth.notes;
   for (const n of notes) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, `Struktur-Regel: ${n}`]);
@@ -413,11 +416,17 @@ export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], op
         const col = await db.maybeOne(`select id, name from board_columns where project_id = $1 and (lower(name) = lower($2) or ($3 and is_done)) order by (lower(name) = lower($2)) desc, position limit 1`, [task.project_id, a.column, doneWord]);
         if (!col) errors.push(`Status „${a.column}“ gibt es nicht (Spalten: ${ctx.columns.rows.map((c: any) => c.name).join(', ')})`);
         else if ((await db.one(`select kind from board_columns where id = $1`, [col.id])).kind === 'waiting') errors.push(`Status „${col.name}“ setzt das System: gib wait (worauf, Frist) bzw. ask an`);
-        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2 where id = $1`, [task.id, col.id]); if (task.parent_id && (await db.one(`select is_done from board_columns where id = $1`, [col.id])).is_done) await completeParentIfDone(db, task.id, agent.id); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
+        else if (col.id !== task.column_id) { await db.query(`update tasks set column_id = $2, auto_done_at = null, auto_done_from_column_id = null where id = $1`, [task.id, col.id]); if (task.parent_id && (await db.one(`select is_done from board_columns where id = $1`, [col.id])).is_done) await completeParentIfDone(db, task.id, agent.id); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Status → ${col.name}`]); applied.push({ type: 'set_status', column: col.name }); }
       } else if (a.type === 'check_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId && !i.done);
         if (!it) errors.push(`Task-Abhaken verworfen: itemId ${a.itemId ?? 'fehlt'} unbekannt oder schon erledigt`);
-        if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
+        if (it) {
+          await db.query(`update checklist_items set done = true where id = $1`, [it.id]); it.done = true;
+          await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [it.task_id, agent.id, `Task erledigt: ${it.title}`]);
+          // Letzter offener Punkt einer Aufgabe: Aufgaben-Automatik (und danach die des Arbeitspakets)
+          if ((await syncChecklistDone(db, mail, it.task_id, { id: agent.id, orgId: agent.org_id, kind: 'agent' })) === 'done' && it.task_id === task.id) task.column_id = (await db.one(`select column_id from tasks where id = $1`, [task.id])).column_id;
+          applied.push(a);
+        }
       } else if (a.type === 'add_item') {
         if (!a.text?.trim()) errors.push('Task ohne Text verworfen');
         else {
@@ -429,15 +438,37 @@ export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], op
             if (!(canPlan || t.id === task.parent_id || t.parent_id === task.id || t.eff_responsible === agent.id || (t.subproject_id && myTps.includes(t.subproject_id)))) { errors.push(`add_item: ${code.split('-')[0]}-${t.number} liegt außerhalb deines Bereichs`); continue; }
             target = t;
           }
+          const text = a.text.trim().slice(0, 300);
+          // Checklistenpunkte gehören zu Aufgaben: am Arbeitspaket an die einzige offene Aufgabe, sonst neue Aufgabe mit dem Titel des Punkts
+          if (!target.parent_id) {
+            const open = await db.query(`select x.id, x.number, x.title from tasks x join board_columns c on c.id = x.column_id where x.parent_id = $1 and x.deleted_at is null and x.archived_at is null and not c.is_done order by x.position, x.created_at`, [target.id]);
+            const apCode = `${task.project_key}-${target.number}`;
+            if (open.rows.length === 1) {
+              const one = open.rows[0];
+              target = { ...one, parent_id: target.id };
+              notes.push(`„${text.slice(0, 80)}“ als Checklistenpunkt der einzigen offenen Aufgabe ${task.project_key}-${one.number} „${one.title}“ von ${apCode} angelegt (Checklistenpunkte gehören zu Aufgaben)`);
+            } else {
+              const r = await plan({ type: 'create_aufgabe', title: text.slice(0, 200), ref: apCode, text: '', startDate: '', dueDate: '', responsible: '', items: [] });
+              if ('error' in r) { errors.push(`add_item „${text.slice(0, 80)}“: ${r.error}`); continue; }
+              notes.push(`„${text.slice(0, 80)}“ als Aufgabe ${r.applied?.ref ?? ''} an ${apCode} angelegt, weil Checklistenpunkte zu Aufgaben gehören`);
+              await logSys(`Struktur-Regel: ${notes[notes.length - 1]}`);
+              applied.push({ type: 'create_aufgabe', title: text.slice(0, 200), ref: apCode } as any);
+              continue;
+            }
+            await logSys(`Struktur-Regel: ${notes[notes.length - 1]}`);
+          }
           const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [target.id]);
-          await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [target.id, a.text.trim().slice(0, 300), pos.p]);
-          if (target.id !== task.id) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [target.id, agent.id, `Task ergänzt: ${a.text.trim().slice(0, 300)}`]);
+          const ins = await db.one(`insert into checklist_items (task_id, title, position) values ($1,$2,$3) returning id`, [target.id, text, pos.p]);
+          if (target.id !== task.id) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [target.id, agent.id, `Task ergänzt: ${text}`]);
+          items.rows.push({ id: ins.id, title: text, done: false, responsible_email: null, task_id: target.id, task_number: target.number });
+          // Neuer offener Punkt an einer automatisch erledigten Aufgabe: wieder offen
+          await syncChecklistDone(db, mail, target.id, { id: agent.id, orgId: agent.org_id, kind: 'agent' }, { itemTitle: text });
           applied.push(a);
         }
       } else if (a.type === 'update_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId);
         if (!it || !a.text?.trim()) errors.push(`Task-Änderung verworfen: ${!it ? 'itemId unbekannt' : 'kein Text'}`);
-        else { await db.query(`update checklist_items set title = $2 where id = $1`, [it.id, a.text.trim().slice(0, 300)]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task umformuliert: „${it.title}“ → „${a.text.trim().slice(0, 300)}“`]); applied.push(a); }
+        else { await db.query(`update checklist_items set title = $2 where id = $1`, [it.id, a.text.trim().slice(0, 300)]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [it.task_id, agent.id, `Task umformuliert: „${it.title}“ → „${a.text.trim().slice(0, 300)}“`]); applied.push(a); }
       } else if (a.type === 'doc_create') {
         if (!a.title?.trim() || !a.text?.trim()) errors.push('Seite verworfen: Titel oder Inhalt fehlt');
         else {
@@ -879,7 +910,7 @@ ${task.parent_id ? `Aufgabe ${task.project_key}-${task.number} „${task.title}�
 Beschreibung: ${cut(task.description, 2000) || '–'}
 ${parentCtx ? `Arbeitspaket ${task.project_key}-${task.parent_number} (gehört zum Vorgang): Beschreibung: ${cut(parentCtx.description, 1500) || '–'}\n  Tasks: ${cut(parentCtx.items, 1500) || '–'}\n  Log (neueste zuerst): ${cut(parentCtx.log, 1500) || '–'}\n` : ''}${task.external_brief?.trim() ? `Außenbeschreibung (was Externe zu diesem AP erfahren dürfen): ${cut(task.external_brief, 1500)}\n` : ''}Mögliche Status: ${columns.rows.map((x: any) => x.name + (x.is_done ? ' (erledigt)' : '')).join(', ')}
 ${subtasks.rows.length ? `Aufgaben (eigene Zuständigkeit und eigenes Log):\n${subtasks.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ · ${x.column_name}${x.is_done ? ' (erledigt)' : ''}${x.responsible_name ? ` · ${x.responsible_name}` : ''}`).join('\n')}\n` : ''}Tasks:
-${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
+${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.id})${i.task_id !== task.id ? ` · Aufgabe ${task.project_key}-${i.task_number}` : ''}${i.responsible_email ? ` · extern ${i.responsible_email}` : ''}`).join('\n') || '–'}` },
     { key: 'log', text: `Log (neueste zuerst):
 ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}` },
     { key: 'chat', keep: true, text: dms.rows.length ? `Chat (deine Direktnachrichten zu ${code}, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}` : '' },
@@ -1123,13 +1154,16 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       }
       const dup = await db.maybeOne(`select number from tasks where project_id = $1 and deleted_at is null and archived_at is null and lower(title) = lower($2) and parent_id is not distinct from $3::uuid and ($3::uuid is not null or subproject_id is not distinct from $4::uuid)`, [task.project_id, title, parentId, subprojectId]);
       if (dup) return { error: `${a.type}: „${title}“ gibt es schon (${code(dup.number)})` };
-      // Planungstiefe „aufgaben“: die Tasks eines neuen Arbeitspakets werden seine Aufgaben
-      const asTasks = a.type === 'create_ap' && depth === 'aufgaben' && Array.isArray(a.items) && a.items.length;
-      const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: asTasks ? [] : a.items, logTaskId: task.id });
+      // Checklistenpunkte gehören zu Aufgaben: items eines neuen Arbeitspakets werden je nach Planungstiefe eine Aufgabe „Schritte“
+      // mit Checkliste (checkliste) oder je item eine Aufgabe (auto, aufgaben); das legt createPlannedTask an
+      const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: a.items, logTaskId: task.id });
       created++;
-      if (asTasks) {
-        for (const it of (a.items as unknown[]).map((x) => cleanTitle(x)).filter(Boolean).slice(0, MAX_CREATE)) { await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title: it, parentId: t.id, subprojectId }); created++; }
-        await log(task.id, `Struktur-Regel: ${a.items.length} Tasks von ${code(t.number)} als Aufgaben angelegt, weil die Planungstiefe des Projekts „Immer Aufgaben“ ist`);
+      if (t.steps?.as === 'aufgaben') {
+        created += t.steps.count;
+        await log(task.id, `Struktur-Regel: ${t.steps.count} Schritte von ${code(t.number)} als Aufgaben angelegt (Planungstiefe „${depth === 'aufgaben' ? 'Immer Aufgaben' : 'Automatisch'}“; Checklistenpunkte gehören zu Aufgaben)`);
+      } else if (t.steps?.as === 'checkliste') {
+        created++;
+        await log(task.id, `Struktur-Regel: ${t.steps.count} Schritte von ${code(t.number)} als Checkliste der Aufgabe ${t.steps.aufgabe} „Schritte“ angelegt (Planungstiefe „Immer Checklistenpunkte“)`);
       }
       return { applied: { type: a.type, ref: code(t.number), title: t.title, responsible: who.name ?? who.email, startDate: start, dueDate: due } };
     }
@@ -1161,7 +1195,7 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
         const who = await resolvePerson(db, task.project_id, actor, a.responsible);
         if ('error' in who) return { error: `promote_item „${item.title}“: ${who.error}` };
         if (created >= MAX_CREATE) return { error: `promote_item „${item.title}“ verworfen: mehr als ${MAX_CREATE} Anlagen je Lauf` };
-        try { const r = await promoteItem(db, sActor, task.id, item.id, { title: a.title, dueDate: due, startDate: start, responsibleUserId: who.userId, responsibleEmail: who.email }); created++; c.items?.splice(c.items.indexOf(item), 1); return { applied: { type: 'promote_item', ref: code(r.number), title: r.title, responsible: who.name ?? who.email, dueDate: due } }; }
+        try { const r = await promoteItem(db, sActor, item.task_id ?? task.id, item.id, { title: a.title, dueDate: due, startDate: start, responsibleUserId: who.userId, responsibleEmail: who.email }); created++; c.items?.splice(c.items.indexOf(item), 1); return { applied: { type: 'promote_item', ref: code(r.number), title: r.title, responsible: who.name ?? who.email, dueDate: due } }; }
         catch (e: any) { return { error: `promote_item „${item.title}“: ${e?.message ?? e}` }; }
       }
       if (a.type === 'demote_aufgabe') {
@@ -1169,13 +1203,15 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
         if (!inScope(s.t)) return { error: `demote_aufgabe ${code(s.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
         const why = await demoteBlocker(db, s.t.id);
         if (why) return { error: `demote_aufgabe ${code(s.t.number)}: ${why}` };
-        await demoteTask(db, sActor, s.t.id);
+        let toId: string | null = null;
+        if (String(a.target ?? '').trim()) { const d = await byRef(a.target, 'Ziel-Aufgabe'); if ('error' in d) return d; if (!inScope(d.t)) return { error: `demote_aufgabe ${code(s.t.number)} → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' }; toId = d.t.id; }
+        try { await demoteTask(db, sActor, s.t.id, toId); } catch (e: any) { return { error: `demote_aufgabe ${code(s.t.number)}: ${e?.message ?? e}` }; }
         return { applied: { type: 'demote_aufgabe', ref: code(s.t.number), title: s.t.title } };
       }
       if (!item) return { error: `move_item: itemId ${a.itemId || 'fehlt'} nicht in der Task-Liste` };
       const d = await byRef(a.target, 'Ziel'); if ('error' in d) return d;
       if (!inScope(d.t)) return { error: `move_item „${item.title}“ → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
-      try { await moveItem(db, sActor, task.id, item.id, d.t.id); c.items?.splice(c.items.indexOf(item), 1); } catch (e: any) { return { error: `move_item „${item.title}“: ${e?.message ?? e}` }; }
+      try { await moveItem(db, sActor, item.task_id ?? task.id, item.id, d.t.id); c.items?.splice(c.items.indexOf(item), 1); } catch (e: any) { return { error: `move_item „${item.title}“: ${e?.message ?? e}` }; }
       return { applied: { type: 'move_item', target: code(d.t.number), title: item.title } };
     }
 

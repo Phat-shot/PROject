@@ -100,9 +100,9 @@ export interface Membership {
  */
 export type PlanningDepth = 'auto' | 'aufgaben' | 'checkliste';
 export const PLANNING_DEPTHS: { key: PlanningDepth; label: string; hint: string }[] = [
-  { key: 'auto', label: 'Automatisch (Regel)', hint: 'Aufgabe, wenn ein Schritt eine eigene Zuständigkeit, einen eigenen Termin oder eigenen Status und Log braucht (delegierbar, nachverfolgbar); sonst Checklistenpunkt, den die zuständige Person selbst abhakt.' },
+  { key: 'auto', label: 'Automatisch (Regel)', hint: 'Aufgabe, wenn ein Schritt eine eigene Zuständigkeit, einen eigenen Termin oder eigenen Status und Log braucht (delegierbar, nachverfolgbar); sonst Checklistenpunkt einer Aufgabe, den die zuständige Person selbst abhakt.' },
   { key: 'aufgaben', label: 'Immer Aufgaben', hint: 'Jeder Schritt wird eine Aufgabe mit eigenem Status, Termin und Log; Checklistenpunkte nur an Aufgaben.' },
-  { key: 'checkliste', label: 'Immer Checklistenpunkte', hint: 'Schritte werden Checklistenpunkte am Arbeitspaket; Aufgaben nur auf ausdrücklichen Wunsch (mit Termin oder eigener Zuständigkeit).' }
+  { key: 'checkliste', label: 'Immer Checklistenpunkte', hint: 'Schritte werden Checklistenpunkte einer Aufgabe (neues Arbeitspaket: eine Aufgabe „Schritte“); weitere Aufgaben nur auf ausdrücklichen Wunsch (mit Termin oder eigener Zuständigkeit).' }
 ];
 export interface Project {
   id: string;
@@ -129,6 +129,8 @@ export interface Project {
   timeTrackingEnabled: boolean;
   /** Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind (Vorgabe, je AP übersteuerbar) */
   autoCompleteParent?: boolean;
+  /** Aufgabe automatisch erledigt, wenn alle ihre Checklistenpunkte erledigt sind (Vorgabe, Standard an, je Aufgabe übersteuerbar über Task.autoComplete) */
+  autoDoneAufgabe?: boolean;
   /** Planungstiefe: wie Schritte eines Arbeitspakets angelegt werden (auto = Regel Aufgabe vs. Checklistenpunkt, aufgaben, checkliste) */
   planningDepth?: PlanningDepth;
   budgetHours: number | null;
@@ -535,8 +537,11 @@ export interface Task {
   externalBrief?: string | null;
   /** KI-Agent an diesem Arbeitspaket pausiert (PL) */
   agentPaused?: boolean;
-  /** Automatisch erledigt, wenn alle Aufgaben erledigt sind; null = Vorgabe des Projekts */
+  /** Automatik je Element, null = Vorgabe des Projekts: am Arbeitspaket „erledigt, wenn alle Aufgaben erledigt“ (autoCompleteParent),
+   *  an einer Aufgabe „erledigt, wenn alle Checklistenpunkte erledigt“ (autoDoneAufgabe) */
   autoComplete?: boolean | null;
+  /** Von der Automatik erledigt (letzter Checklistenpunkt); ein wieder geöffneter Punkt holt die Aufgabe in die vorherige Spalte zurück */
+  autoDoneAt?: string | null;
   /** Lauf des Agenten steht an oder läuft gerade */
   agentRunning?: boolean;
   /** Wartezustand des Agenten: worauf, seit wann, Nachfassen/Eskalation geplant */
