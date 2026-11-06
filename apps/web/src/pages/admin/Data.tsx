@@ -9,7 +9,7 @@ export function AuditCard() {
   const { error, run, busy } = useAsync();
   return (
     <div className="card" id="audit">
-      <div className="row between"><h2 style={{ margin: 0 }}>Audit-Export</h2><span className="row">
+      <div className="row between"><h2 className="m-0">Audit-Export</h2><span className="row">
         <button className="btn" disabled={busy} onClick={() => void run(async () => setAudit((await api.get<{ entries: AuditEntry[] }>('/audit')).entries))}>Anzeigen (nur Metadaten, wird protokolliert)</button>
         <button className="btn primary" disabled={busy} onClick={() => void run(async () => { const e = (await api.get<{ entries: AuditEntry[] }>('/audit')).entries; downloadCsv(`audit-${new Date().toISOString().slice(0, 10)}.csv`, ['Zeit', 'Wer', 'Aktion', 'Objekttyp', 'Objekt', 'Projekt', 'Details'], e.map((x) => [x.createdAt, x.userName ?? 'Worker', x.action, x.objectType, x.objectId, x.projectId, JSON.stringify(x.details)])); })}>CSV herunterladen</button>
       </span></div>

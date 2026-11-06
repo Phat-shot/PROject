@@ -9,6 +9,7 @@ import { CopyMoveDialog } from './CopyMove';
 import { useMembers, useTransferQuestion } from './planForms';
 import { useCreate } from './create';
 import { InlineCreate } from './BoardView';
+import { IconDiamond, IconLock, IconX } from '../../components/icons';
 
 /**
  * Maske eines Teilprojekts, aufgebaut wie die des Arbeitspakets: Kopf mit Name und Aktionen, Felder (Verantwortung, Zeitraum),
@@ -52,14 +53,14 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
 
   return (
     <Drawer onClose={onClose}
-      title={<span className="row" style={{ gap: 6 }}><span className="badge" title="Teilprojekt">TP</span>{canPlan ? <InlineText value={s.name} canEdit onSave={(name) => name.trim() && save({ name: name.trim() })} /> : s.name}{s.restricted && <span title="Eingeschränkt sichtbar">🔒</span>}</span>}
+      title={<span className="row gap-2"><span className="badge" title="Teilprojekt">TP</span>{canPlan ? <InlineText value={s.name} canEdit onSave={(name) => name.trim() && save({ name: name.trim() })} /> : s.name}{s.restricted && <span title="Eingeschränkt sichtbar"><IconLock size={12} /></span>}</span>}
       actions={canPlan ? <>
         <button className="btn sm" title="Teilprojekt mit Arbeitspaketen kopieren, hier oder in ein anderes Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>
         <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>
         {isPl && <button className="btn sm danger" onClick={remove}>Löschen</button>}
       </> : undefined}>
       {error && <div className="error mb">{error}</div>}
-      <div className="row small mb" style={{ gap: 6, flexWrap: 'wrap' }}>
+      <div className="row small mb gap-2 wrap">
         <span className="badge">{open.length} offen</span><span className="badge">{aps.length - open.length} erledigt</span>{overdue > 0 && <span className="badge warn">{overdue} überfällig</span>}
       </div>
       <div className="form cols-3">
@@ -77,18 +78,18 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
       <h3 className="mt">Meilensteine</h3>
       {milestones.length === 0 && <p className="muted small">Keine.</p>}
       {milestones.map((m) => (
-        <div key={m.id} className="row inline-row" style={{ gap: 6 }}>
-          <span>◆</span>
+        <div key={m.id} className="row inline-row gap-2">
+          <span><IconDiamond size={12} /></span>
           {canPlan ? <InlineText value={m.name} canEdit onSave={(name) => void run(async () => { await api.patch(`/projects/${pid}/milestones/${m.id}`, { name }); await reload(); })} /> : <span>{m.name}</span>}
           {canPlan ? <input type="date" className="inline-date" value={m.date} onChange={(e) => { if (e.target.value) void run(async () => { await api.patch(`/projects/${pid}/milestones/${m.id}`, { date: e.target.value }); await reload(); }); }} /> : <span className="muted small">{fmtDate(m.date)}</span>}
-          {canPlan && <button className="btn sm link right" title="Meilenstein löschen" onClick={() => void dialog.confirm({ title: 'Meilenstein löschen', text: `„${m.name}“ (${fmtDate(m.date)}) löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/milestones/${m.id}`); await reload(); }); })}>✕</button>}
+          {canPlan && <button className="btn sm link right" title="Meilenstein löschen" onClick={() => void dialog.confirm({ title: 'Meilenstein löschen', text: `„${m.name}“ (${fmtDate(m.date)}) löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/milestones/${m.id}`); await reload(); }); })} aria-label="Meilenstein löschen"><IconX /></button>}
         </div>
       ))}
       {canPlan && <button className="btn sm link" onClick={() => void run(async () => { await create.milestone(s.id); })}>+ Meilenstein</button>}
 
       <h3 className="mt">Arbeitspakete <span className="count">{open.length}/{aps.length}</span></h3>
       {aps.length === 0 && <p className="muted small">Noch keine.</p>}
-      <div className="stack" style={{ gap: 2 }}>
+      <div className="stack gap-1">
         {aps.map((x) => (
           <button key={x.id} className={`list-row ${x.done ? 'is-done' : ''}`} onClick={() => openTask(x.id)}>
             <span className="tkey">{detail.project.key}-{x.number}</span>
@@ -109,14 +110,14 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
 function Visibility({ s, isPl, onSave }: { s: Subproject; isPl: boolean; onSave: (b: Record<string, unknown>) => unknown }) {
   const members = useMembers();
   const groups = useData<{ groups: Group[] }>(isPl ? '/groups' : null);
-  if (!isPl) return <p className="muted small mt">{s.restricted ? '🔒 Eingeschränkt sichtbar (PL, Verantwortliche und benannte Personen und Gruppen).' : 'Für alle Projektmitglieder sichtbar.'}</p>;
+  if (!isPl) return <p className="muted small mt">{s.restricted ? <><IconLock size={12} /> Eingeschränkt sichtbar (PL, Verantwortliche und benannte Personen und Gruppen).</> : 'Für alle Projektmitglieder sichtbar.'}</p>;
   const toggle = (k: 'accessUserIds' | 'accessGroupIds', id: string) => onSave({ [k]: s[k].includes(id) ? s[k].filter((x) => x !== id) : [...s[k], id] });
   return (
-    <div className="mt stack" style={{ gap: 4 }}>
+    <div className="mt stack gap-1">
       <label className="check"><input type="checkbox" checked={s.restricted} onChange={(e) => onSave({ restricted: e.target.checked })} /> Eingeschränkt sichtbar <span className="muted small">(nur PL, Verantwortliche und die hier benannten Benutzer und Gruppen)</span></label>
       {s.restricted && <div className="grid cols-2">
-        <div className="field"><span>Benutzer</span><div className="stack" style={{ gap: 2 }}>{members.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={s.accessUserIds.includes(u.id)} onChange={() => toggle('accessUserIds', u.id)} /> {u.name}</label>)}</div></div>
-        <div className="field"><span>Gruppen</span><div className="stack" style={{ gap: 2 }}>{(groups.data?.groups ?? []).map((g) => <label key={g.id} className="check small"><input type="checkbox" checked={s.accessGroupIds.includes(g.id)} onChange={() => toggle('accessGroupIds', g.id)} /> {g.name}</label>)}{groups.data && groups.data.groups.length === 0 && <span className="muted small">Keine Gruppen.</span>}</div></div>
+        <div className="field"><span>Benutzer</span><div className="stack gap-1">{members.map((u) => <label key={u.id} className="check small"><input type="checkbox" checked={s.accessUserIds.includes(u.id)} onChange={() => toggle('accessUserIds', u.id)} /> {u.name}</label>)}</div></div>
+        <div className="field"><span>Gruppen</span><div className="stack gap-1">{(groups.data?.groups ?? []).map((g) => <label key={g.id} className="check small"><input type="checkbox" checked={s.accessGroupIds.includes(g.id)} onChange={() => toggle('accessGroupIds', g.id)} /> {g.name}</label>)}{groups.data && groups.data.groups.length === 0 && <span className="muted small">Keine Gruppen.</span>}</div></div>
       </div>}
     </div>
   );

@@ -7,6 +7,7 @@ import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject, useProjectOptional } from '../ProjectPage';
 import { contactLabel } from '../../lib/useContacts';
 import type { ProjectContact } from '@projekttool/shared';
+import { IconX } from '../../components/icons';
 
 export type StepType = 'task' | 'timer' | 'wait' | 'mail';
 export interface WorkflowStep {
@@ -33,7 +34,7 @@ export function stepSummary(s: WorkflowStep): string {
 export function RunRow({ r, onOpen, showProject }: { r: WorkflowRun; onOpen: () => void; showProject?: boolean }) {
   const pct = r.totalSteps ? Math.round((r.doneSteps / r.totalSteps) * 100) : 0;
   return (
-    <div className="card wf-run" onClick={onOpen} style={{ cursor: 'pointer' }}>
+    <div className="card wf-run pointer" onClick={onOpen}>
       <div className="row between">
         <div><strong>{r.name}</strong> <span className="muted small">{r.defName}{showProject ? (r.projectKind === 'workflow' ? ' · isoliert' : ` · Projekt ${r.projectKey}`) : r.standalone ? ' · isoliert' : ''} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}</span></div>
         <span className={`badge ${r.status === 'active' ? 'member' : r.status === 'done' ? 'ok' : ''}`}>{r.status === 'active' ? 'aktiv' : r.status === 'done' ? 'abgeschlossen' : 'abgebrochen'}</span>
@@ -60,8 +61,8 @@ export function RunDetail({ runId, backTo }: { runId: string; backTo: string }) 
   return (
     <div className="content">
       <div className="row between mb">
-        <div><Link to={backTo}>← Workflows</Link><h2 style={{ margin: '4px 0 0' }}>{r.name}</h2><div className="muted small">{r.defName}{r.projectKind === 'workflow' ? ` · isolierter Lauf (Mini-Projekt ${r.projectKey})` : ` · Projekt ${r.projectKey}`} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}{r.finishedAt ? ` · beendet ${fmtDateTime(r.finishedAt)}` : ''}</div></div>
-        <div className="row" style={{ gap: 6 }}>
+        <div><Link to={backTo}>← Workflows</Link><h2 className="m-0 mt-1">{r.name}</h2><div className="muted small">{r.defName}{r.projectKind === 'workflow' ? ` · isolierter Lauf (Mini-Projekt ${r.projectKey})` : ` · Projekt ${r.projectKey}`} · gestartet {fmtDateTime(r.startedAt)}{r.startedByName ? ` von ${r.startedByName}` : ''}{r.finishedAt ? ` · beendet ${fmtDateTime(r.finishedAt)}` : ''}</div></div>
+        <div className="row gap-2">
           <span className={`badge ${r.status === 'active' ? 'member' : r.status === 'done' ? 'ok' : ''}`}>{r.status === 'active' ? 'aktiv' : r.status === 'done' ? 'abgeschlossen' : 'abgebrochen'}</span>
           {r.status === 'active' && <button className="btn sm" disabled={busy} title="Timer, Mails und Arbeitspakete jetzt prüfen" onClick={() => void act('check')}>Jetzt prüfen</button>}
           {r.status === 'active' && cur?.type === 'wait' && cur.waitKind === 'approval' && canApprove && <button className="btn sm primary" disabled={busy} onClick={() => void act('approve')}>Freigeben und weiter</button>}
@@ -111,7 +112,7 @@ export function StartRunDialog({ def, standalone, columnId, subprojectId, onClos
       <div className="form">
         <label className="field"><span>Name des Laufs</span><input type="text" value={name} autoFocus placeholder={`${def.name} ${new Date().toLocaleDateString('de-DE')}`} onChange={(e) => setName(e.target.value)} /></label>
         {varNames.map((v) => <label key={v} className="field"><span>{v}</span><input type="text" value={vars[v] ?? ''} onChange={(e) => setVars({ ...vars, [v]: e.target.value })} placeholder={`Wert für {{${v}}}`} /></label>)}
-        {!standalone && detail && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        {!standalone && detail && <div className="row gap-3 wrap">
           <label className="field"><span>Spalte für die Arbeitspakete</span><select value={col} onChange={(e) => setCol(e.target.value)}><option value="">erste Spalte</option>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
           <label className="field"><span>Teilprojekt</span><select value={sub} onChange={(e) => setSub(e.target.value)}><option value="">– keins –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
         </div>}
@@ -139,29 +140,29 @@ export function WorkflowEditor({ existing, members, agents = [], contacts, save:
   return (
     <Modal title={existing ? 'Workflow bearbeiten' : 'Neuer Workflow'} onClose={onClose}>
       <div className="form wf-editor">
-        <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
-          <label className="field" style={{ flex: 1 }}><span>Name</span><input type="text" value={name} autoFocus onChange={(e) => setName(e.target.value)} placeholder="z. B. Kickoff-Ablauf" /></label>
-          <label className="check" style={{ alignSelf: 'end' }}><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> aktiv (startbar)</label>
+        <div className="row gap-3 wrap">
+          <label className="field grow"><span>Name</span><input type="text" value={name} autoFocus onChange={(e) => setName(e.target.value)} placeholder="z. B. Kickoff-Ablauf" /></label>
+          <label className="check self-end"><input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} /> aktiv (startbar)</label>
         </div>
         <label className="field"><span>Beschreibung (optional)</span><input type="text" value={desc} onChange={(e) => setDesc(e.target.value)} /></label>
-        <p className="muted small" style={{ margin: 0 }}>Platzhalter in Titeln und Texten: {'{{projekt}}'}, {'{{workflow}}'}, {'{{lauf}}'}, {'{{starter}}'}, {'{{datum}}'} und eigene wie {'{{kunde}}'} (werden beim Start abgefragt).</p>
+        <p className="muted small m-0">Platzhalter in Titeln und Texten: {'{{projekt}}'}, {'{{workflow}}'}, {'{{lauf}}'}, {'{{starter}}'}, {'{{datum}}'} und eigene wie {'{{kunde}}'} (werden beim Start abgefragt).</p>
         <ol className="wf-edit-list">
           {steps.map((s, i) => (
             <li key={s.key} className="card">
               <div className="row between">
-                <div className="row" style={{ gap: 6 }}><strong>{i + 1}.</strong>
+                <div className="row gap-2"><strong>{i + 1}.</strong>
                   <select value={s.type} onChange={(e) => upd(i, { ...newStep(e.target.value as StepType, i + 1), key: s.key, title: s.title })}>{(Object.keys(STEP_LABEL) as StepType[]).map((k) => <option key={k} value={k}>{STEP_LABEL[k]}</option>)}</select>
                 </div>
-                <div className="row" style={{ gap: 4 }}>
+                <div className="row gap-1">
                   <button className="btn sm" title="Nach oben" disabled={i === 0} onClick={() => move(i, -1)}>↑</button>
                   <button className="btn sm" title="Nach unten" disabled={i === steps.length - 1} onClick={() => move(i, 1)}>↓</button>
-                  <button className="btn sm link" title="Entfernen" disabled={steps.length === 1} onClick={() => setSteps((xs) => xs.filter((_, j) => j !== i))}>✕</button>
+                  <button className="btn sm link" title="Entfernen" disabled={steps.length === 1} onClick={() => setSteps((xs) => xs.filter((_, j) => j !== i))} aria-label="Entfernen"><IconX /></button>
                 </div>
               </div>
               <label className="field"><span>{s.type === 'task' ? 'Titel des Arbeitspakets' : 'Bezeichnung'}</span><input type="text" value={s.title} onChange={(e) => upd(i, { title: e.target.value })} placeholder={s.type === 'task' ? 'z. B. Kickoff {{kunde}} vorbereiten' : ''} /></label>
               {s.type === 'task' && <>
                 <label className="field"><span>Beschreibung</span><textarea value={s.description ?? ''} onChange={(e) => upd(i, { description: e.target.value })} rows={2} /></label>
-                <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                <div className="row gap-3 wrap">
                   <label className="field"><span>Zuständig</span>
                     <select value={s.responsible ?? 'pl'} onChange={(e) => upd(i, { responsible: e.target.value as WorkflowStep['responsible'] })}>
                       <option value="pl">geerbt (Teilprojekt/PL)</option><option value="starter">wer den Lauf startet</option><option value="user">bestimmter Benutzer (muss im Zielprojekt Mitglied sein)</option><option value="email">extern (Kontakt/Mail)</option><option value="previous">Zuständige des vorigen Arbeitspakets</option><option value="agent">KI-Agent (muss im Zielprojekt Mitglied sein; ohne Recht „Workflow-Schritte“ oder per Agenten-Policy gesperrt, dann an die PL)</option>
@@ -169,26 +170,26 @@ export function WorkflowEditor({ existing, members, agents = [], contacts, save:
                   {s.responsible === 'agent' && <label className="field"><span>KI-Agent</span><select value={s.responsibleUserId ?? ''} onChange={(e) => upd(i, { responsibleUserId: e.target.value || null })}><option value="">– wählen –</option>{agents.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>}
                   {s.responsible === 'user' && <label className="field"><span>Benutzer</span><select value={s.responsibleUserId ?? ''} onChange={(e) => upd(i, { responsibleUserId: e.target.value || null })}><option value="">– wählen –</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>}
                   {s.responsible === 'email' && <label className="field"><span>Mail-Adresse</span><input type="email" list={`wf-contacts-${i}`} value={s.responsibleEmail ?? ''} onChange={(e) => upd(i, { responsibleEmail: e.target.value })} /><datalist id={`wf-contacts-${i}`}>{contacts.map((c) => <option key={c.email} value={c.email}>{contactLabel(c)}</option>)}</datalist></label>}
-                  <label className="field"><span>Fällig nach Tagen</span><input type="number" min={0} value={s.dueDays ?? ''} onChange={(e) => upd(i, { dueDays: e.target.value === '' ? null : Number(e.target.value) })} style={{ width: 90 }} /></label>
+                  <label className="field"><span>Fällig nach Tagen</span><input className="w-90" type="number" min={0} value={s.dueDays ?? ''} onChange={(e) => upd(i, { dueDays: e.target.value === '' ? null : Number(e.target.value) })} /></label>
                   <label className="field"><span>Priorität</span><select value={s.priority ?? 'normal'} onChange={(e) => upd(i, { priority: e.target.value })}><option value="low">niedrig</option><option value="normal">normal</option><option value="high">hoch</option><option value="critical">kritisch</option></select></label>
                 </div>
                 <label className="field"><span>Checkliste (ein Punkt je Zeile)</span><textarea value={(s.checklist ?? []).join('\n')} rows={2} onChange={(e) => upd(i, { checklist: e.target.value.split('\n') })} /></label>
                 <label className="check"><input type="checkbox" checked={s.waitForDone !== false} onChange={(e) => upd(i, { waitForDone: e.target.checked })} /> auf Erledigung warten, bevor der nächste Schritt startet</label>
               </>}
-              {s.type === 'timer' && <div className="row" style={{ gap: 12 }}>
-                <label className="field"><span>Tage</span><input type="number" min={0} value={s.days ?? ''} onChange={(e) => upd(i, { days: e.target.value === '' ? null : Number(e.target.value) })} style={{ width: 90 }} /></label>
-                <label className="field"><span>Stunden</span><input type="number" min={0} value={s.hours ?? ''} onChange={(e) => upd(i, { hours: e.target.value === '' ? null : Number(e.target.value) })} style={{ width: 90 }} /></label>
+              {s.type === 'timer' && <div className="row gap-3">
+                <label className="field"><span>Tage</span><input className="w-90" type="number" min={0} value={s.days ?? ''} onChange={(e) => upd(i, { days: e.target.value === '' ? null : Number(e.target.value) })} /></label>
+                <label className="field"><span>Stunden</span><input className="w-90" type="number" min={0} value={s.hours ?? ''} onChange={(e) => upd(i, { hours: e.target.value === '' ? null : Number(e.target.value) })} /></label>
               </div>}
               {s.type === 'wait' && <>
                 <label className="field"><span>Ereignis</span><select value={s.waitKind ?? 'approval'} onChange={(e) => upd(i, { waitKind: e.target.value as 'approval' | 'mail' })}><option value="approval">Freigabe durch die Projektleitung („Freigeben und weiter“)</option><option value="mail">Mail-Eingang am Projektkonto</option></select></label>
-                {s.waitKind === 'mail' && <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                {s.waitKind === 'mail' && <div className="row gap-3 wrap">
                   <label className="field"><span>Betreff enthält</span><input type="text" value={s.mailSubject ?? ''} onChange={(e) => upd(i, { mailSubject: e.target.value })} placeholder="z. B. Bestätigung" /></label>
                   <label className="field"><span>Absender enthält (optional)</span><input type="text" value={s.mailFrom ?? ''} onChange={(e) => upd(i, { mailFrom: e.target.value })} placeholder="kunde@firma.de" /></label>
                 </div>}
               </>}
               {s.type === 'mail' && <>
                 <label className="field"><span>Empfänger (Adressen, mit Komma)</span><input type="text" value={(s.to ?? []).join(', ')} onChange={(e) => upd(i, { to: e.target.value.split(',').map((x) => x.trim()).filter(Boolean) })} /></label>
-                <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                <div className="row gap-3 wrap">
                   <label className="check"><input type="checkbox" checked={Boolean(s.toStarter)} onChange={(e) => upd(i, { toStarter: e.target.checked })} /> an Starter</label>
                   <label className="check"><input type="checkbox" checked={Boolean(s.toPl)} onChange={(e) => upd(i, { toPl: e.target.checked })} /> an PL</label>
                   <label className="check"><input type="checkbox" checked={Boolean(s.toPrevious)} onChange={(e) => upd(i, { toPrevious: e.target.checked })} /> an Zuständige des vorigen Arbeitspakets</label>
@@ -199,7 +200,7 @@ export function WorkflowEditor({ existing, members, agents = [], contacts, save:
             </li>
           ))}
         </ol>
-        <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+        <div className="row gap-2 wrap">
           {(Object.keys(STEP_LABEL) as StepType[]).map((k) => <button key={k} className="btn sm" onClick={() => setSteps((xs) => [...xs, newStep(k, nextKey())])}>+ {STEP_LABEL[k]}</button>)}
         </div>
         {error && <div className="error">{error}</div>}

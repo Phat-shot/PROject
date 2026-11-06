@@ -5,6 +5,7 @@ import { api, downloadCsv, fmtDate, fmtDateTime } from '../lib/api';
 import { useAuth } from '../lib/auth';
 import { useData } from '../lib/useData';
 import { Modal, useAsync } from '../components/ui';
+import { IconDiamond } from '../components/icons';
 
 interface Row {
   id: string; key: string; name: string; description: string | null; myRole: string; leadName: string | null;
@@ -58,12 +59,12 @@ export function PortfolioView({ projectId }: { projectId: string | null }) {
                     </td>
                     <td><Link to={`/projekte/${r.id}`}><span className="badge">{r.key}</span> {r.name}</Link>{r.health.note && <div className="muted small">{r.health.note}</div>}</td>
                     <td className="small">{r.leadName ?? '–'}</td>
-                    <td style={{ minWidth: 120 }}><div className="bar" title={`${r.stats.done} von ${total} erledigt`}><div className="done" style={{ width: `${total ? (r.stats.done / total) * 100 : 0}%` }} /></div><span className="muted small">{total ? Math.round((r.stats.done / total) * 100) : 0} %</span></td>
+                    <td className="min-w-120"><div className="bar" title={`${r.stats.done} von ${total} erledigt`}><div className="done" style={{ width: `${total ? (r.stats.done / total) * 100 : 0}%` }} /></div><span className="muted small">{total ? Math.round((r.stats.done / total) * 100) : 0} %</span></td>
                     <td>{r.stats.open}{r.stats.dueWeek > 0 && <span className="muted small"> · {r.stats.dueWeek} in 7 Tagen</span>}</td>
                     <td className={r.stats.overdue ? 'bad' : ''} style={r.stats.overdue ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{r.stats.overdue}</td>
                     <td>{r.stats.blocked + r.stats.escalated > 0 ? <span className="badge danger">{r.stats.blocked} / {r.stats.escalated}</span> : <span className="muted">–</span>}</td>
                     <td>{r.stats.redRisks > 0 ? <Link to={`/projekte/${r.id}/raid`} className="badge danger">{r.stats.redRisks}</Link> : <span className="muted">–</span>}</td>
-                    <td className="small nowrap">{r.nextMilestone ? <>◆ {fmtDate(r.nextMilestone.date)} {r.nextMilestone.name}</> : <span className="muted">–</span>}</td>
+                    <td className="small nowrap">{r.nextMilestone ? <><IconDiamond size={12} /> {fmtDate(r.nextMilestone.date)} {r.nextMilestone.name}</> : <span className="muted">–</span>}</td>
                     <td className="small nowrap">{r.timeTrackingEnabled ? <>{Math.round(r.loggedMinutes / 60)} h{r.budgetHours ? ` / ${r.budgetHours} h` : ''}</> : <span className="muted">–</span>}</td>
                     <td className="small muted nowrap">{r.lastActivity ? fmtDateTime(r.lastActivity) : '–'}</td>
                   </tr>
@@ -74,11 +75,11 @@ export function PortfolioView({ projectId }: { projectId: string | null }) {
           <p className="muted small mt">Ampel: von der Projektleitung gesetzt (Klick, nur PL) oder berechnet: rot bei Blockaden, Eskalation ab Stufe 2 oder mehr als einem Viertel Verzug, gelb bei Verzug, sonst grün. Ein kleiner zweiter Punkt zeigt die berechnete Farbe, wenn sie abweicht.</p>
         </div>
         <div className="card">
-          <h2>Auslastung über alle Projekte <span className="muted small" style={{ fontWeight: 400 }}>offene Arbeitspakete je Person</span></h2>
+          <h2>Auslastung über alle Projekte <span className="muted small fw-400">offene Arbeitspakete je Person</span></h2>
           {d.data && workload.length === 0 && <div className="muted small">Keine zugewiesenen Arbeitspakete.</div>}
           {d.data && workload.length > 0 && (
             <table className="table"><thead><tr><th>Person</th><th>Offen</th><th>Überfällig</th><th>Je Projekt</th></tr></thead><tbody>
-              {workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td>{w.open}</td><td style={w.overdue && !projectId ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{projectId ? <span className="muted" title="Nur über alle Projekte ausgewertet">–</span> : w.overdue}</td><td className="small">{w.perProject.map((p) => <span key={p.key} className="badge" style={{ marginRight: 4 }}>{p.key} {p.open}</span>)}</td></tr>)}
+              {workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td>{w.open}</td><td style={w.overdue && !projectId ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{projectId ? <span className="muted" title="Nur über alle Projekte ausgewertet">–</span> : w.overdue}</td><td className="small">{w.perProject.map((p) => <span key={p.key} className="badge mr-1">{p.key} {p.open}</span>)}</td></tr>)}
             </tbody></table>
           )}
         </div>
@@ -107,16 +108,16 @@ function TimeAcrossProjects({ projectId }: { projectId: string | null }) {
   return (
     <div className="mt">
       <div className="card">
-        <h2>Zeiten über Projekte <span className="muted small" style={{ fontWeight: 400 }}>{fmtDate(t.from)} – {fmtDate(t.to)} · {hours(t.total)}</span></h2>
+        <h2>Zeiten über Projekte <span className="muted small fw-400">{fmtDate(t.from)} – {fmtDate(t.to)} · {hours(t.total)}</span></h2>
         <div className="row small">
-          <span className="muted">Zeitraum</span><input type="date" style={{ width: 'auto' }} value={range.from || t.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input type="date" style={{ width: 'auto' }} value={range.to || t.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
+          <span className="muted">Zeitraum</span><input className="w-auto" type="date" value={range.from || t.from} onChange={(e) => setRange({ ...range, from: e.target.value })} /><input className="w-auto" type="date" value={range.to || t.to} onChange={(e) => setRange({ ...range, to: e.target.value })} />
           <button className="btn sm" onClick={() => downloadCsv(`zeiten_projekte_${t.from}_${t.to}.csv`, ['Projekt', 'Person', 'Minuten'], t.projects.flatMap((p) => p.people.map((x) => [p.key, x.name, x.minutes])))}>CSV</button>
         </div>
         {t.projects.length === 0 && <div className="muted small mt">Keine Buchungen im Zeitraum.</div>}
         {t.projects.length > 0 && <table className="table mt"><thead><tr><th>Projekt</th><th>Gebucht</th><th>Je Person</th></tr></thead><tbody>
-          {t.projects.map((p) => <tr key={p.projectId}><td><Link to={`/projekte/${p.projectId}/zeiten`}><span className="badge">{p.key}</span> {p.name}</Link></td><td className="nowrap">{hours(p.minutes)}</td><td className="small">{p.people.map((x) => <span key={x.userId} className="badge" style={{ marginRight: 4 }}>{x.name} {hours(x.minutes)}</span>)}</td></tr>)}
+          {t.projects.map((p) => <tr key={p.projectId}><td><Link to={`/projekte/${p.projectId}/zeiten`}><span className="badge">{p.key}</span> {p.name}</Link></td><td className="nowrap">{hours(p.minutes)}</td><td className="small">{p.people.map((x) => <span key={x.userId} className="badge mr-1">{x.name} {hours(x.minutes)}</span>)}</td></tr>)}
         </tbody></table>}
-        {t.people.length > 1 && <p className="small mt"><span className="muted">Je Person:</span> {t.people.map((x) => <span key={x.userId} className="badge" style={{ marginRight: 4 }}>{x.name} {hours(x.minutes)}</span>)}</p>}
+        {t.people.length > 1 && <p className="small mt"><span className="muted">Je Person:</span> {t.people.map((x) => <span key={x.userId} className="badge mr-1">{x.name} {hours(x.minutes)}</span>)}</p>}
       </div>
     </div>
   );

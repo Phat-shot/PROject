@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
 import type { Membership } from '@projekttool/shared';
+import { IconArchive, IconArrowLeft, IconChevronDown, IconChevronRight, IconReply, IconX } from './icons';
+import { IconButton, Loading } from './ui';
 import { api } from '../lib/api';
 import { useData } from '../lib/useData';
 import { useIsMobile } from '../lib/useMedia';
@@ -74,11 +76,11 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
       <button className={`msg-item ${c.channelId === channelId ? 'sel' : ''} ${c.unread ? 'unread' : ''}`} onClick={() => onSelect(c.channelId)}>
         <span className={`msg-avatar ${c.kind === 'project' ? 'proj' : c.partner?.kind === 'agent' ? 'agent' : ''} ${c.pinned ? 'pinned' : ''}`} title={c.pinned ? 'Dein Assistent, angepinnt' : undefined}>{c.kind === 'project' ? (c.projectKey ?? '#').slice(0, 3) : c.partner?.kind === 'agent' ? 'KI' : initials(c.title)}</span>
         <span className="msg-main">
-          <span className="row between"><span className="msg-title ell">{c.title}{c.pinned && <span className="badge" style={{ marginLeft: 6 }}>Assistent</span>}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
+          <span className="row between"><span className="msg-title ell">{c.title}{c.pinned && <span className="badge ml-2">Assistent</span>}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
           <span className="row between"><span className="muted small ell">{c.lastBody ? `${c.kind === 'project' && c.lastUser ? `${c.lastUser}: ` : ''}${c.lastBody}` : c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.subtitle}</span>{c.unread > 0 && <span className="badge danger">{c.unread}</span>}</span>
         </span>
       </button>
-      {!c.pinned && <button className="msg-arch" title={c.archived ? 'Aus dem Archiv holen' : 'Archivieren (kommt mit der nächsten Nachricht zurück)'} aria-label={c.archived ? 'Aus dem Archiv holen' : 'Archivieren'} onClick={() => void archive(c, !c.archived)}>{c.archived ? '↩' : '🗄'}</button>}
+      {!c.pinned && <button className="msg-arch" title={c.archived ? 'Aus dem Archiv holen' : 'Archivieren (kommt mit der nächsten Nachricht zurück)'} aria-label={c.archived ? 'Aus dem Archiv holen' : 'Archivieren'} onClick={() => void archive(c, !c.archived)}>{c.archived ? <IconReply /> : <IconArchive />}</button>}
     </div>
   );
   const current = convs?.find((c) => c.channelId === channelId) ?? null;
@@ -94,19 +96,19 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
         <strong>Chat</strong>
         <input type="search" placeholder="Gespräche und Nachrichten suchen …" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Chat durchsuchen" />
         <button className="btn sm" title="Neues Gespräch mit einer Person oder einem KI-Agenten" onClick={() => setPicking(!picking)}>+ Neu</button>
-        {onClose && <button className="btn sm" title="Schließen" aria-label="Chat schließen" onClick={onClose}>✕</button>}
+        {onClose && <IconButton label="Chat schließen" size="sm" onClick={onClose}><IconX /></IconButton>}
       </div>
       <div className="msg-body">
         <div className="msg-list">
           {picking && <PeoplePicker exclude={new Set((convs ?? []).filter((c) => c.partner).map((c) => c.partner!.id))} onPick={(p) => void start(p)} onCancel={() => setPicking(false)} />}
           {error && <div className="error small">{error}</div>}
-          {!convs && !error && <div className="muted small" style={{ padding: 10 }}>Lade …</div>}
+          {!convs && !error && <div className="pad-10"><Loading /></div>}
           {list.map(item)}
           {archived.length > 0 && <>
-            <button className="msg-group msg-group-btn" aria-expanded={showArchived} onClick={() => setShowArchived(!showArchived)}>{showArchived ? '▾' : '▸'} Archiviert ({archived.length})</button>
+            <button className="msg-group msg-group-btn" aria-expanded={showArchived} onClick={() => setShowArchived(!showArchived)}>{showArchived ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} Archiviert ({archived.length})</button>
             {showArchived && archived.map(item)}
           </>}
-          {convs && list.length === 0 && !hits.length && <div className="muted small" style={{ padding: 10 }}>{needle ? 'Kein Gespräch gefunden.' : 'Noch keine Gespräche. Über „+ Neu“ eine Person oder einen KI-Agenten anschreiben.'}</div>}
+          {convs && list.length === 0 && !hits.length && <div className="muted small pad-10">{needle ? 'Kein Gespräch gefunden.' : 'Noch keine Gespräche. Über „+ Neu“ eine Person oder einen KI-Agenten anschreiben.'}</div>}
           {hits.length > 0 && <>
             <div className="msg-group">Nachrichten</div>
             {hits.map((h) => (
@@ -119,7 +121,7 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
         </div>
         <div className="msg-pane">
           {current ? <Conversation c={current} threadId={threadId ?? null} msgId={msgId ?? null} onBack={() => onSelect(null)} onThread={(t) => onSelect(current.channelId, t)} onSent={() => void load()} onArchive={current.pinned ? undefined : () => void archive(current, !current.archived)} />
-            : channelId && convs ? <div className="muted small" style={{ padding: 24 }}>Gespräch nicht gefunden oder nicht mehr zugänglich.</div>
+            : channelId && convs ? <div className="muted small pad-24">Gespräch nicht gefunden oder nicht mehr zugänglich.</div>
               : <div className="msg-empty muted small">Gespräch links wählen. Chat ist der Weg zwischen Projektbeteiligten, auch mit KI-Agenten (im Projektkanal per @Name); Mail bleibt für Externe.</div>}
         </div>
       </div>
@@ -137,8 +139,8 @@ function Conversation({ c, threadId, msgId, onBack, onThread, onSent, onArchive 
   return (
     <>
       <div className="msg-pane-head">
-        <button className="btn sm msg-back" onClick={onBack} aria-label="Zurück zur Liste">←</button>
-        <div className="ell" style={{ flex: 1 }}><strong>{c.title}</strong> <span className="muted small">{c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.partner?.kind === 'agent' ? 'KI-Agent' : c.partner?.email}</span></div>
+        <IconButton label="Zurück zur Liste" size="sm" className="msg-back" onClick={onBack}><IconArrowLeft /></IconButton>
+        <div className="ell grow"><strong>{c.title}</strong> <span className="muted small">{c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.partner?.kind === 'agent' ? 'KI-Agent' : c.partner?.email}</span></div>
         {onArchive && <button className="btn sm" title={c.archived ? 'Aus dem Archiv holen' : 'Archivieren: das Gespräch verschwindet aus der Liste, bis eine neue Nachricht kommt'} onClick={onArchive}>{c.archived ? 'Aus dem Archiv' : 'Archivieren'}</button>}
       </div>
       <ChatPane key={c.channelId} channelId={c.channelId} members={members} canModerate={detail.data?.project.myMembership.role === 'pl'}
@@ -159,7 +161,7 @@ function PeoplePicker({ exclude, onPick, onCancel }: { exclude: Set<string>; onP
       <div className="row"><input type="text" autoFocus placeholder="Person oder KI-Agent …" value={f} onChange={(e) => setF(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') onCancel(); if (e.key === 'Enter' && list[0]) onPick(list[0]); }} /><button className="btn sm link" onClick={onCancel}>Abbrechen</button></div>
       <div className="msg-picker-list">
         {list.map((p) => <button key={p.id} className="msg-hit" onClick={() => onPick(p)}><span className="small"><strong>{p.name}</strong> <span className="muted">{p.kind === 'agent' ? 'KI-Agent' : p.email}</span></span></button>)}
-        {d.data && list.length === 0 && <div className="muted small" style={{ padding: 6 }}>Niemand gefunden.</div>}
+        {d.data && list.length === 0 && <div className="muted small pad-6">Niemand gefunden.</div>}
       </div>
     </div>
   );

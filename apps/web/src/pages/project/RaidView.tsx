@@ -6,6 +6,7 @@ import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
+import { IconX } from '../../components/icons';
 
 const KIND_LABEL: Record<RaidKind, string> = { risk: 'Risiko', assumption: 'Annahme', issue: 'Issue', decision: 'Entscheidung' };
 const STATUS_LABEL = { open: 'offen', mitigated: 'in Behandlung', closed: 'geschlossen' } as const;
@@ -44,7 +45,7 @@ export function RaidView() {
         {(Object.keys(KIND_LABEL) as RaidKind[]).map((k) => <button key={k} className={`chip ${kind === k ? 'on' : ''}`} onClick={() => set('art', kind === k ? '' : k)}>{KIND_LABEL[k]} <span className="muted">{counts[k]}</span></button>)}
         <label className="check small"><input type="checkbox" checked={showClosed} onChange={(e) => set('geschlossen', e.target.checked ? '1' : '')} /> geschlossene zeigen</label>
         {(cell || params.get('nr')) && <button className="chip" onClick={() => { set('zelle', ''); set('nr', ''); }}>Filter löschen</button>}
-        {canEdit && <span className="row right" style={{ gap: 4 }}>{(Object.keys(KIND_LABEL) as RaidKind[]).map((k) => <button key={k} className="btn sm" onClick={() => setCreate(k)}>+ {KIND_LABEL[k]}</button>)}</span>}
+        {canEdit && <span className="row right gap-1">{(Object.keys(KIND_LABEL) as RaidKind[]).map((k) => <button key={k} className="btn sm" onClick={() => setCreate(k)}>+ {KIND_LABEL[k]}</button>)}</span>}
       </div>
       {error && <div className="error mb">{error}</div>}
       <div className="grid cols-2 mb" style={{ gridTemplateColumns: 'minmax(0, 1fr) 380px' }}>
@@ -56,24 +57,24 @@ export function RaidView() {
                 <tr key={x.id} className="inline-row" style={x.status === 'closed' ? { opacity: 0.6 } : undefined}>
                   <td className="nowrap"><span className="tkey">{x.kind === 'decision' ? 'E' : x.kind === 'issue' ? 'I' : x.kind === 'assumption' ? 'A' : 'R'}-{x.number}</span></td>
                   <td><span className={`badge raid-${x.kind}`}>{KIND_LABEL[x.kind]}</span></td>
-                  <td style={{ minWidth: 220 }}><InlineText value={x.title} canEdit={canEdit} onSave={(v) => void patch(x, { title: v })} />{x.taskId && <button className="btn sm link" onClick={() => openTask(x.taskId!)}>{detail.project.key}-{tasks.find((t) => t.id === x.taskId)?.number ?? '?'}</button>}</td>
+                  <td className="min-w-220"><InlineText value={x.title} canEdit={canEdit} onSave={(v) => void patch(x, { title: v })} />{x.taskId && <button className="btn sm link" onClick={() => openTask(x.taskId!)}>{detail.project.key}-{tasks.find((t) => t.id === x.taskId)?.number ?? '?'}</button>}</td>
                   <td>{x.kind === 'risk' || x.kind === 'issue' ? <select className="inline-select" value={x.probability ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { probability: e.target.value ? Number(e.target.value) : null })}><option value="">–</option>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select> : <span className="muted">–</span>}</td>
                   <td>{x.kind === 'risk' || x.kind === 'issue' ? <select className="inline-select" value={x.impact ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { impact: e.target.value ? Number(e.target.value) : null })}><option value="">–</option>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>{n}</option>)}</select> : <span className="muted">–</span>}</td>
                   <td>{x.score != null && <span className={`badge ${scoreClass(x.score) === 'high' ? 'danger' : scoreClass(x.score) === 'mid' ? 'warn' : 'ok'}`}>{x.score}</span>}</td>
                   <td><select className="inline-select" value={x.status} disabled={!canEdit} onChange={(e) => void patch(x, { status: e.target.value as RaidItem['status'] })}>{Object.entries(STATUS_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></td>
                   <td><select className="inline-select" value={x.ownerUserId ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { ownerUserId: e.target.value || null })}><option value="">–</option>{members.map((m) => <option key={m.userId} value={m.userId}>{m.name}</option>)}</select></td>
                   <td className="nowrap"><input type="date" className="inline-date" value={x.dueDate ?? ''} disabled={!canEdit} onChange={(e) => void patch(x, { dueDate: e.target.value || null })} /></td>
-                  <td className="nowrap"><DetailButton item={x} canEdit={canEdit} onSave={(body) => patch(x, body)} />{me.role === 'pl' && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Eintrag löschen', text: `„${x.title}“ löschen? Zum Behalten der Historie besser auf „geschlossen“ setzen.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/raid/${x.id}`); await d.reload(); }); })}>✕</button>}</td>
+                  <td className="nowrap"><DetailButton item={x} canEdit={canEdit} onSave={(body) => patch(x, body)} />{me.role === 'pl' && <button className="btn sm link" title="Löschen" onClick={() => void dialog.confirm({ title: 'Eintrag löschen', text: `„${x.title}“ löschen? Zum Behalten der Historie besser auf „geschlossen“ setzen.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/raid/${x.id}`); await d.reload(); }); })} aria-label="Löschen"><IconX /></button>}</td>
                 </tr>
               ))}
             </tbody></table>
           )}
         </div>
         <div className="card">
-          <h2>Risikomatrix <span className="muted small" style={{ fontWeight: 400 }}>offene Risiken</span></h2>
+          <h2>Risikomatrix <span className="muted small fw-400">offene Risiken</span></h2>
           <div className="raid-matrix">
             <div className="c n" />{[1, 2, 3, 4, 5].map((i) => <div key={i} className="c n" title="Auswirkung">A{i}</div>)}
-            {[5, 4, 3, 2, 1].map((p) => <span key={p} style={{ display: 'contents' }}><div className="c n" title="Wahrscheinlichkeit">W{p}</div>{[1, 2, 3, 4, 5].map((i) => { const k = `${p}-${i}`; const n = matrix.get(k) ?? 0; return <div key={k} className={`c ${scoreClass(p * i)} ${n ? 'has' : ''} ${cell === k ? 'sel' : ''}`} title={`W${p} × A${i} = ${p * i}`} onClick={() => n && set('zelle', cell === k ? '' : k)}>{n || ''}</div>; })}</span>)}
+            {[5, 4, 3, 2, 1].map((p) => <span className="contents" key={p}><div className="c n" title="Wahrscheinlichkeit">W{p}</div>{[1, 2, 3, 4, 5].map((i) => { const k = `${p}-${i}`; const n = matrix.get(k) ?? 0; return <div key={k} className={`c ${scoreClass(p * i)} ${n ? 'has' : ''} ${cell === k ? 'sel' : ''}`} title={`W${p} × A${i} = ${p * i}`} onClick={() => n && set('zelle', cell === k ? '' : k)}>{n || ''}</div>; })}</span>)}
           </div>
           <p className="muted small mt">Score = Wahrscheinlichkeit × Auswirkung (1 bis 25). Ab 8 gelb, ab 15 rot. Klick auf eine Zelle filtert die Liste.</p>
         </div>
@@ -99,7 +100,7 @@ function DetailButton({ item: x, canEdit, onSave }: { item: RaidItem; canEdit: b
             <label className="field"><span>{x.kind === 'decision' ? 'Begründung und Konsequenzen' : x.kind === 'assumption' ? 'Wie wird die Annahme geprüft?' : 'Maßnahme'}</span><textarea value={f.mitigation} readOnly={!canEdit} onChange={(e) => setF({ ...f, mitigation: e.target.value })} /></label>
             {x.kind === 'decision' && <label className="field"><span>Entschieden am</span><input type="date" value={f.decidedOn} readOnly={!canEdit} onChange={(e) => setF({ ...f, decidedOn: e.target.value })} /></label>}
             <div className="muted small">Angelegt {fmtDate(x.createdAt.slice(0, 10))}, zuletzt geändert {fmtDate(x.updatedAt.slice(0, 10))}</div>
-            {canEdit && <div className="row"><button className="btn primary sm" onClick={() => void onSave({ description: f.description || null, mitigation: f.mitigation || null, decidedOn: f.decidedOn || null }).then(() => setOpen(false))}>Speichern</button><button className="btn sm" onClick={() => setOpen(false)}>Abbrechen</button></div>}
+            {canEdit && <div className="row"><button className="btn sm primary" onClick={() => void onSave({ description: f.description || null, mitigation: f.mitigation || null, decidedOn: f.decidedOn || null }).then(() => setOpen(false))}>Speichern</button><button className="btn sm" onClick={() => setOpen(false)}>Abbrechen</button></div>}
           </div>
         </Modal>
       )}

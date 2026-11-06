@@ -44,7 +44,7 @@ function SetupChecklist({ taskCount }: { taskCount: number }) {
   if (open.length === 0) return null;
   return (
     <div className="card mb setup">
-      <h2>Projekt einrichten <span className="muted small" style={{ fontWeight: 400 }}>{items.length - open.length} von {items.length} erledigt</span></h2>
+      <h2>Projekt einrichten <span className="muted small fw-400">{items.length - open.length} von {items.length} erledigt</span></h2>
       <ul className="setup-list">{items.map((i) => <li key={i.label} className={i.done ? 'done' : ''}>{i.done ? '✓' : '○'} {i.done ? <span>{i.label}</span> : <Link to={i.to}>{i.label}</Link>}</li>)}</ul>
     </div>
   );
@@ -61,9 +61,9 @@ export function OverviewView() {
   const pct = total ? Math.round((o.counts.done / total) * 100) : 0;
   return (
     <div className="overview">
-      <div className="row mb" style={{ alignItems: 'flex-start' }}>
-        {detail.project.health?.color && <span className={`notice ${detail.project.health.color === 'red' ? 'danger' : detail.project.health.color === 'green' ? 'ok' : ''}`} style={{ padding: '4px 10px' }}><span className={`ampel small ${detail.project.health.color}`} /> Status {{ green: 'grün', yellow: 'gelb', red: 'rot' }[detail.project.health.color]}{detail.project.health.note ? `: ${detail.project.health.note}` : ''}<span className="muted small"> · {detail.project.health.updatedBy}</span></span>}
-        {detail.project.description && <p className="muted" style={{ margin: 0 }}>{detail.project.description}</p>}
+      <div className="row mb items-start">
+        {detail.project.health?.color && <span className={`notice ${detail.project.health.color === 'red' ? 'danger' : detail.project.health.color === 'green' ? 'ok' : ''} pad-xs`}><span className={`ampel small ${detail.project.health.color}`} /> Status {{ green: 'grün', yellow: 'gelb', red: 'rot' }[detail.project.health.color]}{detail.project.health.note ? `: ${detail.project.health.note}` : ''}<span className="muted small"> · {detail.project.health.updatedBy}</span></span>}
+        {detail.project.description && <p className="muted m-0">{detail.project.description}</p>}
       </div>
       <SetupChecklist taskCount={tasks.length} />
       <div className="kpis mb">
@@ -78,14 +78,14 @@ export function OverviewView() {
       </div>
       {o.escalations.length > 0 && (
         <div className="card mb warn">
-          <h2>Warnungen und Eskalationen <span className="muted small" style={{ fontWeight: 400 }}>Regelwerk: Verzug, Stillstand, Blockaden entlang der Kette Zuständig → Teilprojekt → PL → Eskalationskontakt</span></h2>
+          <h2>Warnungen und Eskalationen <span className="muted small fw-400">Regelwerk: Verzug, Stillstand, Blockaden entlang der Kette Zuständig → Teilprojekt → PL → Eskalationskontakt</span></h2>
           <table className="table"><thead><tr><th>Arbeitspaket</th><th>Grund</th><th>Stufe</th><th>Kette</th></tr></thead><tbody>
             {o.escalations.map((e) => (
               <tr key={e.taskId} className="clickable" onClick={() => openTask(e.taskId)}>
                 <td>{e.title}<div className="muted small">{e.responsible}</div></td>
                 <td className="small">{e.reason}</td>
                 <td className="nowrap">{e.blocked && <span className="badge blocked">Blockiert</span>} {e.level > 0 ? <span className={`badge esc${e.level}`}>Stufe {e.level}</span> : <span className="badge warn">Warnung</span>}{e.targetLevel > e.level && <span className="muted small"> → {e.targetLevel} beim nächsten Lauf</span>}</td>
-                <td><div className="chain">{e.chain.map((c, i) => <span key={i} style={{ display: 'contents' }}>{i > 0 && <span className="arrow">→</span>}<span className={`step ${i <= e.level && i > 0 ? 'on' : ''}`}>{c}</span></span>)}</div></td>
+                <td><div className="chain">{e.chain.map((c, i) => <span className="contents" key={i}>{i > 0 && <span className="arrow">→</span>}<span className={`step ${i <= e.level && i > 0 ? 'on' : ''}`}>{c}</span></span>)}</div></td>
               </tr>
             ))}
           </tbody></table>
@@ -97,7 +97,7 @@ export function OverviewView() {
             <h2>Fortschritt je Teilprojekt</h2>
             {o.perSubproject.map((s) => (
               <div key={s.id} className="mb">
-                <div className="row between small"><span>{s.name}</span><span className="muted">{s.done}/{s.total}{s.overdue ? <span style={{ color: 'var(--danger)' }}> · {s.overdue} überfällig</span> : ''}</span></div>
+                <div className="row between small"><span>{s.name}</span><span className="muted">{s.done}/{s.total}{s.overdue ? <span className="text-danger"> · {s.overdue} überfällig</span> : ''}</span></div>
                 <div className="bar"><div className="done" style={{ width: `${s.total ? (s.done / s.total) * 100 : 0}%` }} /><div className="over" style={{ width: `${s.total ? (s.overdue / s.total) * 100 : 0}%` }} /></div>
               </div>
             ))}
@@ -106,7 +106,7 @@ export function OverviewView() {
           <div className="card">
             <h2>Überfällig</h2>
             {o.overdue.length === 0 ? <p className="muted small">Nichts überfällig.</p> : (
-              <table className="table"><tbody>{o.overdue.map((t) => <tr key={t.id} className="clickable" onClick={() => openTask(t.id)}><td>{t.title}</td><td className="nowrap" style={{ color: 'var(--danger)' }}>{fmtDate(t.dueDate)}</td><td className="muted small">{t.responsible}</td></tr>)}</tbody></table>
+              <table className="table"><tbody>{o.overdue.map((t) => <tr key={t.id} className="clickable" onClick={() => openTask(t.id)}><td>{t.title}</td><td className="nowrap text-danger">{fmtDate(t.dueDate)}</td><td className="muted small">{t.responsible}</td></tr>)}</tbody></table>
             )}
           </div>
           <div className="card">
@@ -129,7 +129,7 @@ export function OverviewView() {
           </div>
           <div className="card">
             <h2>Auslastung (offene Arbeitspakete je Person)</h2>
-            <table className="table"><tbody>{o.workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td className="nowrap">{w.open} offen{w.overdue ? <span style={{ color: 'var(--danger)' }}> · {w.overdue} überfällig</span> : ''}</td></tr>)}</tbody></table>
+            <table className="table"><tbody>{o.workload.map((w) => <tr key={w.userId}><td>{w.name}</td><td className="nowrap">{w.open} offen{w.overdue ? <span className="text-danger"> · {w.overdue} überfällig</span> : ''}</td></tr>)}</tbody></table>
           </div>
           <div className="card">
             <h2>Wartet auf dich</h2>

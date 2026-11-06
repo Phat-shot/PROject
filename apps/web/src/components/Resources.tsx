@@ -3,6 +3,7 @@ import { RESOURCE_KINDS, type Availability, type Group, type Resource, type Reso
 import { api, ApiError, fmtDate, fmtDateTime, today } from '../lib/api';
 import { Modal, useAsync, useDialog } from './ui';
 import { useData } from '../lib/useData';
+import { IconX } from './icons';
 
 /**
  * Ressourcen und Personen im Kalender (Konzept 10): Buchungsformular mit Verfügbarkeitsampel und Konfliktbehandlung (409 → vorläufig
@@ -94,10 +95,10 @@ export function BookingForm(p: BookingFormProps) {
         <label className="field"><span>Titel</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} placeholder={p.taskId ? 'leer = Titel des Arbeitspakets' : 'z. B. Fassade einrüsten'} /></label>
         <label className="field"><span>Notiz</span><input type="text" value={note} onChange={(e) => setNote(e.target.value)} /></label>
         {p.mode !== 'absence' && p.mode !== 'block' && <label className="check" title="Vorläufige Belegungen dürfen sich überschneiden und werden später bestätigt"><input type="checkbox" checked={tentative} onChange={(e) => setTentative(e.target.checked)} /> vorläufig</label>}
-        {ampel && <div className="small row" style={{ gap: 6 }}><span className={`badge ${ampel[0]}`}>{ampel[1]}</span>{avail!.conflicts.length > 0 && <span className="muted">{avail!.conflicts.map((c) => `${bookingTitle(c)} ${spanText(c)}`).join('; ')}</span>}</div>}
+        {ampel && <div className="small row gap-2"><span className={`badge ${ampel[0]}`}>{ampel[1]}</span>{avail!.conflicts.length > 0 && <span className="muted">{avail!.conflicts.map((c) => `${bookingTitle(c)} ${spanText(c)}`).join('; ')}</span>}</div>}
         {conflicts && <div className="notice small">
           <strong>Belegt:</strong> {conflicts.map((c) => `${bookingTitle(c)} ${spanText(c)}`).join('; ') || 'bestätigte Überschneidung'}.
-          <div className="row mt" style={{ gap: 6 }}>
+          <div className="row mt gap-2">
             <button className="btn sm" disabled={busy} onClick={() => void save(false, true)}>Trotzdem vorläufig anfragen</button>
             {p.canForce && <button className="btn sm danger" disabled={busy} onClick={() => void save(true, false)} title="Nur PL oder „Projektplan ändern“; wird festgehalten und den Betroffenen gemeldet">Übersteuern</button>}
           </div>
@@ -149,10 +150,10 @@ export function BookingRow({ b, canDecide, canDelete, onChanged }: { b: Resource
   const decide = (decision: 'confirm' | 'decline') => run(async () => { await api.post(`/bookings/${b.id}/decide`, { decision }); await onChanged(); });
   return <li>
     <strong>{b.resourceName ?? b.userName}</strong> {spanText(b)} <span className="muted">· {bookingTitle(b)}{b.createdByName ? ` · von ${b.createdByName}` : ''}</span>
-    {b.tentative && <span className="badge warn" style={{ marginLeft: 4 }}>vorläufig</span>}{b.conflict && <span className="badge danger" style={{ marginLeft: 4 }} title="überschneidet sich mit einer anderen Belegung">Konflikt</span>}{b.followTask && <span className="badge" style={{ marginLeft: 4 }} title="folgt Start und Termin des Arbeitspakets">folgt AP</span>}
-    {(canDecide && b.tentative) || canDelete ? <span className="row" style={{ gap: 4, display: 'inline-flex', marginLeft: 6 }}>
+    {b.tentative && <span className="badge warn ml-1">vorläufig</span>}{b.conflict && <span className="badge danger ml-1" title="überschneidet sich mit einer anderen Belegung">Konflikt</span>}{b.followTask && <span className="badge ml-1" title="folgt Start und Termin des Arbeitspakets">folgt AP</span>}
+    {(canDecide && b.tentative) || canDelete ? <span className="row gap-1 inline-flex ml-2">
       {canDecide && b.tentative && <><button className="btn sm" disabled={busy} onClick={() => void decide('confirm')}>Bestätigen</button><button className="btn sm" disabled={busy} onClick={() => void decide('decline')}>Ablehnen</button></>}
-      {canDelete && !b.tentative && <button className="btn sm link" disabled={busy} onClick={() => void dialog.confirm({ title: 'Belegung löschen', text: `${b.resourceName ?? b.userName} ${spanText(b)} löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/bookings/${b.id}`); await onChanged(); }); })}>✕</button>}
+      {canDelete && !b.tentative && <button className="btn sm link" disabled={busy} onClick={() => void dialog.confirm({ title: 'Belegung löschen', text: `${b.resourceName ?? b.userName} ${spanText(b)} löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/bookings/${b.id}`); await onChanged(); }); })} aria-label="Entfernen"><IconX /></button>}
     </span> : null}
     {error && <div className="error small">{error}</div>}
   </li>;
@@ -172,26 +173,26 @@ export function ResourcesTable({ projectId, canEdit, canDelete, groups }: { proj
     {error && <div className="error mb">{error}</div>}
     <table className="table"><thead><tr><th>Name</th><th>Art</th><th>Ort / Kontakt</th>{!projectId && <th>Freigabegruppe</th>}<th>Belegungen</th><th /></tr></thead><tbody>
       {list.map((r) => <tr key={r.id} style={r.active ? undefined : { opacity: 0.6 }}>
-        <td>{r.name}{!r.active && <span className="badge" style={{ marginLeft: 4 }}>inaktiv</span>}{r.trade && <div className="muted small">{r.trade}{r.organization ? ` · ${r.organization}` : ''}</div>}</td>
+        <td>{r.name}{!r.active && <span className="badge ml-1">inaktiv</span>}{r.trade && <div className="muted small">{r.trade}{r.organization ? ` · ${r.organization}` : ''}</div>}</td>
         <td className="small">{kindLabel(r.kind)}</td>
         <td className="small">{r.location}{r.email && <div><a href={`mailto:${r.email}`}>{r.email}</a></div>}</td>
-        {!projectId && <td className="small">{canEdit ? <select value={r.approvalGroupId ?? ''} style={{ width: 'auto' }} onChange={(e) => void save(r, { approvalGroupId: e.target.value || null })}><option value="">keine (jedes Mitglied bestätigt)</option>{(groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select> : r.approvalGroupName ?? '–'}</td>}
+        {!projectId && <td className="small">{canEdit ? <select className="w-auto" value={r.approvalGroupId ?? ''} onChange={(e) => void save(r, { approvalGroupId: e.target.value || null })}><option value="">keine (jedes Mitglied bestätigt)</option>{(groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select> : r.approvalGroupName ?? '–'}</td>}
         <td className="small">{r.futureBookings ?? 0} künftig</td>
         <td className="nowrap">{canEdit && <>
           <button className="btn sm" title="Sperrzeit setzen" onClick={() => setBlock(r)}>Sperrzeit</button>
           <button className="btn sm" onClick={() => void save(r, { active: !r.active })}>{r.active ? 'Deaktivieren' : 'Aktivieren'}</button>
-          {canDelete && <button className="btn sm link" title="Löschen (mit künftigen Belegungen nur deaktivieren)" onClick={() => void dialog.confirm({ title: 'Ressource löschen', text: `„${r.name}“ löschen? Mit künftigen Belegungen wird sie nur deaktiviert.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/resources/${r.id}`); await d.reload(); }); })}>✕</button>}
+          {canDelete && <button className="btn sm link" title="Löschen (mit künftigen Belegungen nur deaktivieren)" onClick={() => void dialog.confirm({ title: 'Ressource löschen', text: `„${r.name}“ löschen? Mit künftigen Belegungen wird sie nur deaktiviert.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/resources/${r.id}`); await d.reload(); }); })} aria-label="Löschen (mit künftigen Belegungen nur deaktivieren)"><IconX /></button>}
         </>}</td>
       </tr>)}
       {d.data && list.length === 0 && <tr><td colSpan={6} className="muted small">Noch keine Ressourcen.</td></tr>}
     </tbody></table>
     {canEdit && <form className="row mt" style={{ flexWrap: 'wrap' }} onSubmit={(e) => { e.preventDefault(); void run(async () => { await api.post('/resources', { ...f, projectId, approvalGroupId: f.approvalGroupId || null }); setF(empty); await d.reload(); }); }}>
-      <select value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as ResourceKind })} style={{ width: 'auto' }}>{RESOURCE_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
-      <input type="text" placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={{ width: 180 }} required />
-      <input type="text" placeholder={f.kind === 'person' ? 'Gewerk' : 'Ort'} value={f.kind === 'person' ? f.trade : f.location} onChange={(e) => setF(f.kind === 'person' ? { ...f, trade: e.target.value } : { ...f, location: e.target.value })} style={{ width: 140 }} />
-      <input type="email" placeholder={f.kind === 'person' ? 'E-Mail der Person' : 'Postfach (optional)'} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={{ width: 200 }} />
-      {f.kind === 'person' && <input type="text" placeholder="Firma" value={f.organization} onChange={(e) => setF({ ...f, organization: e.target.value })} style={{ width: 140 }} />}
-      {!projectId && (groups ?? []).length > 0 && <select value={f.approvalGroupId} onChange={(e) => setF({ ...f, approvalGroupId: e.target.value })} style={{ width: 'auto' }}><option value="">ohne Freigabegruppe</option>{(groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select>}
+      <select className="w-auto" value={f.kind} onChange={(e) => setF({ ...f, kind: e.target.value as ResourceKind })}>{RESOURCE_KINDS.map((k) => <option key={k.key} value={k.key}>{k.label}</option>)}</select>
+      <input className="w-180" type="text" placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
+      <input className="w-140" type="text" placeholder={f.kind === 'person' ? 'Gewerk' : 'Ort'} value={f.kind === 'person' ? f.trade : f.location} onChange={(e) => setF(f.kind === 'person' ? { ...f, trade: e.target.value } : { ...f, location: e.target.value })} />
+      <input className="w-200" type="email" placeholder={f.kind === 'person' ? 'E-Mail der Person' : 'Postfach (optional)'} value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} />
+      {f.kind === 'person' && <input className="w-140" type="text" placeholder="Firma" value={f.organization} onChange={(e) => setF({ ...f, organization: e.target.value })} />}
+      {!projectId && (groups ?? []).length > 0 && <select className="w-auto" value={f.approvalGroupId} onChange={(e) => setF({ ...f, approvalGroupId: e.target.value })}><option value="">ohne Freigabegruppe</option>{(groups ?? []).map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}</select>}
       <button className="btn sm" disabled={busy || !f.name.trim()}>Anlegen</button>
     </form>}
     {block && <BookingForm projectId={null} mode="block" target={{ resourceId: block.id, name: block.name }} onClose={() => setBlock(null)} onSaved={async () => { setBlock(null); await d.reload(); }} />}
@@ -205,9 +206,9 @@ export function AbsencesCard() {
   const { error, run } = useAsync();
   return (
     <div className="card">
-      <div className="row between"><h2 style={{ margin: 0 }}>Abwesenheiten</h2><button className="btn sm" onClick={() => setAdd(true)}>+ Abwesenheit</button></div>
+      <div className="row between"><h2 className="m-0">Abwesenheiten</h2><button className="btn sm" onClick={() => setAdd(true)}>+ Abwesenheit</button></div>
       <p className="muted small">Urlaub, Schulung, Krankheit: zählt als belegt, wenn jemand dich einplant oder ein Agent Termine vorschlägt. Andere sehen nur „abwesend“.</p>
-      <ul className="small">{(d.data?.absences ?? []).map((a) => <li key={a.id}>{spanText(a)} · {a.title ?? 'Abwesenheit'} <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/bookings/${a.id}`); await d.reload(); })}>✕</button></li>)}</ul>
+      <ul className="small">{(d.data?.absences ?? []).map((a) => <li key={a.id}>{spanText(a)} · {a.title ?? 'Abwesenheit'} <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/bookings/${a.id}`); await d.reload(); })} aria-label="Entfernen"><IconX /></button></li>)}</ul>
       {d.data && d.data.absences.length === 0 && <div className="muted small">Keine Abwesenheiten eingetragen.</div>}
       {error && <div className="error small">{error}</div>}
       {add && <BookingForm projectId={null} mode="absence" onClose={() => setAdd(false)} onSaved={async () => { setAdd(false); await d.reload(); }} />}

@@ -42,7 +42,7 @@ export function AllTasksView({ projectId }: { projectId: string | null }) {
           <button className={`chip ${mine ? 'on' : ''}`} onClick={() => set('mine', mine ? '' : '1')}>Nur meine</button>
           {FILTERS.map(([k, l]) => <button key={k} className={`chip ${filter === k ? 'on' : ''}`} onClick={() => set('filter', k)}>{l}</button>)}
           <label className="check small"><input type="checkbox" checked={withDone} onChange={(e) => set('done', e.target.checked ? '1' : '')} /> erledigte zeigen</label>
-          <span className="muted small right">{rows.length} Arbeitspakete{overdue > 0 && <> · <span style={{ color: 'var(--danger)' }}>{overdue} überfällig</span></>}</span></>}
+          <span className="muted small right">{rows.length} Arbeitspakete{overdue > 0 && <> · <span className="text-danger">{overdue} überfällig</span></>}</span></>}
         </div>
         {error && <div className="error mb">{error}</div>}
         {<div className="card">
@@ -54,16 +54,16 @@ export function AllTasksView({ projectId }: { projectId: string | null }) {
                   <tr key={x.id} style={{ opacity: x.done ? 0.6 : 1 }}>
                     <td className="nowrap"><Link to={`/projekte/${x.projectId}/board?task=${x.id}`} className="tkey">{x.projectKey}-{x.number}</Link></td>
                     <td>
-                      {x.parent && <span className="badge" title={`Aufgabe in ${x.projectKey}-${x.parent.number} ${x.parent.title}`} style={{ marginRight: 6 }}>Aufgabe</span>}
+                      {x.parent && <span className="badge mr-2" title={`Aufgabe in ${x.projectKey}-${x.parent.number} ${x.parent.title}`}>Aufgabe</span>}
                       <Link to={`/projekte/${x.projectId}/board?task=${x.id}`}>{x.title}</Link>
                       {x.parent && <span className="muted small"> · in {x.parent.title}</span>}
-                      {x.blocked && <span className="badge warn" style={{ marginLeft: 6 }}>blockiert</span>}
-                      {x.escalationLevel > 0 && <span className="badge danger" style={{ marginLeft: 6 }}>Eskalation {x.escalationLevel}</span>}
-                      {x.conflicts.length > 0 && <span className="badge warn" style={{ marginLeft: 6 }}>Konflikt</span>}
+                      {x.blocked && <span className="badge warn ml-2">blockiert</span>}
+                      {x.escalationLevel > 0 && <span className="badge danger ml-2">Eskalation {x.escalationLevel}</span>}
+                      {x.conflicts.length > 0 && <span className="badge warn ml-2">Konflikt</span>}
                     </td>
                     <td><span className={`badge prio-${x.priority}`}>{prioLabel[x.priority]}</span></td>
                     <td className="nowrap" style={{ color: !x.done && x.dueDate && x.dueDate < t ? 'var(--danger)' : undefined }}>{fmtDate(x.dueDate)}</td>
-                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.inherited && <span className="muted"> (geerbt{x.responsible.inheritedFrom === 'task' ? ' vom Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? ' vom Teilprojekt' : ' vom PL'})</span>}{x.responsible.userId === user?.id && <span className="badge" style={{ marginLeft: 6 }}>ich</span>}</td>
+                    <td className="small">{x.responsible.name ?? x.responsible.email ?? <span className="muted">–</span>}{x.responsible.inherited && <span className="muted"> (geerbt{x.responsible.inheritedFrom === 'task' ? ' vom Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? ' vom Teilprojekt' : ' vom PL'})</span>}{x.responsible.userId === user?.id && <span className="badge ml-2">ich</span>}</td>
                     <td className="small muted">{x.done ? 'erledigt' : 'offen'}</td>
                   </tr>
                 ))}

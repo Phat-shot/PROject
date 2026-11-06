@@ -42,9 +42,9 @@ export function rightsSummary(r: AiFeature[] | undefined): string {
 export function ScopeEditor({ scope, projectIds, onChange, agent = false }: { scope: 'all' | 'selected' | 'none'; projectIds: string[]; onChange: (scope: 'all' | 'selected' | 'none', projectIds: string[]) => void; agent?: boolean }) {
   const projects = useData<{ projects: { id: string; label: string }[] }>(scope === 'selected' ? '/ai/release-projects' : null, [scope]);
   return (
-    <div className="full stack" style={{ gap: 4 }}>
+    <div className="full stack gap-1">
       <label className="field"><span>Einsatz</span><select value={scope} onChange={(e) => onChange(e.target.value as any, projectIds)}><option value="all">alle Projekte</option><option value="selected">ausgewählte Projekte</option>{!agent && <option value="none">kein Projekt (nur Verbindungstest; Agenten damit laufen nirgends)</option>}</select></label>
-      {scope === 'selected' && <div className="row small" style={{ flexWrap: 'wrap' }}>{(projects.data?.projects ?? []).map((p) => <label key={p.id} className="check"><input type="checkbox" checked={projectIds.includes(p.id)} onChange={(e) => onChange(scope, e.target.checked ? [...projectIds, p.id] : projectIds.filter((x) => x !== p.id))} /> {p.label}</label>)}{projects.data && projects.data.projects.length === 0 && <span className="muted">keine aktiven Projekte</span>}</div>}
+      {scope === 'selected' && <div className="row small wrap">{(projects.data?.projects ?? []).map((p) => <label key={p.id} className="check"><input type="checkbox" checked={projectIds.includes(p.id)} onChange={(e) => onChange(scope, e.target.checked ? [...projectIds, p.id] : projectIds.filter((x) => x !== p.id))} /> {p.label}</label>)}{projects.data && projects.data.projects.length === 0 && <span className="muted">keine aktiven Projekte</span>}</div>}
     </div>
   );
 }
@@ -86,16 +86,16 @@ export function AgentEditorModal({ agent, llms, llmId, orgBudget, scoped, onClos
           <label className="field"><span>Denkmodus</span><select value={f.thinkingMode ?? ''} disabled={llm?.provider !== 'local'} title={llm?.provider === 'local' ? undefined : 'Nur bei lokalen Modellen'} onChange={(e) => setF({ ...f, thinkingMode: (e.target.value || null) as 'off' | 'on' | null })}><option value="">wie LLM ({llm?.thinkingOff ? 'aus' : 'Standard'})</option><option value="off">aus</option><option value="on">an</option></select></label>
         </div>
         {scoped && <ScopeEditor agent scope={f.scope} projectIds={f.projectIds} onChange={(scope, projectIds) => setF({ ...f, scope: scope === 'selected' ? 'selected' : 'all', projectIds })} />}
-        <h3 style={{ margin: '8px 0 0' }}>Was der Agent darf</h3>
-        <p className="muted small" style={{ margin: 0 }}>Die PL lädt ihn ins Projekt ein und kann dort nur abschalten, nie mehr erlauben.</p>
+        <h3 className="m-0 mt-2">Was der Agent darf</h3>
+        <p className="muted small m-0">Die PL lädt ihn ins Projekt ein und kann dort nur abschalten, nie mehr erlauben.</p>
         <RightsEditor value={f.rights} onChange={(rights) => setF({ ...f, rights })} />
-        <h3 style={{ margin: '8px 0 0' }}>Obergrenze der Selbstständigkeit</h3>
+        <h3 className="m-0 mt-2">Obergrenze der Selbstständigkeit</h3>
         <div className="grid cols-2">
           <label className="field"><span>höchstens</span><select value={f.maxMode} onChange={(e) => setF({ ...f, maxMode: e.target.value as AgentMode | '' })}><option value="">keine Grenze (Projekt entscheidet)</option>{AGENT_MODES.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}</select></label>
           <label className="field"><span>höchste Denktiefe</span><select value={f.maxDepth} onChange={(e) => setF({ ...f, maxDepth: e.target.value as AgentDepth | '' })}><option value="">keine Grenze</option>{AGENT_DEPTHS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}</select></label>
         </div>
         <div className="field"><span>Immer bestätigen lassen <span className="muted">(gilt in jedem Projekt, auch bei „Selbstständig“)</span></span>
-          <div className="row" style={{ flexWrap: 'wrap', gap: 6 }}>{AGENT_ACTION_CLASSES.map((c) => <label key={c.key} className="check small" style={{ margin: 0 }}><input type="checkbox" checked={f.lockedConfirm.includes(c.key)} onChange={(e) => lock(c.key, e.target.checked)} /> {c.label}</label>)}</div>
+          <div className="row wrap gap-2">{AGENT_ACTION_CLASSES.map((c) => <label key={c.key} className="check small m-0"><input type="checkbox" checked={f.lockedConfirm.includes(c.key)} onChange={(e) => lock(c.key, e.target.checked)} /> {c.label}</label>)}</div>
         </div>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !f.name.trim() || !f.aiProfileId} onClick={() => void save()}>{agent ? 'Speichern' : 'Anlegen'}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>

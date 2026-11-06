@@ -49,11 +49,11 @@ export function GeneralTab() {
           </div>
           {timeTracking ? <div className="grid cols-2">
             <label className="check"><input type="checkbox" checked={f.timeTrackingEnabled} disabled={!isPl} onChange={(e) => setF({ ...f, timeTrackingEnabled: e.target.checked })} /> Zeiterfassung aktiv (optionales Modul)</label>
-            {(f.timeTrackingEnabled || f.budgetHours) && <label className="field"><span>Budget (Stunden)</span><input type="number" min={0} value={f.budgetHours} disabled={!isPl} onChange={(e) => setF({ ...f, budgetHours: e.target.value })} style={{ width: 120 }} /></label>}
+            {(f.timeTrackingEnabled || f.budgetHours) && <label className="field"><span>Budget (Stunden)</span><input className="w-120" type="number" min={0} value={f.budgetHours} disabled={!isPl} onChange={(e) => setF({ ...f, budgetHours: e.target.value })} /></label>}
           </div> : <p className="muted small">Zeiterfassung ist mandantenweit deaktiviert (<Link to="/verwaltung/allgemein">Verwaltung › Allgemein</Link>).</p>}
           <label className="check"><input type="checkbox" checked={f.autoCompleteParent} disabled={!isPl} onChange={(e) => setF({ ...f, autoCompleteParent: e.target.checked })} /> Arbeitspaket automatisch erledigt, wenn alle Aufgaben erledigt sind <span className="muted small">(je Arbeitspaket unter „Einstellungen“ änderbar)</span></label>
           {error && <div className="error">{error}</div>}
-          {isPl && <div className="row"><button className="btn primary sm" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility, timeTrackingEnabled: f.timeTrackingEnabled, budgetHours: f.budgetHours ? Number(f.budgetHours) : null, autoCompleteParent: f.autoCompleteParent }); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>}
+          {isPl && <div className="row"><button className="btn sm primary" disabled={busy || !dirty || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/projects/${p.id}`, { name: f.name, description: f.description, visibility: f.visibility, timeTrackingEnabled: f.timeTrackingEnabled, budgetHours: f.budgetHours ? Number(f.budgetHours) : null, autoCompleteParent: f.autoCompleteParent }); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>}
         </div>
       </SettingsCard>
       {isPl && p.status === 'active' && <SettingsCard title="Aktionen">

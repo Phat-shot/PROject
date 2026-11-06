@@ -4,7 +4,8 @@ import type { MailDraft, Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText } from './MentionInput';
-import { useDialog } from './ui';
+import { IconButton, useDialog } from './ui';
+import { IconChevronDown, IconChevronRight, IconPencil, IconX } from './icons';
 import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
@@ -116,8 +117,8 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const Msg = ({ m, inThread }: { m: ChatMessage; inThread: boolean }) => (
     <div id={`msg-${m.id}`} className={`chat-msg ${!system(m) && m.userId === user?.id ? 'mine' : ''} ${system(m) ? 'system' : ''} ${m.deleted ? 'deleted' : ''} ${highlight === m.id ? 'highlight' : ''}`}>
       <div className="chat-head">{system(m) && <span className="badge" title="Systembeitrag nach den Benachrichtigungsregeln">System</span>}{isQuestion(m) && <span className="badge" title="Offene Frage: Antwort hier im Thread oder im Arbeitspaket">{(m.meta as any).kind === 'confirm' ? 'Bestätigung' : (m.meta as any).kind === 'decision' ? 'Entscheidung' : 'Frage'}</span>}{(!system(m) || m.userId) && <strong>{m.userName}</strong>}<span className="muted small">{timeLabel(m.createdAt)}{m.editedAt ? ' · bearbeitet' : ''}</span>
-        {!m.deleted && !system(m) && m.userId === user?.id && <button className="btn sm link" title="Bearbeiten" onClick={() => setEditing({ id: m.id, body: m.body })}>✎</button>}
-        {!m.deleted && ((!system(m) && m.userId === user?.id) || canModerate) && <button className="btn sm link" title="Löschen" onClick={() => void remove(m)}>✕</button>}
+        {!m.deleted && !system(m) && m.userId === user?.id && <IconButton label="Nachricht bearbeiten" size="sm" variant="link" onClick={() => setEditing({ id: m.id, body: m.body })}><IconPencil size={14} /></IconButton>}
+        {!m.deleted && ((!system(m) && m.userId === user?.id) || canModerate) && <IconButton label="Nachricht löschen" size="sm" variant="link" onClick={() => void remove(m)}><IconX size={14} /></IconButton>}
       </div>
       {editing?.id === m.id
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
@@ -127,7 +128,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
-        <button className={`btn sm link chat-thread-btn ${thread === m.id ? 'open' : ''}`} aria-expanded={thread === m.id} onClick={() => setThread(thread === m.id ? null : m.id)}>{thread === m.id ? '▾ ' : m.replyCount > 0 ? '▸ ' : ''}{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt && thread !== m.id ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
+        <button className={`btn sm link chat-thread-btn ${thread === m.id ? 'open' : ''}`} aria-expanded={thread === m.id} onClick={() => setThread(thread === m.id ? null : m.id)}>{thread === m.id ? <><IconChevronDown size={12} /> </> : m.replyCount > 0 ? <><IconChevronRight size={12} /> </> : ''}{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt && thread !== m.id ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}
     </div>
   );
@@ -138,7 +139,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {replies.map((m) => <div key={m.id}>{Msg({ m, inThread: true })}</div>)}
       {canWrite && <div className="chat-compose" ref={replyBox}>
         <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten … (Enter sendet)" onSubmit={() => void send(reply, id)} enterSends />
-        <button className="btn primary sm" disabled={!reply.trim()} onClick={() => void send(reply, id)}>Antworten</button>
+        <button className="btn sm primary" disabled={!reply.trim()} onClick={() => void send(reply, id)}>Antworten</button>
       </div>}
     </div>
   );
@@ -150,7 +151,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
         {error && <div className="error mb">{error}</div>}
         <div className="chat-list" ref={listRef} onScroll={onScroll}>
           {hasMore && <div className="center"><button className="btn sm" onClick={() => void older()}>Ältere laden</button></div>}
-          {msgs.length === 0 && <div className="muted small center" style={{ padding: 24 }}>{emptyText ?? 'Noch keine Nachrichten.'}</div>}
+          {msgs.length === 0 && <div className="muted small center pad-24">{emptyText ?? 'Noch keine Nachrichten.'}</div>}
           {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}{threads && thread === m.id && inlineThread(m.id)}</div>; })}
           {threads && thread && !msgs.some((m) => m.id === thread) && <div className="muted small center">Der Thread gehört zu einer älteren Nachricht: „Ältere laden“.</div>}
           {busy.length > 0 && <div className="muted small chat-busy" role="status">{busy.map((b) => b.name).join(', ')} {busy.length > 1 ? 'denken' : 'denkt'} nach … <span title="Lokale Modelle antworten bei belegter GPU später; die Antwort erscheint hier von selbst">(kann dauern)</span></div>}
@@ -210,7 +211,7 @@ function DraftCard({ draftId }: { draftId: string }) {
         <div className="draft-body">{d.body}</div>
       </>}
       {error && <div className="error">{error}</div>}
-      {sent ? <div className="mt"><span className="badge ok">gesendet</span></div> : <div className="row mt" style={{ flexWrap: 'wrap', gap: 6 }}>
+      {sent ? <div className="mt"><span className="badge ok">gesendet</span></div> : <div className="row mt wrap gap-2">
         {edit
           ? <><button className="btn sm primary" disabled={busy} onClick={() => void act(async () => { await api.patch(`/mail/drafts/${d.id}`, edit); await api.post(`/mail/drafts/${d.id}/send`); setEdit(null); })}>Speichern und senden</button><button className="btn sm" disabled={busy} onClick={() => void act(async () => { await api.patch(`/mail/drafts/${d.id}`, edit); setEdit(null); })}>Nur speichern</button><button className="btn sm link" onClick={() => setEdit(null)}>Abbrechen</button></>
           : <><button className="btn sm primary" disabled={busy} onClick={() => void act(() => api.post(`/mail/drafts/${d.id}/send`))}>Senden</button><button className="btn sm" disabled={busy} onClick={() => setEdit({ subject: d.subject, body: d.body })}>Ändern</button><button className="btn sm danger" disabled={busy} onClick={() => void act(() => api.del(`/mail/drafts/${d.id}`), 'Entwurf verworfen.')}>Verwerfen</button></>}
@@ -228,7 +229,7 @@ function QuestionHead({ q, onChanged }: { q: Question; onChanged: () => void }) 
     <div className={`question-head ${q.status}`}>
       <div className="row between small"><span><strong>{kind}</strong>{q.taskCode && <> zu <Link to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>{q.taskCode}</Link></>} · {status}</span>
         <span className="row">{q.taskId && <Link className="btn sm link" to={`/projekte/${q.projectId}/board?task=${q.taskId}`}>Im AP öffnen</Link>}{q.status === 'open' && <button className="btn sm link" title="Frage ohne Antwort schließen" onClick={() => void act(() => api.post(`/questions/${q.id}/cancel`, {}))}>Erledigt</button>}</span></div>
-      {q.status === 'open' && q.options && q.options.length > 0 && <div className="row mt" style={{ gap: 6 }}>{q.options.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void act(() => api.post(`/questions/${q.id}/answer`, { option: o.key }))}>{o.label}</button>)}</div>}
+      {q.status === 'open' && q.options && q.options.length > 0 && <div className="row mt gap-2">{q.options.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void act(() => api.post(`/questions/${q.id}/answer`, { option: o.key }))}>{o.label}</button>)}</div>}
       {q.kind === 'approval' && <ApprovalCard q={q} onChanged={onChanged} />}
       {q.status === 'answered' && q.answerText && <div className="small muted mt">{q.answerOption && q.options ? `${q.options.find((o) => o.key === q.answerOption)?.label ?? q.answerOption}: ` : ''}{q.answerText}</div>}
       {error && <div className="error small mt">{error}</div>}

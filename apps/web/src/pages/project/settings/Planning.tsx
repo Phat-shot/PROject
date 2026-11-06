@@ -7,6 +7,7 @@ import { LABEL_COLORS } from '@projekttool/shared';
 import { InlineText } from '../TaskDrawer';
 import { useProject } from '../../ProjectPage';
 import { SettingsCard, ReadOnlyNote } from '../../../components/settings/Settings';
+import { IconX } from '../../../components/icons';
 
 function LabelsCard() {
   const { detail, reload } = useProject();
@@ -16,21 +17,21 @@ function LabelsCard() {
   const [name, setName] = useState('');
   const [color, setColor] = useState<string>('blue');
   const pid = detail.project.id;
-  if (!isPl) return <div className="row" style={{ gap: 4 }}>{detail.labels.map((l) => <span key={l.id} className={`lbl full ${l.color}`}>{l.name}</span>)}{detail.labels.length === 0 && <span className="muted small">Keine Labels.</span>}</div>;
+  if (!isPl) return <div className="row gap-1">{detail.labels.map((l) => <span key={l.id} className={`lbl full ${l.color}`}>{l.name}</span>)}{detail.labels.length === 0 && <span className="muted small">Keine Labels.</span>}</div>;
   return (
     <div className="stack">
       {error && <div className="error">{error}</div>}
       {detail.labels.map((l) => (
         <div key={l.id} className="row">
-          <span className={`lbl full ${l.color}`} style={{ minWidth: 60, textAlign: 'center' }}>{l.name}</span>
+          <span className={`lbl full ${l.color} min-w-60 text-center`}>{l.name}</span>
           <InlineText value={l.name} canEdit onSave={(v) => run(async () => { await api.patch(`/projects/${pid}/labels/${l.id}`, { name: v }); await reload(); })} />
           <select className="inline-select" value={l.color} onChange={(e) => void run(async () => { await api.patch(`/projects/${pid}/labels/${l.id}`, { color: e.target.value }); await reload(); })}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
-          <button className="btn sm link" title="Label löschen" onClick={() => void dialog.confirm({ title: 'Label löschen', text: `„${l.name}“ wird von allen Arbeitspaketen entfernt.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/labels/${l.id}`); await reload(); }); })}>✕</button>
+          <button className="btn sm link" title="Label löschen" onClick={() => void dialog.confirm({ title: 'Label löschen', text: `„${l.name}“ wird von allen Arbeitspaketen entfernt.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/labels/${l.id}`); await reload(); }); })} aria-label="Label löschen"><IconX /></button>
         </div>
       ))}
       <form className="row" onSubmit={(e) => { e.preventDefault(); if (!name.trim()) return; void run(async () => { await api.post(`/projects/${pid}/labels`, { name: name.trim(), color }); setName(''); await reload(); }); }}>
-        <input type="text" placeholder="Neues Label" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} />
-        <select value={color} onChange={(e) => setColor(e.target.value)} style={{ width: 'auto' }}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
+        <input className="w-160" type="text" placeholder="Neues Label" value={name} onChange={(e) => setName(e.target.value)} />
+        <select className="w-auto" value={color} onChange={(e) => setColor(e.target.value)}>{LABEL_COLORS.map((c) => <option key={c} value={c}>{c}</option>)}</select>
         <button className="btn sm" disabled={!name.trim()}>Anlegen</button>
       </form>
     </div>
@@ -46,7 +47,7 @@ export function ColumnsForm({ onClose }: { onClose: () => void }) {
   return (
     <Modal title="Board-Spalten" onClose={onClose}>
       <div className="stack">
-        {cols.map((c, i) => <div key={i} className="row"><input type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} style={{ flex: 1 }} /><select value={c.kind} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, kind: e.target.value as any, isDone: e.target.value === 'done' } : x)))} style={{ width: 'auto' }}>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><label className="small nowrap">WIP <input type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} style={{ width: 56 }} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))}>✕</button></div>)}
+        {cols.map((c, i) => <div key={i} className="row"><input className="grow" type="text" value={c.name} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} /><select className="w-auto" value={c.kind} onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, kind: e.target.value as any, isDone: e.target.value === 'done' } : x)))}>{Object.entries(KIND).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><label className="small nowrap">WIP <input className="w-56" type="number" min={0} value={c.wipLimit ?? ''} placeholder="–" onChange={(e) => setCols(cols.map((x, j) => (j === i ? { ...x, wipLimit: e.target.value ? Number(e.target.value) : null } : x)))} /></label><button className="btn sm link" onClick={() => setCols(cols.filter((_, j) => j !== i))} aria-label="Entfernen"><IconX /></button></div>)}
         <button className="btn sm" onClick={() => setCols([...cols, { id: undefined, name: 'Neue Spalte', isDone: false, kind: 'active' as const, wipLimit: null }])}>+ Spalte</button>
         <p className="muted small">Spaltenart: „Geplant“ und „Zurückgestellt“ zählen nicht als Stillstand für die Eskalation. WIP-Limit färbt die Spalte rot, wenn mehr Arbeitspakete darin liegen.</p>
         {error && <div className="error">{error}</div>}
@@ -71,7 +72,7 @@ export function PlanningTab() {
         <MilestoneList />
       </SettingsCard>
       <SettingsCard title="Board" action={isPl && <button className="btn sm" onClick={() => setColumns(true)}>Spalten bearbeiten</button>}>
-        <div className="row mb" style={{ gap: 6 }}>{detail.columns.map((c) => <span key={c.id} className="badge" title={c.kind}>{c.name}{c.wipLimit != null ? ` · WIP ${c.wipLimit}` : ''}</span>)}</div>
+        <div className="row mb gap-2">{detail.columns.map((c) => <span key={c.id} className="badge" title={c.kind}>{c.name}{c.wipLimit != null ? ` · WIP ${c.wipLimit}` : ''}</span>)}</div>
         <h3>Labels</h3>
         {!isPl && <ReadOnlyNote who="PL (anlegen dürfen alle Mitglieder im Board)" />}
         <LabelsCard />

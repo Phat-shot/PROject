@@ -11,7 +11,7 @@ export function useAssistAgent(caps: AiCapabilities | null | undefined, feature:
   const { fit, def } = assistChoice(caps, feature);
   const agentId = (pick && fit.some((a) => a.id === pick) ? pick : null) ?? def ?? fit[0]?.id ?? null;
   const picker = !def && fit.length > 1
-    ? <select className="sm" aria-label="Ausführender Agent" title="Ausführender Agent" style={{ width: 'auto' }} value={agentId ?? ''} onChange={(e) => setPick(e.target.value)}>{fit.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
+    ? <select className="sm w-auto" aria-label="Ausführender Agent" title="Ausführender Agent" value={agentId ?? ''} onChange={(e) => setPick(e.target.value)}>{fit.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select>
     : null;
   return { agentId, picker };
 }

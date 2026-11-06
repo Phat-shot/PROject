@@ -97,7 +97,7 @@ export function RichEditor({ html, onChange, pageId, uploadUrl, placeholder, min
         </>}
         <span className="sep" />
         <Btn ed={editor} title="Bild einfügen (auch per Drag & Drop oder Einfügen)" run={() => fileRef.current?.click()}>🖼 Bild</Btn>
-        <input ref={fileRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
+        <input className="hidden" ref={fileRef} type="file" accept="image/*" onChange={(e) => { const f = e.target.files?.[0]; if (f) void upload(f); e.target.value = ''; }} />
         <Btn ed={editor} on={editor.isActive('link')} title="Link" run={() => { const prev = editor.getAttributes('link').href ?? ''; const url = prompt('Link-Adresse', prev); if (url === null) return; url ? editor.chain().focus().extendMarkRange('link').setLink({ href: url }).run() : editor.chain().focus().unsetLink().run(); }}>🔗</Btn>
         {!minimal && <>
           <span className="sep" />

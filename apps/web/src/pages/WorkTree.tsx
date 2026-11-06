@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import type { ChecklistItem, Subproject, Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../lib/api';
 import { prioLabel } from '../components/ui';
+import { IconLock } from '../components/icons';
 
 export interface WorkProject {
   id: string; key: string; name: string; myRole: string;
@@ -51,16 +52,16 @@ export function WorkTree({ nodes, reload }: { nodes: WorkNode[]; reload: () => P
       {nodes.map(({ p, leadIsMe, lanes }) => (
         <div key={p.id} className="card wt-project">
           <div className="wt-head">
-            <Link to={`/projekte/${p.id}`} className="row" style={{ gap: 8 }}><span className="badge">{p.key}</span><strong>{p.name}</strong></Link>
+            <Link to={`/projekte/${p.id}`} className="row gap-2"><span className="badge">{p.key}</span><strong>{p.name}</strong></Link>
             {leadIsMe && <span className="badge pl">Projektleitung</span>}
             <span className="muted small right">{p.lead.name && !leadIsMe ? `PL: ${p.lead.name}` : ''}</span>
           </div>
-          {lanes.length === 0 && <div className="muted small" style={{ padding: '4px 0 0 18px' }}>Keine offenen Arbeitspakete für dich.</div>}
+          {lanes.length === 0 && <div className="muted small sub-list">Keine offenen Arbeitspakete für dich.</div>}
           {lanes.map((l) => (
             <div key={l.sub?.id ?? 'none'} className="wt-lane">
               <div className="wt-sub">
                 <span className="wt-bracket" />
-                <span className="wt-label">{l.sub ? l.sub.name : 'Ohne Teilprojekt'}{l.sub?.restricted && <span title="Eingeschränkt sichtbar"> 🔒</span>}</span>
+                <span className="wt-label">{l.sub ? l.sub.name : 'Ohne Teilprojekt'}{l.sub?.restricted && <span title="Eingeschränkt sichtbar"> <IconLock size={12} /></span>}</span>
                 {l.sub && l.mine && <span className="muted small">verantwortlich: ich{l.sub.responsible.inherited ? ' (geerbt vom PL)' : ''}</span>}
                 {l.sub && !l.mine && <span className="muted small">verantwortlich: {l.sub.responsible.name ?? '–'}{l.sub.responsible.inherited ? ' (geerbt)' : ''}</span>}
                 {l.sub?.endDate && <span className="muted small">· bis {fmtDate(l.sub.endDate)}</span>}

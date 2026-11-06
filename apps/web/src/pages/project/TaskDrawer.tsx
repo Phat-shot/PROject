@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import type { Resource, ResourceBooking, Task, TaskComment, TaskRelation } from '@projekttool/shared';
 import { BookingForm, BookingRow } from '../../components/Resources';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
-import { Drawer, Markdown, Modal, PromptModal, prioLabel, useAsync, useDialog } from '../../components/ui';
+import { Badge, Button, Drawer, FieldError, IconButton, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog } from '../../components/ui';
+import { IconArrowLeft, IconArrowUpRight, IconCheck, IconChevronDown, IconChevronRight, IconHourglass, IconX } from '../../components/icons';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
 import { useAuth } from '../../lib/auth';
@@ -57,6 +58,10 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   const [external, setExternal] = useState(false);
   const [item, setItem] = useState('');
   const [saved, setSaved] = useState(false);
+  const savedTimer = useRef<number | undefined>(undefined);
+  // Autosave-Fehler nahe am Feld: welches Feld, welche Meldung
+  const [saveError, setSaveError] = useState<{ field: string; msg: string } | null>(null);
+  const saveErr = (...keys: string[]) => (saveError && keys.includes(saveError.field) ? saveError.msg : null);
   // Einstellungen eingeklappt: oben steht das Arbeiten, die Konfiguration nur bei Bedarf (Zustand je Browser gemerkt)
   const [cfgOpen, setCfgOpen] = useState(() => { try { return localStorage.getItem('taskDrawer.settings') === 'open'; } catch { return false; } });
   const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' }>(null);
@@ -88,7 +93,12 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   const canPlan = me.role === 'pl' || me.canEditPlan;
   const canDates = canPlan || t.responsibleUserId === me.userId;
   const patch = async (body: Record<string, unknown>) => {
-    await run(async () => { await api.patch(`/tasks/${t.id}`, body); await load(); await reloadTasks(); setSaved(true); setTimeout(() => setSaved(false), 1500); });
+    const field = Object.keys(body)[0] ?? '';
+    setSaveError(null);
+    try {
+      await api.patch(`/tasks/${t.id}`, body); await load(); await reloadTasks();
+      setSaved(true); window.clearTimeout(savedTimer.current); savedTimer.current = window.setTimeout(() => setSaved(false), 3000);
+    } catch (e: any) { setSaveError({ field, msg: e?.message ?? String(e) }); }
   };
   const isPlHere = detail.project.myMembership.role === 'pl';
   const members = users.filter((u) => detail.members.some((m) => m.userId === u.id) && (u.kind !== 'agent' || isPlHere));
@@ -102,12 +112,13 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   return (
     <Drawer title={<>{!t.parentId && <span className="badge tkey-badge" title="Kennung, auch in der Suche">{detail.project.key}-{t.number}</span>}<TitleEdit value={t.title} canEdit={canEdit} done={t.done} onSave={(title) => patch({ title })} /></>} onClose={onClose}
       actions={<>
-        {saved && <span className="muted small">gespeichert</span>}
+        {saved && <span className="save-state" role="status">gespeichert</span>}
+        {saveError && <span className="save-state error" role="alert">Nicht gespeichert: {saveError.msg}</span>}
         {canEdit && !t.blocked && !t.done && <button className="btn sm" onClick={() => setAsk({ kind: 'blocked' })}>Blockiert melden</button>}
-        {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <button className="btn sm primary" title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>✓ Erledigt</button>}
+        {canEdit && !t.done && detail.columns.some((c) => c.isDone) && <Button size="sm" variant="primary" loading={busy} icon={<IconCheck />} title="In die Erledigt-Spalte" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/move`, { columnId: detail.columns.find((c) => c.isDone)!.id, index: 0 }); await load(); await reloadTasks(); })}>Erledigt</Button>}
       </>}>
-      {error && <div className="error mb">{error}</div>}
-      {t.parent && <p className="small mb" style={{ marginTop: 0 }}><button className="btn sm link" title="Zurück zum Arbeitspaket" onClick={() => onView({ id: t.parent!.id, expand: t.id, full: false })}>← {t.parent.title}</button></p>}
+      {error && <div className="error mb" role="alert">{error}</div>}
+      {t.parent && <p className="small mb mt-0"><button className="btn sm link" title="Zurück zum Arbeitspaket" onClick={() => onView({ id: t.parent!.id, expand: t.id, full: false })}><IconArrowLeft /> {t.parent.title}</button></p>}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {(() => {
         // Ursprungsmail: Sprung zur Mail; zum Abschluss die Mail beantworten (aufbereitetes Ergebnis, nicht im Log)
@@ -117,10 +128,10 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
         // Mit KI formulieren: Knopf bleibt sichtbar, gesperrt mit Begründung; mehrere geeignete Agenten ohne Projektagent: Auswahl
         const aiNo = aiBlocked(ai, 'assist.final_reply');
         return <div className={`notice mb small ${prompt ? '' : o.answered ? 'ok' : 'info'}`}>
-          Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok" style={{ marginLeft: 6 }}>beantwortet</span>}
-          {prompt && <div style={{ marginTop: 4 }}>Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
-          {canEdit && !o.answered && <div className="row" style={{ marginTop: 6 }}><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiNo ? <button className="btn sm" disabled title={aiNo}>Mit KI formulieren</button> : <>{finalAgent.picker}<Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}${finalAgent.agentId ? `&agent=${finalAgent.agentId}` : ''}`}>Mit KI formulieren</Link></>}</div>}
-          {canEdit && !o.answered && aiNo && ai && <div className="muted" style={{ marginTop: 4 }}>KI: {aiNo}</div>}
+          Entstanden aus Mail von <strong>{o.fromName ?? o.fromAddr}</strong> „<Link to={`/projekte/${detail.project.id}/mail/m/${o.id}`}>{o.subject || '(kein Betreff)'}</Link>“ ({fmtDate(o.date)}){o.answered && <span className="badge ok ml-2">beantwortet</span>}
+          {prompt && <div className="mt-1">Erledigt: Ergebnis als Antwort auf diese Mail senden, statt einer eigenen Abschlussmail.</div>}
+          {canEdit && !o.answered && <div className="row mt-2"><Link className={`btn sm ${prompt ? 'primary' : ''}`} to={`/projekte/${detail.project.id}/mail/neu?final=1&ap=${t.id}`}>Ursprungsmail beantworten</Link>{aiNo ? <button className="btn sm" disabled title={aiNo}>Mit KI formulieren</button> : <>{finalAgent.picker}<Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?final=1&ai=1&ap=${t.id}${finalAgent.agentId ? `&agent=${finalAgent.agentId}` : ''}`}>Mit KI formulieren</Link></>}</div>}
+          {canEdit && !o.answered && aiNo && ai && <div className="muted mt-1">KI: {aiNo}</div>}
         </div>;
       })()}
       {t.deletedAt && <div className="notice danger mb"><strong>Im Papierkorb</strong> seit {fmtDateTime(t.deletedAt)}. {me.role !== 'reader' && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/restore`); await load(); await reloadTasks(); })}>Wiederherstellen</button>}</div>}
@@ -138,35 +149,35 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       {t.conflicts.length > 0 && (
         <div className="notice mb">
           <strong>Terminkonflikt</strong>
-          <ul style={{ margin: '4px 0 6px', paddingLeft: 18 }}>{t.conflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
+          <ul className="my-1 ul-18">{t.conflicts.map((c, i) => <li key={i}>{c}</li>)}</ul>
           <span className="small">Nichts wird automatisch verschoben. {canPlan && <button className="btn sm link" onClick={() => void run(async () => setShift(await api.post(`/tasks/${t.id}/shift-successors`, {})))}>Nachfolger verschieben (Vorschau)</button>}</span>
         </div>
       )}
 
       <div className="form cols-3 task-core">
         <label className="field"><span>Status</span>
-          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) { await load(); await reloadTasks(); } }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small">⏳ {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}</label>
+          <select value={t.columnId} disabled={!canEdit} onChange={(e) => { const c = detail.columns.find((x) => x.id === e.target.value)!; void run(async () => { if (await moveTaskTo(dialog.form, t.id, c)) { await load(); await reloadTasks(); } }); }}>{detail.columns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>{t.wait && <span className="muted small"><IconHourglass size={12} /> {t.wait.reason}{t.wait.until ? ` · Frist ${fmtDate(t.wait.until.slice(0, 10))}` : ''}{t.wait.expiredAt ? ' · Frist abgelaufen, zurückgestellt' : ''}</span>}<FieldError error={saveErr('columnId')} /></label>
         <label className="field"><span>Zuständig</span>
           <select value={t.responsibleUserId ?? (t.responsibleEmail ? (contacts.some((c) => c.email === t.responsibleEmail) ? `ext:${t.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} onChange={(e) => { const v = e.target.value; if (v === 'extern') return; if (v.startsWith('ext:')) { void patch({ responsibleEmail: v.slice(4), responsibleUserId: null }); return; } void patch({ responsibleUserId: v || null, responsibleEmail: null }); }}>
             <option value="">{inheritedName ? `${inheritedName} (geerbt vom ${inheritedFrom})` : '– geerbt –'}</option>
             {t.responsibleEmail && !contacts.some((c) => c.email === t.responsibleEmail) && <option value="extern">{t.responsibleEmail} (extern)</option>}
             {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
             {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
-          </select></label>
-        <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ dueDate: e.target.value || null })} /></label>
+          </select><FieldError error={saveErr('responsibleUserId', 'responsibleEmail')} /></label>
+        <label className="field"><span>Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('dueDate')) || undefined} onChange={(e) => void patch({ dueDate: e.target.value || null })} /><FieldError error={saveErr('dueDate')} /></label>
       </div>
-        {respAgent && <div className="field full task-agent"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || t.agentRunning || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); setAgentMsg(null); await load(); })}>{t.agentRunning ? 'Läuft …' : 'Jetzt laufen lassen'}</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small" style={{ marginTop: 4 }}>Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' ✓' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' ✓' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentRun && !agentRun.allowed && <div className="small" style={{ marginTop: 4, color: 'var(--warn)' }}>Läuft nicht: {agentRun.reason}</div>}{t.agentRunning && <div className="small muted" style={{ marginTop: 4 }}>{respAgent.name} arbeitet; du kannst das Fenster schließen, das Ergebnis steht danach im Log.</div>}{agentMsg && <div className="small" style={{ marginTop: 4 }}>{agentMsg}</div>}</div>}
-      {!canDates && canEdit && <p className="muted small" style={{ margin: '4px 0 0' }}>Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
+        {respAgent && <div className="field full task-agent"><span>KI-Agent</span><span className="row small"><span className="badge">{respAgent.name}{t.responsible.inherited ? ' (geerbt)' : ''}</span>{isPlHere && <><button className="btn sm" disabled={t.agentPaused || t.agentRunning || agentRun?.allowed === false} title={t.agentPaused ? 'Agent ist pausiert; erst fortsetzen' : agentRun?.allowed === false ? agentRun.reason : undefined} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-run`); setAgentMsg(null); await load(); })}>{t.agentRunning ? 'Läuft …' : 'Jetzt laufen lassen'}</button><button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/agent-pause`, { paused: !t.agentPaused }); await load(); })}>{t.agentPaused ? 'Agent fortsetzen' : 'Agent pausieren'}</button></>}<Link className="btn sm link" to={`/projekte/${detail.project.id}/ki`}>Läufe</Link></span>{t.agentWait && <div className="muted small mt-1">Wartet seit {fmtDateTime(t.agentWait.since)} auf {{ reply: 'Rückmeldung', date: 'Termin', task: 'Erledigung durch andere', info: 'Information' }[t.agentWait.kind]}: {t.agentWait.reason}{t.agentNextCheckAt && <> · Prüfung {fmtDateTime(t.agentNextCheckAt)}</>}{t.agentWait.remindAt && <> · Nachfassen {fmtDateTime(t.agentWait.remindAt)}{t.agentWait.reminded ? ' (erledigt)' : ''}</>}{t.agentWait.escalateAt && <> · Eskalation {fmtDateTime(t.agentWait.escalateAt)}{t.agentWait.escalated ? ' (erledigt)' : ''}</>}</div>}{t.agentPaused && <div className="muted small">Agent pausiert.</div>}{agentRun && !agentRun.allowed && <div className="small mt-1 text-warn">Läuft nicht: {agentRun.reason}</div>}{t.agentRunning && <div className="small muted mt-1">{respAgent.name} arbeitet; du kannst das Fenster schließen, das Ergebnis steht danach im Log.</div>}{agentMsg && <div className="small mt-1">{agentMsg}</div>}</div>}
+      {!canDates && canEdit && <p className="muted small m-0 mt-1">Termine ändert der PL, wer „Projektplan ändern“ darf oder die zuständige Person.</p>}
 
       <details className="task-settings mt" open={cfgOpen} onToggle={(e) => { const o = (e.currentTarget as HTMLDetailsElement).open; setCfgOpen(o); try { localStorage.setItem('taskDrawer.settings', o ? 'open' : 'closed'); } catch { /* privat */ } }}>
         <summary><strong>Einstellungen</strong> <span className="muted small">{[sp?.name ?? (t.subprojectId ? 'Teilprojekt eingeschränkt' : 'kein Teilprojekt'), prioLabel[t.priority], t.startDate ? `Start ${fmtDate(t.startDate)}` : null, t.labelIds.length ? `${t.labelIds.length} Label${t.labelIds.length > 1 ? 's' : ''}` : null, t.responsibleEmail ? `extern: ${t.responsibleEmail}` : null].filter(Boolean).join(' · ')}</span></summary>
         <div className="form cols-2 task-fields mt">
         <label className="field"><span>Teilprojekt</span>
-          <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' 🔒' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select></label>
+          <select value={t.subprojectId ?? ''} disabled={!canEdit || Boolean(t.parentId)} title={t.parentId ? 'Folgt dem Arbeitspaket' : undefined} onChange={(e) => void patch({ subprojectId: e.target.value || null })}><option value="">– keines –</option>{detail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}{s.restricted ? ' (eingeschränkt sichtbar)' : ''}</option>)}{sp === undefined && t.subprojectId && <option value={t.subprojectId}>(eingeschränkt)</option>}</select><FieldError error={saveErr('subprojectId')} /></label>
         <label className="field"><span>Priorität</span>
-          <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
-        <label className="field"><span>Start</span><input type="date" value={t.startDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void patch({ startDate: e.target.value || null })} /></label>
-        <div className="field"><span>Labels</span>{canEdit ? <LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color}`} style={{ marginRight: 4 }}>{l.name}</span> : null; })}</span>}</div>
+          <select value={t.priority} disabled={!canEdit} onChange={(e) => void patch({ priority: e.target.value })}>{Object.entries(prioLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select><FieldError error={saveErr('priority')} /></label>
+        <label className="field"><span>Start</span><input type="date" value={t.startDate ?? ''} disabled={!canEdit || !canDates} aria-invalid={Boolean(saveErr('startDate')) || undefined} onChange={(e) => void patch({ startDate: e.target.value || null })} /><FieldError error={saveErr('startDate')} /></label>
+        <div className="field"><span>Labels</span>{canEdit ? <><LabelPicker value={t.labelIds} onChange={(v) => void patch({ labelIds: v })} /><FieldError error={saveErr('labelIds')} /></> : <span>{t.labelIds.map((id) => { const l = detail.labels.find((x) => x.id === id); return l ? <span key={id} className={`lbl full ${l.color} mr-1`}>{l.name}</span> : null; })}</span>}</div>
         <TextField label="Extern (neue Mail-Adresse, wird Kontakt)" type="email" value={t.responsibleEmail ?? ''} canEdit={canEdit} placeholder="extern@firma.de" list="project-contacts" onSave={(v) => patch({ responsibleEmail: v || null, ...(v ? { responsibleUserId: null } : {}) })} />
         <ContactsDatalist projectId={detail.project.id} />
         {!t.parentId && <label className="field"><span>Automatisch erledigt</span>
@@ -175,7 +186,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           </select></label>}
         {timeTracking && (detail.project.timeTrackingEnabled || t.estimateMinutes) ? <>
           <TextField label="Geschätzter Aufwand (Stunden)" type="number" value={t.estimateMinutes ? String(Math.round((t.estimateMinutes / 60) * 100) / 100) : ''} canEdit={canEdit} onSave={(v) => patch({ estimateMinutes: v ? Math.round(Number(v) * 60) : null })} />
-          <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <span className="badge warn" style={{ marginLeft: 6 }}>über Schätzung</span> : null}</span></div>
+          <div className="field"><span>Gebucht</span><span>{fmtH(t.loggedMinutes)}{t.estimateMinutes && t.loggedMinutes > t.estimateMinutes ? <Badge tone="warn" className="ml-2">über Schätzung</Badge> : null}</span></div>
         </> : null}
         </div>
         <TextArea label="Außenbeschreibung (für Externe)" value={t.externalBrief ?? ''} canEdit={canEdit && canPlan} empty="Keine. KI-Agenten schreiben Externen nur, was hier, in Log-Einträgen „für Externe sichtbar“ und in freigegebenen Seiten steht; die Beschreibung oben nur, wenn das AP dem Externen zugewiesen ist." onSave={(v) => patch({ externalBrief: v || null })} />
@@ -183,7 +194,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           <PredecessorPicker task={t} all={tasks} projectKey={detail.project.key} canEdit={canEdit && canPlan} onChange={(ids) => patch({ predecessorIds: ids })} />
           {!t.parentId && <RecurrenceField value={t.recurrence ?? null} hasDue={Boolean(t.dueDate)} canEdit={canEdit} onSave={(rec) => patch({ recurrence: rec })} />}
         </div>
-        {respAgent && (isPlHere || me.canEditPlan) && <div className="row small mt" style={{ gap: 6 }}><span className="muted">KI-Agent:</span><TaskPolicyInline task={t} onChanged={load} /></div>}
+        {respAgent && (isPlHere || me.canEditPlan) && <div className="row small mt gap-2"><span className="muted">KI-Agent:</span><TaskPolicyInline task={t} onChanged={load} /></div>}
         <ResourcesBlock task={t} canEdit={canEdit} canForce={isPlHere || Boolean(me.canEditPlan)} />
         <ReportWish taskId={t.id} />
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
@@ -198,6 +209,7 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       </details>
 
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => patch({ description: v || null })} />
+      <FieldError error={saveErr('description', 'externalBrief', 'recurrence', 'predecessorIds', 'autoComplete', 'estimateMinutes')} />
 
       {!t.parentId && <SubtaskSection parent={t} subtasks={d.subtasks ?? []} canEdit={canEdit} members={members} expand={expand} onFull={(id) => onView({ id, expand: null, full: true })} onChanged={async () => { await load(); await reloadTasks(); }} />}
 
@@ -207,20 +219,20 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           <li key={i.id} className={i.done ? 'done' : ''}>
             <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await load(); await reloadTasks(); })} />
             <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
-            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? (contacts.some((c) => c.email === i.responsibleEmail) ? `ext:${i.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} title="Zuständig für diesen Task" onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } if (v.startsWith('ext:')) { void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: v.slice(4) }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
+            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? (contacts.some((c) => c.email === i.responsibleEmail) ? `ext:${i.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} title="Zuständig für diesen Checklistenpunkt" aria-label={`Zuständig für „${i.title}“`} onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } if (v.startsWith('ext:')) { void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: v.slice(4) }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
               <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
               {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
               <option value="extern">{i.responsibleEmail && !contacts.some((c) => c.email === i.responsibleEmail) ? `${i.responsibleEmail} (extern)` : 'extern (neue Mail-Adresse) …'}</option>
             </select>
             {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
-            {canEdit && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); })}>✕</button>}
+            {canEdit && <IconButton label={`Checklistenpunkt „${i.title}“ löschen`} size="sm" variant="link" onClick={() => void dialog.confirm({ title: 'Checklistenpunkt löschen', text: `„${i.title}“ löschen?${d.mails.some((m) => m.checklistItemId === i.id) ? ' Der Mailverlauf dazu bleibt am Arbeitspaket.' : ''}`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); }); })}><IconX /></IconButton>}
             <MailThread mails={d.mails.filter((m) => m.checklistItemId === i.id)} projectId={detail.project.id} />
           </li>
         ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await load(); await reloadTasks(); }); }}>
-        <input type="text" placeholder="Neuer Punkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /><button className="btn sm">Hinzufügen</button></form>}
+        <input type="text" aria-label="Neuer Checklistenpunkt" placeholder="Neuer Checklistenpunkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} className="grow" /><Button type="submit" size="sm" loading={busy} disabled={!item.trim()}>Hinzufügen</Button></form>}
 
       <QuestionsBlock taskId={t.id} canAnswer={canEdit} isPl={me.role === 'pl'} onChanged={() => void load()} />
       <RelationsBlock taskId={t.id} canDecide={canEdit} />
@@ -229,27 +241,27 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
         <MailThread mails={d.mails.filter((m) => !m.checklistItemId)} projectId={detail.project.id} onOrigin={canEdit ? (m) => void run(async () => { await api.post(`/tasks/${t.id}/mails/${m.id}/origin`, { origin: !m.origin }); await load(); }) : undefined} />
       </>}
       {d.attachments.length > 0 && <><h3 className="mt">Anhänge</h3>
-      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{canEdit && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await load(); await reloadTasks(); }); })}>✕</button>}</li>)}</ul>
+      <ul>{d.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{canEdit && <IconButton label={`Anhang „${a.filename}“ löschen`} size="sm" variant="link" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await load(); await reloadTasks(); }); })}><IconX /></IconButton>}</li>)}</ul>
       </>}
       {canEdit && <div className="row mt task-quick">
         <Link className="btn sm" to={`/projekte/${detail.project.id}/mail/neu?ap=${t.id}`}>Mail schreiben</Link>
         {(t.responsible.email || t.responsibleEmail) && <button className="btn sm" title="Stand beim Zuständigen nachfragen, Antwort landet im Arbeitspaket" onClick={() => setMail({ to: t.responsibleEmail ?? t.responsible.email ?? '', subject: `${detail.project.key}: Stand zu „${t.title}“`, body: `Guten Tag,\n\nwie ist der Stand zum Arbeitspaket „${t.title}“${t.dueDate ? ` (fällig ${t.dueDate.split('-').reverse().join('.')})` : ''}?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Stand nachfragen</button>}
-        <label className="btn sm file-btn" title="Datei an {kind === 'Aufgabe' ? 'die Aufgabe' : 'das Arbeitspaket'} anhängen">Datei anhängen<input type="file" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} /></label>
-        {detail.project.mailAddress && <span className="muted small" title="Antworten an diese Adresse landen automatisch hier">Antwortadresse {detail.project.mailAddress.replace('@', `+t${t.mailCode}@`)}</span>}
+        <label className="btn sm file-btn" title={`Datei an ${kind === 'Aufgabe' ? 'die Aufgabe' : 'das Arbeitspaket'} anhängen`}>Datei anhängen<input type="file" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?taskId=${t.id}`, fd); await load(); await reloadTasks(); }); }} /></label>
+        {detail.project.mailAddress && <span className="muted small" title="Antworten an diese Adresse landen automatisch hier">Antwortadresse (<Term k="pluscode">Plus-Code</Term>) {detail.project.mailAddress.replace('@', `+t${t.mailCode}@`)}</span>}
       </div>}
 
       {timeTracking && detail.project.timeTrackingEnabled && <TimeSection taskId={t.id} canEdit={canEdit} onChanged={async () => { await load(); await reloadTasks(); }} />}
       <WebSourcesBlock taskId={t.id} />
 
       <h3 className="mt">Log und Kommentare</h3>
-      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge" style={{ marginLeft: 6 }}>aus Mail</span>}{c.source === 'ai' && <span className="badge" style={{ marginLeft: 6 }} title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge" style={{ marginLeft: 6 }} title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.visibility === 'external' && <span className="badge ok" style={{ marginLeft: 6 }} title="Teil des Außenkontexts: KI-Agenten dürfen das Externen zu diesem AP mitteilen">für Externe sichtbar</span>}{c.mailId && <Link className="small" style={{ marginLeft: 6 }} to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}{canEdit && (canPlan || c.userId === me.userId) && <button className="btn sm link" title={c.visibility === 'external' ? 'Wieder nur intern' : 'Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)'} onClick={() => void run(async () => { await api.patch(`/tasks/${t.id}/comments/${c.id}`, { visibility: c.visibility === 'external' ? 'internal' : 'external' }); await load(); })}>{c.visibility === 'external' ? 'nur intern' : 'für Externe freigeben'}</button>}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
+      {d.comments.map((c) => <div key={c.id} className="comment"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}{c.source === 'mail' && <span className="badge ml-2">aus Mail</span>}{c.source === 'ai' && <span className="badge ml-2" title="KI-Vorschlag, freigegeben">KI</span>}{c.source === 'chat' && <span className="badge ml-2" title="Antwort auf eine Rückfrage des Agenten im Chat">aus Chat</span>}{c.visibility === 'external' && <span className="badge ok ml-2" title="Teil des Außenkontexts: KI-Agenten dürfen das Externen zu diesem AP mitteilen">für Externe sichtbar</span>}{c.mailId && <Link className="small ml-2" to={`/projekte/${detail.project.id}/mail/mail/${c.mailId}`}>öffnen</Link>}{canEdit && (canPlan || c.userId === me.userId) && <button className="btn sm link" title={c.visibility === 'external' ? 'Wieder nur intern' : 'Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)'} onClick={() => void run(async () => { await api.patch(`/tasks/${t.id}/comments/${c.id}`, { visibility: c.visibility === 'external' ? 'internal' : 'external' }); await load(); })}>{c.visibility === 'external' ? 'nur intern' : 'für Externe freigeben'}</button>}</div><div className="pre"><MentionText text={c.body} members={detail.members} /></div></div>)}
       {canEdit && <div className="stack mt">
         <MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar … (@Name erwähnt eine Person, Strg+Enter sendet)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment, visibility: external ? 'external' : 'internal' }); setComment(''); setExternal(false); await load(); }); }} />
         <div className="row"><button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment, visibility: external ? 'external' : 'internal' }); setComment(''); setExternal(false); await load(); })}>Kommentieren</button>
           <label className="check small" title="Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)"><input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} /> für Externe sichtbar</label></div>
       </div>}
 
-      {ask?.kind === 'taskEmail' && <PromptModal title="Externe Zuständigkeit für diesen Task" label="Mail-Adresse" type="email" value={ask.value} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAsk(null)}
+      {ask?.kind === 'taskEmail' && <PromptModal title="Externe Zuständigkeit für diesen Checklistenpunkt" label="Mail-Adresse" type="email" value={ask.value} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAsk(null)}
         onSubmit={(v) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${ask.itemId}`, { responsibleUserId: null, responsibleEmail: v || null }); await load(); })} />}
       {ask?.kind === 'blocked' && <PromptModal title="Als blockiert melden" label="Warum hängt das Arbeitspaket?" placeholder="z. B. warten auf Freigabe des Kunden" submitLabel="Melden" onClose={() => setAsk(null)} onSubmit={(v) => void patch({ blocked: true, blockedReason: v })} />}
       {ask?.kind === 'escalate' && <PromptModal title="Eine Stufe höher eskalieren" label="Grund (optional)" submitLabel="Eskalieren" onClose={() => setAsk(null)} onSubmit={(note) => void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); })} />}
@@ -302,9 +314,9 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
           <li key={x.id} className={`${x.done ? 'done' : ''} ${open === x.id ? 'open' : ''}`}>
             <div className="st-row">
               <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void move(x, (x.done ? openCol : doneCol)?.id)} />
-              <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? '▾' : '▸'} {x.title}</button>
+              <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} aria-expanded={open === x.id} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} {x.title}</button>
               {x.blocked && <span className="badge blocked">blockiert</span>}
-              {x.dueDate && <span className="small nowrap" style={!x.done && x.dueDate < t0 ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(x.dueDate)}</span>}
+              {x.dueDate && <span className={`small nowrap ${!x.done && x.dueDate < t0 ? 'text-danger fw-600' : ''}`}>{fmtDate(x.dueDate)}</span>}
               {!x.done && <select className="inline-select" value={x.columnId} disabled={!canEdit || busy} title="Status" onChange={(e) => void move(x, e.target.value)}>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
               <select className="inline-select" value={x.responsibleUserId ?? ''} disabled={!canEdit || busy} title="Zuständig" onChange={(e) => void run(async () => { await api.patch(`/tasks/${x.id}`, { responsibleUserId: e.target.value || null, responsibleEmail: null }); await onChanged(); })}>
                 <option value="">{(x.responsibleUserId ? null : x.responsible.name ?? x.responsible.email) ?? '–'} (geerbt)</option>
@@ -316,8 +328,8 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
         ))}
       </ul>
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); void add(); }}>
-        <input type="text" placeholder="Neue Aufgabe … (Enter; eigener Termin, Zuständigkeit und Log)" title="Aufgaben teilen das Arbeitspaket in zuweisbare Schritte; die Checkliste bleibt für kleine Punkte" value={title} onChange={(e) => setTitle(e.target.value)} style={{ flex: 1 }} />
-        <select value={resp} onChange={(e) => setResp(e.target.value)} style={{ width: 'auto' }} title="Zuständig">
+        <input className="grow" type="text" placeholder="Neue Aufgabe … (Enter; eigener Termin, Zuständigkeit und Log)" title="Aufgaben teilen das Arbeitspaket in zuweisbare Schritte; die Checkliste bleibt für kleine Punkte" value={title} onChange={(e) => setTitle(e.target.value)} />
+        <select className="w-auto" value={resp} onChange={(e) => setResp(e.target.value)} title="Zuständig">
           <option value="">zuständig: geerbt</option>
           {members.map((u) => <option key={u.id} value={u.id}>{u.name}{u.kind === 'agent' ? ' (KI-Agent)' : ''}</option>)}
         </select>
@@ -347,20 +359,20 @@ function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; 
   return (
     <div className="st-panel">
       {error && <div className="error small">{error}</div>}
-      <div className="row small" style={{ gap: 8, alignItems: 'center' }}>
-        <label className="row" style={{ gap: 4, alignItems: 'center' }}><span className="muted">Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}`, { dueDate: e.target.value || null }); await changed(); })} /></label>
-        <button className="btn sm link right" onClick={onFull}>Alle Details ↗</button>
+      <div className="row small gap-2 items-center">
+        <label className="row gap-1 items-center"><span className="muted">Deadline</span><input type="date" value={t.dueDate ?? ''} disabled={!canEdit || !canDates} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}`, { dueDate: e.target.value || null }); await changed(); })} /></label>
+        <button className="btn sm link right" onClick={onFull}>Alle Details <IconArrowUpRight size={12} /></button>
       </div>
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => run(async () => { await api.patch(`/tasks/${t.id}`, { description: v || null }); await changed(); })} />
       {(t.checklist?.length ?? 0) > 0 && <ul className="checklist">{t.checklist!.map((i) => <li key={i.id} className={i.done ? 'done' : ''}>
         <input type="checkbox" checked={i.done} disabled={!canEdit} onChange={(e) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await changed(); })} /> {i.title}
       </li>)}</ul>}
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { await api.post(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await changed(); }); }}>
-        <input type="text" placeholder="Checklistenpunkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} style={{ flex: 1 }} /></form>}
+        <input className="grow" type="text" placeholder="Checklistenpunkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} /></form>}
       {d.comments.length > 3 && <button className="btn sm link" onClick={() => setAll(!all)}>{all ? 'Nur die letzten' : `Alle ${d.comments.length} Log-Einträge`}</button>}
-      {comments.map((c) => <div key={c.id} className="comment small"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}</div><div style={{ whiteSpace: 'pre-wrap' }}><MentionText text={c.body} members={detail.members} /></div></div>)}
-      {canEdit && <div className="row" style={{ gap: 6 }}>
-        <div style={{ flex: 1 }}><MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar zur Aufgabe … (Strg+Enter)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} /></div>
+      {comments.map((c) => <div key={c.id} className="comment small"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}</div><div className="pre"><MentionText text={c.body} members={detail.members} /></div></div>)}
+      {canEdit && <div className="row gap-2">
+        <div className="grow"><MentionInput value={comment} onChange={setComment} members={detail.members} placeholder="Kommentar zur Aufgabe … (Strg+Enter)" onSubmit={() => { if (comment.trim()) void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); }); }} /></div>
         <button className="btn sm" disabled={busy || !comment.trim()} onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/comments`, { body: comment }); setComment(''); await load(); })}>Senden</button>
       </div>}
     </div>
@@ -420,7 +432,7 @@ function TitleEdit({ value, canEdit, done, onSave }: { value: string; canEdit: b
   useEffect(() => { const el = ref.current; if (!el || typeof ResizeObserver === 'undefined') return; let w = el.clientWidth; const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } }); ro.observe(el); return () => ro.disconnect(); }, []);
   const commit = () => { if (v.trim() && v.trim() !== value) void onSave(v.trim()); else setV(value); };
   return (
-    <span className="row" style={{ gap: 8, flex: 1, minWidth: 0, alignItems: 'flex-start' }}>
+    <span className="row gap-2 grow items-start">
       <textarea ref={ref} className="title-edit" rows={1} value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value.replace(/\n/g, ' '))} onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); (e.target as HTMLTextAreaElement).blur(); } if (e.key === 'Escape') { setV(value); (e.target as HTMLTextAreaElement).blur(); } }} />
       {done && <span className="badge ok">erledigt</span>}
@@ -478,19 +490,19 @@ function RecurrenceField({ value, hasDue, canEdit, onSave }: { value: Recurrence
   return (
     <div className="field full"><span>Wiederholung {value && <span className="muted">· {describeRec(value)}</span>}</span>
       <div className="row">
-        <select value={rec?.freq ?? ''} disabled={!canEdit} onChange={(e) => setRec(e.target.value ? { freq: e.target.value as Recurrence['freq'], interval: 1, mode: rec?.mode ?? 'after_done', leadDays: rec?.leadDays ?? 0, nth: 1, weekday: 1 } : null)} style={{ width: 'auto' }}>
+        <select className="w-auto" value={rec?.freq ?? ''} disabled={!canEdit} onChange={(e) => setRec(e.target.value ? { freq: e.target.value as Recurrence['freq'], interval: 1, mode: rec?.mode ?? 'after_done', leadDays: rec?.leadDays ?? 0, nth: 1, weekday: 1 } : null)}>
           <option value="">keine</option><option value="daily">täglich</option><option value="weekly">wöchentlich</option><option value="monthly">monatlich</option><option value="monthly_weekday">n-ter Wochentag im Monat</option>
         </select>
         {rec && <>
-          <label className="small">alle <input type="number" min={1} value={rec.interval ?? 1} onChange={(e) => setRec({ ...rec, interval: Number(e.target.value) })} style={{ width: 56 }} /> {rec.freq === 'daily' ? 'Tage' : rec.freq === 'weekly' ? 'Wochen' : 'Monate'}</label>
-          {rec.freq === 'monthly_weekday' && <><select value={rec.nth ?? 1} onChange={(e) => setRec({ ...rec, nth: Number(e.target.value) })} style={{ width: 'auto' }}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}.</option>)}</select>
-            <select value={rec.weekday ?? 1} onChange={(e) => setRec({ ...rec, weekday: Number(e.target.value) })} style={{ width: 'auto' }}>{['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></>}
-          <select value={rec.mode} onChange={(e) => setRec({ ...rec, mode: e.target.value as Recurrence['mode'] })} style={{ width: 'auto' }}><option value="after_done">nächste nach Erledigung</option><option value="on_due">nächste vor Fälligkeit</option></select>
-          {rec.mode === 'on_due' && <label className="small">Vorlauf <input type="number" min={0} value={rec.leadDays ?? 0} onChange={(e) => setRec({ ...rec, leadDays: Number(e.target.value) })} style={{ width: 56 }} /> Tage</label>}
+          <label className="small">alle <input className="w-56" type="number" min={1} value={rec.interval ?? 1} onChange={(e) => setRec({ ...rec, interval: Number(e.target.value) })} /> {rec.freq === 'daily' ? 'Tage' : rec.freq === 'weekly' ? 'Wochen' : 'Monate'}</label>
+          {rec.freq === 'monthly_weekday' && <><select className="w-auto" value={rec.nth ?? 1} onChange={(e) => setRec({ ...rec, nth: Number(e.target.value) })}>{[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n}.</option>)}</select>
+            <select className="w-auto" value={rec.weekday ?? 1} onChange={(e) => setRec({ ...rec, weekday: Number(e.target.value) })}>{['So', 'Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa'].map((d, i) => <option key={i} value={i}>{d}</option>)}</select></>}
+          <select className="w-auto" value={rec.mode} onChange={(e) => setRec({ ...rec, mode: e.target.value as Recurrence['mode'] })}><option value="after_done">nächste nach Erledigung</option><option value="on_due">nächste vor Fälligkeit</option></select>
+          {rec.mode === 'on_due' && <label className="small">Vorlauf <input className="w-56" type="number" min={0} value={rec.leadDays ?? 0} onChange={(e) => setRec({ ...rec, leadDays: Number(e.target.value) })} /> Tage</label>}
         </>}
         {dirty && canEdit && <button className="btn sm primary" onClick={() => void onSave(rec)}>Übernehmen</button>}
       </div>
-      {rec && !hasDue && <span className="small" style={{ color: 'var(--warn)' }}>Wiederholung braucht eine Deadline.</span>}
+      {rec && !hasDue && <span className="small text-warn">Wiederholung braucht eine Deadline.</span>}
     </div>
   );
 }
@@ -515,12 +527,12 @@ function TimeSection({ taskId, canEdit, onChanged }: { taskId: string; canEdit: 
   return (
     <>
       <h3 className="mt">Zeiten {data && <span className="badge">{fmtH(data.totalMinutes)}</span>}</h3>
-      {data && data.entries.length > 0 && <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap small">{fmtDate(e.date)}</td><td className="small">{e.userName}</td><td className="nowrap small">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td><td>{(e.userId === detail.project.myMembership.userId || detail.project.myMembership.role === 'pl') && <button className="btn sm link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await load(); await onChanged(); })}>✕</button>}</td></tr>)}</tbody></table>}
+      {data && data.entries.length > 0 && <table className="table"><tbody>{data.entries.map((e) => <tr key={e.id}><td className="nowrap small">{fmtDate(e.date)}</td><td className="small">{e.userName}</td><td className="nowrap small">{fmtH(e.minutes)}</td><td className="muted small">{e.note}</td><td>{(e.userId === detail.project.myMembership.userId || detail.project.myMembership.role === 'pl') && <IconButton label="Zeitbuchung löschen" size="sm" variant="link" onClick={() => void run(async () => { await api.del(`/time/${e.id}`); await load(); await onChanged(); })}><IconX /></IconButton>}</td></tr>)}</tbody></table>}
       {canEdit && <div className="row mt">
-        <input type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} style={{ width: 140 }} />
-        <input type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} style={{ width: 64 }} />
-        <input type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} style={{ width: 64 }} />
-        <input type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} style={{ flex: 1 }} />
+        <input className="w-140" type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />
+        <input className="w-64" type="number" min={0} placeholder="Std" value={f.hours} onChange={(e) => setF({ ...f, hours: e.target.value })} />
+        <input className="w-64" type="number" min={0} max={59} placeholder="Min" value={f.minutes} onChange={(e) => setF({ ...f, minutes: e.target.value })} />
+        <input className="grow" type="text" placeholder="Notiz" value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
         <button className="btn sm primary" disabled={busy || minutes <= 0} onClick={() => void run(async () => { await api.post(`/projects/${detail.project.id}/time`, { taskId, date: f.date, minutes, note: f.note }); setF({ ...f, hours: '', minutes: '', note: '' }); await load(); await onChanged(); })}>Buchen</button>
       </div>}
       {error && <div className="error mt">{error}</div>}
@@ -542,7 +554,7 @@ function ResourcesBlock({ task, canEdit, canForce }: { task: Task; canEdit: bool
   const list = d.data?.bookings ?? [];
   if (!list.length && !canEdit) return null;
   return <>
-    <h3 className="mt">Ressourcen {list.length > 0 && <span className="badge">{list.length}</span>}{canEdit && <button className="btn sm" style={{ marginLeft: 8 }} onClick={() => setBook(true)}>Buchen</button>}</h3>
+    <h3 className="mt">Ressourcen {list.length > 0 && <span className="badge">{list.length}</span>}{canEdit && <button className="btn sm ml-2" onClick={() => setBook(true)}>Buchen</button>}</h3>
     {list.length > 0 && <ul className="small">{list.map((b) => <BookingRow key={b.id} b={b} canDecide={canEdit} canDelete={canEdit && (b.createdBy === detail.project.myMembership.userId || canForce)} onChanged={() => d.reload()} />)}</ul>}
     {book && <BookingForm projectId={detail.project.id} taskId={task.id} taskDates={{ startDate: task.startDate ?? null, dueDate: task.dueDate ?? null }} resources={resources.data?.resources ?? []} persons={detail.members.filter((m) => m.kind !== 'agent').map((m) => ({ id: m.userId, name: m.name }))} canForce={canForce} onClose={() => setBook(false)} onSaved={async () => { setBook(false); await d.reload(); }} />}
   </>;
@@ -562,7 +574,7 @@ function RelationsBlock({ taskId, canDecide }: { taskId: string; canDecide: bool
     <ul className="small">{list.map((r) => <li key={r.id}>
       <strong>{r.other.ref}</strong> {r.other.title}{r.other.done ? ' (erledigt)' : ''} <span className="muted">· {kind[r.kind] ?? r.kind} · {status[r.status] ?? r.status}{r.foundByName ? ` · gemeldet von ${r.foundByName}` : ''}{r.decidedByName ? ` · entschieden von ${r.decidedByName}` : ''}</span>
       {(r.note || r.signals.length > 0) && <div className="muted">{r.note ?? r.signals.map((s) => s.detail).join('; ')}</div>}
-      {canDecide && (r.status === 'suggested' || r.status === 'asked') && <div className="row" style={{ gap: 4, marginTop: 2 }}>
+      {canDecide && (r.status === 'suggested' || r.status === 'asked') && <div className="row gap-1 mt-1">
         <button className="btn sm" onClick={() => void decide(r.id, 'sync')}>synchron bearbeiten</button>
         <button className="btn sm" onClick={() => void decide(r.id, 'dependency')} title="Abhängigkeit: das andere Arbeitspaket zuerst (PL oder „Projektplan ändern“)">Abhängigkeit</button>
         <button className="btn sm" onClick={() => void decide(r.id, 'duplicate')}>zusammenführen</button>
@@ -605,7 +617,7 @@ function QuestionsBlock({ taskId, canAnswer, isPl, onChanged }: { taskId: string
           <div><strong>{kind(q)}</strong> von {q.askedByName ?? '?'} an {q.addresseeName ?? 'Projektkanal'} · {fmtDateTime(q.createdAt)}{q.level > 0 ? ` · Stufe ${q.level + 1}` : ''}</div>
           <div>{q.body}</div>
           {q.kind === 'approval' && <ApprovalCard q={q} onChanged={() => void refresh()} canDecide={canAnswer} />}
-          <div className="row mt" style={{ gap: 6 }}>
+          <div className="row mt gap-2">
             {q.kind !== 'approval' && canAnswer && q.options?.map((o) => <button key={o.key} className="btn sm primary" onClick={() => void run(async () => { await api.post(`/questions/${q.id}/answer`, { option: o.key }); await refresh(); })}>{o.label}</button>)}
             {q.kind !== 'approval' && canAnswer && <button className="btn sm" onClick={() => setAnswering(q)}>Beantworten</button>}
             {q.channelId && <button className="btn sm link" onClick={() => openChat(q.channelId, q.messageId, q.messageId)}>Im Chat öffnen</button>}

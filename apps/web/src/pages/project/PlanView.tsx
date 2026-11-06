@@ -5,6 +5,7 @@ import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { MilestoneList, SubprojectList } from './planForms';
 import { useCreate } from './create';
+import { IconDiamond } from '../../components/icons';
 
 const DAY = 86400_000;
 const ZOOM: [number, string][] = [[2, 'Quartal'], [4, 'Monat'], [10, 'Woche'], [24, 'Tag']];
@@ -136,7 +137,7 @@ export function PlanView() {
       <div className="row mb">
         <span className="muted small">Balken ziehen verschiebt Start und Deadline, rechte Kante ändert die Deadline, Meilensteine lassen sich ziehen. Linien = Vorgänger → Nachfolger, rot bei Konflikt. Nichts verschiebt sich automatisch.{save.busy && ' · speichert …'}</span>
         {save.error && <span className="error small">{save.error}</span>}
-        <span className="row right" style={{ gap: 2 }}>{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
+        <span className="row right gap-1">{ZOOM.map(([v, l]) => <button key={v} className={`chip ${PX_PER_DAY === v ? 'on' : ''}`} onClick={() => zoomTo(v)} title={`${v} px je Tag`}>{l}</button>)}<button className="chip" onClick={() => { const el = scrollRef.current; if (el) el.scrollTo({ left: Math.max(0, x(today()) + 280 - el.clientWidth / 2), behavior: 'smooth' }); }}>Heute</button></span>
         <button className="btn" title="Plan als CSV (Excel)" onClick={() => downloadCsv(`plan_${detail.project.key}.csv`, ['Art', 'Bezeichnung', 'Start', 'Ende', 'Zuständig', 'Erledigt', 'Konflikt'], rows.map((r) => [r.kind === 'sub' ? 'Teilprojekt' : r.kind === 'ms' ? 'Meilenstein' : r.child ? 'Aufgabe' : 'Arbeitspaket', r.label, r.start, r.end, r.resp ?? '', r.done ? 'ja' : '', r.conflict ? 'ja' : '']))}>CSV</button>
         {canPlan && <><button className="btn" onClick={() => void create.subproject()}>+ Teilprojekt</button><button className="btn" onClick={() => void create.milestone()}>+ Meilenstein</button></>}
       </div>
@@ -155,7 +156,7 @@ export function PlanView() {
             {rows.map((r) => (
               <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
                 <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind === 'task' || r.kind === 'sub' ? 'pointer' : undefined }} title={r.kind === 'sub' ? 'Teilprojekt öffnen' : undefined} onClick={() => { if (r.kind === 'task') openTask(r.id); else if (r.kind === 'sub') openSubproject(r.id); }}>
-                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && '◆ '}{r.label}
+                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && '<IconDiamond size={12} /> '}{r.label}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
                 </td>
                 <td className="bars" style={{ width }}>

@@ -1041,3 +1041,92 @@ button.lane-name.link:hover { color: var(--primary, inherit); }
   .task-card:hover { transform: none; }
   .btn:active:not(:disabled) { transform: none; }
 }
+
+/* Toasts: Stapel unten rechts; Fehler rot, Erfolg grün */
+.toasts { position: fixed; right: 16px; bottom: 16px; z-index: 1000; display: flex; flex-direction: column; gap: var(--sp-2); max-width: min(380px, calc(100vw - 32px)); pointer-events: none; }
+.toasts > div { display: flex; flex-direction: column; gap: var(--sp-2); }
+.toast { display: flex; align-items: flex-start; gap: var(--sp-2); padding: 10px 12px; border-radius: var(--r-lg); background: var(--surface); border: 1px solid var(--border); box-shadow: var(--shadow-pop); color: var(--text); font-size: var(--fs-md); pointer-events: auto; }
+.toast > span { flex: 1; min-width: 0; word-break: break-word; }
+.toast.error { border-color: var(--danger-border); background: var(--danger-soft); color: var(--danger); }
+.toast.ok { border-color: var(--ok-border); background: var(--ok-soft); color: var(--ok); }
+.toast .icon-btn { color: inherit; }
+@media (max-width: 600px) { .toasts { right: 8px; left: 8px; bottom: 8px; max-width: none; } }
+
+/* Pflichtfelder (Stern per CSS, damit der Labeltext unverändert bleibt), Feldfehler, Glossar, Ladehinweis */
+.field > span.req::after, label.req::after { content: ' *'; color: var(--danger); font-weight: 600; }
+.field-error { display: block; color: var(--danger); font-size: var(--fs-sm); margin-top: 2px; }
+.field input[aria-invalid='true'], .field select[aria-invalid='true'], .field textarea[aria-invalid='true'] { border-color: var(--danger); }
+abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; cursor: help; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: btn-spin 0.7s linear infinite; vertical-align: -2px; margin-right: 6px; flex: none; }
+.loading { display: inline-flex; align-items: center; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* Dropdown „Mehr“: Menüeinträge mit Tastaturmarkierung und sichtbarem Grund, wenn gesperrt */
+.menu [role='menuitem'].active, .menu [role='menuitem']:focus-visible { background: var(--surface-2); }
+.menu [role='menuitem']:disabled { opacity: 0.6; cursor: default; }
+.menu [role='menuitem'] .reason { display: block; font-size: var(--fs-xs); color: var(--muted); font-weight: 400; }
+.dropdown > .btn .icon { margin-left: 4px; }
+.btn-reason { font-size: var(--fs-xs); color: var(--muted); margin-left: 4px; }
+
+/* Board-Karten per Tastatur; Suche als Listbox */
+.task-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.search-results .item.active { background: var(--primary-soft); }
+
+/* Reiterleiste: Hinweis, dass seitlich weitergeht (Fade am rechten Rand, nur wenn scrollbar) */
+.tabs.below.scrollable { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 32px), transparent); }
+.tabs.below.scrollable.at-end { -webkit-mask-image: none; mask-image: none; }
+
+/* Autosave im Arbeitspaket: Rückmeldung nahe am Feld */
+.save-state { font-size: var(--fs-sm); color: var(--muted); }
+.save-state.error { color: var(--danger); }
+.kbd-hint kbd { margin-left: 4px; }
+
+/* Ersatz für häufige Inline-Styles */
+.setup-card { width: min(420px, 95vw); }
+.oidc-btn { width: 100%; text-align: center; }
+.demo-list { margin: 6px 0 0; padding-left: 18px; }
+.mail-body { min-height: 180px; }
+.mail-body.tall { min-height: 240px; }
+.list-tight { gap: 2px; }
+.list-compact { margin: 4px 0 0; padding-left: 18px; }
+.grow { flex: 1; min-width: 0; }
+.w-56 { width: 56px; } .w-64 { width: 64px; } .w-110 { width: 110px; } .w-140 { width: 140px; }
+.w-full { width: 100%; }
+.text-left { text-align: left; }
+.fw-400 { font-weight: 400; } .fw-600 { font-weight: 600; }
+.mr-1 { margin-right: var(--sp-1); } .mr-2 { margin-right: var(--sp-2); }
+.mb-0 { margin-bottom: 0; } .mt-0 { margin-top: 0; }
+.ml-auto { margin-left: auto; }
+.pad-row { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.pad-sm { padding: 4px 12px; }
+.m-12 { margin: 12px; }
+.border-top { border-top: 1px solid var(--border); padding-top: 8px; }
+.title-input { font-size: 18px; font-weight: 600; }
+.op-60 { opacity: 0.6; }
+.nav-hint { padding: 2px 10px 4px; }
+.nav-empty { padding: 4px 22px; }
+.relative { position: relative; }
+.help-link { font-size: var(--fs-sm); margin-left: var(--sp-2); white-space: nowrap; }
+.settings-intro { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--sp-2); margin: 0 0 var(--sp-3); color: var(--muted); font-size: var(--fs-md); }
+
+/* Weitere Utilities (mechanischer Ersatz von Inline-Styles) */
+.items-center { align-items: center; } .items-start { align-items: flex-start; } .items-end { align-items: flex-end; }
+.my-1 { margin: var(--sp-1) 0; } .ul-18 { padding-left: 18px; }
+.m-0.mt-1 { margin-top: var(--sp-1); } .m-0.mt-2 { margin-top: var(--sp-2); }
+.pad-10 { padding: 10px; } .pad-24 { padding: 24px; } .pad-xs { padding: 4px 10px; }
+.scroll-x { overflow-x: auto; }
+.text-center { text-align: center; } .fw-500 { font-weight: 500; } .min-w-0 { min-width: 0; }
+.title-row { align-items: flex-start; }
+.label-picker .lbl { border: 0; cursor: pointer; line-height: 20px; }
+.label-picker .lbl.off { opacity: 0.35; }
+.label-picker .lbl.on { opacity: 1; }
+.lbl.off { opacity: 0.35; }
+.wrap { flex-wrap: wrap; }
+.w-48 { width: 48px; } .w-60 { width: 60px; } .w-70 { width: 70px; } .w-90 { width: 90px; } .w-120 { width: 120px; } .w-150 { width: 150px; } .w-160 { width: 160px; } .w-180 { width: 180px; } .w-200 { width: 200px; } .w-260 { width: 260px; } .w-280 { width: 280px; }
+.min-w-60 { min-width: 60px; } .min-w-120 { min-width: 120px; } .min-w-160 { min-width: 160px; } .min-w-180 { min-width: 180px; } .min-w-220 { min-width: 220px; }
+.max-w-260 { max-width: 260px; } .max-w-320 { max-width: 320px; } .max-w-420 { max-width: 420px; }
+.self-end { align-self: flex-end; } .contents { display: contents; } .hidden { display: none; } .select-all { user-select: all; }
+.pointer { cursor: pointer; } .inline-flex { display: inline-flex; } .py-1 { padding: 4px 0; } .pad-6 { padding: 6px; } .mt-3 { margin-top: var(--sp-3); } .ml-4 { margin-left: var(--sp-4); }
+.kpi-big { font-size: 24px; font-weight: 700; } .color-input { width: 48px; height: 32px; padding: 0; }
+.ell-420 { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sub-list { padding: 4px 0 0 18px; }

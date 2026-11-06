@@ -39,7 +39,7 @@ function MailInquiryDefault() {
         <label className="field"><span>Offene Punkte aus neuen Mails</span><select value={v.mode} onChange={(e) => setF({ ...v, mode: e.target.value as MailInquiry['mode'] })}>{Object.entries(INQUIRY_LABEL).map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></label>
         <label className="field"><span>Frist der Rückfrage (Stunden, danach Weitergabe über die Kette)</span><input type="number" min={1} max={720} value={v.waitHours} onChange={(e) => setF({ ...v, waitHours: Number(e.target.value) })} /></label>
         {error && <div className="error full">{error}</div>}
-        <div className="full row"><button className="btn primary sm" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/org/settings', { mailInquiry: f }); setF(null); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
+        <div className="full row"><button className="btn sm primary" disabled={busy || !f} onClick={() => void run(async () => { await api.put('/org/settings', { mailInquiry: f }); setF(null); await reload(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
       </div>
     </>
   );
@@ -81,10 +81,10 @@ function ExternalWindowForm() {
       <p className="muted small">Mails der Agenten an Nicht-Interne (auch Antworten auf Ursprungsmails und PDF-Versand) gehen nur in diesem Fenster (Europe/Berlin); außerhalb plant das System den Versand auf den nächsten Fensterbeginn und schreibt das ins Log. Interner Chat, Fragen und Entwürfe sind nicht betroffen.</p>
       <div className="form cols-2">
         <label className="check full"><input type="checkbox" checked={v.enabled} onChange={(e) => setFw({ ...v, enabled: e.target.checked })} /> Fenster aktiv</label>
-        <div className="field"><span>Wochentage</span><div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>{WEEKDAY_SHORT.map((d, i) => <label key={d} className="check small" style={{ margin: 0 }}><input type="checkbox" checked={v.days.includes(i + 1)} onChange={(e) => setFw({ ...v, days: e.target.checked ? [...v.days, i + 1].sort() : v.days.filter((x) => x !== i + 1) })} /> {d}</label>)}</div></div>
+        <div className="field"><span>Wochentage</span><div className="row gap-2 wrap">{WEEKDAY_SHORT.map((d, i) => <label key={d} className="check small m-0"><input type="checkbox" checked={v.days.includes(i + 1)} onChange={(e) => setFw({ ...v, days: e.target.checked ? [...v.days, i + 1].sort() : v.days.filter((x) => x !== i + 1) })} /> {d}</label>)}</div></div>
         <div className="row"><label className="field"><span>von</span><input type="time" value={v.from} onChange={(e) => setFw({ ...v, from: e.target.value })} /></label><label className="field"><span>bis</span><input type="time" value={v.to} onChange={(e) => setFw({ ...v, to: e.target.value })} /></label></div>
         {error && <div className="error full">{error}</div>}
-        <div className="full row"><button className="btn primary sm" disabled={busy || !fw} onClick={() => void run(async () => { await api.put('/ai/settings', { externalWindow: v }); setFw(null); await invalidateAi(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
+        <div className="full row"><button className="btn sm primary" disabled={busy || !fw} onClick={() => void run(async () => { await api.put('/ai/settings', { externalWindow: v }); setFw(null); await invalidateAi(); flash('Gespeichert.'); })}>Speichern</button>{msg && <span className="muted small">{msg}</span>}</div>
       </div>
     </>
   );

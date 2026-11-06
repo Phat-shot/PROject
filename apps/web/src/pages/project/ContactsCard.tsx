@@ -5,6 +5,7 @@ import { useData } from '../../lib/useData';
 import { useAsync, useDialog } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { InlineText } from './TaskDrawer';
+import { IconX } from '../../components/icons';
 
 /** Kontakte und Stakeholder des Projekts: Externe, die Arbeitspakete bekommen, Verteiler, Ansprechpartner. */
 export function ContactsCard() {
@@ -31,16 +32,16 @@ export function ContactsCard() {
             <td><InlineText value={c.organization ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { organization: v })} /></td>
             <td><InlineText value={c.phone ?? ''} canEdit={canEdit} onSave={(v) => void save(c, { phone: v })} /></td>
             <td><input type="checkbox" aria-label={`${c.name ?? c.email} nach außen`} checked={Boolean(c.external)} disabled={!canEdit || busy} onChange={(e) => void save(c, { external: e.target.checked })} /></td>
-            <td className="nowrap">{canEdit && <button className="btn sm link" title="Als buchbare Person (Ressource vom Typ Person) im Projekt führen, z. B. für Einsatztage" onClick={() => void run(async () => { await api.post('/resources', { kind: 'person', name: c.name ?? c.email, email: c.email, organization: c.organization ?? null, trade: c.role ?? null, projectId: pid }); setMsg(`${c.name ?? c.email} ist jetzt buchbar (Einstellungen › Planung und Board).`); })}>buchbar</button>}{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })}>✕</button>}</td>
+            <td className="nowrap">{canEdit && <button className="btn sm link" title="Als buchbare Person (Ressource vom Typ Person) im Projekt führen, z. B. für Einsatztage" onClick={() => void run(async () => { await api.post('/resources', { kind: 'person', name: c.name ?? c.email, email: c.email, organization: c.organization ?? null, trade: c.role ?? null, projectId: pid }); setMsg(`${c.name ?? c.email} ist jetzt buchbar (Einstellungen › Planung und Board).`); })}>buchbar</button>}{canEdit && <button className="btn sm link" title="Kontakt entfernen" onClick={() => void dialog.confirm({ title: 'Kontakt entfernen', text: `${c.name ?? c.email} aus der Kontaktliste entfernen? Zuweisungen an Arbeitspaketen bleiben.`, confirmLabel: 'Entfernen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/projects/${pid}/contacts/${c.id}`); await d.reload(); }); })} aria-label="Kontakt entfernen"><IconX /></button>}</td>
           </tr>
         ))}
         {d.data && d.data.contacts.length === 0 && <tr><td colSpan={7} className="muted small">Noch keine Kontakte.</td></tr>}
       </tbody></table>
       {canEdit && <form className="row mt" onSubmit={(e) => { e.preventDefault(); void run(async () => { await api.post(`/projects/${pid}/contacts`, f); setF({ email: '', name: '', role: '', organization: '' }); await d.reload(); }); }}>
-        <input type="email" placeholder="E-Mail" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} style={{ width: 200 }} required />
-        <input type="text" placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={{ width: 160 }} required />
-        <input type="text" placeholder="Rolle" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} style={{ width: 140 }} />
-        <input type="text" placeholder="Organisation" value={f.organization} onChange={(e) => setF({ ...f, organization: e.target.value })} style={{ width: 160 }} />
+        <input className="w-200" type="email" placeholder="E-Mail" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} required />
+        <input className="w-160" type="text" placeholder="Name" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} required />
+        <input className="w-140" type="text" placeholder="Rolle" value={f.role} onChange={(e) => setF({ ...f, role: e.target.value })} />
+        <input className="w-160" type="text" placeholder="Organisation" value={f.organization} onChange={(e) => setF({ ...f, organization: e.target.value })} />
         <button className="btn sm" disabled={busy || !f.email}>Hinzufügen</button>
       </form>}
     </div>

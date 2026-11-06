@@ -6,7 +6,9 @@ import { AUDIENCE_LABEL } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useRefresh } from '../../lib/useRefresh';
-import { Modal, PromptModal, roleLabel, statusLabel, useAsync, useDialog } from '../../components/ui';
+import { Button, Dropdown, FieldError, IconButton, Loading, Modal, PromptModal, roleLabel, statusLabel, Term, useAsync, useDialog, useDirty, type DropdownItem } from '../../components/ui';
+import { IconArrowLeft, IconPaperclip, IconX } from '../../components/icons';
+import { useUnsavedChanges } from '../../lib/useUnsavedChanges';
 import { ProjectScope, useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { useAssistAgent } from '../../components/AssistAgent';
@@ -96,7 +98,7 @@ export function MailView() {
         </select>
         {canWrite && <button className="btn sm primary right" onClick={() => go({}, `${base}/neu`)}>Neue Mail</button>}
       </div> : <div className="mail-views">
-        {canWrite && <button className="btn primary mb" style={{ width: '100%' }} onClick={() => go({}, `${base}/neu`)}>Neue Mail</button>}
+        {canWrite && <button className="btn primary mb w-full" onClick={() => go({}, `${base}/neu`)}>Neue Mail</button>}
         <div className={`view approve ${inDrafts ? 'active' : ''} ${pending.length ? 'has' : ''}`} onClick={() => go({}, `${base}/freigaben`)} title="Entwürfe von Personen und KI-Agenten, die auf Freigabe warten">
           <span>Zur Freigabe</span>{pending.length > 0 && <span className="badge warn">{pending.length}</span>}
         </div>
@@ -106,7 +108,7 @@ export function MailView() {
             <span>{label(f)}</span>{f.specialUse === 'inbox' && (accountId ? unread.byAccount?.[accountId] : projectId ? unread.byProject[projectId] : unread.total) ? <span className="badge danger">{accountId ? unread.byAccount?.[accountId] : projectId ? unread.byProject[projectId] : unread.total}</span> : null}
           </div>
         ))}
-        {folders.length === 0 && <div className="muted small" style={{ padding: '4px 10px' }}>{views.data && readable.length === 0 ? 'Kein Postfach mit Leserecht.' : 'Lade Ordner …'}</div>}
+        {folders.length === 0 && <div className="muted small pad-xs">{views.data && readable.length === 0 ? 'Kein Postfach mit Leserecht.' : 'Lade Ordner …'}</div>}
         {manage && <Link className="btn sm link mt" to={`/projekte/${projectId}/einstellungen/mail`}>Ansichten und Filter verwalten</Link>}
       </div>}
       <Routes>
@@ -127,7 +129,7 @@ function ComposeGlobal({ views, onDone }: { views: ViewRow[]; onDone: (projectId
   const projects = [...new Map(writable.map((v) => [v.projectId, v.projectKey ?? ''])).entries()];
   const fromView = writable.find((v) => v.id === params.get('view'))?.projectId;
   const projectId = fromView ?? (writable.some((v) => v.projectId === params.get('projekt')) ? params.get('projekt') : null) ?? (projects.length === 1 ? projects[0][0] : null);
-  if (!views.length) return <div className="mail-detail muted">Lade …</div>;
+  if (!views.length) return <div className="mail-detail"><Loading /></div>;
   if (!writable.length) return <div className="mail-detail"><div className="empty">Du hast an keinem Postfach Entwurfs- oder Senderecht.</div></div>;
   if (!projectId) return (
     <div className="mail-detail">
@@ -163,27 +165,27 @@ function InboxList({ base, projectId, folder, accountId, views, folders, mobile 
   const back = `${base}?${params.toString()}`;
   return (
     <>
-      {mobile && mailId && <div className="mail-mobile-bar"><button className="btn sm" onClick={() => nav(back)}>← Zur Liste</button></div>}
+      {mobile && mailId && <div className="mail-mobile-bar"><Button size="sm" icon={<IconArrowLeft />} onClick={() => nav(back)}>Zur Liste</Button></div>}
       {(!mobile || !mailId) && <div className="mail-list">
         {filters}
-        {pending > 0 && <div className="mail-approve-note" onClick={() => nav(`${base}/freigaben?${params.toString()}`)}>{pending} Entw{pending === 1 ? 'urf wartet' : 'ürfe warten'} auf Freigabe →</div>}
-        <div className="row" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border)' }}>
-          <input type="text" placeholder="Betreff oder Absender …" value={q} onChange={(e) => setQ(e.target.value)} style={{ flex: 1 }} />
+        {pending > 0 && <div className="mail-approve-note" onClick={() => nav(`${base}/freigaben?${params.toString()}`)}>{pending} Entw{pending === 1 ? 'urf wartet' : 'ürfe warten'} auf Freigabe ›</div>}
+        <div className="row pad-row">
+          <input className="grow" type="text" placeholder="Betreff oder Absender …" value={q} onChange={(e) => setQ(e.target.value)} />
           <span className="muted small nowrap">{mails.length}</span>
         </div>
-        {list.error && <div className="error" style={{ margin: 12 }}>{list.error}</div>}
+        {list.error && <div className="error m-12">{list.error}</div>}
         {mails.map((m) => (
           <div key={m.id} className={`mail-item ${mailId === m.id ? 'active' : ''} ${m.unread ? 'unread' : ''}`} onClick={() => open(m.id)}>
             <div className="from"><span>{m.folder.toLowerCase() === 'sent' ? `An: ${m.toJson.join(', ')}` : m.fromName ?? m.fromAddr}</span><span className="date">{fmtDateTime(m.date)}</span></div>
-            <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge" style={{ marginLeft: 6 }}>Arbeitspaket</span>}{m.hasAttachments && ' 📎'}</div>
-            <div className="snippet">{!projectId && (m.projectKeys ?? [m.projectKey]).map((k) => <span key={k} className="badge" style={{ marginRight: 6 }}>{k}</span>)}{m.snippet}{!accountId && accountCount > 1 && <span className="muted"> · {m.accountName}</span>}</div>
+            <div className="subject">{m.subject}{m.linkedTaskIds.length > 0 && <span className="badge ml-2">Arbeitspaket</span>}{m.hasAttachments && <> <IconPaperclip size={12} /><span className="sr-only">mit Anhang</span></>}</div>
+            <div className="snippet">{!projectId && (m.projectKeys ?? [m.projectKey]).map((k) => <span key={k} className="badge mr-2">{k}</span>)}{m.snippet}{!accountId && accountCount > 1 && <span className="muted"> · {m.accountName}</span>}</div>
           </div>
         ))}
-        {list.data && mails.length === 0 && <div className="empty" style={{ margin: 12 }}>{views.length === 0 ? 'Noch kein Postfach mit Leserecht. Die PL legt Ansichten unter Projekteinstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}
+        {list.data && mails.length === 0 && <div className="empty m-12">{views.length === 0 ? 'Noch kein Postfach mit Leserecht. Die PL legt Ansichten unter Projekteinstellungen › Mail an.' : 'Keine Mails in diesem Ordner.'}</div>}
       </div>}
       {mobile && !mailId ? null : mailId && pid
         ? <ProjectScope projectId={pid}><MailDetailPanel mailId={mailId} views={views} folders={folders} onChanged={() => void list.reload()} onGone={() => { void list.reload(); nav(back); }} viewHint={current?.viewId} /></ProjectScope>
-        : <div className="mail-detail muted">{mailId ? (outside.error ?? 'Lade …') : 'Mail wählen.'}</div>}
+        : <div className="mail-detail muted">{mailId ? (outside.error ?? <Loading />) : 'Mail wählen.'}</div>}
     </>
   );
 }
@@ -192,6 +194,7 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
   const { detail, tasks, reloadTasks, openTask, ai } = useProject();
   const d = useData<{ mail: MailDetail; rights: MailViewT['myRights']; viewIds: string[]; canModify: boolean; links: { taskId: string; title: string; code: string; projectId: string; copied: boolean; origin: boolean; isSubtask: boolean }[] }>(`/mail/mails/${mailId}`, [mailId]);
   const [moveTo, setMoveTo] = useState('');
+  const [moving, setMoving] = useState(false);
   const [newFolder, setNewFolder] = useState(false);
   const actions = useData<{ rule: MailAction[]; ai: MailAction[]; pages: { pageId: string; kind: string; title: string }[] }>(`/mail/mails/${mailId}/actions`);
   const aiRuns = useData<{ runs: MailAiRun[]; suggestAgent: { id: string; name: string; canProcess: boolean } | null }>(`/mail/mails/${mailId}/ai?projectId=${detail.project.id}`, [mailId]);
@@ -206,7 +209,7 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
   const sumAgent = useAssistAgent(ai, 'assist.summarize');
   const essAgent = useAssistAgent(ai, 'assist.essence');
   if (d.error) return <div className="mail-detail"><div className="error">{d.error}</div><p className="muted mt">Verknüpfte Mail, keine Berechtigung: Du darfst die Ansicht nicht lesen, aus der diese Mail stammt.</p></div>;
-  if (!d.data) return <div className="mail-detail muted">Lade …</div>;
+  if (!d.data) return <div className="mail-detail"><Loading>Lädt Mail …</Loading></div>;
   const m = d.data.mail;
   const r = d.data.rights;
   const view = views.find((v) => v.id === viewHint && d.data!.viewIds.includes(v.id)) ?? views.find((v) => d.data!.viewIds.includes(v.id));
@@ -244,45 +247,46 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
         {m.ccJson.length > 0 && <div><strong>Cc:</strong> {m.ccJson.join(', ')}</div>}
         <div><strong>Datum:</strong> {fmtDateTime(m.date)} · Ordner {m.folder}</div>
       </div>
-      <div className="mail-actions">
-        <span className="muted small">Mail:</span>
-        {(r.canDraft || r.canSend) && view && <Link className="btn sm" to={`/postfach/neu?reply=${m.id}&view=${view.id}&projekt=${detail.project.id}`}>Antworten</Link>}
-        {d.data.canModify && (<>
-          <button className="btn sm" onClick={() => folderAction(() => api.post(`/mail/mails/${m.id}/archive`))}>Archivieren</button>
-          <button className="btn sm danger" onClick={() => void dlg.confirm({ title: 'Mail löschen', text: 'In den Papierkorb des Kontos verschieben? Verknüpfungen mit Arbeitspaketen bleiben.', confirmLabel: 'In Papierkorb', danger: true }).then((ok) => { if (ok) folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); })}>Löschen</button>
-          <select value={moveTo} onChange={(e) => setMoveTo(e.target.value)} style={{ width: 'auto' }}>
-            <option value="">Verschieben nach …</option>
-            {mailFolders.filter((f) => f.path.toLowerCase() !== m.folder.toLowerCase()).map((f) => <option key={f.path} value={f.path}>{f.specialUse ? FOLDER_LABEL[f.specialUse] : f.path}</option>)}
-            <option value="__new">+ neuer Unterordner …</option>
-          </select>
-          <button className="btn sm" disabled={!moveTo} onClick={() => {
-            if (moveTo === '__new') { setNewFolder(true); return; }
-            folderAction(() => api.post(`/mail/mails/${m.id}/move`, { folder: moveTo }));
-          }}>Verschieben</button>
-        </>)}
+      {/* Primäraktionen sichtbar; alles Weitere im Menü „Mehr“ (gesperrte Einträge nennen den Grund) */}
+      <div className="mail-actions row gap-1">
+        {(r.canDraft || r.canSend) && view && <Link className="btn sm primary" to={`/postfach/neu?reply=${m.id}&view=${view.id}&projekt=${detail.project.id}`}>Antworten</Link>}
+        <Button size="sm" disabled={!enabled('create_task')} title={enabled('create_task') ? 'Arbeitspaket aus dieser Mail anlegen' : reason('create_task')} onClick={() => setDialog('createTask')}>Arbeitspaket erstellen</Button>
+        <Button size="sm" disabled={!enabled('link_task')} title={enabled('link_task') ? 'Mit einem bestehenden Arbeitspaket verknüpfen oder dorthin kopieren' : reason('link_task')} onClick={() => setDialog('link')}>Verknüpfen</Button>
+        {!enabled('create_task') && reason('create_task') && <span className="btn-reason">{reason('create_task')}</span>}
+        {essAgent.picker}{sumAgent.picker}
+        <Dropdown label="Mehr" items={[
+          ...(d.data.canModify ? [
+            { label: 'Archivieren', onClick: () => void folderAction(() => api.post(`/mail/mails/${m.id}/archive`)) },
+            { label: 'Verschieben nach …', onClick: () => setMoving(true) },
+            { label: 'Löschen (Papierkorb)', danger: true, onClick: () => void dlg.confirm({ title: 'Mail löschen', text: 'In den Papierkorb des Kontos verschieben? Verknüpfungen mit Arbeitspaketen bleiben.', confirmLabel: 'In Papierkorb', danger: true }).then((ok) => { if (ok) void folderAction(() => api.post(`/mail/mails/${m.id}/trash`)); }) }
+          ] : []),
+          { label: 'Ins Arbeitspaket-Log übernehmen', disabled: !enabled('task_log'), reason: reason('task_log'), onClick: () => setDialog('log') },
+          { label: 'Arbeitspaket anpassen (Mail als Beleg)', disabled: !enabled('task_adjust'), reason: reason('task_adjust'), onClick: () => setDialog('adjust') },
+          { label: 'In Doku ablegen', disabled: !enabled('to_page'), reason: reason('to_page'), onClick: () => setDialog('toPage') },
+          { label: 'An Seite anhängen', disabled: !enabled('append_page'), reason: reason('append_page'), onClick: () => setDialog('appendPage') },
+          { label: `KI: Vorschläge zur Mail${suggestAgent ? ` (${suggestAgent.name})` : ''}`, disabled: !suggestAgent || Boolean(aiNo('mail.triage')) || Boolean(m.outgoing), reason: !suggestAgent ? 'Kein Agent im Projekt' : aiNo('mail.triage') ?? (m.outgoing ? 'Nur für eingehende Mails' : undefined), onClick: () => void run(async () => { const res = await api.post<{ existing: boolean; agent: { name: string } }>(`/mail/mails/${m.id}/ai-suggest`, { projectId: detail.project.id }); setAiMsg(res.existing ? `${res.agent.name} hat zu dieser Mail schon Vorschläge gemacht (unten).` : `${res.agent.name} prüft die Mail und meldet sich per Chat.`); await aiRuns.reload(); }) },
+          { label: 'KI: Essenz → Arbeitspaket', disabled: Boolean(aiNo('assist.essence')), reason: aiNo('assist.essence') ?? undefined, onClick: () => setDialog('aiEssence') },
+          { label: 'KI: Essenz → Seite', disabled: Boolean(aiNo('assist.essence')), reason: aiNo('assist.essence') ?? undefined, onClick: () => setDialog('aiMerge') },
+          { label: 'KI: Zusammenfassen', disabled: Boolean(aiNo('assist.summarize')), reason: aiNo('assist.summarize') ?? undefined, onClick: () => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`, { agentId: sumAgent.agentId }); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); }) },
+          { label: 'Offene KI-Vorschläge', onClick: () => nav(`/projekte/${detail.project.id}/einstellungen/ki-laeufe`) }
+        ] as DropdownItem[]} />
       </div>
-      <div className="row mb">
-        <span className="muted small" title="Ohne KI: die Mail selbst wird übernommen">Projekt:</span>
-        <span className="muted small">Arbeitspaket</span>
-        {enabled('create_task') && <button className="btn sm" onClick={() => setDialog('createTask')}>Erstellen</button>}
-        {enabled('link_task') && <button className="btn sm" onClick={() => setDialog('link')}>Verknüpfen / Kopieren</button>}
-        <button className="btn sm" disabled={!enabled('task_log')} title={reason('task_log')} onClick={() => setDialog('log')}>Ins Log übernehmen</button>
-        <button className="btn sm" disabled={!enabled('task_adjust')} title={reason('task_adjust')} onClick={() => setDialog('adjust')}>Anpassen (Mail als Beleg)</button>
-        <span className="muted small" style={{ marginLeft: 8 }}>Doku</span>
-        <button className="btn sm" disabled={!enabled('to_page')} title={reason('to_page')} onClick={() => setDialog('toPage')}>Ablegen</button>
-        <button className="btn sm" disabled={!enabled('append_page')} title={reason('append_page')} onClick={() => setDialog('appendPage')}>An Seite anhängen</button>
-      </div>
-      <div className="row mb small">
-        <span className="muted" title={suggestAgent ? `${suggestAgent.name} antwortet dir per Direktnachricht im Chat` : 'Kein Agent im Projekt (Projektagent unter Mitglieder oder Agent an der Mail-Ansicht): Ergebnisse erscheinen hier bzw. unter Vorschläge zur Freigabe'}>Agent schlägt vor{suggestAgent ? ` (Antwort im Chat von ${suggestAgent.name})` : ' (kein Agent im Projekt)'}:</span>
-        <button className="btn sm" disabled={!suggestAgent || Boolean(aiNo('mail.triage')) || Boolean(m.outgoing)} title={!suggestAgent ? 'Kein Agent im Projekt' : aiNo('mail.triage') ?? `${suggestAgent.name} prüft die Mail und schlägt Arbeitspaket, Termin, Antwort oder Ablage vor; die Vorschläge kommen per Chat, angenommen wird an der Mail`} onClick={() => void run(async () => { const res = await api.post<{ existing: boolean; agent: { name: string } }>(`/mail/mails/${m.id}/ai-suggest`, { projectId: detail.project.id }); setAiMsg(res.existing ? `${res.agent.name} hat zu dieser Mail schon Vorschläge gemacht (unten).` : `${res.agent.name} prüft die Mail und meldet sich per Chat.`); await aiRuns.reload(); })}>Vorschläge zur Mail</button>
-        {essAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Vorschlag für Log, Status und Termin; wird erst nach Freigabe angewendet'} onClick={() => setDialog('aiEssence')}>Essenz → Arbeitspaket</button>
-        <button className="btn sm" disabled={Boolean(aiNo('assist.essence'))} title={aiNo('assist.essence') ?? 'Abschnitt für Protokoll oder Bericht; wird erst nach Freigabe angehängt'} onClick={() => setDialog('aiMerge')}>Essenz → Seite</button>
-        {sumAgent.picker}<button className="btn sm" disabled={Boolean(aiNo('assist.summarize'))} title={aiNo('assist.summarize') ?? 'Kurzfassung der Mail (wird gespeichert)'} onClick={() => void run(async () => { const res = await api.post<{ summary: string; viaChat: string | null }>(`/mail/mails/${m.id}/ai/summarize`, { agentId: sumAgent.agentId }); setSummary(res.summary); if (res.viaChat) setAiMsg(`Zusammenfassung auch per Chat von ${res.viaChat}.`); })}>Zusammenfassen</button>
-        <Link className="btn sm link" to={`/projekte/${detail.project.id}/einstellungen/ki-laeufe`}>Offene Vorschläge</Link>
-        {ai && aiReasons.length > 0 && <span className="muted">{aiReasons.join(' · ')}</span>}
-      </div>
+      {moving && d.data.canModify && <div className="row mb gap-1">
+        <label className="muted small" htmlFor="mail-move">Verschieben nach</label>
+        <select id="mail-move" value={moveTo} className="w-auto" onChange={(e) => setMoveTo(e.target.value)}>
+          <option value="">Ordner wählen …</option>
+          {mailFolders.filter((f) => f.path.toLowerCase() !== m.folder.toLowerCase()).map((f) => <option key={f.path} value={f.path}>{f.specialUse ? FOLDER_LABEL[f.specialUse] : f.path}</option>)}
+          <option value="__new">+ neuer Unterordner …</option>
+        </select>
+        <Button size="sm" variant="primary" disabled={!moveTo} onClick={() => {
+          if (moveTo === '__new') { setNewFolder(true); return; }
+          void folderAction(() => api.post(`/mail/mails/${m.id}/move`, { folder: moveTo }));
+        }}>Verschieben</Button>
+        <Button size="sm" variant="link" onClick={() => { setMoving(false); setMoveTo(''); }}>Abbrechen</Button>
+      </div>}
+      {ai && aiReasons.length > 0 && <p className="muted small">KI: {aiReasons.join(' · ')} (<Term k="essenz">Essenz</Term> und Zusammenfassung brauchen KI-Recht an der Ansicht und einen Agenten mit dem Recht.)</p>}
       <MailAiBox key={m.id} mailId={m.id} accountId={m.accountId} outgoing={Boolean(m.outgoing)} views={views} canCreateTask={r.canCreateTask} data={aiRuns} />
-      {summary && <div className="notice mb small" style={{ whiteSpace: 'pre-wrap' }}><strong>Zusammenfassung (KI):</strong> {summary}</div>}
+      {summary && <div className="notice mb small pre"><strong>Zusammenfassung (KI):</strong> {summary}</div>}
       {aiMsg && <div className="success mb small">{aiMsg} <Link to={`/projekte/${detail.project.id}/einstellungen/ki-laeufe`}>Offene Vorschläge</Link></div>}
       {(d.data.links.length > 0 || (actions.data?.pages.length ?? 0) > 0) && (
         <p className="small">
@@ -297,14 +301,7 @@ function MailDetailPanel({ mailId, views, folders, onChanged, onGone, viewHint }
 
       {newFolder && <PromptModal title="Neuer Unterordner" label="Name" placeholder="z. B. Lieferanten" submitLabel="Anlegen und verschieben" onClose={() => setNewFolder(false)}
         onSubmit={(name) => { if (name) folderAction(async () => { const f = await api.post<{ folder: MailFolder }>(`/mail/accounts/${m.accountId}/folders`, { name }); await api.post(`/mail/mails/${m.id}/move`, { folder: f.folder.path }); }); }} />}
-      {dialog === 'link' && (
-        <Modal title="Mit Arbeitspaket verknüpfen oder kopieren" onClose={() => setDialog(null)}>
-          <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die das Arbeitspaket lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
-          <table className="table"><tbody>
-            {tasks.filter((t) => !t.done).map((t) => <tr key={t.id}><td>{t.title}</td><td className="nowrap"><button className="btn sm" onClick={() => void doLink(t.id, false)}>Verknüpfen</button> <button className="btn sm" disabled={!enabled('copy_task')} onClick={() => void doLink(t.id, true)}>Kopieren</button></td></tr>)}
-          </tbody></table>
-        </Modal>
-      )}
+      {dialog === 'link' && <LinkTaskDialog canCopy={enabled('copy_task')} copyReason={reason('copy_task')} onClose={() => setDialog(null)} onLink={(id, copy) => void doLink(id, copy)} />}
       {dialog === 'log' && <PickTaskDialog title="Ins Arbeitspaket-Log übernehmen" hint="Die Mail wird 1:1 als Log-Eintrag (Zitat) an das Arbeitspaket gehängt und verknüpft. Für eine Essenz: „KI: Essenz → Arbeitspaket“." noteLabel="Eigene Anmerkung (optional)" onClose={() => setDialog(null)}
         onPick={(taskId, note) => withConfirm(
           (confirmed) => api.post(`/mail/mails/${m.id}/to-task-log`, { taskId, note, confirmed }),
@@ -352,19 +349,53 @@ export function MailHtml({ html }: { html: string }) {
   );
 }
 
+/** Arbeitspaket per Suchfeld (Kennung oder Titel) eingrenzen; Liste mit Kennung, erledigte am Ende. */
+function useTaskSearch() {
+  const { detail, tasks } = useProject();
+  const [q, setQ] = useState('');
+  const needle = q.trim().toLowerCase();
+  const code = (t: { number?: number }) => `${detail.project.key}-${t.number ?? ''}`;
+  const list = tasks.filter((t) => !t.parentId && !t.archivedAt && !t.deletedAt && (!needle || t.title.toLowerCase().includes(needle) || code(t).toLowerCase().includes(needle)))
+    .sort((a, b) => Number(a.done) - Number(b.done) || (b.number ?? 0) - (a.number ?? 0));
+  const input = <input type="search" aria-label="Arbeitspaket suchen" placeholder="Kennung oder Titel filtern …" value={q} onChange={(e) => setQ(e.target.value)} autoFocus />;
+  return { list, code, input, q };
+}
+
 function PickTaskDialog({ title, hint, noteLabel, onClose, onPick }: { title: string; hint: string; noteLabel?: string; onClose: () => void; onPick: (taskId: string, note: string) => Promise<void> }) {
-  const { tasks } = useProject();
-  const [taskId, setTaskId] = useState(tasks.find((t) => !t.done)?.id ?? '');
+  const { list, code, input } = useTaskSearch();
+  const [taskId, setTaskId] = useState(list.find((t) => !t.done)?.id ?? '');
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
+  const shown = list.slice(0, 50);
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} onClose={onClose} dirty={note.trim().length > 0}>
       <div className="form">
         <p className="muted small">{hint}</p>
-        <label className="field"><span>Arbeitspaket</span><select value={taskId} onChange={(e) => setTaskId(e.target.value)}>{tasks.map((t) => <option key={t.id} value={t.id}>{t.done ? '✓ ' : ''}{t.title}</option>)}</select></label>
+        <label className="field"><span className="req">Arbeitspaket</span>{input}
+          <select value={shown.some((t) => t.id === taskId) ? taskId : ''} size={Math.min(8, Math.max(2, shown.length + 1))} aria-required="true" onChange={(e) => setTaskId(e.target.value)}>
+            {shown.length === 0 && <option value="" disabled>Kein Treffer</option>}
+            {shown.map((t) => <option key={t.id} value={t.id}>{code(t)} · {t.title}{t.done ? ' (erledigt)' : ''}</option>)}
+          </select>{list.length > 50 && <span className="muted small">{list.length - 50} weitere – bitte weiter eingrenzen.</span>}</label>
         {noteLabel && <label className="field"><span>{noteLabel}</span><textarea value={note} onChange={(e) => setNote(e.target.value)} /></label>}
-        <div><button className="btn primary" disabled={busy || !taskId} onClick={() => { setBusy(true); void onPick(taskId, note).finally(() => setBusy(false)); }}>Übernehmen</button></div>
+        <div><Button variant="primary" loading={busy} disabled={!taskId || !shown.some((t) => t.id === taskId)} onClick={() => { setBusy(true); void onPick(taskId, note).finally(() => setBusy(false)); }}>Übernehmen</Button></div>
       </div>
+    </Modal>
+  );
+}
+
+/** Mit Arbeitspaket verknüpfen oder kopieren: Suchfeld, Kennung je Zeile. */
+function LinkTaskDialog({ canCopy, copyReason, onClose, onLink }: { canCopy: boolean; copyReason: string; onClose: () => void; onLink: (taskId: string, copy: boolean) => void }) {
+  const { list, code, input } = useTaskSearch();
+  const shown = list.filter((t) => !t.done).slice(0, 50);
+  return (
+    <Modal title="Mit Arbeitspaket verknüpfen oder kopieren" onClose={onClose}>
+      <p className="small muted">Verknüpfen: Wer die Ansicht nicht lesen darf, sieht nur „verknüpfte Mail, keine Berechtigung“. Kopieren: Die Mail wird für alle sichtbar, die das Arbeitspaket lesen dürfen, mit Bestätigung und Audit-Eintrag.</p>
+      <div className="field mb">{input}</div>
+      {!canCopy && copyReason && <p className="muted small">Kopieren nicht möglich: {copyReason}</p>}
+      {shown.length === 0 && <div className="empty">Kein offenes Arbeitspaket passt.</div>}
+      <table className="table"><tbody>
+        {shown.map((t) => <tr key={t.id}><td><span className="tkey">{code(t)}</span> {t.title}</td><td className="nowrap"><Button size="sm" onClick={() => onLink(t.id, false)}>Verknüpfen</Button> <Button size="sm" disabled={!canCopy} title={canCopy ? undefined : copyReason} onClick={() => onLink(t.id, true)}>Kopieren</Button></td></tr>)}
+      </tbody></table>
     </Modal>
   );
 }
@@ -484,7 +515,11 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
   const [f, setF] = useState({ viewId: params.get('view') ?? writable[0]?.id ?? '', taskId: taskParam ?? '', to: params.get('to') ?? '', cc: '', subject: params.get('subject') ?? '', body: params.get('body') ?? '', inReplyTo: '' as string | null });
   // Eigene Mail an Externe: Fundstellen der Außenprüfung vor dem Senden als Hinweis, gesendet wird trotzdem auf Wunsch
   const [check, setCheck] = useState<{ audience: AudienceClass; findings: OutboundFinding[] } | null>(null);
-  const { busy, error, run } = useAsync();
+  const { busy, error, fieldErrors, run } = useAsync();
+  // Ungespeicherte Eingaben: Warnung beim Verlassen (Tab schließen oder Seitenwechsel), bis gesendet oder gespeichert
+  const [done, setDone] = useState(false);
+  const { dirty } = useDirty({ to: f.to, cc: f.cc, subject: f.subject, body: f.body });
+  useUnsavedChanges(dirty && !done);
   // Ansichten laden asynchron: erste schreibbare Ansicht nachziehen, sobald sie da ist
   useEffect(() => { if (!f.viewId && writable[0]) setF((x) => ({ ...x, viewId: writable[0].id })); }, [writable.length]);
   useEffect(() => setCheck(null), [f.to, f.cc, f.subject, f.body, f.taskId]);
@@ -510,7 +545,7 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
   const view = views.find((v) => v.id === f.viewId);
   if (writable.length === 0) return <div className="mail-detail"><div className="empty">Du hast an keiner Ansicht ein Entwurfs- oder Senderecht.</div></div>;
   const split = (s: string) => s.split(/[,;\s]+/).map((x) => x.trim()).filter(Boolean);
-  const save = async (send: boolean) => { await api.post('/mail/drafts', { viewId: f.viewId, projectId: detail.project.id, taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, inReplyTo: f.inReplyTo, send }); onDone(); };
+  const save = async (send: boolean) => { await api.post('/mail/drafts', { viewId: f.viewId, projectId: detail.project.id, taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body, inReplyTo: f.inReplyTo, send }); setDone(true); onDone(); };
   const trySend = () => run(async () => {
     const r = await api.post<{ outbound: { audience: AudienceClass; findings: OutboundFinding[] } | null }>(`/projects/${detail.project.id}/outbound-hint`, { taskId: f.taskId || null, to: split(f.to), cc: split(f.cc), subject: f.subject, body: f.body });
     if (r.outbound?.findings.length) { setCheck(r.outbound); return; }
@@ -527,12 +562,12 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
           <select value={f.viewId} onChange={(e) => setF({ ...f, viewId: e.target.value })}>{writable.map((v) => <option key={v.id} value={v.id}>{v.name} – {v.accountAddress}{v.myRights.canSend ? '' : ' (nur Entwurf, Versand nach Freigabe)'}</option>)}</select></label>
         <label className="field"><span>Zu Arbeitspaket (setzt Antwortadresse mit Arbeitspaket-Code)</span>
           <select value={f.taskId} onChange={(e) => setF({ ...f, taskId: e.target.value })}><option value="">– keine –</option>{tasks.map((t) => <option key={t.id} value={t.id}>{t.title}</option>)}</select></label>
-        <label className="field"><span>An</span><input type="text" value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="mehrere mit Komma" /></label>
-        <label className="field"><span>Cc</span><input type="text" value={f.cc} onChange={(e) => setF({ ...f, cc: e.target.value })} /></label>
-        <label className="field"><span>Betreff</span><input type="text" value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /></label>
-        <label className="field"><span>Text</span><textarea style={{ minHeight: 240 }} value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /></label>
+        <label className="field"><span className="req">An</span><input type="text" required aria-required="true" aria-invalid={Boolean(fieldErrors.to) || undefined} value={f.to} onChange={(e) => setF({ ...f, to: e.target.value })} placeholder="mehrere mit Komma" /><FieldError error={fieldErrors.to} /></label>
+        <label className="field"><span>Cc</span><input type="text" value={f.cc} onChange={(e) => setF({ ...f, cc: e.target.value })} /><FieldError error={fieldErrors.cc} /></label>
+        <label className="field"><span className="req">Betreff</span><input type="text" required aria-required="true" aria-invalid={Boolean(fieldErrors.subject) || undefined} value={f.subject} onChange={(e) => setF({ ...f, subject: e.target.value })} /><FieldError error={fieldErrors.subject} /></label>
+        <label className="field"><span>Text</span><textarea className="mail-body tall" value={f.body} onChange={(e) => setF({ ...f, body: e.target.value })} /><FieldError error={fieldErrors.body} /></label>
         {view?.accountType === 'personal' && !view.myRights.canSend && <div className="notice small">Aus persönlichen Konten sendet nur der Eigentümer. Dein Entwurf geht an ihn zur Freigabe.</div>}
-        {error && <div className="error">{error}</div>}
+        {error && !Object.keys(fieldErrors).length && <div className="error" role="alert">{error}</div>}
         {check && (
           <div className="notice small">
             <strong>Hinweise der Außenprüfung</strong> ({AUDIENCE_LABEL[check.audience]}): Die Mail nennt Inhalte, die Externe nicht erfahren sollen. Du entscheidest selbst.
@@ -544,10 +579,10 @@ export function Compose({ views, onDone }: { views: ViewRow[]; onDone: () => voi
           </div>
         )}
         <div className="row">
-          <button className="btn primary" disabled={busy || !f.to || !f.subject || Boolean(check)} onClick={() => void trySend()}>
+          <Button variant="primary" loading={busy} disabled={!f.to || !f.subject || Boolean(check)} onClick={() => void trySend()}>
             {view?.myRights.canSend ? 'Senden' : 'Zur Freigabe einreichen'}
-          </button>
-          <button className="btn" disabled={busy || !f.to || !f.subject} onClick={() => void run(() => save(false))}>Als Entwurf speichern</button>
+          </Button>
+          <Button disabled={busy || !f.to || !f.subject} onClick={() => void run(() => save(false))}>Als Entwurf speichern</Button>
         </div>
       </div>
     </div>
@@ -576,7 +611,7 @@ function DraftsPanel({ drafts, reload, projectId }: { drafts: MailDraft[]; reloa
             <table className="table"><tbody>
               {rows.map((d) => (
                 <tr key={d.id}>
-                  <td>{d.projectKey && <span className="badge" style={{ marginRight: 6 }}>{d.projectKey}</span>}<strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName}{d.byAgent ? ' (KI-Agent)' : ''} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}{status !== 'sent' && (d.outbound?.findings.length ?? 0) > 0 && <div className="small mt" style={{ color: 'var(--warn)' }} title={d.outbound!.findings.map((f) => f.text).join('\n')}>Hinweise der Außenprüfung: {d.outbound!.findings.length}</div>}</td>
+                  <td>{d.projectKey && <span className="badge mr-2">{d.projectKey}</span>}<strong>{d.subject}</strong><div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName}{d.byAgent ? ' (KI-Agent)' : ''} · {fmtDateTime(d.createdAt)}</div>{d.error && <div className="error small mt">{d.error}</div>}{status !== 'sent' && (d.outbound?.findings.length ?? 0) > 0 && <div className="small mt text-warn" title={d.outbound!.findings.map((f) => f.text).join('\n')}>Hinweise der Außenprüfung: {d.outbound!.findings.length}</div>}</td>
                   <td className="nowrap">
                     {status !== 'sent' && <button className="btn sm" onClick={() => setEdit(d)}>Ansehen</button>}{' '}
                     {(status === 'pending_approval' || status === 'draft' || status === 'failed') && <button className="btn sm primary" onClick={() => void run(async () => { await api.post(`/mail/drafts/${d.id}/send`); await reload(); })}>{status === 'pending_approval' ? 'Freigeben und senden' : 'Senden'}</button>}{' '}
@@ -603,7 +638,7 @@ function DraftsPanel({ drafts, reload, projectId }: { drafts: MailDraft[]; reloa
 /** Fundstellen der Außenprüfung und, bei Agenten-Mails, was die Neuformulierung zurückgehalten hat. */
 function Findings({ findings, withheld }: { findings: OutboundFinding[]; withheld?: string[] }) {
   return <>
-    {findings.length > 0 && <ul style={{ margin: '4px 0', paddingLeft: 18 }}>{findings.map((f, i) => <li key={i}>{f.text}</li>)}</ul>}
+    {findings.length > 0 && <ul className="my-1 ul-18">{findings.map((f, i) => <li key={i}>{f.text}</li>)}</ul>}
     {(withheld?.length ?? 0) > 0 && <div className="muted">Zurückgehalten: {withheld!.join('; ')}</div>}
   </>;
 }
@@ -641,7 +676,7 @@ function HeldCheck({ check, canShare, onDone }: { check: OutboundCheck; canShare
   const externals = check.recipients.filter((r) => r.audience !== 'internal').map((r) => r.email).join(', ');
   const decide = (action: 'release' | 'edit' | 'block') => run(async () => { await api.post(`/outbound-checks/${check.id}/decide`, { action, ...(action === 'edit' ? { subject, body } : {}), sharePageIds: action === 'block' ? [] : share }); await onDone(); });
   return (
-    <div className="mb" style={{ borderTop: '1px solid var(--border)', paddingTop: 8 }}>
+    <div className="mb border-top">
       <div><strong>{d.subject}</strong> <span className="badge">{CHANNEL_LABEL[check.channel] ?? check.channel}</span> <span className="badge">{AUDIENCE_LABEL[check.audience]}</span></div>
       <div className="muted small">an {d.toAddrs.join(', ')} · von {d.userName}{check.taskRef ? ` · ${check.taskRef} „${check.taskTitle}“` : ''} · {fmtDateTime(check.createdAt)}{d.pageTitle ? ` · Anhang „${d.pageTitle}“ (PDF)` : ''}</div>
       <div className="notice small mt"><strong>Fundstellen</strong><Findings findings={check.findings} withheld={check.withheld} /></div>
@@ -651,9 +686,9 @@ function HeldCheck({ check, canShare, onDone }: { check: OutboundCheck; canShare
       {editing ? (
         <div className="form mt">
           <label className="field"><span>Betreff</span><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} /></label>
-          <label className="field"><span>Text</span><textarea style={{ minHeight: 180 }} value={body} onChange={(e) => setBody(e.target.value)} /></label>
+          <label className="field"><span>Text</span><textarea className="mail-body" value={body} onChange={(e) => setBody(e.target.value)} /></label>
         </div>
-      ) : <div className="small mt" style={{ whiteSpace: 'pre-wrap' }}>{d.body}</div>}
+      ) : <div className="small mt pre">{d.body}</div>}
       {error && <div className="error small mt">{error}</div>}
       <div className="row mt">
         {editing
@@ -673,7 +708,7 @@ function EditDraft({ draft, onSaved }: { draft: MailDraft; onSaved: () => Promis
   return (
     <div className="form">
       <label className="field"><span>Betreff</span><input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} /></label>
-      <label className="field"><span>Text (Vorher/Nachher: Änderungen werden gespeichert, bevor freigegeben wird)</span><textarea style={{ minHeight: 200 }} value={body} onChange={(e) => setBody(e.target.value)} /></label>
+      <label className="field"><span>Text (Vorher/Nachher: Änderungen werden gespeichert, bevor freigegeben wird)</span><textarea className="mail-body" value={body} onChange={(e) => setBody(e.target.value)} /></label>
       {error && <div className="error">{error}</div>}
       <div><button className="btn primary" disabled={busy} onClick={() => void run(async () => { await api.patch(`/mail/drafts/${draft.id}`, { subject, body }); await onSaved(); })}>Speichern</button></div>
     </div>
@@ -737,10 +772,10 @@ export function RightsEditor({ view, onClose, onChanged }: { view: ViewRow; onCl
   return (
     <Modal title={`Rechte: ${view.name}`} onClose={onClose}>
       <table className="table"><thead><tr><th>Person / Rolle</th>{flags.map(([k, l]) => <th key={k}>{l}</th>)}<th /></tr></thead><tbody>
-        {rows.map((r, i) => <tr key={i}><td>{label(r)}</td>{flags.map(([k]) => <td key={k}><input type="checkbox" checked={Boolean(r[k])} disabled={k === 'canSend' && view.accountType === 'personal'} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, [k]: e.target.checked } : x)))} /></td>)}<td><button className="btn sm link" onClick={() => setRows(rows.filter((_, j) => j !== i))}>✕</button></td></tr>)}
+        {rows.map((r, i) => <tr key={i}><td>{label(r)}</td>{flags.map(([k]) => <td key={k}><input type="checkbox" checked={Boolean(r[k])} disabled={k === 'canSend' && view.accountType === 'personal'} onChange={(e) => setRows(rows.map((x, j) => (j === i ? { ...x, [k]: e.target.checked } : x)))} /></td>)}<td><IconButton label={`${label(r)} entfernen`} size="sm" variant="link" onClick={() => setRows(rows.filter((_, j) => j !== i))}><IconX /></IconButton></td></tr>)}
       </tbody></table>
       <div className="row mt">
-        <select value={addUser} onChange={(e) => setAddUser(e.target.value)} style={{ width: 'auto' }}>
+        <select className="w-auto" value={addUser} onChange={(e) => setAddUser(e.target.value)}>
           <option value="">+ Person oder Rolle</option>
           {['pl', 'member', 'reader'].filter((ro) => !rows.some((r) => r.role === ro)).map((ro) => <option key={ro} value={`role:${ro}`}>Rolle {roleLabel[ro]}</option>)}
           {detail.members.filter((m) => !rows.some((r) => r.userId === m.userId)).map((m) => <option key={m.userId} value={`user:${m.userId}`}>{m.name}</option>)}

@@ -5,6 +5,7 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, useAsync, useDialog } from '../../components/ui';
 import { useAuth } from '../../lib/auth';
+import { IconX } from '../../components/icons';
 
 export const globalLabel: Record<string, string> = { org_admin: 'Org-Admin', project_creator: 'Projektersteller', user: 'Benutzer' };
 
@@ -26,13 +27,13 @@ export function UsersCard({ users, reload }: { users: User[]; reload: () => Prom
   const patch = (u: User, body: Record<string, unknown>) => void run(async () => { await api.patch(`/users/${u.id}`, body); await reload(); });
   return (
     <div className="card">
-      <div className="row between mb"><h2 style={{ margin: 0 }}>Benutzer</h2><button className="btn sm" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></div>
+      <div className="row between mb"><h2 className="m-0">Benutzer</h2><button className="btn sm" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await reload(); }} />}
       {error && <div className="error mb">{error}</div>}
       <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th /></tr></thead><tbody>
         {users.map((u) => <tr key={u.id} className={u.active ? undefined : 'muted'}>
-          <td>{u.name}{!u.active && <span className="badge" style={{ marginLeft: 4 }}>deaktiviert</span>}</td><td>{u.email}</td>
-          <td>{u.kind === 'agent' ? <span className="badge">KI-Agent</span> : <select aria-label={`Globale Rolle ${u.name}`} value={u.globalRole} disabled={busy || !u.active} onChange={(e) => patch(u, { globalRole: e.target.value })} style={{ width: 'auto' }}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}{u.totpEnabled && <span className="badge ok" style={{ marginLeft: 4 }} title="Zweiter Faktor aktiv">2FA</span>}</td>
+          <td>{u.name}{!u.active && <span className="badge ml-1">deaktiviert</span>}</td><td>{u.email}</td>
+          <td>{u.kind === 'agent' ? <span className="badge">KI-Agent</span> : <select className="w-auto" aria-label={`Globale Rolle ${u.name}`} value={u.globalRole} disabled={busy || !u.active} onChange={(e) => patch(u, { globalRole: e.target.value })}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}{u.totpEnabled && <span className="badge ok ml-1" title="Zweiter Faktor aktiv">2FA</span>}</td>
           <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : u.globalRole === 'org_admin' ? <span className="muted">alle</span> : ORG_RIGHTS.map((r) => <label key={r.key} className="check" title={ORG_RIGHT_HINT[r.key]}><input type="checkbox" disabled={busy || !u.active} checked={Boolean(u.orgRights?.includes(r.key))} onChange={(e) => { const rest = (u.orgRights ?? []).filter((x) => x !== r.key); patch(u, { orgRights: e.target.checked ? [...rest, r.key] : rest }); }} /> {r.label}</label>)}</td>
           <td className="nowrap">{u.totpEnabled && <button className="btn sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => void dialog.confirm({ title: 'Zweiten Faktor zurücksetzen', text: `${u.name} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor neu einrichten.`, confirmLabel: 'Zurücksetzen' }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/totp/reset`); await reload(); }); })}>2FA zurücksetzen</button>}
             {u.kind !== 'agent' && !u.active && <button className="btn sm" disabled={busy} onClick={() => patch(u, { active: true })}>Reaktivieren</button>}
@@ -60,8 +61,8 @@ export function ProjectLeadsCard({ users }: { users: User[] }) {
       <p className="muted small">Nur Kennung, Name und PL, keine Inhalte. Neu bestimmen z. B., wenn die PL das Unternehmen verlässt; die bisherige PL bleibt Stellvertretung, bis die neue sie entfernt, und bekommt eine Meldung. Sich selbst bestimmt man hier nicht.</p>
       {data && data.projects.length === 0 && <div className="empty">Keine Projekte.</div>}
       {data && data.projects.length > 0 && <table className="table"><thead><tr><th>Projekt</th><th>Verantwortliche PL</th><th /></tr></thead><tbody>
-        {data.projects.map((p) => <tr key={p.id}><td><strong>{p.key}</strong> {p.name}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 4 }}>archiviert</span>}</td>
-          <td>{p.lead ? <>{p.lead.name}{!p.lead.active && <span className="badge danger" style={{ marginLeft: 4 }}>deaktiviert</span>}</> : <span className="muted">–</span>}</td>
+        {data.projects.map((p) => <tr key={p.id}><td><strong>{p.key}</strong> {p.name}{p.status === 'archived' && <span className="badge ml-1">archiviert</span>}</td>
+          <td>{p.lead ? <>{p.lead.name}{!p.lead.active && <span className="badge danger ml-1">deaktiviert</span>}</> : <span className="muted">–</span>}</td>
           <td className="nowrap"><button className="btn sm link" onClick={() => { setEdit(p); setF({ userId: people.find((u) => u.id !== p.lead?.userId)?.id ?? '', transferTasks: false }); }}>PL neu bestimmen</button></td></tr>)}
       </tbody></table>}
       {error && <div className="error mt">{error}</div>}
@@ -91,7 +92,7 @@ export function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
     <div className="card">
       <h2>Benutzer einladen</h2>
       {data && !data.hasOrgAccount && <div className="notice mb small">Kein Org-Postfach angebunden. Einladungen werden dann nicht per Mail verschickt, der Einladungslink lässt sich aber kopieren und weitergeben. Org-Postfach anlegen unter <Link to="/verwaltung/mail">Verwaltung › Mail</Link>.</div>}
-      <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+      <div className="row items-end wrap">
         <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label className="field"><span>E-Mail</span><input type="email" value={f.email} onChange={(e) => setF({ ...f, email: e.target.value })} /></label>
         <label className="field"><span>Globale Rolle</span><select value={f.globalRole} onChange={(e) => setF({ ...f, globalRole: e.target.value })}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
@@ -108,8 +109,8 @@ export function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
         <table className="table mt"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Status</th><th /></tr></thead><tbody>
           {data.invitations.map((i) => <tr key={i.id}>
             <td>{i.name}</td><td>{i.email}</td><td><span className="badge">{globalLabel[i.globalRole]}</span></td>
-            <td className="small">{i.sentAt ? <>verschickt {fmtDateTime(i.sentAt)}</> : <span style={{ color: 'var(--warn)' }}>nicht verschickt{i.sendError ? `: ${i.sendError}` : ''}</span>}<div className="muted">gültig bis {fmtDateTime(i.expiresAt)}</div></td>
-            <td className="nowrap"><button className="btn sm link" onClick={() => void copy(i.link)}>Link kopieren</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ sent: boolean; error?: string }>(`/invitations/${i.id}/resend`); setMsg(r.sent ? { ok: true, text: `Erneut an ${i.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: i.link }); await reload(); })}>Erneut senden</button><button className="btn sm link" onClick={() => void run(async () => { await api.del(`/invitations/${i.id}`); await reload(); })}>✕</button></td>
+            <td className="small">{i.sentAt ? <>verschickt {fmtDateTime(i.sentAt)}</> : <span className="text-warn">nicht verschickt{i.sendError ? `: ${i.sendError}` : ''}</span>}<div className="muted">gültig bis {fmtDateTime(i.expiresAt)}</div></td>
+            <td className="nowrap"><button className="btn sm link" onClick={() => void copy(i.link)}>Link kopieren</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ sent: boolean; error?: string }>(`/invitations/${i.id}/resend`); setMsg(r.sent ? { ok: true, text: `Erneut an ${i.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: i.link }); await reload(); })}>Erneut senden</button><button className="btn sm link" onClick={() => void run(async () => { await api.del(`/invitations/${i.id}`); await reload(); })} aria-label="Entfernen"><IconX /></button></td>
           </tr>)}
         </tbody></table>
       )}
@@ -136,12 +137,12 @@ export function GroupsCard({ users, canAdmin }: { users: User[]; canAdmin: boole
   const toggle = (list: string[], id: string, on: boolean) => (on ? [...list.filter((x) => x !== id), id] : list.filter((x) => x !== id));
   return (
     <div className="card">
-      <div className="row between"><h2 style={{ margin: 0 }}>Berechtigungsgruppen</h2>{canAdmin && <button className="btn sm" onClick={() => open(null)}>+ Gruppe</button>}</div>
+      <div className="row between"><h2 className="m-0">Berechtigungsgruppen</h2>{canAdmin && <button className="btn sm" onClick={() => open(null)}>+ Gruppe</button>}</div>
       <p className="muted small">Gruppen bündeln Personen für Sichtbarkeit und Rechte: als Mitglied oder Leser eines Projekts (die PL nimmt sie unter Mitglieder auf), für eingeschränkte Teilprojekte und Mail-Ansichten. Verwalter einer Gruppe pflegen deren Mitglieder.</p>
       {data && groups.length === 0 && <div className="empty">Noch keine Gruppen.</div>}
       {groups.length > 0 && <table className="table"><thead><tr><th>Gruppe</th><th>Mitglieder</th><th>Verwalter</th><th /></tr></thead><tbody>
-        {groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge" style={{ marginLeft: 6 }} title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{names(g.memberIds) || <span className="muted">–</span>}</td><td className="small">{names(g.managerIds) || <span className="muted">–</span>}</td>
-          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button>{canAdmin && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Projekte, Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })}>✕</button>}</td></tr>)}
+        {groups.map((g) => <tr key={g.id}><td>{g.name}{g.idpName && <span className="badge ml-2" title="Mitglieder kommen bei SSO-Anmeldung aus dieser Gruppe des Identitätsanbieters">SSO: {g.idpName}</span>}{g.description && <div className="muted small">{g.description}</div>}</td><td className="small">{names(g.memberIds) || <span className="muted">–</span>}</td><td className="small">{names(g.managerIds) || <span className="muted">–</span>}</td>
+          <td className="nowrap"><button className="btn sm link" onClick={() => open(g)}>Bearbeiten</button>{canAdmin && <button className="btn sm link" onClick={() => void dialog.confirm({ title: 'Gruppe löschen', text: `„${g.name}“ löschen? Freigaben über diese Gruppe (Projekte, Teilprojekte, Mail-Ansichten) enden.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/groups/${g.id}`); await reload(); }); })} aria-label="Entfernen"><IconX /></button>}</td></tr>)}
       </tbody></table>}
       {error && <div className="error mt">{error}</div>}
       {edit && (
@@ -153,9 +154,9 @@ export function GroupsCard({ users, canAdmin }: { users: User[]; canAdmin: boole
               <label className="field"><span>Gruppe beim Identitätsanbieter (SSO, optional)</span><input type="text" value={f.idpName} placeholder="z. B. PM-Team (Name aus dem Gruppen-Claim)" onChange={(e) => setF({ ...f, idpName: e.target.value })} /><span className="muted small">Bei jeder SSO-Anmeldung wird die Mitgliedschaft nach dieser Gruppe gesetzt oder entfernt.</span></label>
             </>}
             <div className="field"><span>Mitglieder</span>
-              <div className="grid cols-2" style={{ gap: 2 }}>{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" disabled={!canAdmin && f.managerIds.includes(u.id)} checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: toggle(f.memberIds, u.id, e.target.checked) })} /> {u.name}</label>)}</div></div>
+              <div className="grid cols-2 gap-1">{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" disabled={!canAdmin && f.managerIds.includes(u.id)} checked={f.memberIds.includes(u.id)} onChange={(e) => setF({ ...f, memberIds: toggle(f.memberIds, u.id, e.target.checked) })} /> {u.name}</label>)}</div></div>
             {canAdmin && <div className="field"><span>Verwalter (pflegen die Mitglieder dieser Gruppe)</span>
-              <div className="grid cols-2" style={{ gap: 2 }}>{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" aria-label={`Verwalter ${u.name}`} checked={f.managerIds.includes(u.id)} onChange={(e) => setF({ ...f, managerIds: toggle(f.managerIds, u.id, e.target.checked), memberIds: e.target.checked ? toggle(f.memberIds, u.id, true) : f.memberIds })} /> {u.name}</label>)}</div></div>}
+              <div className="grid cols-2 gap-1">{people.map((u) => <label key={u.id} className="check small"><input type="checkbox" aria-label={`Verwalter ${u.name}`} checked={f.managerIds.includes(u.id)} onChange={(e) => setF({ ...f, managerIds: toggle(f.managerIds, u.id, e.target.checked), memberIds: e.target.checked ? toggle(f.memberIds, u.id, true) : f.memberIds })} /> {u.name}</label>)}</div></div>}
             {!canAdmin && <p className="muted small">Als Verwalter pflegst du die Mitglieder; Verwalter, Name und SSO-Zuordnung ändert die Gruppenverwaltung.</p>}
             <div><button className="btn primary" disabled={busy || (canAdmin && !f.name.trim())} onClick={() => void run(async () => {
               const body = canAdmin ? f : { memberIds: f.memberIds };

@@ -89,7 +89,7 @@ export function CopyMoveDialog({ kind, op, detail, task, subproject, tasks = [],
           {op === 'move' && <span className="muted small">Im Zielprojekt brauchst du das Recht „Projektplan ändern“ oder die PL-Rolle.</span>}
         </label>
         {kind === 'task' && targetDetail && (
-          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <div className="row gap-3 wrap">
             <label className="field"><span>Teilprojekt im Ziel</span>
               <select value={subId} onChange={(e) => setSubId(e.target.value)}><option value="">– keins –</option>{targetDetail.subprojects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></label>
             <label className="field"><span>Spalte im Ziel</span>
@@ -99,7 +99,7 @@ export function CopyMoveDialog({ kind, op, detail, task, subproject, tasks = [],
         {op === 'copy' && <label className="field"><span>{kind === 'task' ? 'Titel der Kopie' : 'Name der Kopie'}</span><input type="text" value={name} placeholder={kind === 'task' ? `${task?.title} (Kopie)` : `${subproject?.name} (Kopie)`} onChange={(e) => setName(e.target.value)} /></label>}
         <fieldset style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px' }}>
           <legend className="small">Was mitgenommen wird</legend>
-          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+          <div className="row gap-3 wrap">
             <label className="check"><input type="radio" name="cm-mode" checked={mode === 'all'} onChange={() => setMode('all')} /> Alles</label>
             <label className="check"><input type="radio" name="cm-mode" checked={mode === 'all_except'} onChange={() => setMode('all_except')} /> Alles außer …</label>
             <label className="check"><input type="radio" name="cm-mode" checked={mode === 'only'} onChange={() => setMode('only')} /> Nichts außer …</label>
@@ -111,7 +111,7 @@ export function CopyMoveDialog({ kind, op, detail, task, subproject, tasks = [],
               ))}
             </div>
           )}
-          {mode === 'all' && <p className="muted small" style={{ margin: '6px 0 0' }}>{partList.filter((p) => allKeys.includes(p.key)).map((p) => p.label).join(', ')}</p>}
+          {mode === 'all' && <p className="muted small m-0 mt-2">{partList.filter((p) => allKeys.includes(p.key)).map((p) => p.label).join(', ')}</p>}
         </fieldset>
         {kind === 'subproject' && parts.includes('tasks') && tasks.length > 0 && (
           <fieldset style={{ border: '1px solid var(--border)', borderRadius: 6, padding: '8px 12px' }}>
@@ -119,7 +119,7 @@ export function CopyMoveDialog({ kind, op, detail, task, subproject, tasks = [],
             <div style={{ maxHeight: 220, overflow: 'auto', display: 'grid', gap: 2 }}>
               {tasks.map((x) => <label key={x.id} className="check"><input type="checkbox" checked={taskIds.has(x.id)} onChange={() => toggleTask(x.id)} /> <span className="badge tkey-badge">{source.key}-{x.number}</span> {x.title}{x.done && <span className="muted small"> (erledigt)</span>}</label>)}
             </div>
-            {op === 'move' && <p className="muted small" style={{ margin: '6px 0 0' }}>Abgewählte Arbeitspakete bleiben hier ohne Teilprojekt.</p>}
+            {op === 'move' && <p className="muted small m-0 mt-2">Abgewählte Arbeitspakete bleiben hier ohne Teilprojekt.</p>}
           </fieldset>
         )}
         {op === 'move' && <p className="muted small">Verschobene Arbeitspakete bekommen im Ziel eine neue Nummer; Links auf das Arbeitspaket bleiben gültig. Besprechungsbezüge entfallen.</p>}

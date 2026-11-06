@@ -5,6 +5,9 @@ import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
+import { IconButton } from '../../components/ui';
+import { IconChevronDown, IconChevronRight, IconMail, IconMore, IconX } from '../../components/icons';
+import { useUnsavedChanges } from '../../lib/useUnsavedChanges';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { MeetingsView } from './MeetingsView';
@@ -46,10 +49,10 @@ export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
   const canWrite = me.role !== 'reader';
   const row = (p: DocPage, depth: number) => (
     <div key={p.id} className={`page ${pageId === p.id ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => nav(`${base}/${p.id}`)}>
-      <span className="t">{(p.childCount ?? 0) > 0 ? '▾ ' : ''}{p.title}</span>
+      <span className="t">{(p.childCount ?? 0) > 0 ? <><IconChevronDown size={12} /> </> : ''}{p.title}</span>
       {canWrite && <span className="acts" onClick={(e) => e.stopPropagation()}>
-        <button title="Unterseite anlegen" onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}>+</button>
-        <button title="Seiteneinstellungen" onClick={() => nav(`${base}/${p.id}?einstellungen=1`)}>⋯</button>
+        <button title="Unterseite anlegen" aria-label={`Unterseite anlegen unter ${p.title}`} onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}>+</button>
+        <button title="Seiteneinstellungen" aria-label={`Seiteneinstellungen: ${p.title}`} onClick={() => nav(`${base}/${p.id}?einstellungen=1`)}><IconMore size={14} /></button>
       </span>}
       <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
     </div>
@@ -64,17 +67,17 @@ export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
   };
   return (
     <div className="docs-layout">
-      {mobile && (pageId || meetings) && <button className="btn sm tree-toggle" onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? '▾ Seitenbaum ausblenden' : '▸ Seitenbaum'}</button>}
+      {mobile && (pageId || meetings) && <button className="btn sm tree-toggle" aria-expanded={treeOpen} onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? <><IconChevronDown /> Seitenbaum ausblenden</> : <><IconChevronRight /> Seitenbaum</>}</button>}
       {showTree && <div className="doc-tree" onClick={() => { if (mobile) setTreeOpen(false); }}>
         <div className="row between"><strong>Doku</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewPage({ folderId: docs.data?.folders[0]?.id ?? null, parentPageId: null })}>+ Seite</button>}</div>
         <div className={`folder meetings-link ${meetings ? 'active' : ''}`}><span className="t" title="Besprechungen: Termine, Teilnehmer, Protokolle" onClick={() => nav(`${base}/besprechungen`)}>Besprechungen</span></div>
         {docs.data?.folders.filter((f) => !f.parentId).map((f) => (
           <div key={f.id}>
             <div className={`folder ${f.pageId && pageId === f.pageId ? 'active' : ''}`}>
-              <span className="t" title="Ordnerseite öffnen" onClick={() => void openFolder(f)}>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> ✉</span>}</span>
+              <span className="t" title="Ordnerseite öffnen" onClick={() => void openFolder(f)}>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> <IconMail size={12} /><span className="sr-only">mit Verteiler</span></span>}</span>
               {canWrite && <span className="acts">
-                <button title="Seite in diesem Ordner anlegen" onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+</button>
-                {me.role === 'pl' && <button title="Ordner bearbeiten (Name, Verteiler)" onClick={() => setEditFolder(f)}>⋯</button>}
+                <button title="Seite in diesem Ordner anlegen" aria-label={`Seite in Ordner ${f.name} anlegen`} onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+</button>
+                {me.role === 'pl' && <button title="Ordner bearbeiten (Name, Verteiler)" aria-label={`Ordner ${f.name} bearbeiten`} onClick={() => setEditFolder(f)}><IconMore size={14} /></button>}
               </span>}
             </div>
             {rootsIn(f.id).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}
@@ -109,7 +112,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   const [params, setParams] = useSearchParams();
   const d = useData<PageData>(`/docs/pages/${pageId}`);
   const [edit, setEdit] = useState(false);
-  const [editor, setEditor] = useState<{ save: () => Promise<void>; busy: boolean } | null>(null);
+  const [editor, setEditor] = useState<{ save: () => Promise<void>; busy: boolean; dirty: boolean } | null>(null);
   const [share, setShare] = useState(false);
   const [settings, setSettingsState] = useState(() => params.get('einstellungen') === '1');
   const setSettings = (v: boolean) => { setSettingsState(v); if (!v && params.get('einstellungen')) { const n = new URLSearchParams(params); n.delete('einstellungen'); setParams(n, { replace: true }); } };
@@ -161,13 +164,13 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
         <span className="right" />
         {edit ? <>
           <button className="btn sm primary" disabled={!editor || editor.busy} onClick={() => void editor?.save()}>Speichern <kbd>Strg+S</kbd></button>
-          <button className="btn sm" onClick={() => setEdit(false)}>Abbrechen</button>
+          <button className="btn sm" onClick={() => { if (!editor?.dirty) { setEdit(false); return; } void dialog.confirm({ title: 'Eingaben verwerfen?', text: 'Ungespeicherte Änderungen an der Seite gehen verloren.', confirmLabel: 'Verwerfen', danger: true }).then((ok) => { if (ok) setEdit(false); }); }}>Abbrechen</button>
         </> : <>
           {canEdit && <button className="btn sm primary" onClick={() => setEdit(true)}>Bearbeiten</button>}
           {p.status === 'final' && canFinal && <button className="btn sm" disabled={busy || !(folder?.distributionList.length || s.recipients?.length)} title={folder?.distributionList.length ? `An (Ordner): ${folder.distributionList.join(', ')}` : s.recipients?.length ? `An (Seite): ${s.recipients.join(', ')}` : 'Kein Verteiler am Ordner oder an der Seite'} onClick={() => void run(async () => { const r = await api.post<{ to: string[]; filename: string }>(`/docs/pages/${p.id}/distribute`, {}); setError(null); await d.reload(); await dialog.notify({ title: 'PDF versendet', text: `„${r.filename}“ ging an: ${r.to.join(', ')}` }); })}>Als PDF an Verteiler senden</button>}
           {me.role !== 'reader' && <button className="btn sm" onClick={newChild} title={isFolderPage ? 'Neue Seite in diesem Ordner' : childTemplate ? `Vorlage: ${tplName(childTemplate)}` : undefined}>{isFolderPage ? '+ Seite' : '+ Unterseite'}</button>}
           <span className="menu-wrap">
-            <button className="btn sm" title="Weitere Aktionen" onClick={() => setMenu(!menu)}>⋯</button>
+            <button className="btn sm" title="Weitere Aktionen" aria-label="Weitere Aktionen" aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu(!menu)}><IconMore /></button>
             {menu && <><div className="menu-backdrop" onClick={() => setMenu(false)} /><div className="menu" onClick={() => setMenu(false)}>
               {me.role !== 'reader' && <button onClick={() => setSettings(true)}>Seiteneinstellungen</button>}
               {isFolderPage && me.role === 'pl' && <button onClick={() => setEditFolder(true)}>Ordner bearbeiten (Name, Verteiler)</button>}
@@ -201,7 +204,7 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
         </div>
         <div className="card">
           <h3>Anhänge</h3>
-          <ul>{d.data.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{me.role !== 'reader' && p.status !== 'final' && <button className="btn sm link" title="Anhang löschen" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await d.reload(); }); })}>✕</button>}</li>)}</ul>
+          <ul>{d.data.attachments.map((a) => <li key={a.id}><a href={`/api/attachments/${a.id}`} target="_blank" rel="noreferrer">{a.filename}</a> <span className="muted small">({Math.round(a.size / 1024)} KB)</span>{me.role !== 'reader' && p.status !== 'final' && <IconButton label={`Anhang „${a.filename}“ löschen`} size="sm" variant="link" onClick={() => void dialog.confirm({ title: 'Anhang löschen', text: `„${a.filename}“ endgültig löschen?`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/attachments/${a.id}`); await d.reload(); }); })}><IconX /></IconButton>}</li>)}</ul>
           {me.role !== 'reader' && <input type="file" onChange={(e) => { const f = e.target.files?.[0]; if (!f) return; const fd = new FormData(); fd.append('file', f); void run(async () => { await api.post(`/attachments?pageId=${p.id}`, fd); await d.reload(); }); }} />}
         </div>
       </div>
@@ -213,16 +216,20 @@ function PageView({ pageId, docs, reloadTree, onNewChild, onNewInFolder }: { pag
   );
 }
 
-function Editor({ page, onApi, onSaved }: { page: DocPage; onApi: (api: { save: () => Promise<void>; busy: boolean }) => void; onSaved: () => Promise<void> }) {
+function Editor({ page, onApi, onSaved }: { page: DocPage; onApi: (api: { save: () => Promise<void>; busy: boolean; dirty: boolean }) => void; onSaved: () => Promise<void> }) {
   const [title, setTitle] = useState(page.title);
   const [html, setHtml] = useState(page.contentHtml);
+  const [savedOnce, setSavedOnce] = useState(false);
   const { busy, error, run } = useAsync();
-  const save = async () => { await run(async () => { await api.patch(`/docs/pages/${page.id}`, { title, contentHtml: html, baseVersion: page.version }); await onSaved(); }); };
+  const dirty = !savedOnce && (title !== page.title || html !== page.contentHtml);
+  // Ungespeicherte Änderungen: Warnung beim Schließen des Tabs und Nachfrage vor einem Seitenwechsel
+  useUnsavedChanges(dirty);
+  const save = async () => { await run(async () => { await api.patch(`/docs/pages/${page.id}`, { title, contentHtml: html, baseVersion: page.version }); setSavedOnce(true); await onSaved(); }); };
   // Speichern-Knopf liegt in der Aktionsleiste der Seite; Zustand dorthin melden
-  useEffect(() => { onApi({ save, busy }); }, [title, html, busy]);
+  useEffect(() => { onApi({ save, busy, dirty }); }, [title, html, busy, dirty]);
   return (
     <div>
-      <div className="row mb"><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} style={{ fontSize: 18, fontWeight: 600 }} placeholder="Titel" /></div>
+      <div className="row mb"><input type="text" aria-label="Titel" value={title} onChange={(e) => setTitle(e.target.value)} className="title-input" placeholder="Titel" /></div>
       {error && <div className="error mb">{error}</div>}
       <RichEditor html={html} onChange={setHtml} pageId={page.id} onSave={() => void save()} />
       <p className="muted small mt">Jede Speicherung erzeugt eine neue Version; Speichern auf einer veralteten Version wird abgelehnt. Bilder werden als Anhang der Seite gespeichert.</p>
@@ -328,7 +335,7 @@ function ShareDialog({ page, onClose }: { page: DocPage; onClose: () => void }) 
           const r = await api.post<{ share: DocShare; sent: boolean }>(`/docs/pages/${page.id}/shares`, { email: f.email, mode: f.mode, includeChildren: f.includeChildren, expiresDays: f.expiresDays ? Number(f.expiresDays) : null, send: f.send, message: f.message });
           setCreated({ url: r.share.url, sent: r.sent }); setF({ ...f, email: '' }); await shares.reload();
         })}>Freigeben</button></div>
-        {created && <div className="success full small">Freigabe erstellt{created.sent ? ' und per Mail gesendet' : ''}. Link: <code style={{ userSelect: 'all' }}>{created.url}</code></div>}
+        {created && <div className="success full small">Freigabe erstellt{created.sent ? ' und per Mail gesendet' : ''}. Link: <code className="select-all">{created.url}</code></div>}
       </div>
       <h3 className="mt">Bestehende Freigaben</h3>
       {shares.data?.shares.length === 0 && <p className="muted small">Keine.</p>}
