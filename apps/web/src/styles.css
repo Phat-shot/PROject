@@ -1267,3 +1267,13 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .result-lines .result-ok > .icon { color: var(--ok); }
 .result-lines .result-held > .icon { color: var(--warn); }
 .result-lines .result-denied > .icon { color: var(--danger); }
+
+/* Chat: Agent denkt nach – Spinner mit Name; bei weniger Bewegung eine stehende Sanduhr statt des Spinners */
+.chat-busy { display: flex; align-items: center; gap: 4px; font-style: normal; }
+.chat-busy .spinner { margin-right: 2px; }
+.chat-busy .chat-busy-still { display: none; flex: none; }
+.chat-busy .chat-busy-hint { margin-left: 4px; }
+@media (prefers-reduced-motion: reduce) {
+  .chat-busy .spinner { display: none; }
+  .chat-busy .chat-busy-still { display: inline-block; }
+}
