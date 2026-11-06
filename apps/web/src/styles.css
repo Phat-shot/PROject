@@ -1130,3 +1130,21 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .kpi-big { font-size: 24px; font-weight: 700; } .color-input { width: 48px; height: 32px; padding: 0; }
 .ell-420 { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sub-list { padding: 4px 0 0 18px; }
+
+/* Management-Report: Block-Editor (Einstellungen › Fristen und Berichte), Vorschau und Portfolio-Dialog */
+.report-blocks { display: grid; gap: var(--sp-2); }
+.report-block-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-2); }
+.report-block.card { padding: 10px 12px; display: grid; gap: var(--sp-2); }
+.report-block:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.report-block-title { flex: 1 1 180px; min-width: 120px; }
+.report-block-opts { row-gap: var(--sp-1); }
+.report-block-opts input[type=number] { width: 64px; }
+.report-globals { row-gap: var(--sp-1); }
+.menu [role='menuitem'] .desc { display: block; font-size: var(--fs-xs); color: var(--muted); font-weight: 400; white-space: normal; max-width: 320px; }
+.report-preview { max-height: 70vh; overflow: auto; border: 1px solid var(--border); border-radius: var(--r-md); padding: 10px 14px; background: var(--surface); }
+.report-preview .prose, .report-preview .prose svg, .prose .report-chart svg { max-width: 100%; height: auto; }
+.prose .report-chart { margin: 8px 0 12px; }
+.ProseMirror .report-chart.ProseMirror-selectednode, .ProseMirror div.report-chart:has(svg):focus { outline: 2px solid var(--primary); }
+.report-fieldset { border: 1px solid var(--border); border-radius: var(--r-md); padding: 6px 10px 8px; margin: 0; display: grid; gap: 4px; }
+.report-fieldset legend { color: var(--muted); padding: 0 4px; }
+.report-choice { display: flex; flex-wrap: wrap; gap: 4px 14px; }

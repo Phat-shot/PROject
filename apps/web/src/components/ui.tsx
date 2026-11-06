@@ -277,9 +277,26 @@ export function PromptModal({ title, label, value = '', placeholder, type = 'tex
   );
 }
 
+/**
+ * Sanitizer für Seiten-, Berichts- und Markdown-HTML: HTML- und SVG-Profil (Diagramme der Berichte: svg, rect, text, line,
+ * circle, path, g, tspan samt Attributen), ohne Skripte, Stylesheets und foreignObject; Tabellen- und Checklisten-Attribute
+ * des Editors bleiben erhalten.
+ */
+export const SANITIZE_CONFIG = {
+  USE_PROFILES: { html: true, svg: true, svgFilters: false },
+  FORBID_TAGS: ['script', 'style', 'foreignObject', 'iframe', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'base', 'meta', 'link'],
+  FORBID_ATTR: ['onload', 'onerror', 'onclick'],
+  ADD_ATTR: ['target', 'colwidth', 'data-type', 'data-checked', 'role', 'aria-label', 'viewBox', 'text-anchor', 'font-family', 'font-weight', 'stroke-dasharray']
+} as const;
+export function sanitizeHtml(html: string): string {
+  return String(DOMPurify.sanitize(html, SANITIZE_CONFIG as any));
+}
+/** Bereinigtes HTML (Seite, Bericht, Vorschau) als Fließtext anzeigen. */
+export function SafeHtml({ html, className = 'prose' }: { html: string; className?: string }) {
+  return <div className={className} dangerouslySetInnerHTML={{ __html: sanitizeHtml(html) }} />;
+}
 export function Markdown({ md }: { md: string }) {
-  const html = DOMPurify.sanitize(marked.parse(md, { async: false, breaks: true, gfm: true }) as string);
-  return <div className="prose" dangerouslySetInnerHTML={{ __html: html }} />;
+  return <SafeHtml html={marked.parse(md, { async: false, breaks: true, gfm: true }) as string} />;
 }
 
 /**

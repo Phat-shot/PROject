@@ -4,7 +4,7 @@
  */
 import type { ComponentType, SVGProps } from 'react';
 import {
-  AlertTriangle, ArrowLeft, ArrowRight, ArrowUpRight, Archive, Bell, Check, CheckSquare, ChevronDown, ChevronRight, ChevronUp, Circle, Clock, CornerDownLeft,
+  AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Copy, Archive, Bell, Check, CheckSquare, ChevronDown, ChevronRight, ChevronUp, Circle, Clock, CornerDownLeft,
   Diamond, Hourglass, Link2, Lock, LockOpen, Mail, Menu, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, RotateCw, Scissors, Search, Settings, Star,
   ThumbsDown, ThumbsUp, Trash2, X
 } from 'lucide-react';
@@ -32,6 +32,9 @@ export const IconSettings = wrap(Settings);
 export const IconArrowLeft = wrap(ArrowLeft);
 export const IconArrowRight = wrap(ArrowRight);
 export const IconArrowUpRight = wrap(ArrowUpRight);
+export const IconArrowUp = wrap(ArrowUp);
+export const IconArrowDown = wrap(ArrowDown);
+export const IconCopy = wrap(Copy);
 export const IconPaperclip = wrap(Paperclip);
 export const IconDiamond = wrap(Diamond);
 export const IconRotate = wrap(RotateCw);

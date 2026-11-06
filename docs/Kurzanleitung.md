@@ -55,6 +55,7 @@ Fachbegriffe und Anglizismen, wie sie in der Oberfläche vorkommen:
 - **Intern: Chat.** Knopf unten rechts oder „Chat“ in der Leiste (mobil als Seite). Projektkanal je Projekt mit Threads direkt unter der Nachricht, Direktnachrichten mit Personen und KI-Agenten, Suche oben. Gespräche lassen sich archivieren; sie kommen mit der nächsten Nachricht zurück.
 - **Extern: Mail** über das Projektkonto. „Stand nachfragen“ im AP schreibt eine vorbelegte Mail; die Antwort landet über die Antwortadresse (Plus-Code) automatisch im AP.
 - **Doku:** Protokolle, Konzepte, Berichte als Seiten. Status Entwurf → In Prüfung → Final; finale Seiten lassen sich als PDF an den Verteiler des Ordners senden.
+- **Management-Report:** Die PL stellt den Bericht unter Einstellungen › Fristen und Berichte aus Blöcken zusammen (Vorlage wählen, Vorschau, PDF); über alle Projekte gibt es ihn unter Dashboard › Projekte › „Management-Report“.
 
 ## Mit KI-Agenten arbeiten
 

@@ -210,7 +210,15 @@ Eine bestätigte Überschneidung lehnt das System ab und zeigt die Belegungen; w
 
 - **Zeiterfassung** (optional je Projekt, mandantenweit abschaltbar): Buchung je AP oder frei, Schätzung, Budget, Auswertung je Person und Teilprojekt, CSV. Mitglieder sehen eigene Buchungen, die PL alle, Leser keine; das gilt auch für die Zeiten im AP.
 - **Auswertung:** Durchsatz je Woche, Durchlaufzeit, Verzug nach Alter, Eskalationen, je Teilprojekt; CSV.
-- **Reporting** (Einstellungen › Fristen und Berichte): Statusbericht aus Vorlage im festen Rhythmus, mit Kennzahlen, als Entwurf zur Prüfung oder direkt als PDF an den Empfängerkreis.
+- **Reporting** (Einstellungen › Fristen und Berichte): Management-Report aus Blöcken im festen Rhythmus, als Entwurf zur Prüfung oder direkt als PDF an den Empfängerkreis.
+
+**Aufbau des Berichts.** Die PL stellt den Bericht aus Blöcken zusammen, die untereinander im Bericht erscheinen: Gesamtstand (Ampel, Fortschritt Soll/Ist, Kennzahlen), Änderungen im Zeitraum, Überfällig, Blockiert und eskaliert, Meilensteine, Teilprojekte, Risiken und Entscheidungen (RAID), Gebuchte Zeit, Entscheidungen und Meldungen, Ausblick, Management-Summary (KI) und Freitext. Jeder Block hat eine eigene Überschrift und nur die Optionen, die zu ihm passen: Zeitraum (seit dem letzten Bericht, letzte Woche, letzter Monat, letztes Quartal oder n Tage), Diagramm, maximale Einträge, Ausblick-Tage oder Freitext in Markdown. Blöcke lassen sich verschieben, duplizieren und entfernen, auch mit der Tastatur. „Aufbau wählen“ setzt eine Vorlage: Management-Report (Standard), Kurzstatus, Monatsbericht oder Leer.
+
+**Texte und Grafik.** Über den Blöcken stehen zwei Schalter: „Texte“ regelbasiert oder KI (die Projekt-KI formuliert die Management-Summary aus den Zahlen der anderen Blöcke; ohne Agenten mit Berichtsrecht fällt der Bericht auf den Regeltext zurück) und „Grafisch ausarbeiten“ (Diagramme als Vektorgrafik in Seite und PDF; der Schalter je Block greift nur, wenn er an ist).
+
+**Vorschau.** „Vorschau“ zeigt den Bericht mit dem aktuellen, noch nicht gespeicherten Aufbau als Seite im Dialog; „Als PDF“ öffnet dieselbe Fassung als PDF im neuen Tab. Erst „Speichern“ legt den Aufbau in der Policy ab, „Jetzt erzeugen“ speichert und erstellt die Berichtsseite sofort. Wer den Aufbau nicht ändern darf, sieht ihn als eine Zeile zusammengefasst. Berichtsseiten in der Doku behalten ihre Diagramme beim Öffnen und Bearbeiten.
+
+**Portfolio-Report.** Unter Dashboard › Projekte erzeugt „Management-Report“ einen Bericht über alle sichtbaren Projekte oder eine Auswahl: Gesamtübersicht mit Ampel, Fortschritt, Verzug und nächstem Meilenstein, dazu je Projekt die gewählten Zusatzblöcke (Änderungen, Meilensteine, Ausblick, Überfällig, Blockiert, Risiken) im Zeitraum Woche, Monat, Quartal oder n Tage. Vorschau im Dialog, PDF im neuen Tab.
 - **Risiken (RAID):** Risiken mit Wahrscheinlichkeit und Auswirkung, Annahmen, Issues und Entscheidungen mit Verantwortlichen und Terminen.
 
 ## 11. KI im Projekt
