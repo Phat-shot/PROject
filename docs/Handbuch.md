@@ -100,7 +100,12 @@ Knopf klicken, Titel eingeben (Enter), danach öffnet die Maske mit allen Felder
 - **Mails:** „Mail aus Arbeitspaket schreiben“, „Stand nachfragen“; Antworten an die Antwortadresse (Plus-Code) landen automatisch im AP. Ist das AP aus einer Mail entstanden, steht oben „Entstanden aus Mail von …“ und nach Erledigung „Ursprungsmail beantworten“ (KI-Handbuch Kapitel 3).
 - **Log und Kommentare:** `@Name` benachrichtigt die Person. Systemeinträge (Status, Eskalation, Agent, Mail) stehen im selben Log. Das Häkchen **„für Externe sichtbar“** beim Kommentieren macht den Eintrag Teil des Außenkontexts (Kennzeichen am Eintrag). Nachträglich umschalten („für Externe freigeben“ / „nur intern“) dürfen PL und „Projektplan ändern“, bei eigenen Einträgen auch die verfassende Person.
 - **Agent am AP:** „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand, offene Fragen, Freigaben, Quellen, verwandte Arbeitspakete, Ressourcen, Berichtswunsch und Selbstständigkeit je AP (KI-Handbuch Kapitel 4 und 9).
-- **Kopieren / Verschieben** (auch in andere Projekte, wählbar was mitgeht; Aufgaben gehen beim Verschieben immer mit), **Archivieren**, **Löschen** (PL; Papierkorb 30 Tage, Aufgaben gehen mit).
+- **Kopieren / Verschieben …** Das Menü „Verschieben …“ hält die Struktur beweglich, alles im selben Projekt mit Log-Eintrag an Quelle und Ziel, Audit und Meldung an die Zuständigen:
+  - **Aufgabe:** „In anderes Arbeitspaket …“ (Ziel per Kennung oder Titel suchen; Checkliste, Anhänge, Log und Zeiten gehen mit, das Teilprojekt folgt dem Ziel), „Zum Arbeitspaket machen …“ (eigene Karte in der Spalte des bisherigen AP, Teilprojekt wählbar), „Zu Checklistenpunkt machen“ (nur ohne Zeitbuchungen, verknüpfte Mails und offene Fragen; Log und Kommentare werden als ein Eintrag am AP zusammengefasst, Anhänge und Checkliste wandern dorthin; Status, Termin, Beschreibung und Labels entfallen, mit Rückfrage).
+  - **Arbeitspaket:** „Teilprojekt ändern …“ (Aufgaben folgen) und „In anderes Projekt …“ (bisheriger Dialog mit Auswahl, was mitgeht; PL oder „Projektplan ändern“). Auch in der Teilprojekt-Maske steht je AP eine Auswahl des Teilprojekts.
+  - **Checklistenpunkt:** Menü je Punkt mit „In Aufgabe umwandeln …“ (Titel, Termin, Zuständigkeit; der Punkt entfällt, Mails dazu bleiben am AP), „Verschieben nach …“ (anderes AP oder andere Aufgabe) und „Löschen“.
+  - **Ziehen:** Aufgaben aus der Aufgabenliste des AP oder aus der aufgeklappten Karte lassen sich auf eine andere AP-Karte im Board ziehen (gestrichelter Rahmen = Ziel); das hängt sie um, der Status bleibt. Ziehen in eine Spalte setzt wie bisher den Status.
+  - **Archivieren**, **Löschen** (PL; Papierkorb 30 Tage, Aufgaben gehen mit). Im Chat erledigt der KI-Agent dasselbe mit dem Befehl `move` (KI-Handbuch Kapitel 4).
 
 ### Eskalationsregelwerk
 
@@ -266,7 +271,7 @@ Drei Einstellungsseiten mit denselben Reitern in derselben Reihenfolge (Konzept:
 | Benachrichtigungen | Chat und Mail je Ereignisklasse, je Projekt abweichen, stummschalten | Regelmatrix mit Sperren, Doku-Seite, „Wer bekommt was?“ | Tages-Digest, Regelmatrix mit Sperren |
 | KI | – | Agenten im Projekt (einladen, einschränken), Projektagent mit Mail-Modus, Agenten-Policy, eigenes LLM mit seinen Agenten, Deine Rechte | LLMs und ihre Agenten (anlegen, berechtigen, Obergrenze), Grenzen und Vorgaben (Notaus, Budget, eigenes LLM, Online-Recherche), KI-Log, Feedback |
 | Fristen und Berichte | – | Eskalationsregeln, Reporting | – |
-| Planung und Board | – | Teilprojekte, Meilensteine, Spalten, Labels, Ressourcen des Projekts | Ressourcen-Pool, Projektvorlagen, Doku-Vorlagen |
+| Planung und Board | – | **Planungstiefe** (Aufgabe oder Checklistenpunkt: Automatisch nach Regel, Immer Aufgaben, Immer Checklistenpunkte; verbindlich für KI-Agenten, Leitlinie fürs Team), Teilprojekte, Meilensteine, Spalten, Labels, Ressourcen des Projekts | Ressourcen-Pool, Projektvorlagen, Doku-Vorlagen |
 | Telefonie | – | – | Schlüssel, Rufnummern (Projekt, Agent, KI-Profil, Begrüßung), Webhook-URLs, Anruf-Log (`docs/Telefonie.md`) |
 | Kalender | Kalender-Abo (ICS), CalDAV, Abwesenheiten | – | – |
 | Sicherheit | Passwort, zweiter Faktor (Authenticator-App) | – | Stand von Single Sign-on (OIDC) und OAuth2 |

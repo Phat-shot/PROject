@@ -13,6 +13,8 @@ import * as L from '../docs/layout.js';
 import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
 import { AGENT_SHEET, DATA_RULE, TASK_RULES, mailData } from './sheet.js';
+import { STRUCTURE_RULES, applyPlanningDepth, planningDepthText } from './structure.js';
+import { demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { syncAgentWaiting } from '../tasks/waiting.js';
@@ -52,7 +54,7 @@ export type AgentAction =
   | { type: 'resolve'; questionId: string; text?: string | null; reason?: string | null }
   | { type: 'refer'; text: string; subject?: string | null; to?: string[] | null }
   | { type: 'wait'; kind: 'reply' | 'date' | 'task' | 'info'; reason: string; checkAfterHours?: number; until?: string; remindAfterHours?: number; escalateAfterHours?: number }
-  | { type: 'add_item'; text: string }
+  | { type: 'add_item'; text: string; /** Kennung eines anderen Arbeitspakets (Struktur-Regel: Aufgabe wird Task am Ziel-AP); leer = dieses */ ref?: string | null }
   | { type: 'update_item'; itemId: string; text: string }
   | { type: 'doc_create'; title: string; folder?: string | null; text: string }
   | { type: 'doc_append'; pageId: string; text: string }
@@ -78,6 +80,11 @@ export type AgentAction =
   | { type: 'read_task'; ref: string }
   | { type: 'relate'; ref: string; kind?: RelationKind | null; text?: string | null }
   | { type: 'withdraw'; ref: string }
+  | { type: 'move_aufgabe'; ref: string; target: string }
+  | { type: 'move_ap'; ref: string; subproject?: string | null }
+  | { type: 'promote_item'; itemId: string; title?: string | null; dueDate?: string | null; responsible?: string | null }
+  | { type: 'demote_aufgabe'; ref: string }
+  | { type: 'move_item'; itemId: string; target: string }
   | { type: 'none'; reason?: string };
 const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task']);
 /** Leserunden und Zugriffe je Denktiefe: DEPTH_LIMITS (Standard zwei Runden, sechs Zugriffe; research zählt gegen das Recherche-Budget) */
@@ -112,20 +119,21 @@ const SCHEMA = {
   properties: {
     note: { type: 'string', description: 'Kurze Notiz für das Protokoll: was mit den Aktionen unten veranlasst wird und warum. Nur Aktionen in der Liste werden ausgeführt.' },
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
-      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId'],
+      required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId', 'target'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'none'] },
+        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
         text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
-        itemId: { type: 'string', description: 'check_item/update_item: itemId aus der Task-Liste; sonst leer' },
+        itemId: { type: 'string', description: 'check_item/update_item/promote_item/move_item: itemId aus der Task-Liste; sonst leer' },
+        target: { type: 'string', description: 'move_aufgabe: Kennung des Ziel-Arbeitspakets; move_item: Kennung des Ziel-Arbeitspakets oder der Ziel-Aufgabe; sonst leer' },
         pageId: { type: 'string', description: 'read_page/doc_update/doc_append/doc_status/doc_move/doc_send_pdf: pageId aus der Seitenliste; sonst leer' },
         status: { type: 'string', description: 'doc_status: draft, review oder final; sonst leer' },
-        title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; sonst leer' },
-        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; sonst leer' },
-        responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
+        title: { type: 'string', description: 'doc_create: Seitentitel; doc_update: neuer Titel (optional); create_aufgabe/create_ap/create_subproject/create_milestone/create_event: Titel; promote_item: Titel der neuen Aufgabe (leer = Text des Tasks); sonst leer' },
+        ref: { type: 'string', description: 'assign/set_dates: Kennung (z. B. WEB-12), bei set_dates leer = dieses; create_aufgabe: Kennung des Arbeitspakets, leer = dieses; read_task/relate/withdraw: Kennung des anderen Arbeitspakets; move_aufgabe/demote_aufgabe: Kennung der Aufgabe; move_ap: Kennung des Arbeitspakets; sonst leer' },
+        responsible: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/assign/promote_item: E-Mail eines Projektmitglieds (oder externe Adresse), leer = keine direkte Zuweisung; sonst leer' },
         startDate: { type: 'string', description: 'create_aufgabe/create_ap/create_subproject/set_dates: Start als YYYY-MM-DD; book_resource ganztägig: erster Tag; sonst leer' },
         dueDate: { type: 'string', description: 'create_aufgabe/create_ap/set_dates: Termin als YYYY-MM-DD; create_subproject: Ende; create_milestone: Datum; book_resource ganztägig: letzter Tag; sonst leer' },
-        subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; sonst leer' },
+        subproject: { type: 'string', description: 'create_ap/create_milestone: Name des Teilprojekts, leer = dieses bzw. keins; move_ap: Name des Ziel-Teilprojekts, leer = aus dem Teilprojekt heraus; sonst leer' },
         items: { type: 'array', items: { type: 'string' }, description: 'create_aufgabe/create_ap: Tasks (Checkliste); sonst leer' },
         startsAt: { type: 'string', description: 'create_event/book_resource: Beginn als YYYY-MM-DDTHH:MM (Europe/Berlin); book_resource ganztägig stattdessen startDate/dueDate; sonst leer' },
         endsAt: { type: 'string', description: 'create_event/book_resource: Ende als YYYY-MM-DDTHH:MM, leer = eine Stunde; sonst leer' },
@@ -176,11 +184,11 @@ export interface RunCtx {
   errand: { ownerId: string } | null;
 }
 export interface HeldAction { action: AgentAction; classes: AgentActionClass[]; label: string; base: Record<string, unknown> }
-export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean }
+export interface ApplyResult { applied: AgentAction[]; errors: string[]; held: HeldAction[]; waited: boolean; /** Umsetzungen der Struktur-Regel (Aufgabe ↔ Task), für Log und Lauf-Protokoll */ notes: string[] }
 
 /** Arbeitspaket mit Spalte, Projekt, Teilprojekt und Über-AP, wie es Lauf und Bestätigung brauchen. */
 export function loadTaskForAgent(db: Db, taskId: string): Promise<any> {
-  return db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
+  return db.maybeOne(`select t.*, c.name as column_name, p.key as project_key, p.name as project_name, p.planning_depth, s.name as subproject_name, pt.title as parent_title, pt.number as parent_number from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join subprojects s on s.id = t.subproject_id left join tasks pt on pt.id = t.parent_id where t.id = $1 and t.deleted_at is null`, [taskId]);
 }
 
 /**
@@ -248,6 +256,11 @@ export async function baseOf(ctx: RunCtx, a: any): Promise<Record<string, unknow
   switch (a?.type) {
     case 'doc_status': case 'doc_send_pdf': { const p = await db.maybeOne(`select version, status from doc_pages where id = $1`, [a.pageId]); return p ? { pageVersion: p.version, pageStatus: p.status } : {}; }
     case 'set_status': return { columnId: task.column_id };
+    case 'move_aufgabe': case 'demote_aufgabe': case 'move_ap': {
+      const n = Number(String(a.ref ?? '').split('-').pop()) || 0;
+      const t = n ? await db.maybeOne(`select parent_id, subproject_id from tasks where project_id = $1 and number = $2`, [task.project_id, n]) : null;
+      return t ? { parentId: t.parent_id, subprojectId: t.subproject_id } : {};
+    }
     case 'assign': case 'set_dates': {
       const n = Number(String(a.ref ?? '').split('-').pop()) || (a.type === 'set_dates' ? task.number : 0);
       const t = n ? await db.maybeOne(`select responsible_user_id, responsible_email, start_date, due_date from tasks where project_id = $1 and number = $2`, [task.project_id, n]) : null;
@@ -281,9 +294,14 @@ async function holdProposals(ctx: RunCtx, held: HeldAction[], runId: string | nu
 }
 
 /** Aktionen eines Agenten ausführen (Lauf mit hold = anhalten nach Policy; Bestätigung mit approvedBy ohne Anhalten). */
-export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
+export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], opts: { hold: boolean; approvedBy?: string | null }): Promise<ApplyResult> {
   const { db, mail, fetchFn, agent, task, m, cfg: c, now, trigger, items, pages, folders, members, pls, account, canMail, viewAccount, signature, canPlan, myTps, code } = ctx;
   const errors: string[] = [];
+  // Struktur-Regel des Projekts (Planungstiefe): Aufgabe ↔ Task umsetzen, bevor Rechte und Policy greifen; jede Umsetzung steht im Log
+  const depth = applyPlanningDepth(actions0, { depth: task.planning_depth, isAp: !task.parent_id });
+  const actions = depth.actions;
+  const notes = depth.notes;
+  for (const n of notes) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, `Struktur-Regel: ${n}`]);
   const held: HeldAction[] = [];
   let forceDraft = false; let policyNote = '';
   const pageTitle = (id: string) => pages.rows.find((p: any) => p.id === id)?.title ?? null;
@@ -294,7 +312,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     let chats = 0;
     let asked = 0;
     let waited = false;
-    const plan = planner(db, { agent, m, task, canPlan, myTps, now });
+    const plan = planner(db, { agent, m, task, canPlan, myTps, now, items: items.rows });
     const supersede = (to: string[], keepId: string | null, pageId: string | null = null) => supersedeDrafts(db, { taskId: task.id, projectId: task.project_id, orgId: agent.org_id, authorId: agent.id, to, keepId, pageId });
     /** Tatsächlicher Versandstatus ins Log (der Agent selbst behauptet keinen Versand). */
     const logSys = (body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, body]);
@@ -402,7 +420,20 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
         if (it) { await db.query(`update checklist_items set done = true where id = $1`, [it.id]); await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [task.id, agent.id, `Task erledigt: ${it.title}`]); applied.push(a); }
       } else if (a.type === 'add_item') {
         if (!a.text?.trim()) errors.push('Task ohne Text verworfen');
-        else { const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [task.id]); await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [task.id, a.text.trim().slice(0, 300), pos.p]); applied.push(a); }
+        else {
+          // Ziel: dieses Arbeitspaket; mit ref (Struktur-Regel aus create_aufgabe) ein anderes im eigenen Bereich
+          let target: any = task;
+          if (a.ref && String(a.ref).trim() && Number(String(a.ref).split('-').pop()) !== task.number) {
+            const t = await findTaskByRef(db, task.project_id, a.ref);
+            if (!t) { errors.push(`add_item: ${a.ref} nicht gefunden`); continue; }
+            if (!(canPlan || t.id === task.parent_id || t.parent_id === task.id || t.eff_responsible === agent.id || (t.subproject_id && myTps.includes(t.subproject_id)))) { errors.push(`add_item: ${code.split('-')[0]}-${t.number} liegt außerhalb deines Bereichs`); continue; }
+            target = t;
+          }
+          const pos = await db.one(`select coalesce(max(position), 0) + 1 as p from checklist_items where task_id = $1`, [target.id]);
+          await db.query(`insert into checklist_items (task_id, title, position) values ($1,$2,$3)`, [target.id, a.text.trim().slice(0, 300), pos.p]);
+          if (target.id !== task.id) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [target.id, agent.id, `Task ergänzt: ${a.text.trim().slice(0, 300)}`]);
+          applied.push(a);
+        }
       } else if (a.type === 'update_item') {
         const it = items.rows.find((i: any) => i.id === a.itemId);
         if (!it || !a.text?.trim()) errors.push(`Task-Änderung verworfen: ${!it ? 'itemId unbekannt' : 'kein Text'}`);
@@ -749,7 +780,7 @@ export async function applyAgentActions(ctx: RunCtx, actions: AgentAction[], opt
     if (!waited && !(await db.maybeOne(`select 1 from questions where task_id = $1 and asked_by = $2 and status = 'open'`, [task.id, agent.id]))) await db.query(`update tasks set agent_wait = null, agent_next_check_at = null where id = $1`, [task.id]);
     // Spalte „Wartet“ folgt dem Wartezustand (wartet → Wartet, fertig gewartet → zurück)
     await syncAgentWaiting(db, task.id, { enter: waited });
-  return { applied, errors, held, waited };
+  return { applied, errors, held, waited, notes };
 }
 
 /**
@@ -836,7 +867,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Systemblöcke (Konzept 6.8): fest (KI-Sheet und Regeln, für alle Läufe gleich), je Agent und Projekt (Name, Rolle, Stil), je Projekt und Sichtbarkeit (Überblick); Anthropic cacht die Blöcke
-  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${DATA_RULE}`;
+  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${STRUCTURE_RULES}\n\n${DATA_RULE}`;
   const sysAgent = `# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
   let systemBlocks = [sysFixed, sysAgent, digestText(digest)];
   let system = systemBlocks.join('\n\n');
@@ -868,7 +899,8 @@ ${aps.rows.map((x: any) => `- ${task.project_key}-${x.number} „${x.title}“ �
 Ansprechpartner für Rückfragen und Terminzusagen: ${contact ? `${contact.name} <${contact.email}> (${contact.why})` : 'keiner'}${busy.rows.length ? `\nBelegt (${contact.name}: Termine, Belegungen, Abwesenheiten, ohne Details): ${busy.rows.map((x: any) => `${x.kind === 'absence' ? 'abwesend ' : ''}${fmtSpan(x.starts_at, x.ends_at)}${x.tentative ? ' (vorläufig)' : ''}`).join(', ')}` : ''}
 Ressourcen (Projekt und Pool; buchbar mit book_resource, immer vorläufig bis eine Person bestätigt): ${resources.rows.map((r: any) => `${r.name} (${{ room: 'Raum', equipment: 'Gerät', scaffold: 'Gerüst', vehicle: 'Fahrzeug', person: 'Person', other: 'Sonstiges' }[String(r.kind)] ?? r.kind}${r.location ? `, ${r.location}` : ''})${Array.isArray(r.busy) && r.busy.length ? ` belegt: ${r.busy.map((b: any) => `${fmtSpan(b.s, b.e, b.a)}${b.t ? ' (vorläufig)' : ''}`).join('; ')}` : ' frei'}`).join('\n  ') || '–'}${apBookings.rows.length ? `\nBelegungen dieses Arbeitspakets: ${apBookings.rows.map((b: any) => `${b.resource_name ?? b.user_name} ${fmtSpan(b.starts_at, b.ends_at, b.all_day)}${b.tentative ? ' (vorläufig)' : ''}`).join('; ')}` : ''}
 Deine Rechte: Mails ${canMail ? 'direkt senden (bis zu drei je Lauf, auch mit PDF einer Doku-Seite)' : 'nur als Entwurf zur Freigabe'}${account ? '' : viewAccount ? ` (kein Projektkonto; Entwürfe gehen über ${viewAccount.address}${viewAccount.use === 'personal' ? ', der Kontoinhaber gibt frei' : ''})` : ' (kein Mailkonto)'}; Antwort auf die Ursprungsmail (reply_origin) aus deren Konto; Chat an Projektmitglieder (chat); Status setzen; Tasks abhaken, ergänzen, umformulieren; Doku wie ein Mitglied: Seiten lesen (read_page), anlegen (doc_create), Inhalt ersetzen (doc_update), ergänzen (doc_append), Status setzen (doc_status: draft, review${m.can_finalize ? ', final' : '; final nur mit Recht „Final setzen“, das du nicht hast'}), verschieben (doc_move), Ordner anlegen (folder_create); PDF einer finalen Seite per Mail senden (doc_send_pdf: ${m.can_finalize ? 'an Projektmitglieder, Adressen aus dem Verteiler oder mit Freigabe der Seite; leer = Verteiler des Ordners' : 'an Projektmitglieder oder Adressen mit Freigabe der Seite; Verteiler nur mit Recht „Final setzen“, das du nicht hast'}); Log schreiben; Blockade melden; an PL eskalieren. Online-Recherche: ${webOk.ok ? `ja (research; bis zu ${webOk.settings.maxPerRun} Suchen je Lauf, heute noch ${webOk.left}; nur lesen, keine Kontaktaufnahme; Suchbegriffe ohne Namen, Adressen, Interna; Netzfunde nur mit Quelle übernehmen, das System hängt Seiten die Quellen an)` : `nein (${webOk.reason})`}.
-Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event). Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
+${planningDepthText(task.planning_depth)}
+Planen: Aufgaben anlegen (create_aufgabe) ${canPlan ? 'unter jedem Arbeitspaket' : myTps.length ? 'unter Arbeitspaketen deiner Teilprojekte und deinen eigenen' : task.parent_id ? 'unter dem Arbeitspaket dieser Aufgabe' : 'unter diesem Arbeitspaket'}; Arbeitspakete anlegen (create_ap) ${canPlan ? 'in allen Teilprojekten' : myTps.length ? 'in deinen Teilprojekten' : 'nicht'}; Teilprojekte und Meilensteine ${canPlan ? 'ja' : 'nicht'}; zuweisen (assign) an Mitglieder${isPl ? ' und Agenten' : ' (Agenten weist nur die PL zu)'}; Start/Termin setzen (set_dates) ${canPlan ? 'überall' : 'bei Arbeit, die du angelegt hast oder die noch keinen Termin hat'}; Termine im Projektkalender (create_event); Struktur ändern (move_aufgabe, move_ap, promote_item, demote_aufgabe, move_item) ${canPlan ? 'im ganzen Projekt' : 'in deinem Bereich, sonst als Vorschlag an die PL'}. Projekte, Mitglieder, Rechte und Einstellungen nicht.${canPlan ? '' : '\nFür dein eigenes Arbeitspaket brauchst du keine neuen Teilprojekte, Arbeitspakete oder Zuweisungen: Aufgaben, Termine (create_event), Mails, Fragen (ask) und Warten (wait) genügen. Verlangt die Arbeit wirklich ein Teilprojekt, ein Arbeitspaket außerhalb oder Termine anderer, gib die Aktion trotzdem an: das System legt sie der PL als Freigabe vor (keine eigene Frage dazu).'}
 Agenten-Policy: ${policyText(policy)}
 ${openQs.rows.length ? `Offene Fragen von dir (nicht erneut fragen; resolve, wenn anders erledigt):\n${openQs.rows.map((q: any) => `- an ${q.to_name ?? 'Projektkanal'} seit ${new Date(q.created_at).toLocaleDateString('de-DE')}: ${cut(q.body, 200)} (questionId ${q.id})`).join('\n')}\n` : ''}${lastErr ? `Im letzten Lauf (${new Date(lastErr.created_at).toLocaleDateString('de-DE')}) nicht ausgeführt: ${cut(lastErr.error, 600)}. Mach es diesmal richtig oder wähle einen anderen Weg; wiederhole den Fehler nicht.\n` : ''}${waitText(task, now)}Anlass dieses Laufs: ${triggerText(trigger, { ...task, personal_errand: Boolean(ctx.errand) })}
 
@@ -961,7 +993,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'system')`, [task.id, agent.id, 'Auftrag erledigt und archiviert (persönlicher Assistent)']);
     }
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, fingerprint, input_tokens, output_tokens, error, proposed, cost) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) returning id`,
-      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut(String(j.note ?? j.reasoning ?? ''), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
+      [agent.org_id, agent.id, task.project_id, task.id, trigger, errors.length ? 'error' : 'ok', cut([String(j.note ?? j.reasoning ?? ''), ...res.notes.map((n) => `Struktur-Regel: ${n}`)].filter(Boolean).join(' · '), 2000), JSON.stringify(applied), await fingerprintOf(db, task.id), inputTokens, outputTokens, errors.length ? errors.join(' | ') : null, JSON.stringify(actions), dl.cost]);
     if (checkIds.length) await db.query(`update outbound_checks set run_id = $1 where id = any($2::uuid[])`, [run.id, checkIds]);
     if (errors.length) { await reportRunErrors(db, agent, task, errors, run.id); await recordFeedback(db, { orgId: agent.org_id, projectId: task.project_id, agentId: agent.id, kind: 'run_error', sourceType: 'agent_run', sourceId: run.id, context: { detail: `${code} „${task.title}“ · Anlass ${trigger}`, reason: errors.join(' | '), output: { note: j.note, actions } } }); }
     if (ctx.webSearches) await db.query(`update agent_runs set web_searches = $2 where id = $1`, [run.id, ctx.webSearches]);
@@ -1008,7 +1040,8 @@ const ACTION_LABEL: Record<string, string> = {
   comment: 'Log', set_status: 'Status', check_item: 'Task erledigt', add_item: 'Task ergänzt', update_item: 'Task umformuliert', doc_create: 'Seite angelegt', doc_append: 'Seite ergänzt',
   doc_update: 'Seite überarbeitet', doc_status: 'Seitenstatus', doc_move: 'Seite verschoben', folder_create: 'Ordner angelegt', doc_send_pdf: 'PDF gesendet', mail: 'Mail', reply_origin: 'Antwort auf die Ursprungsmail',
   blocked: 'Blockiert', escalate: 'Entscheidung an die PL', ask: 'Frage gestellt', resolve: 'Frage erledigt', refer: 'Rückfrage weitergegeben', create_aufgabe: 'Aufgabe angelegt', create_ap: 'Arbeitspaket angelegt', assign: 'Zugewiesen', set_dates: 'Termine gesetzt',
-  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen'
+  create_subproject: 'Teilprojekt angelegt', create_milestone: 'Meilenstein angelegt', create_event: 'Termin eingetragen', book_resource: 'Ressource gebucht', relate: 'Zusammenhang gemeldet', withdraw: 'Zusammenhang zurückgezogen',
+  move_aufgabe: 'Aufgabe verschoben', move_ap: 'Arbeitspaket zugeordnet', promote_item: 'Task wurde Aufgabe', demote_aufgabe: 'Aufgabe wurde Task', move_item: 'Task verschoben'
 };
 /** Text eines Zwischenstands aus den ausgeführten Aktionen und der Notiz des Laufs (vom System, nicht vom Modell). */
 function progressText(actions: AgentAction[], note: unknown): string {
@@ -1040,7 +1073,7 @@ async function unreleasedRecipients(db: Db, page: { id: string; project_id: stri
   return to.filter((x) => !allowed.has(x));
 }
 
-const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource'];
+const PLAN_TYPES: string[] = ['create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item'];
 const MAX_CREATE = 15;
 
 /**
@@ -1048,9 +1081,11 @@ const MAX_CREATE = 15;
  * sonst nur im eigenen Bereich (dieses AP und seine Aufgaben, eigene Zuständigkeit, eigene Teilprojekte). Agenten
  * weist nur eine PL zu; bestehende Termine anderer ändert nur, wer planen darf.
  */
-function planner(db: Db, c: { agent: { id: string; name: string; org_id: string }; m: any; task: any; canPlan: boolean; myTps: string[]; now: Date }) {
+function planner(db: Db, c: { agent: { id: string; name: string; org_id: string }; m: any; task: any; canPlan: boolean; myTps: string[]; now: Date; items?: any[] }) {
   const { agent, m, task, canPlan, myTps, now } = c;
   const actor: PlanActor = { id: agent.id, name: agent.name, orgId: agent.org_id, role: m.role, label: `${agent.name} (KI-Agent)`, isAgent: true };
+  const sActor: StructureActor = { id: agent.id, name: agent.name, orgId: agent.org_id, kind: 'agent' };
+  const depth = String(task.planning_depth ?? 'auto');
   const code = (n: number) => `${task.project_key}-${n}`;
   const inScope = (t: any) => canPlan || t.id === task.id || t.parent_id === task.id || t.id === task.parent_id || t.eff_responsible === agent.id || Boolean(t.subproject_id && myTps.includes(t.subproject_id));
   const log = (taskId: string, body: string) => db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [taskId, agent.id, body]);
@@ -1088,9 +1123,60 @@ function planner(db: Db, c: { agent: { id: string; name: string; org_id: string 
       }
       const dup = await db.maybeOne(`select number from tasks where project_id = $1 and deleted_at is null and archived_at is null and lower(title) = lower($2) and parent_id is not distinct from $3::uuid and ($3::uuid is not null or subproject_id is not distinct from $4::uuid)`, [task.project_id, title, parentId, subprojectId]);
       if (dup) return { error: `${a.type}: „${title}“ gibt es schon (${code(dup.number)})` };
-      const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: a.items, logTaskId: task.id });
+      // Planungstiefe „aufgaben“: die Tasks eines neuen Arbeitspakets werden seine Aufgaben
+      const asTasks = a.type === 'create_ap' && depth === 'aufgaben' && Array.isArray(a.items) && a.items.length;
+      const t = await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title, description: a.text, parentId, subprojectId, startDate: start, dueDate: due, responsibleUserId: who.userId, responsibleEmail: who.email, responsibleKind: who.kind, items: asTasks ? [] : a.items, logTaskId: task.id });
       created++;
+      if (asTasks) {
+        for (const it of (a.items as unknown[]).map((x) => cleanTitle(x)).filter(Boolean).slice(0, MAX_CREATE)) { await createPlannedTask(db, actor, { projectId: task.project_id, projectKey: task.project_key, title: it, parentId: t.id, subprojectId }); created++; }
+        await log(task.id, `Struktur-Regel: ${a.items.length} Tasks von ${code(t.number)} als Aufgaben angelegt, weil die Planungstiefe des Projekts „Immer Aufgaben“ ist`);
+      }
       return { applied: { type: a.type, ref: code(t.number), title: t.title, responsible: who.name ?? who.email, startDate: start, dueDate: due } };
+    }
+
+    if (a.type === 'move_aufgabe' || a.type === 'demote_aufgabe' || a.type === 'move_item' || a.type === 'move_ap' || a.type === 'promote_item') {
+      // Struktur ändern (Klasse Umstrukturieren): Quelle und Ziel im eigenen Bereich, sonst Vorschlag an die PL
+      const byRef = async (ref: unknown, what: string): Promise<{ error: string } | { t: any }> => { const t = await findTaskByRef(db, task.project_id, ref); if (!t) return { error: `${a.type}: ${what} ${String(ref ?? '').trim() || 'fehlt'} nicht gefunden` }; if (!(await canSeeSubproject(db, agent.id, t.subproject_id))) return { error: `${a.type}: ${code(t.number)} liegt außerhalb deines Bereichs` }; return { t }; };
+      if (a.type === 'move_aufgabe') {
+        const s = await byRef(a.ref, 'Aufgabe'); if ('error' in s) return s;
+        const d = await byRef(a.target, 'Ziel-Arbeitspaket'); if ('error' in d) return d;
+        if (!s.t.parent_id) return { error: `move_aufgabe: ${code(s.t.number)} ist ein Arbeitspaket; Arbeitspakete ordnest du mit move_ap einem Teilprojekt zu` };
+        if (d.t.parent_id) return { error: `move_aufgabe: ${code(d.t.number)} ist eine Aufgabe; Ziel muss ein Arbeitspaket sein` };
+        if (!inScope(s.t) || !inScope(d.t)) return { error: `move_aufgabe ${code(s.t.number)} → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+        try { await reparentTask(db, sActor, s.t.id, { parentId: d.t.id }); } catch (e: any) { return { error: `move_aufgabe ${code(s.t.number)}: ${e?.message ?? e}` }; }
+        return { applied: { type: 'move_aufgabe', ref: code(s.t.number), target: code(d.t.number), title: s.t.title } };
+      }
+      if (a.type === 'move_ap') {
+        const s = await byRef(a.ref, 'Arbeitspaket'); if ('error' in s) return s;
+        if (s.t.parent_id) return { error: `move_ap: ${code(s.t.number)} ist eine Aufgabe (move_aufgabe)` };
+        const sp = a.subproject ? await subprojectByName(a.subproject) : null;
+        if (a.subproject && !sp) return { error: `move_ap ${code(s.t.number)}: Teilprojekt „${a.subproject}“ gibt es nicht` };
+        if (!canPlan && !(inScope(s.t) && (!sp || myTps.includes(sp.id)))) return { error: `move_ap ${code(s.t.number)}: Arbeitspakete ordnet nur zu, wer planen darf oder in seinen Teilprojekten`, hold: 'plan' };
+        try { await reparentTask(db, sActor, s.t.id, { parentId: null, subprojectId: sp?.id ?? null }); } catch (e: any) { return { error: `move_ap ${code(s.t.number)}: ${e?.message ?? e}` }; }
+        return { applied: { type: 'move_ap', ref: code(s.t.number), subproject: sp?.name ?? null, title: s.t.title } };
+      }
+      const item = (c.items ?? []).find((i: any) => i.id === a.itemId);
+      if (a.type === 'promote_item') {
+        if (!item) return { error: `promote_item: itemId ${a.itemId || 'fehlt'} nicht in der Task-Liste` };
+        const who = await resolvePerson(db, task.project_id, actor, a.responsible);
+        if ('error' in who) return { error: `promote_item „${item.title}“: ${who.error}` };
+        if (created >= MAX_CREATE) return { error: `promote_item „${item.title}“ verworfen: mehr als ${MAX_CREATE} Anlagen je Lauf` };
+        try { const r = await promoteItem(db, sActor, task.id, item.id, { title: a.title, dueDate: due, startDate: start, responsibleUserId: who.userId, responsibleEmail: who.email }); created++; c.items?.splice(c.items.indexOf(item), 1); return { applied: { type: 'promote_item', ref: code(r.number), title: r.title, responsible: who.name ?? who.email, dueDate: due } }; }
+        catch (e: any) { return { error: `promote_item „${item.title}“: ${e?.message ?? e}` }; }
+      }
+      if (a.type === 'demote_aufgabe') {
+        const s = await byRef(a.ref, 'Aufgabe'); if ('error' in s) return s;
+        if (!inScope(s.t)) return { error: `demote_aufgabe ${code(s.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+        const why = await demoteBlocker(db, s.t.id);
+        if (why) return { error: `demote_aufgabe ${code(s.t.number)}: ${why}` };
+        await demoteTask(db, sActor, s.t.id);
+        return { applied: { type: 'demote_aufgabe', ref: code(s.t.number), title: s.t.title } };
+      }
+      if (!item) return { error: `move_item: itemId ${a.itemId || 'fehlt'} nicht in der Task-Liste` };
+      const d = await byRef(a.target, 'Ziel'); if ('error' in d) return d;
+      if (!inScope(d.t)) return { error: `move_item „${item.title}“ → ${code(d.t.number)}: liegt außerhalb deines Bereichs`, hold: 'foreign' };
+      try { await moveItem(db, sActor, task.id, item.id, d.t.id); c.items?.splice(c.items.indexOf(item), 1); } catch (e: any) { return { error: `move_item „${item.title}“: ${e?.message ?? e}` }; }
+      return { applied: { type: 'move_item', target: code(d.t.number), title: item.title } };
     }
 
     if (a.type === 'assign' || a.type === 'set_dates') {

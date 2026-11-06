@@ -1152,3 +1152,8 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 /* Rückfrage des Agenten im Chat: Knöpfe zur Wahl des Themas (Projekt, persönlich, allgemein) */
 .choices-card { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
 .choices-card .btn:disabled:not(.primary) { opacity: 0.55; }
+/* Struktur verschieben: Aufgabe auf eine Karte ziehen (reparent), Ziel-Auswahl im Verschieben-Dialog */
+.task-card.drop-sub { outline: 2px dashed var(--accent, #2563eb); outline-offset: 2px; }
+.subtasks li[draggable="true"], .card-subs li[draggable="true"] { cursor: grab; }
+.picker-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow: auto; border: 1px solid var(--border, #ddd); border-radius: 6px; padding: 6px; margin-top: 4px; }
+.picker-list .check.on { background: var(--bg-soft, rgba(37, 99, 235, 0.08)); border-radius: 4px; }

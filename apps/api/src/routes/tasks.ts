@@ -16,6 +16,7 @@ import { nextDueDate, type Recurrence } from '../tasks/recurrence.js';
 import { dispatch } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { answerQuestion, cancelQuestions, type QuestionRow } from '../questions.js';
+import { demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 
 const PRIORITIES: TaskPriority[] = ['low', 'normal', 'high', 'critical'];
 
@@ -524,6 +525,56 @@ export async function taskRoutes(app: FastifyInstance) {
     const { task: t } = await requireTask(db, user, req.params.id, 'member');
     await db.query(`delete from checklist_items where id = $1 and task_id = $2`, [req.params.itemId, req.params.id]);
     return { task: await loadTask(db, req.params.id) };
+  });
+
+  // Struktur: Aufgabe umhängen oder zum Arbeitspaket machen, Arbeitspaket einem Teilprojekt zuordnen (Rechte wie PATCH: Mitglied)
+  const actorOf = (user: { id: string; name: string; orgId: string; kind?: string }): StructureActor => ({ id: user.id, name: user.name, orgId: user.orgId, kind: user.kind === 'agent' ? 'agent' : 'person' });
+  app.post<{ Params: { id: string }; Body: { parentId?: string | null; subprojectId?: string | null } }>('/tasks/:id/reparent', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    const b = req.body ?? {};
+    if (b.parentId) {
+      const parent = await db.maybeOne(`select id, project_id, subproject_id from tasks where id = $1 and deleted_at is null`, [b.parentId]);
+      if (!parent || parent.project_id !== existing.project_id) throw badRequest('Ziel-Arbeitspaket gehört nicht zum Projekt');
+      if (!(await canSeeSubproject(db, user.id, parent.subproject_id))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    }
+    if (b.subprojectId && !(await canSeeSubproject(db, user.id, b.subprojectId))) throw forbidden('Teilprojekt ist eingeschränkt sichtbar');
+    const r = await reparentTask(db, actorOf(user), existing.id, { parentId: b.parentId ?? null, ...('subprojectId' in b ? { subprojectId: b.subprojectId ?? null } : {}) });
+    if (r.changed && user.kind !== 'agent') queueAgentRun(existing.id, 'task_changed');
+    return { task: await loadTask(db, existing.id) };
+  });
+
+  // Checklistenpunkt → Aufgabe (am Arbeitspaket; bei der Checkliste einer Aufgabe am Arbeitspaket darüber)
+  app.post<{ Params: { id: string; itemId: string }; Body: { title?: string | null; dueDate?: string | null; startDate?: string | null; responsibleUserId?: string | null; responsibleEmail?: string | null } }>('/tasks/:id/checklist/:itemId/promote', async (req) => {
+    const user = requireUser(req);
+    const { task: existing, membership: m } = await requireTask(db, user, req.params.id, 'member');
+    const b = req.body ?? {};
+    if (b.responsibleUserId) await assertResponsible(db, existing.project_id, m, b.responsibleUserId);
+    const r = await promoteItem(db, actorOf(user), existing.id, req.params.itemId, b);
+    if (b.responsibleEmail) await rememberContact(existing.project_id, b.responsibleEmail);
+    return { task: await loadTask(db, r.id), source: await loadTask(db, existing.id) };
+  });
+
+  // Aufgabe → Checklistenpunkt am Arbeitspaket (nur ohne eigene Aufgaben, Zeiten, Mails, offene Fragen; Log wird am Arbeitspaket zusammengefasst)
+  app.post<{ Params: { id: string } }>('/tasks/:id/demote', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    const why = await demoteBlocker(db, existing.id);
+    if (why) throw badRequest(why);
+    const r = await demoteTask(db, actorOf(user), existing.id);
+    if (user.kind !== 'agent') queueAgentRun(r.apId, 'task_changed');
+    return { task: await loadTask(db, r.apId), itemId: r.itemId };
+  });
+
+  // Checklistenpunkt an ein anderes Arbeitspaket oder eine andere Aufgabe
+  app.post<{ Params: { id: string; itemId: string }; Body: { toTaskId: string } }>('/tasks/:id/checklist/:itemId/move', async (req) => {
+    const user = requireUser(req);
+    const { task: existing } = await requireTask(db, user, req.params.id, 'member');
+    if (!req.body?.toTaskId) throw badRequest('Ziel fehlt');
+    const { task: to } = await requireTask(db, user, req.body.toTaskId, 'member');
+    if (to.project_id !== existing.project_id) throw badRequest('Ziel gehört nicht zum Projekt');
+    await moveItem(db, actorOf(user), existing.id, req.params.itemId, to.id);
+    return { task: await loadTask(db, existing.id), target: await loadTask(db, to.id) };
   });
 
   // Kommentare

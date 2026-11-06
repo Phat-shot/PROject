@@ -3,7 +3,7 @@ import { api } from '../../../lib/api';
 import { Modal, useAsync, useDialog } from '../../../components/ui';
 import { MilestoneList, SubprojectList } from '../planForms';
 import { ResourcesTable } from '../../../components/Resources';
-import { LABEL_COLORS } from '@projekttool/shared';
+import { LABEL_COLORS, PLANNING_DEPTHS } from '@projekttool/shared';
 import { InlineText } from '../TaskDrawer';
 import { useProject } from '../../ProjectPage';
 import { SettingsCard, ReadOnlyNote } from '../../../components/settings/Settings';
@@ -58,6 +58,26 @@ export function ColumnsForm({ onClose }: { onClose: () => void }) {
 }
 
 
+/** Planungstiefe: wie Schritte eines Arbeitspakets angelegt werden (Menschen und KI-Agenten); Regel im KI-Sheet, Durchsetzung bei Agentenläufen. */
+function PlanningDepthCard() {
+  const { detail, reload } = useProject();
+  const isPl = detail.project.myMembership.role === 'pl';
+  const { busy, error, run } = useAsync();
+  const value = detail.project.planningDepth ?? 'auto';
+  return (
+    <div className="stack">
+      {!isPl && <ReadOnlyNote who="PL" />}
+      <label className="field"><span>Planungstiefe</span>
+        <select value={value} disabled={!isPl || busy} aria-label="Planungstiefe" onChange={(e) => void run(async () => { await api.patch(`/projects/${detail.project.id}`, { planningDepth: e.target.value }); await reload(); })}>
+          {PLANNING_DEPTHS.map((d) => <option key={d.key} value={d.key}>{d.label}</option>)}
+        </select>
+      </label>
+      <ul className="small muted m-0">{PLANNING_DEPTHS.map((d) => <li key={d.key}><strong>{d.label}:</strong> {d.hint}</li>)}</ul>
+      {error && <div className="error">{error}</div>}
+    </div>
+  );
+}
+
 /** Projekt › Einstellungen › Planung und Board: Teilprojekte, Meilensteine, Spalten, Labels, Ressourcen des Projekts. */
 export function PlanningTab() {
   const { detail } = useProject();
@@ -65,6 +85,9 @@ export function PlanningTab() {
   const [columns, setColumns] = useState(false);
   return (
     <>
+      <SettingsCard title="Planungstiefe" hint="Aufgabe oder Checklistenpunkt? Gilt für KI-Agenten verbindlich (das System setzt die Regel bei ihren Läufen um und vermerkt es im Log) und als Leitlinie für das Team. Verschieben und Umwandeln geht jederzeit im Arbeitspaket.">
+        <PlanningDepthCard />
+      </SettingsCard>
       <SettingsCard title="Teilprojekte" hint="Klick öffnet die Maske: Verantwortung (sonst die PL), Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine und Arbeitspakete. Auch über den Kopf der Swimlane im Board und die Zeile im Plan.">
         <SubprojectList />
       </SettingsCard>

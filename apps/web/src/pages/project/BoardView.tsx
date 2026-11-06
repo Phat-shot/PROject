@@ -6,6 +6,7 @@ import { useAuth } from '../../lib/auth';
 import { Badge, Button, IconButton, Initials, keyboardShortcutsBlocked, Loading, Modal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
 import { IconAlert, IconCheck, IconCheckSquare, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
 import { moveTaskTo } from '../../lib/moveTask';
+import { SUBTASK_DRAG } from './MoveDialog';
 import { useCreate } from './create';
 import { useData } from '../../lib/useData';
 import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
@@ -274,11 +275,25 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   // Fortschritt aus Aufgaben und Checkliste zusammen
   const stepsTotal = x.subtaskTotal + x.checklistTotal; const stepsDone = x.subtaskDone + x.checklistDone;
   const dueTitle = x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline';
+  // Aufgabe (aus dem Arbeitspaket oder einer Karte) auf dieses Arbeitspaket ziehen: umhängen (reparent), nicht Status
+  const { reloadTasks, tasks: allTasks } = useProject();
+  const toast = useToast();
+  const [subOver, setSubOver] = useState(false);
+  const isSubDrag = (e: React.DragEvent) => canEdit && !x.parentId && Array.from(e.dataTransfer.types).includes(SUBTASK_DRAG);
+  const onSubDrop = async (id: string) => {
+    if (!id || id === x.id || allTasks.find((k) => k.id === id)?.parentId === x.id) return;
+    try { await api.post(`/tasks/${id}/reparent`, { parentId: x.id }); await reloadTasks(); toast.ok(`Aufgabe nach ${detail.project.key}-${x.number} verschoben.`); }
+    catch (e: any) { toast.error(`Verschieben fehlgeschlagen: ${e?.message ?? e}`); }
+  };
   return (
-    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''}`} draggable={canEdit && !selectable}
+    <div className={`task-card prio-${x.priority} ${x.done ? 'is-done' : ''} ${dragging ? 'dragging' : ''} ${dropMarker ? `drop-${dropMarker}` : ''} ${subOver ? 'drop-sub' : ''} ${x.recurrence ? 'recurring' : ''} ${x.blocked ? 'blocked' : ''} ${selected ? 'selected' : ''} ${selectable ? 'selectable' : ''}`} draggable={canEdit && !selectable}
       role="button" tabIndex={0} aria-label={`${detail.project.key}-${x.number} ${x.title}${selectable ? (selected ? ' (ausgewählt)' : '') : ' öffnen'}`} aria-pressed={selectable ? selected : undefined}
       onKeyDown={(e) => { if (e.target !== e.currentTarget) return; if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(e as unknown as React.MouseEvent); } }}
-      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd} onDragOver={onDragOverCard} onClick={onClick}>
+      onDragStart={(e) => { e.dataTransfer.effectAllowed = 'move'; onDragStart(); }} onDragEnd={onDragEnd}
+      onDragOver={(e) => { if (isSubDrag(e)) { e.preventDefault(); e.stopPropagation(); e.dataTransfer.dropEffect = 'move'; if (!subOver) setSubOver(true); return; } onDragOverCard(e); }}
+      onDragLeave={(e) => { if (subOver && !(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setSubOver(false); }}
+      onDrop={(e) => { if (!isSubDrag(e)) return; e.preventDefault(); e.stopPropagation(); setSubOver(false); void onSubDrop(e.dataTransfer.getData(SUBTASK_DRAG)); }}
+      onClick={onClick}>
       {(selectable || selected) && <input type="checkbox" className="select-box" checked={selected} readOnly tabIndex={-1} aria-label="Auswählen" />}
       {labels.length > 0 && <div className="labels">{labels.map((l) => <span key={l!.id} className={`lbl full ${l!.color}`}>{l!.name}</span>)}</div>}
       <div className="title">{x.title}</div>
@@ -428,9 +443,10 @@ function CardSubtasks({ kids, open: initial, canEdit }: { kids: Task[]; open: bo
   const move = (k: Task, colId: string) => run(async () => { const col = detail.columns.find((c) => c.id === colId); if (col && (await moveTaskTo(dialog.form, k.id, col))) await reloadTasks(); });
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
-    <div className="card-subs" onClick={stop} onMouseDown={stop} onKeyDown={stop} onDragStart={(e) => { e.preventDefault(); e.stopPropagation(); }} draggable={false}>
+    <div className="card-subs" onClick={stop} onMouseDown={stop} onKeyDown={stop} onDragStart={(e) => { e.stopPropagation(); if (!(e.target as HTMLElement).closest('[data-subtask]')) e.preventDefault(); }} draggable={false}>
       <button className="card-subs-toggle" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? 'Aufgaben einklappen' : 'Aufgaben aufklappen'}>{open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} {done}/{kids.length} Aufgaben</button>
-      {open && <ul>{kids.map((k) => <li key={k.id} className={k.done ? 'done' : ''}>
+      {open && <ul>{kids.map((k) => <li key={k.id} className={k.done ? 'done' : ''} data-subtask={k.id} draggable={canEdit} title={canEdit ? 'Auf ein anderes Arbeitspaket ziehen, um die Aufgabe dorthin zu verschieben' : undefined}
+        onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData(SUBTASK_DRAG, k.id); e.dataTransfer.setData('text/plain', k.title); e.dataTransfer.effectAllowed = 'move'; }}>
         <input type="checkbox" checked={k.done} disabled={!canEdit || busy} title={k.done ? 'Wieder öffnen' : 'Erledigt'} aria-label={`${k.title}: ${k.done ? 'wieder öffnen' : 'erledigt'}`} onChange={() => { const col = k.done ? openCol : doneCol; if (col) void move(k, col.id); }} />
         <button className="sub-title" title="Im Arbeitspaket öffnen" onClick={() => openTask(k.id)}>{k.title}</button>
         {!k.done && <span className="sub-meta">

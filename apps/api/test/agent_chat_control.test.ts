@@ -248,3 +248,48 @@ test('Nachfassen gehört zum Arbeitspaket: run statt neuer Aufgabe, fällige Fri
   assert.match(p, /Tasks: .*\[ \] Sven \(sven@airgpu\.example\) meldet sich bis Freitag/);
   assert.match(p, /Log \(neueste zuerst\): .*Agent fortgesetzt: Frist fällig/);
 });
+
+test('Chat-Befehl move: Aufgabe unter ein anderes AP und AP ins Teilprojekt (PL), ohne Auftragsrecht verweigert, Behauptung „verschoben“ ohne Befehl wird ersetzt', async () => {
+  const pl = await t.login('pl@demo.local');
+  await t.api(pl).put(`/projects/${web()}/agent-policy`, { chatOrders: 'pl' });
+  const ap1 = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Chat Quelle' })).json().task;
+  const ap2 = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Chat Ziel' })).json().task;
+  const a = (await t.api(pl).post(`/projects/${web()}/tasks`, { title: 'Chat Schritt', parentId: ap1.id })).json().task;
+  const sp = (await t.api(pl).post(`/projects/${web()}/subprojects`, { name: 'Chat-TP' })).json().subproject;
+  // Mitglied ohne Auftragsrecht (chatOrders = pl) und ohne „Projektplan ändern“: verweigert (Max darf im Seed planen, hier kurz nicht)
+  const max = await t.login('max@demo.local');
+  await t.db.query(`update project_members set can_edit_plan = false where project_id = $1 and user_id = $2`, [web(), t.ids.users.max]);
+  nextCommands = [C({ type: 'move', ref: `WEB-${a.number}`, to: `WEB-${ap2.number}` })];
+  await say(max, dmMax, `Verschiebe die Aufgabe WEB-${a.number} unter das Arbeitspaket WEB-${ap2.number}.`);
+  let card = await lastCard(dmMax);
+  assert.match(card.body, /✗ Nicht ausgeführt: WEB-\d+: Verschieben erfordert das Auftragsrecht/);
+  await t.db.query(`update project_members set can_edit_plan = true where project_id = $1 and user_id = $2`, [web(), t.ids.users.max]);
+  assert.equal((await t.db.one(`select parent_id from tasks where id = $1`, [a.id])).parent_id, ap1.id);
+  // PL: Aufgabe umhängen, Karte mit Link, Log an Quelle und Ziel; die Antwort darf „verschoben“ sagen
+  nextCommands = [C({ type: 'move', ref: `WEB-${a.number}`, to: `WEB-${ap2.number}` })];
+  nextReply = 'Ich habe die Aufgabe verschoben.';
+  await say(pl, dmPl, `Verschiebe die Aufgabe WEB-${a.number} unter das Arbeitspaket WEB-${ap2.number}.`);
+  card = await lastCard(dmPl);
+  assert.match(card.body, new RegExp(`✓ WEB-${a.number} „Chat Schritt“ verschoben unter WEB-${ap2.number} „Chat Ziel“`));
+  assert.equal(card.meta.results[0].link, `/projekte/${web()}/board?task=${a.id}`);
+  assert.equal((await t.db.one(`select parent_id from tasks where id = $1`, [a.id])).parent_id, ap2.id);
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like '%hierher verschoben (Petra Lenz)'`, [ap2.id]));
+  let reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
+  assert.equal(reply.body, 'Ich habe die Aufgabe verschoben.');
+  // AP ins Teilprojekt; Ziel darf keine Aufgabe sein
+  nextCommands = [C({ type: 'move', ref: `WEB-${ap2.number}`, subproject: 'Chat-TP' }), C({ type: 'move', ref: `WEB-${ap1.number}`, to: `WEB-${a.number}` })];
+  await say(pl, dmPl, `WEB-${ap2.number} ins Teilprojekt Chat-TP`);
+  card = await lastCard(dmPl);
+  assert.match(card.body, /✓ WEB-\d+ „Chat Ziel“ dem Teilprojekt „Chat-TP“ zugeordnet/);
+  assert.match(card.body, /✗ Nicht ausgeführt: WEB-\d+: WEB-\d+ ist eine Aufgabe; Ziel muss ein Arbeitspaket sein/);
+  assert.equal((await t.db.one(`select subproject_id from tasks where id = $1`, [ap2.id])).subproject_id, sp.id);
+  assert.equal((await t.db.one(`select subproject_id from tasks where id = $1`, [a.id])).subproject_id, sp.id, 'Aufgabe folgt');
+  // Behauptung ohne Befehl: ersetzt
+  nextReply = 'Ich habe WEB-3 unter WEB-4 umgehängt und dem Teilprojekt zugeordnet.';
+  await say(pl, dmPl, 'Danke');
+  reply = await t.db.one(`select body from chat_messages where channel_id = $1 and user_id = $2 and kind = 'user' order by created_at desc limit 1`, [dmPl, agent.id]);
+  assert.match(reply.body, /^Das konnte ich nicht ausführen/);
+  assert.equal(claimCheck('Ich habe die Aufgabe umgehängt.', false).replaced.length, 1);
+  assert.equal(claimCheck('Das habe ich in einen Checklistenpunkt umgewandelt.', false).replaced.length, 1);
+  assert.equal(claimCheck('Ich habe nichts verschoben.', false).replaced.length, 0, 'Verneinung');
+});

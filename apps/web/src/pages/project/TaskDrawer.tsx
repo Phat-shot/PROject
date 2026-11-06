@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import type { Resource, ResourceBooking, Task, TaskComment, TaskRelation } from '@projekttool/shared';
 import { BookingForm, BookingRow } from '../../components/Resources';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
-import { Badge, Button, Drawer, FieldError, IconButton, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog } from '../../components/ui';
+import { Badge, Button, Drawer, Dropdown, FieldError, IconButton, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
 import { IconArrowLeft, IconArrowUpRight, IconCheck, IconChevronDown, IconChevronRight, IconHourglass, IconX } from '../../components/icons';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
@@ -16,6 +16,7 @@ import type { Recurrence, TimeEntry } from '@projekttool/shared';
 import { MentionInput, MentionText } from '../../components/MentionInput';
 import { fmtH } from './TimeView';
 import { CopyMoveDialog } from './CopyMove';
+import { MoveItemDialog, MoveTaskDialog, PromoteItemDialog, SUBTASK_DRAG, type MoveMode } from './MoveDialog';
 import { moveTaskTo } from '../../lib/moveTask';
 import { useCreate } from './create';
 import { contactLabel, useContacts } from '../../lib/useContacts';
@@ -70,6 +71,10 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   const { busy, error, run, setError } = useAsync();
   const dialog = useDialog();
   const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
+  // Struktur: Aufgabe verschieben / zum AP machen / Teilprojekt; Checklistenpunkt verschieben oder zur Aufgabe machen
+  const [moveMode, setMoveMode] = useState<MoveMode | null>(null);
+  const [itemAction, setItemAction] = useState<null | { kind: 'move' | 'promote'; itemId: string }>(null);
+  const toast = useToast();
   const { contacts } = useContacts(detail.project.id);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
   useEffect(() => { void load(); }, [taskId]);
@@ -119,6 +124,9 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       </>}>
       {error && <div className="error mb" role="alert">{error}</div>}
       {t.parent && <p className="small mb mt-0"><button className="btn sm link" title="Zurück zum Arbeitspaket" onClick={() => onView({ id: t.parent!.id, expand: t.id, full: false })}><IconArrowLeft /> {t.parent.title}</button></p>}
+      {moveMode && <MoveTaskDialog task={t} mode={moveMode} onClose={() => setMoveMode(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok(moveMode === 'reparent' ? 'Aufgabe verschoben.' : moveMode === 'promote' ? 'Jetzt ein eigenes Arbeitspaket.' : 'Teilprojekt geändert.'); if (moveMode === 'promote') onView({ id: t.id, expand: null, full: true }); }} />}
+      {itemAction?.kind === 'move' && t.checklist?.find((i) => i.id === itemAction.itemId) && <MoveItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt verschoben.'); }} />}
+      {itemAction?.kind === 'promote' && t.checklist?.find((i) => i.id === itemAction.itemId) && <PromoteItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} members={members} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt ist jetzt eine Aufgabe.'); }} />}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {(() => {
         // Ursprungsmail: Sprung zur Mail; zum Abschluss die Mail beantworten (aufbereitetes Ergebnis, nicht im Log)
@@ -200,7 +208,16 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       {(d.meetings?.length ?? 0) > 0 && <p className="small mt"><span className="muted">Aus Besprechung:</span> {d.meetings!.map((m) => <span key={m.id}><Link to={`/projekte/${detail.project.id}/besprechungen`}>{m.title} ({fmtDateTime(m.startsAt)})</Link>{m.pageId && <> · <Link to={`/projekte/${detail.project.id}/doku/${m.pageId}`}>Protokoll</Link></>} </span>)}</p>}
         {!t.deletedAt && me.role !== 'reader' && <div className="row mt task-admin">
           <button className="btn sm" title="Kopie anlegen, hier oder in einem anderen Projekt" onClick={() => setCopyMove('copy')}>Kopieren</button>
-          {canPlan && <button className="btn sm" title="In ein anderes Projekt verschieben" onClick={() => setCopyMove('move')}>Verschieben</button>}
+          {canEdit && <Dropdown label="Verschieben …" items={[
+            ...(t.parentId ? [
+              { label: 'In anderes Arbeitspaket …', onClick: () => setMoveMode('reparent') },
+              { label: 'Zum Arbeitspaket machen …', onClick: () => setMoveMode('promote') },
+              { label: 'Zu Checklistenpunkt machen', onClick: () => void dialog.confirm({ title: 'Zu Checklistenpunkt machen', text: `„${t.title}“ wird ein Punkt in der Checkliste von ${detail.project.key}-${t.parent?.number ?? ''} „${t.parent?.title ?? ''}“. Verloren gehen eigener Status, Termin, Beschreibung und Labels; Log und Kommentare werden als ein Eintrag am Arbeitspaket zusammengefasst, Anhänge und Checkliste wandern dorthin. Nicht möglich mit Zeitbuchungen, verknüpften Mails oder offenen Fragen.`, confirmLabel: 'Zu Checklistenpunkt machen', danger: true }).then((ok) => { if (ok) void run(async () => { const r = await api.post<{ task: Task }>(`/tasks/${t.id}/demote`); await reloadTasks(); toast.ok('Aufgabe ist jetzt ein Checklistenpunkt.'); openTask(r.task.id); }); }), danger: true }
+            ] : [
+              { label: 'Teilprojekt ändern …', onClick: () => setMoveMode('subproject') },
+              { label: 'In anderes Projekt …', onClick: () => setCopyMove('move'), disabled: !canPlan, reason: 'nur PL oder „Projektplan ändern“' }
+            ])
+          ]} />}
           {t.archivedAt
             ? <button className="btn sm" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/unarchive`); await load(); await reloadTasks(); })}>Wiederherstellen</button>
             : <button className="btn sm" title="Vom Board nehmen, Historie bleibt" onClick={() => void run(async () => { await api.post(`/tasks/${t.id}/archive`); await reloadTasks(); onClose(); })}>Archivieren</button>}
@@ -226,7 +243,11 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
               <option value="extern">{i.responsibleEmail && !contacts.some((c) => c.email === i.responsibleEmail) ? `${i.responsibleEmail} (extern)` : 'extern (neue Mail-Adresse) …'}</option>
             </select>
             {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
-            {canEdit && <IconButton label={`Checklistenpunkt „${i.title}“ löschen`} size="sm" variant="link" onClick={() => void dialog.confirm({ title: 'Checklistenpunkt löschen', text: `„${i.title}“ löschen?${d.mails.some((m) => m.checklistItemId === i.id) ? ' Der Mailverlauf dazu bleibt am Arbeitspaket.' : ''}`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); }); })}><IconX /></IconButton>}
+            {canEdit && <Dropdown label={`Menü zu „${i.title}“`} icon={false} items={[
+              { label: 'In Aufgabe umwandeln …', onClick: () => setItemAction({ kind: 'promote', itemId: i.id }) },
+              { label: 'Verschieben nach …', onClick: () => setItemAction({ kind: 'move', itemId: i.id }) },
+              { label: 'Löschen', danger: true, onClick: () => void dialog.confirm({ title: 'Checklistenpunkt löschen', text: `„${i.title}“ löschen?${d.mails.some((m) => m.checklistItemId === i.id) ? ' Der Mailverlauf dazu bleibt am Arbeitspaket.' : ''}`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/tasks/${t.id}/checklist/${i.id}`); await load(); await reloadTasks(); }); }) }
+            ]} />}
             <MailThread mails={d.mails.filter((m) => m.checklistItemId === i.id)} projectId={detail.project.id} />
           </li>
         ))}
@@ -311,7 +332,8 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
       <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
       <ul className="subtasks">
         {subtasks.map((x) => (
-          <li key={x.id} className={`${x.done ? 'done' : ''} ${open === x.id ? 'open' : ''}`}>
+          <li key={x.id} className={`${x.done ? 'done' : ''} ${open === x.id ? 'open' : ''}`} draggable={canEdit} title={canEdit ? 'Auf eine Karte im Board ziehen, um die Aufgabe dorthin zu verschieben' : undefined}
+            onDragStart={(e) => { e.dataTransfer.setData(SUBTASK_DRAG, x.id); e.dataTransfer.setData('text/plain', x.title); e.dataTransfer.effectAllowed = 'move'; }}>
             <div className="st-row">
               <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void move(x, (x.done ? openCol : doneCol)?.id)} />
               <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} aria-expanded={open === x.id} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} {x.title}</button>

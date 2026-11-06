@@ -21,7 +21,8 @@ import { createProjectReason, projectPolicy, SQL, TEXT } from '../projectPolicy.
 import { effectiveMailInquiry, inquiryOf, parseInquiry } from '../ai/mailInquiry.js';
 import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
 import type { AgentMode, AgentPolicy } from '@projekttool/shared';
-import type { AgentMailMode, MailInquiry } from '@projekttool/shared';
+import type { AgentMailMode, MailInquiry, PlanningDepth } from '@projekttool/shared';
+import { PLANNING_DEPTHS } from '@projekttool/shared';
 
 export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
 
@@ -35,6 +36,7 @@ export function mapProject(r: any): Project {
     mailAddress: r.mail_address,
     timeTrackingEnabled: Boolean(r.time_tracking_enabled),
     autoCompleteParent: r.auto_complete_parent !== false,
+    planningDepth: PLANNING_DEPTHS.some((d) => d.key === r.planning_depth) ? r.planning_depth : 'auto',
     aiProfileId: r.ai_profile_id ?? null,
     externalProfile: profileOf(r.external_profile),
     budgetHours: r.budget_hours == null ? null : Number(r.budget_hours),
@@ -142,10 +144,11 @@ export async function projectRoutes(app: FastifyInstance) {
     };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null } }>('/projects/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; description?: string; mailAddress?: string | null; timeTrackingEnabled?: boolean; autoCompleteParent?: boolean; planningDepth?: PlanningDepth; budgetHours?: number | null; visibility?: 'members' | 'org'; escalation?: Partial<EscalationPolicy>; reporting?: Partial<ReportingPolicy>; reminders?: Partial<ReminderPolicy>; aiProfileId?: string | null; mailInquiry?: MailInquiry | null } }>('/projects/:id', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const b = req.body ?? {};
+    if (b.planningDepth !== undefined && !PLANNING_DEPTHS.some((d) => d.key === b.planningDepth)) throw badRequest('Planungstiefe: auto, aufgaben oder checkliste');
     if ('mailInquiry' in b) {
       // Mail-Rückfrage je Projekt; null übernimmt wieder die Vorgabe des Mandanten
       let v: MailInquiry | null;
@@ -194,8 +197,8 @@ export async function projectRoutes(app: FastifyInstance) {
     const p = await db.one(
       `update projects set name = coalesce($2, name), description = coalesce($3, description),
          time_tracking_enabled = coalesce($4, time_tracking_enabled), budget_hours = case when $5 then $6::numeric else budget_hours end, visibility = coalesce($7, visibility),
-         auto_complete_parent = coalesce($8, auto_complete_parent) where id = $1 returning *`,
-      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null, b.visibility ?? null, b.autoCompleteParent ?? null]
+         auto_complete_parent = coalesce($8, auto_complete_parent), planning_depth = coalesce($9, planning_depth) where id = $1 returning *`,
+      [req.params.id, b.name ?? null, b.description ?? null, b.timeTrackingEnabled ?? null, 'budgetHours' in b, b.budgetHours ?? null, b.visibility ?? null, b.autoCompleteParent ?? null, b.planningDepth ?? null]
     );
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.update', objectType: 'project', objectId: p.id, details: b });
     return { project: mapProject(p) };

@@ -17,12 +17,23 @@ Für Projektleitung, Mitglieder und Verwaltung. Dieses Handbuch beschreibt, was 
 | Doku | Seiten lesen, anlegen, ändern, ergänzen; Status Entwurf und In Prüfung; PDF finaler Seiten senden | Final setzen nur mit Recht „Final setzen“; Ordner mit Zugriff „kein“ sieht er nicht; löscht nie |
 | Kommunikation intern | Fragen per Chat (offene Frage mit Frist, Nachfassen, Weitergabe), Informationen per Chat, Eskalation an die Projektleitung | Interne nie per Mail |
 | Kommunikation extern | Mails an Externe zu ihrer Aufgabe (höchstens drei je Lauf); Antwort auf die Ursprungsmail zum Abschluss | nur Außenkontext (Kapitel 7); ohne „darf Mails senden“ und beim ersten Kontakt immer Entwurf |
+| Struktur | Aufgaben in ein anderes Arbeitspaket hängen (`move_aufgabe`), Arbeitspakete einem Teilprojekt zuordnen (`move_ap`), Tasks zu Aufgaben machen (`promote_item`) oder verschieben (`move_item`), Aufgaben ohne Zeiten, Mails und offene Fragen zu Tasks machen (`demote_aufgabe`); Log an Quelle und Ziel, Audit | Klasse „Umstrukturieren“ (Standard: Bestätigung), außerhalb seines Bereichs als Vorschlag an die PL; nur im selben Projekt |
 | Planung | Aufgaben, Arbeitspakete, Teilprojekte, Meilensteine, Termine, Zuweisungen je nach Rolle und Recht (höchstens 15 Anlagen je Lauf); Termine verschieben oder absagen, Einladung an die Teilnehmer senden (bestätigte Termine, aus dem Projektkonto) | Termine sagt er nie zu, Kalendereinträge sind vorläufig; Einladungen gelten als Mail nach außen |
 | Ressourcen | Räume, Geräte, externe Personen buchen (immer vorläufig, eine Person bestätigt) | übersteuert nie einen Konflikt |
 | Wissen | Überblick über das Projekt, passende Seiten, ähnliche Arbeitspakete; Suche im Projekt; Überschneidungen melden | nur, was er sehen darf |
 | Recherche online | Suchen und Seiten lesen, Quellen an die Seite hängen | nur mit Freigabe; nur lesen, keine Kontaktaufnahme |
 | Mail-Bearbeitung | als (stellvertretende) Projektleitung Mails direkt bearbeiten, als Mitglied vorschlagen (Kapitel 3) | Inhalte persönlicher Konten nur mit Freigabe; erster Kontakt mit Unbekannten immer Entwurf |
 | Telefon | Anrufe über sipgate annehmen, Anliegen als Arbeitspaket aufnehmen, internen Anrufern den Stand geben (Kapitel 10) | Externe bekommen keine Projektinhalte; Termine nur vorläufig |
+
+### Aufgabe oder Task (Checklistenpunkt)
+
+Bisher legte der Agent bei Aufträgen mal Aufgaben, mal Tasks an. Jetzt gilt eine feste Regel (KI-Sheet, Block „Struktur“) und je Projekt eine **Planungstiefe** (Einstellungen › Planung und Board):
+
+- **Automatisch (Regel):** Eine **Aufgabe** ist ein eigener Schritt mit eigener Zuständigkeit, eigenem Termin oder eigenem Status und Log (mehr als ein Arbeitstag, delegierbar, von außen nachverfolgbar). Ein **Task** ist ein kurzer Prüf- oder Erledigungspunkt ohne eigenen Termin und ohne andere Zuständigkeit, den die zuständige Person des AP bzw. der Aufgabe selbst abhakt. Nie beides für dieselbe Sache; ein AP ohne Aufgaben bekommt Tasks, sobald ein Schritt eine andere Person oder einen eigenen Termin braucht, wird er Aufgabe.
+- **Immer Aufgaben:** Schritte werden Aufgaben; Tasks nur als Checkliste einer Aufgabe.
+- **Immer Checklistenpunkte:** Schritte werden Tasks; Aufgaben nur mit Termin oder anderer Zuständigkeit (ausdrücklicher Wunsch).
+
+Die geltende Planungstiefe steht in jedem Lauf im Kontext („Planungstiefe dieses Projekts: …“). Das System setzt sie außerdem durch: bei „Automatisch“ wird eine Aufgabe ohne Termin, ohne Zuständigkeit, mit kurzem Titel (unter 60 Zeichen) und ohne Tasks zum Task am Ziel-AP; bei „Immer Checklistenpunkte“ jede Aufgabe ohne Termin und Zuständigkeit (ihre Tasks hängen als weitere Punkte an); bei „Immer Aufgaben“ wird ein Task am AP zur Aufgabe und die Tasks eines neuen Arbeitspakets werden seine Aufgaben. Jede Umsetzung steht im Log („Struktur-Regel: … als Checklistenpunkt angelegt, weil …“) und im Lauf-Protokoll.
 
 ### Was er nie tut
 
@@ -166,6 +177,9 @@ Der Agent kennt Rolle und Rechte des Absenders, erkennt Anweisungen in natürlic
 | `policy` | Selbstständigkeit oder Denktiefe je Arbeitspaket („WEB-12 ohne Rückfrage“, „WEB-12 gründlich“), innerhalb der Grenzen | Projektleitung |
 | `report` | Zwischenstände wünschen (jeder Lauf, Meilensteine, täglich, Abschluss; optional per Mail) | Projektleitung, Auftraggeber |
 | `refer` | Frage an die Projektleitung weitergeben; Auftragsvorschlag | Mitglieder |
+| `move` | Aufgabe unter ein anderes Arbeitspaket hängen („WEB-23 unter WEB-22“) oder Arbeitspaket einem Teilprojekt zuordnen („WEB-22 ins Teilprojekt Sanitär“, „keins“ = heraus); nur im selben Projekt, Log an Quelle und Ziel | wie Aufträge (Policy „Aufträge im Chat“) oder „Projektplan ändern“ |
+
+Sagt der Agent „habe ich verschoben, umgehängt, zugeordnet, umgewandelt“, ohne dass ein `move` auf der Karte steht, ersetzt `claimCheck` den Satz wie bei „angelegt“ oder „gesendet“.
 
 ### Thema und Gedächtnis im Chat
 

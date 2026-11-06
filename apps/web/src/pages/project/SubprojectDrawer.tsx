@@ -91,13 +91,19 @@ export function SubprojectDrawer({ subprojectId, onClose }: { subprojectId: stri
       {aps.length === 0 && <p className="muted small">Noch keine.</p>}
       <div className="stack gap-1">
         {aps.map((x) => (
-          <button key={x.id} className={`list-row ${x.done ? 'is-done' : ''}`} onClick={() => openTask(x.id)}>
-            <span className="tkey">{detail.project.key}-{x.number}</span>
-            <span className="grow">{x.title}</span>
-            <span className="muted small">{colName(x.columnId)}</span>
-            {x.dueDate && <span className={`small ${!x.done && x.dueDate < today() ? 'overdue' : 'muted'}`}>{fmtDate(x.dueDate)}</span>}
-            {x.responsible.name && <Initials name={x.responsible.name} />}
-          </button>
+          <div key={x.id} className="row gap-1 items-center">
+            <button className={`list-row grow ${x.done ? 'is-done' : ''}`} onClick={() => openTask(x.id)}>
+              <span className="tkey">{detail.project.key}-{x.number}</span>
+              <span className="grow">{x.title}</span>
+              <span className="muted small">{colName(x.columnId)}</span>
+              {x.dueDate && <span className={`small ${!x.done && x.dueDate < today() ? 'overdue' : 'muted'}`}>{fmtDate(x.dueDate)}</span>}
+              {x.responsible.name && <Initials name={x.responsible.name} />}
+            </button>
+            {me.role !== 'reader' && <select className="inline-select" value={s.id} title="Einem anderen Teilprojekt zuordnen" aria-label={`Teilprojekt von ${detail.project.key}-${x.number}`} disabled={busy}
+              onChange={(e) => void run(async () => { await api.post(`/tasks/${x.id}/reparent`, { parentId: null, subprojectId: e.target.value || null }); await reloadTasks(); })}>
+              <option value="">– keines –</option>{detail.subprojects.map((o) => <option key={o.id} value={o.id}>{o.name}</option>)}
+            </select>}
+          </div>
         ))}
       </div>
       {me.role !== 'reader' && <div className="mt"><InlineCreate open={adding} onOpen={() => setAdding(true)} onClose={() => setAdding(false)} label="+ Arbeitspaket" placeholder="Titel eingeben, Enter zum Anlegen" onCreate={(title) => create.task({ title, subprojectId: s.id })} /></div>}

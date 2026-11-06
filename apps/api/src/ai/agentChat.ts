@@ -47,14 +47,15 @@ const SCHEMA = {
     onTopic: { type: 'boolean', description: 'true, wenn die Antwort das Thema (Projekt oder Arbeitspaket) betrifft; false bei Gruß, Smalltalk, allgemeinen Fragen oder Bitten ohne Projektbezug' },
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
-      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
-        type: { type: 'string', enum: ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer'] },
-        ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); für das in derselben Antwort per order angelegte: neu; sonst leer' },
+      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'to', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
+        type: { type: 'string', enum: ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move'] },
+        ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); move: Kennung der Aufgabe oder des Arbeitspakets, das verschoben wird; für das in derselben Antwort per order angelegte: neu; sonst leer' },
+        to: { type: 'string', description: 'move: Kennung des Ziel-Arbeitspakets (Aufgabe darunter hängen); leer, wenn ein Arbeitspaket per subproject einem Teilprojekt zugeordnet wird; sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
         title: { type: 'string', description: 'order: kurzer Titel des Arbeitspakets bzw. der Aufgabe; sonst leer' },
         parent: { type: 'string', description: 'order: Kennung eines bestehenden Über-AP aus dem Kontext, wenn eine Aufgabe darunter entstehen soll; nie erfinden; sonst leer (neues Arbeitspaket)' },
         project: { type: 'string', description: 'order: Kürzel des Projekts, in das der Auftrag gehört (aus Thema, Treffern oder Übersicht der gemeinsamen Projekte); leer = Thema bzw. persönliches Projekt' },
-        subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer' },
+        subproject: { type: 'string', description: 'order: Name des Teilprojekts oder leer; move: Ziel-Teilprojekt eines Arbeitspakets (leer mit to = Aufgabe umhängen; „keins“ = aus dem Teilprojekt heraus)' },
         dueDate: { type: 'string', description: 'order: Termin YYYY-MM-DD (deutsche Angaben wie 8.11. gehen auch) oder leer' },
         deliverables: { type: 'array', items: { type: 'string' }, description: 'order: Lieferergebnisse als Tasks; sonst leer' },
         every: { type: 'string', description: 'order/report: Zwischenstände each, milestones, daily oder done; sonst leer' },
@@ -352,7 +353,7 @@ export const keyFiguresLine = (label: string, k: KeyFigures) => `Kennzahlen zu $
 /** Verben, mit denen eine Notiz (Log-Eintrag) beschrieben wird: zulässig, wenn eine Notiz ausgeführt wurde. */
 const CLAIM_LOG = 'vermerkt|eingetragen|notiert|festgehalten|hinterlegt|protokolliert|dokumentiert';
 /** Verben für Aktionen, die es im Chat nicht gibt: nie zulässig. */
-const CLAIM_ACT = 'angelegt|erstellt|gesendet|geschickt|verschickt|versendet|verschoben|zugewiesen|erledigt|abgeschlossen|freigegeben|gesetzt';
+const CLAIM_ACT = 'angelegt|erstellt|gesendet|geschickt|verschickt|versendet|verschoben|umgehängt|zugeordnet|umgewandelt|zugewiesen|erledigt|abgeschlossen|freigegeben|gesetzt';
 /**
  * claimCheck (Agenten-Konzept 5 und 10): Sätze in der ersten Person, die behaupten, etwas sei angelegt, eingetragen, vermerkt,
  * gesendet, erledigt oder freigegeben („Ich habe … gesendet“, „habe ich … angelegt“, „wurde von mir … erstellt“), ersetzt das
