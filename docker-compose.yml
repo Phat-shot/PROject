@@ -31,6 +31,8 @@ services:
       SYNC_INTERVAL_MS: "60000"
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       PUBLIC_URL: ${PUBLIC_URL:-http://localhost:3000}
+      # Interne Ziele (eigenes LLM, Nextcloud, IMAP/SMTP, CalDAV) freigeben: Hostnamen oder IP/CIDR, kommagetrennt
+      OUTBOUND_ALLOW_HOSTS: ${OUTBOUND_ALLOW_HOSTS:-}
     # Nur lokal erreichbar; für den Betrieb im Netz deploy/docker-compose.yml (hinter Traefik, TLS) verwenden
     ports:
       - "127.0.0.1:3000:3000"
