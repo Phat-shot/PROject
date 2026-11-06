@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate, FileListing } from '@projekttool/shared';
+import { AGENT_FOLDER_ACCESS, type AgentFolderAccess } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { IconButton } from '../../components/ui';
-import { IconAlert, IconChevronDown, IconChevronRight, IconCloud, IconMail, IconMore, IconX } from '../../components/icons';
+import { IconAlert, IconChevronDown, IconChevronRight, IconCloud, IconMail, IconMore, IconPlus, IconX } from '../../components/icons';
 import { useUnsavedChanges } from '../../lib/useUnsavedChanges';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
@@ -69,7 +70,7 @@ export function DocsView({ meetings = false, files = false }: { meetings?: boole
     <div key={p.id} className={`page ${pageId === p.id ? 'active' : ''}`} style={{ paddingLeft: 8 + depth * 14 }} onClick={() => nav(`${base}/${p.id}`)}>
       <span className="t">{(p.childCount ?? 0) > 0 ? <><IconChevronDown size={12} /> </> : ''}{p.title}</span>
       {canWrite && <span className="acts" onClick={(e) => e.stopPropagation()}>
-        <button title="Unterseite anlegen" aria-label={`Unterseite anlegen unter ${p.title}`} onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}>+</button>
+        <button title="Unterseite anlegen" aria-label={`Unterseite anlegen unter ${p.title}`} onClick={() => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited: childTemplateOf(p) })}><IconPlus size={12} /></button>
         <button title="Seiteneinstellungen" aria-label={`Seiteneinstellungen: ${p.title}`} onClick={() => nav(`${base}/${p.id}?einstellungen=1`)}><IconMore size={14} /></button>
       </span>}
       <span className={`badge ${p.status}`}>{statusLabel[p.status]}</span>
@@ -94,7 +95,7 @@ export function DocsView({ meetings = false, files = false }: { meetings?: boole
             <div className={`folder ${f.pageId && pageId === f.pageId ? 'active' : ''}`}>
               <span className="t" title="Ordnerseite öffnen" onClick={() => void openFolder(f)}>{f.name}{f.distributionList.length > 0 && <span title={`Verteiler: ${f.distributionList.join(', ')}`}> <IconMail size={12} /><span className="sr-only">mit Verteiler</span></span>}</span>
               {canWrite && <span className="acts">
-                <button title="Seite in diesem Ordner anlegen" aria-label={`Seite in Ordner ${f.name} anlegen`} onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}>+</button>
+                <button title="Seite in diesem Ordner anlegen" aria-label={`Seite in Ordner ${f.name} anlegen`} onClick={() => setNewPage({ folderId: f.id, parentPageId: null })}><IconPlus size={12} /></button>
                 {me.role === 'pl' && <button title="Ordner bearbeiten (Name, Verteiler)" aria-label={`Ordner ${f.name} bearbeiten`} onClick={() => setEditFolder(f)}><IconMore size={14} /></button>}
               </span>}
             </div>
@@ -342,7 +343,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
   const { detail } = useProject();
   const [name, setName] = useState(existing?.name ?? '');
   const [list, setList] = useState(existing?.distributionList.join(', ') ?? '');
-  const [agentAccess, setAgentAccess] = useState<'write' | 'read' | 'none'>(existing?.agentAccess ?? 'write');
+  const [agentAccess, setAgentAccess] = useState<AgentFolderAccess>(existing?.agentAccess ?? 'write');
   const { busy, error, run } = useAsync();
   const dialog = useDialog();
   const nav = useNavigate();
@@ -352,7 +353,7 @@ function FolderForm({ existing, onClose, onSaved }: { existing?: DocFolder; onCl
         <label className="field"><span>Name</span><input type="text" value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="field"><span>Verteiler (Mail-Adressen, Komma)</span><input type="text" value={list} onChange={(e) => setList(e.target.value)} placeholder="gf@firma.de, kunde@extern.de" /></label>
         <p className="muted small">Finale Seiten dieses Ordners können als PDF an den Verteiler gesendet werden. Versand über das Projektkonto.</p>
-        <label className="field"><span>Zugriff der KI-Agenten</span><select value={agentAccess} onChange={(e) => setAgentAccess(e.target.value as 'write' | 'read' | 'none')}><option value="write">schreiben (Seiten anlegen, ändern, verschieben)</option><option value="read">nur lesen</option><option value="none">kein Zugriff (auch nicht im Kontext der Agenten)</option></select></label>
+        <label className="field"><span>Zugriff der KI-Agenten</span><select value={agentAccess} onChange={(e) => setAgentAccess(e.target.value as AgentFolderAccess)}>{AGENT_FOLDER_ACCESS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}</select></label>
         <p className="muted small">Gilt auch für Unterordner; die strengste Angabe entlang der Ordner gewinnt.</p>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !name} onClick={() => void run(async () => {

@@ -3,6 +3,7 @@ import type { ChecklistItem, Task } from '@projekttool/shared';
 import { api } from '../../lib/api';
 import { Modal, useAsync, useToast } from '../../components/ui';
 import { useProject } from '../ProjectPage';
+import { DateInput } from '../../components/DateInput';
 
 /**
  * Struktur ändern: Aufgabe in ein anderes Arbeitspaket (POST /tasks/:id/reparent), Aufgabe zum Arbeitspaket machen (parentId null,
@@ -105,7 +106,7 @@ export function PromoteItemDialog({ task, item, members, onClose, onDone }: { ta
         <p className="muted small m-0">Der Punkt wird eine Aufgabe {task.parentId ? 'am Arbeitspaket darüber' : 'dieses Arbeitspakets'} mit eigenem Status, Termin und Log; der Checklistenpunkt entfällt.</p>
         <label className="field"><span>Titel</span><input type="text" value={title} onChange={(e) => setTitle(e.target.value)} /></label>
         <div className="form cols-2">
-          <label className="field"><span>Deadline der Aufgabe</span><input type="date" value={due} onChange={(e) => setDue(e.target.value)} /></label>
+          <label className="field"><span>Deadline der Aufgabe</span><DateInput value={due} onChange={setDue} /></label>
           <label className="field"><span>Zuständig</span><select value={resp} onChange={(e) => setResp(e.target.value)}><option value="">geerbt</option>{members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}</select></label>
         </div>
         {error && <div className="error">{error}</div>}

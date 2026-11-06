@@ -446,10 +446,13 @@ test('Quellen für den Agenten: Einbindung, Doku-Ordner und Mails ausschließbar
   const p2 = (await t.api(pl).post(`/projects/${web()}/docs/pages`, { title: 'Bonusplan Zauberwort', folderId: f2.id, contentMd: 'Zauberwort Bonus' })).json().page;
   const docs = async () => (await knowledgeSearch(t.db, { projectId: web(), agentId: agent.id, query: 'Zauberwort', source: 'docs' })).pages.map((x) => x.title).sort();
   assert.deepEqual(await docs(), ['Bonusplan Zauberwort', 'Gehaltsliste Zauberwort']);
-  const fo = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentEnabled: false }] });
+  const fo = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentAccess: 'none' }] });
   assert.equal(fo.statusCode, 200, fo.body);
   const sub = fo.json().folders.find((x: any) => x.id === f2.id);
   assert.equal(sub.inheritedOff, true); assert.equal(sub.depth, 1);
+  assert.equal(fo.json().folders.find((x: any) => x.id === f1.id).agentAccess, 'none');
+  assert.equal((await t.api(pl).get(`/projects/${web()}/docs`)).json().folders.find((x: any) => x.id === f1.id).agentAccess, 'none', 'derselbe Wert wie in der Doku');
+  assert.equal((await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentEnabled: false }] })).statusCode, 400, 'alter Schalter gibt es nicht mehr');
   assert.deepEqual(await docs(), [], 'Ordner samt Unterordner ausgeschlossen');
   queue = [{ actions: [{ type: 'read_page', pageId: p1.id }] }, { actions: [{ type: 'comment', text: 'ok' }] }];
   const run = await runAgentOnTask(t.db, t.mail, fakeFetch, { id: agent.id, name: agent.name, org_id: t.ids.org, persona: null }, task.id, 'manual');
@@ -461,7 +464,7 @@ test('Quellen für den Agenten: Einbindung, Doku-Ordner und Mails ausschließbar
   assert.equal((await t.api(pl).get(`/docs/pages/${p2.id}`)).statusCode, 200, 'Mensch sieht die Seite');
 
   // Wieder an
-  const on = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentEnabled: true }], bindings: [{ id: vertraege.id, agentEnabled: true }], mails: true });
+  const on = await t.api(pl).patch(`/projects/${web()}/agent-sources`, { folders: [{ id: f1.id, agentAccess: 'write' }], bindings: [{ id: vertraege.id, agentEnabled: true }], mails: true });
   assert.equal(on.statusCode, 200);
   assert.deepEqual(await docs(), ['Bonusplan Zauberwort', 'Gehaltsliste Zauberwort']);
   assert.equal((await readFileText(t.db, { projectIds: [web()], agentId: agent.id, id: `file:${fid}` })).ok, true);

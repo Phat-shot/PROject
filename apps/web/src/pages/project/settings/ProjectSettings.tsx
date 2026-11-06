@@ -15,6 +15,7 @@ import { DataTab } from './Data';
 import { FilesTab } from './Files';
 import { AiView } from '../AiView';
 import { projectPolicy } from '../../../lib/useProjectPolicy';
+import { IconExternal } from '../../../components/icons';
 
 /**
  * Projekt › Einstellungen (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Fristen und Berichte,
@@ -48,7 +49,7 @@ function SettingsIntro({ tab }: { tab: string }) {
   const { detail } = useProject();
   const i = (projectPolicy(detail.project).assistant ? INTRO_PERSONAL[tab] : undefined) ?? INTRO[tab];
   if (!i) return null;
-  return <p className="settings-intro"><span>{i.text}</span><Link className="help-link" to="/hilfe/handbuch" title={`Handbuch, ${i.chapter}`}>Hilfe: Handbuch {i.chapter} ↗</Link></p>;
+  return <p className="settings-intro"><span>{i.text}</span><Link className="help-link" to="/hilfe/handbuch" title={`Handbuch, ${i.chapter}`}>Hilfe: Handbuch {i.chapter} <IconExternal size={12} /></Link></p>;
 }
 
 export function ProjectSettingsPage() {

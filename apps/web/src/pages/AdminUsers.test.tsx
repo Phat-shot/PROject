@@ -68,7 +68,7 @@ describe('Verwaltung: Gruppen mit Verwaltern', () => {
     expect(await screen.findByText('Bau')).toBeInTheDocument();
     expect(screen.queryByText('Fremd')).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: '+ Gruppe' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: '✕' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Entfernen' })).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
     expect(screen.queryByLabelText('Name')).not.toBeInTheDocument();
     expect(screen.queryByLabelText('Verwalter Max Keller')).not.toBeInTheDocument();

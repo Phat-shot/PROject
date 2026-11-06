@@ -9,7 +9,7 @@ function Harness({ value, send }: { value: 1 | -1 | null; send: (id: string, v: 
 }
 
 describe('KI-Feedback: Daumen', () => {
-  it('👍 sofort, 👎 mit Kommentar, erneuter Klick nimmt zurück', () => {
+  it('Daumen hoch sofort, Daumen runter mit Kommentar, erneuter Klick nimmt zurück', () => {
     const send = vi.fn(async () => undefined);
     const { rerender } = render(<Harness value={null} send={send} />);
     fireEvent.click(screen.getByTitle('Hilfreich'));

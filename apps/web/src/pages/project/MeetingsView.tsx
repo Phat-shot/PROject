@@ -4,7 +4,8 @@ import type { Availability, CalendarTarget, DocPage, Meeting, MeetingAttendee, R
 import { kindLabel } from '../../components/Resources';
 import { api, fmtDateTime, today } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, useAsync, useDialog } from '../../components/ui';
+import { IconButton, Modal, useAsync, useDialog } from '../../components/ui';
+import { IconArrowRight, IconX } from '../../components/icons';
 import { useProject } from '../ProjectPage';
 import { DateInput } from '../../components/DateInput';
 
@@ -54,7 +55,7 @@ export function MeetingsView() {
           <div className="row mt">
             <button className="btn sm primary" disabled={busy} onClick={() => void protocol(m)}>{m.pageId ? 'Protokoll öffnen' : 'Protokoll anlegen'}</button>
             <button className="btn sm" disabled={busy || !m.attendees.length || m.tentative} onClick={() => invite(m)}>{m.inviteSentAt ? 'Einladung aktualisieren' : 'Einladung senden (ICS)'}</button>
-            {(targets.data?.targets ?? []).map((tg) => <button key={tg.key} className="btn sm" disabled={busy || m.tentative} title={`Termin in ${tg.label} anlegen oder aktualisieren`} onClick={() => void run(async () => { const r = await api.post<{ updated: boolean }>(`/meetings/${m.id}/push`, { target: tg.key }); setPushed(`${tg.label}: ${r.updated ? 'aktualisiert' : 'eingetragen'}.`); })}>→ {tg.label}</button>)}
+            {(targets.data?.targets ?? []).map((tg) => <button key={tg.key} className="btn sm" disabled={busy || m.tentative} title={`Termin in ${tg.label} anlegen oder aktualisieren`} onClick={() => void run(async () => { const r = await api.post<{ updated: boolean }>(`/meetings/${m.id}/push`, { target: tg.key }); setPushed(`${tg.label}: ${r.updated ? 'aktualisiert' : 'eingetragen'}.`); })}><IconArrowRight size={12} /> {tg.label}</button>)}
             <a className="btn sm" href={`/api/meetings/${m.id}/ics`} title="ICS-Datei für jeden Kalender">ICS-Datei</a>
             {(isPl || m.createdBy === detail.project.myMembership.userId) && <><button className="btn sm" onClick={() => setEdit(m)}>Bearbeiten</button><button className="btn sm danger" onClick={() => void dialog.confirm({ title: 'Besprechung löschen', text: `„${m.title}“ löschen? Protokoll und Arbeitspakete bleiben.`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { await api.del(`/meetings/${m.id}`); setOpen(null); await refresh(); }); })}>Löschen</button></>}
           </div>
@@ -98,7 +99,7 @@ function ActionItems({ m, onChanged }: { m: Meeting; onChanged: () => Promise<vo
   return (
     <div className="mt">
       <div className="small"><span className="muted">Aktionspunkte / Arbeitspakete:</span></div>
-      {m.tasks.length > 0 && <ul className="small my-1 ul-18">{m.tasks.map((t) => <li key={t.id}><button className="btn sm link" onClick={() => openTask(t.id)}>{t.number ? `${detail.project.key}-${t.number} ` : ''}{t.title}</button>{t.done && <span className="badge ok ml-1">erledigt</span>} <button className="btn sm link" title="Verknüpfung lösen" onClick={() => void run(async () => { await api.del(`/meetings/${m.id}/tasks/${t.id}`); await onChanged(); })}>×</button></li>)}</ul>}
+      {m.tasks.length > 0 && <ul className="small my-1 ul-18">{m.tasks.map((t) => <li key={t.id}><button className="btn sm link" onClick={() => openTask(t.id)}>{t.number ? `${detail.project.key}-${t.number} ` : ''}{t.title}</button>{t.done && <span className="badge ok ml-1">erledigt</span>} <IconButton size="sm" variant="link" label={`Verknüpfung mit „${t.title}“ lösen`} onClick={() => void run(async () => { await api.del(`/meetings/${m.id}/tasks/${t.id}`); await onChanged(); })}><IconX size={12} /></IconButton></li>)}</ul>}
       {error && <div className="error small">{error}</div>}
       <form className="row small" onSubmit={(e) => { e.preventDefault(); if (!title.trim()) return; void run(async () => { await api.post(`/meetings/${m.id}/tasks`, { title, responsibleUserId: resp || null, dueDate: due || null }); setTitle(''); setDue(''); await onChanged(); }); }}>
         <input className="grow min-w-180" type="text" placeholder="Neuer Aktionspunkt …" value={title} onChange={(e) => setTitle(e.target.value)} />
@@ -158,7 +159,7 @@ function MeetingForm({ existing, series, onClose, onSaved }: { existing?: Meetin
           <div className="row wrap gap-1">{detail.members.map((m) => <button key={m.userId} type="button" className={`chip ${sel.has(m.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ userId: m.userId, email: m.email, name: m.name })}>{m.name}</button>)}</div>
           {(contacts.data?.contacts.length ?? 0) > 0 && <div className="row mt wrap gap-1"><span className="muted small">Kontakte:</span>{contacts.data!.contacts.map((c) => <button key={c.email} type="button" className={`chip ${sel.has(c.email.toLowerCase()) ? 'on' : ''}`} onClick={() => toggle({ email: c.email, name: c.name })}>{c.name ?? c.email}</button>)}</div>}
           <div className="row mt"><input type="email" placeholder="Weitere Adresse …" value={extra} onChange={(e) => setExtra(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addExtra(); } }} style={{ width: 260 }} /><button type="button" className="btn sm" onClick={addExtra}>Hinzufügen</button></div>
-          {attendees.filter((a) => !a.userId && !contacts.data?.contacts.some((c) => c.email.toLowerCase() === a.email.toLowerCase())).map((a) => <span key={a.email} className="badge mr-1">{a.email} <button type="button" className="btn sm link" onClick={() => toggle(a)}>×</button></span>)}
+          {attendees.filter((a) => !a.userId && !contacts.data?.contacts.some((c) => c.email.toLowerCase() === a.email.toLowerCase())).map((a) => <span key={a.email} className="badge mr-1">{a.email} <IconButton size="sm" variant="link" label={`${a.email} entfernen`} onClick={() => toggle(a)}><IconX size={12} /></IconButton></span>)}
         </div>
         {error && <div className="error full">{error}</div>}
         <div className="full row"><button className="btn primary" disabled={busy || !f.title.trim() || !f.startsAt} onClick={() => void save()}>{existing ? 'Speichern' : 'Anlegen'}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { AgentSources, AgentSourcesPatch } from '@projekttool/shared';
+import { AGENT_FOLDER_ACCESS, type AgentFolderAccess, type AgentSources, type AgentSourcesPatch } from '@projekttool/shared';
 import { api } from '../../../lib/api';
 import { useData } from '../../../lib/useData';
 import { Loading, useAsync } from '../../../components/ui';
@@ -8,7 +8,8 @@ import { ReadOnlyNote, SettingsCard } from '../../../components/settings/Setting
 import { useProject } from '../../ProjectPage';
 
 /**
- * Quellen für den Agenten: was KI-Agenten im Projekt durchsuchen und lesen dürfen – je Doku-Ordner (samt Unterordnern), je
+ * Quellen für den Agenten: was KI-Agenten im Projekt durchsuchen und lesen dürfen – je Doku-Ordner (samt Unterordnern; derselbe
+ * Agent-Zugriff wie in der Doku: schreiben, nur lesen, kein Zugriff), je
  * eingebundenem Dateiquellen-Ordner und Mails des Projekts. Ausgeschlossenes sieht der Agent gar nicht (auch keine Titel); Menschen
  * sehen weiter alles. Die Rechte der Mail-Ansichten (Lesen und KI) gelten zusätzlich. Nur die PL ändert.
  * section: als Abschnitt in einer anderen Karte (persönliches Projekt: „Dein Assistent“), sonst eigene Karte.
@@ -39,12 +40,13 @@ export function AgentSourcesCard({ section = false }: { section?: boolean }) {
           <thead><tr><th>Ordner</th><th>Seiten</th><th>Agent</th></tr></thead>
           <tbody>{d.folders.map((f) => (
             <tr key={f.id}>
-              <td style={{ paddingLeft: `${0.5 + f.depth * 1.25}rem` }}>{f.name}
-                {f.agentAccess === 'none' && <span className="badge ml-1" title="Agent-Zugriff des Ordners in der Doku: kein Zugriff">kein Zugriff</span>}</td>
+              <td style={{ paddingLeft: `${0.5 + f.depth * 1.25}rem` }}>{f.name}</td>
               <td>{f.pages}</td>
               <td>{f.inheritedOff
-                ? <span className="muted small" title="Ein übergeordneter Ordner ist ausgeschlossen">ausgeschlossen (über Oberordner)</span>
-                : toggle(`Ordner ${f.name} für KI-Agenten`, f.agentEnabled, (v) => void save({ folders: [{ id: f.id, agentEnabled: v }] }))}</td>
+                ? <span className="muted small" title="Ein übergeordneter Ordner hat „kein Zugriff“">ausgeschlossen (über Oberordner)</span>
+                : <select aria-label={`Zugriff der KI-Agenten auf Ordner ${f.name}`} value={f.agentAccess} disabled={!canEdit || busy} onChange={(e) => void save({ folders: [{ id: f.id, agentAccess: e.target.value as AgentFolderAccess }] })}>
+                  {AGENT_FOLDER_ACCESS.map((o) => <option key={o.key} value={o.key}>{o.label}</option>)}
+                </select>}</td>
             </tr>
           ))}</tbody>
         </table>

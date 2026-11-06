@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { fmtDate, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { useProject } from '../ProjectPage';
+import { IconArrowRight, IconCheck, IconCircle } from '../../components/icons';
 
 interface Overview {
   escalations: { taskId: string; title: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; score: number; reason: string; chain: string[]; responsible: string | null }[];
@@ -47,7 +48,7 @@ function SetupChecklist({ taskCount }: { taskCount: number }) {
   return (
     <div className="card mb setup">
       <h2>Projekt einrichten <span className="muted small fw-400">{items.length - open.length} von {items.length} erledigt</span></h2>
-      <ul className="setup-list">{items.map((i) => <li key={i.label} className={i.done ? 'done' : ''}>{i.done ? '✓' : '○'} {i.done ? <span>{i.label}</span> : <Link to={i.to}>{i.label}</Link>}</li>)}</ul>
+      <ul className="setup-list">{items.map((i) => <li key={i.label} className={i.done ? 'done' : ''}>{i.done ? <IconCheck size={14} /> : <IconCircle size={14} />}<span className="sr-only">{i.done ? 'Erledigt: ' : 'Offen: '}</span> {i.done ? <span>{i.label}</span> : <Link to={i.to}>{i.label}</Link>}</li>)}</ul>
     </div>
   );
 }
@@ -87,7 +88,7 @@ export function OverviewView() {
                 <td>{e.title}<div className="muted small">{e.responsible}</div></td>
                 <td className="small">{e.reason}</td>
                 <td className="nowrap">{e.blocked && <span className="badge blocked">Blockiert</span>} {e.level > 0 ? <span className={`badge esc${e.level}`}>Stufe {e.level}</span> : <span className="badge warn">Warnung</span>}{e.targetLevel > e.level && <span className="muted small"> → {e.targetLevel} beim nächsten Lauf</span>}</td>
-                <td><div className="chain">{e.chain.map((c, i) => <span className="contents" key={i}>{i > 0 && <span className="arrow">→</span>}<span className={`step ${i <= e.level && i > 0 ? 'on' : ''}`}>{c}</span></span>)}</div></td>
+                <td><div className="chain">{e.chain.map((c, i) => <span className="contents" key={i}>{i > 0 && <span className="arrow"><IconArrowRight size={12} /></span>}<span className={`step ${i <= e.level && i > 0 ? 'on' : ''}`}>{c}</span></span>)}</div></td>
               </tr>
             ))}
           </tbody></table>

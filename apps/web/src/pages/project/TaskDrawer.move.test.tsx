@@ -76,7 +76,9 @@ describe('TaskDrawer: Verschieben und Umwandeln', () => {
     renderDrawer();
     fireEvent.click(await screen.findByRole('button', { name: 'Menü zu „Maße prüfen“' }));
     fireEvent.click(screen.getByRole('menuitem', { name: 'In Aufgabe umwandeln …' }));
-    fireEvent.change(await screen.findByLabelText('Deadline der Aufgabe'), { target: { value: '2026-11-20' } });
+    const due = await screen.findByLabelText('Deadline der Aufgabe');
+    fireEvent.change(due, { target: { value: '20.11.2026' } });
+    fireEvent.blur(due);
     fireEvent.click(screen.getByRole('button', { name: 'Aufgabe anlegen' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/tasks/t1/checklist/i1/promote', { title: 'Maße prüfen', dueDate: '2026-11-20', responsibleUserId: null }));
   });

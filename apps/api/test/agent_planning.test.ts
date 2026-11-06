@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { composeEcho, testApp } from './helpers.js';
 import { runAgents } from '../src/ai/agent.js';
+import { classifyAction } from '../src/ai/agentPolicy.js';
+import { loadMilestone } from '../src/tasks/milestones.js';
 import { flushAgentRuns, queueAgentRun } from '../src/ai/agentEvents.js';
 
 /** Lokales LLM: liefert die Aktionen aus `next`, merkt sich jede Anfrage. */
@@ -142,6 +144,30 @@ test('Stellvertretende PL: Agent plant im ganzen Projekt, weist Agenten zu, änd
   // Unveränderte Agenten-Verantwortung blockiert andere Teilprojekt-Änderungen durch Planer ohne PL-Rolle nicht
   const max = await t.login('max@demo.local');
   assert.equal((await t.api(max).patch(`/projects/${web()}/subprojects/${elektrik}`, { name: 'Elektrik EG', responsibleUserId: morton.id })).statusCode, 200);
+});
+
+test('link_milestone: Agent verknüpft ein AP mit einem Meilenstein (Name oder ID), Log und Audit; Rechte wie create_milestone', async () => {
+  const pl = await t.login('pl@demo.local');
+  const ap = await t.db.one(`select id, number from tasks where title = 'Teilprojekt durchplanen'`);
+  const ms = await t.db.one(`select id from milestones where name = 'Zimmer fertig'`);
+  const other = await t.db.one(`select id, number from tasks where title = 'Wände streichen'`);
+  assert.deepEqual(classifyAction({ type: 'link_milestone', milestone: 'Zimmer fertig' }, { task: { id: ap.id, number: ap.number, parent_id: null, parent_number: null }, agentEmail: 'x@y', doneColumns: new Set() }), ['plan']);
+  next = [
+    A({ type: 'link_milestone', milestone: 'zimmer fertig', ref: '' }),
+    A({ type: 'link_milestone', milestone: ms.id, ref: `WEB-${other.number}` }),
+    A({ type: 'link_milestone', milestone: 'Gibtsnicht', ref: '' })
+  ];
+  await flushAgentRuns();
+  const before = calls.length;
+  const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
+  assert.equal(r.statusCode, 200, r.body);
+  assert.match(calls[before].messages[0].content, /link_milestone: milestone = Name aus „Meilensteine“ oder ID/);
+  const linked = (await t.db.query(`select task_id from milestone_tasks where milestone_id = $1`, [ms.id])).rows.map((x: any) => x.task_id).sort();
+  assert.deepEqual(linked, [ap.id, other.id].sort());
+  assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body = 'Mit Meilenstein „Zimmer fertig“ verknüpft (von Morton)'`, [ap.id]));
+  assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'milestone.link' and object_id = $1`, [ms.id]));
+  assert.match((await t.db.one(`select error from agent_runs where task_id = $1 order by created_at desc limit 1`, [ap.id])).error, /link_milestone: Meilenstein „Gibtsnicht“ gibt es nicht/);
+  assert.equal((await loadMilestone(t.db, ms.id))!.tasksTotal, 2);
 });
 
 test('Verantwortliche PL tritt zurück: Nachfolge nur durch Personen, nie durch einen Agenten', async () => {

@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import type { ChecklistItem, Subproject, Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../lib/api';
 import { prioLabel } from '../components/ui';
-import { IconLock } from '../components/icons';
+import { IconCheckSquare, IconChecklist, IconLock } from '../components/icons';
 
 export interface WorkProject {
   id: string; key: string; name: string; myRole: string;
@@ -91,8 +91,8 @@ function ApNode({ projectId, it, t, toggleTask }: { projectId: string; it: WorkI
         {ap.escalationLevel > 0 && <span className="badge danger">Esk. {ap.escalationLevel}</span>}
         {ap.dueDate && <span style={!ap.done && ap.dueDate < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</span>}
         <span className="muted small">{mine ? (ap.responsible.inherited ? `ich (geerbt vom ${FROM_LABEL[ap.responsible.inheritedFrom ?? 'project']})` : 'ich') : `${ap.responsible.name ?? ap.responsible.email ?? '–'}${ap.responsible.inherited ? ' (geerbt)' : ''}`}</span>
-        {(ap.subtaskTotal ?? 0) > 0 && <span className="muted small" title="Aufgaben erledigt / gesamt">▤ {ap.subtaskDone}/{ap.subtaskTotal}</span>}
-        {ap.checklistTotal > 0 && <span className="muted small">☑ {ap.checklistDone}/{ap.checklistTotal}</span>}
+        {(ap.subtaskTotal ?? 0) > 0 && <span className="muted small" title="Aufgaben erledigt / gesamt"><IconChecklist size={12} /><span className="sr-only">Aufgaben </span> {ap.subtaskDone}/{ap.subtaskTotal}</span>}
+        {ap.checklistTotal > 0 && <span className="muted small" title="Checkliste erledigt / gesamt"><IconCheckSquare size={12} /><span className="sr-only">Checkliste </span> {ap.checklistDone}/{ap.checklistTotal}</span>}
       </div>
       {tasks.map(({ item, inherited }) => (
         <label key={item.id} className={`wt-task ${item.done ? 'done' : ''}`}>

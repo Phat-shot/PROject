@@ -4,6 +4,7 @@ import { useData } from '../../lib/useData';
 import { useAuth } from '../../lib/auth';
 import { useProject } from '../ProjectPage';
 import { DateInput } from '../../components/DateInput';
+import { IconAlert } from '../../components/icons';
 
 interface Analytics {
   from: string; to: string;
@@ -57,7 +58,7 @@ export function AnalyticsView() {
           {a.weeks.map((w) => (
             <div key={w.week} className="wk" title={`${w.week}: ${w.created} angelegt, ${w.done} erledigt${w.escalations ? `, ${w.escalations} Eskalationen` : ''}${w.minutes ? `, ${hours(w.minutes)}` : ''}`}>
               <div className="bars"><div className="b created" style={{ height: `${(w.created / max) * 100}%` }} /><div className="b done" style={{ height: `${(w.done / max) * 100}%` }} /></div>
-              <div className="l">{w.week.slice(5)}{w.escalations > 0 && <span className="esc" title={`${w.escalations} Eskalationen`}>!</span>}</div>
+              <div className="l">{w.week.slice(5)}{w.escalations > 0 && <span className="esc" title={`${w.escalations} Eskalationen`}><IconAlert size={10} /><span className="sr-only">{w.escalations} Eskalationen</span></span>}</div>
             </div>
           ))}
         </div>

@@ -220,7 +220,7 @@ export async function fileRoutes(app: FastifyInstance) {
   // ---- Quellen für den Agenten (Projekt › Einstellungen › KI): Doku-Ordner, Einbindungen, Mails je Schalter; lesen alle
   // Mitglieder, ändern nur die PL. Wirkt nur auf KI-Agenten (Suche, Lesen, Projektdurchlauf), Menschen sehen alles wie bisher.
   async function agentSources(pid: string, canEdit: boolean) {
-    const folders = (await db.query(`select f.id, f.name, f.parent_id, f.position, f.agent_enabled, f.agent_access, (select count(*)::int from doc_pages p where p.folder_id = f.id and p.deleted_at is null) as pages from doc_folders f where f.project_id = $1 order by f.position, f.name`, [pid])).rows as any[];
+    const folders = (await db.query(`select f.id, f.name, f.parent_id, f.position, f.agent_access, (select count(*)::int from doc_pages p where p.folder_id = f.id and p.deleted_at is null) as pages from doc_folders f where f.project_id = $1 order by f.position, f.name`, [pid])).rows as any[];
     // Baum in Anzeige-Reihenfolge (Eltern vor Kindern), Tiefe und „durch übergeordneten Ordner aus“
     const kids = new Map<string | null, any[]>();
     for (const f of folders) { const k = folders.some((x) => x.id === f.parent_id) ? f.parent_id : null; if (!kids.has(k)) kids.set(k, []); kids.get(k)!.push(f); }
@@ -228,8 +228,8 @@ export async function fileRoutes(app: FastifyInstance) {
     const walk = (parent: string | null, depth: number, off: boolean) => {
       for (const f of kids.get(parent) ?? []) {
         if (out.length > 2000 || depth > 20) return;
-        out.push({ id: f.id, name: f.name, parentId: f.parent_id ?? null, depth, pages: Number(f.pages), agentEnabled: f.agent_enabled !== false, agentAccess: f.agent_access ?? 'write', inheritedOff: off });
-        walk(f.id, depth + 1, off || f.agent_enabled === false || f.agent_access === 'none');
+        out.push({ id: f.id, name: f.name, parentId: f.parent_id ?? null, depth, pages: Number(f.pages), agentAccess: f.agent_access ?? 'write', inheritedOff: off });
+        walk(f.id, depth + 1, off || f.agent_access === 'none');
       }
     };
     walk(null, 0, false);
@@ -253,10 +253,12 @@ export async function fileRoutes(app: FastifyInstance) {
     if (b.folders !== undefined) {
       if (!Array.isArray(b.folders)) throw badRequest('folders: Liste erwartet');
       for (const f of b.folders) {
-        const on = flag(f?.agentEnabled, 'folders');
-        const r = await db.query(`update doc_folders set agent_enabled = $3 where id = $1 and project_id = $2 returning name`, [String(f?.id ?? ''), pid, on]);
+        // Ordner: derselbe Agent-Zugriff wie in der Doku (write/read/none), keine zweite Einstellung
+        const access = f?.agentAccess;
+        if (!['write', 'read', 'none'].includes(access)) throw badRequest('folders: agentAccess (write, read oder none) erforderlich');
+        const r = await db.query(`update doc_folders set agent_access = $3 where id = $1 and project_id = $2 returning name`, [String(f?.id ?? ''), pid, access]);
         if (!r.rows.length) throw notFound('Ordner nicht gefunden');
-        changes[`folder:${r.rows[0].name}`] = on;
+        changes[`folder:${r.rows[0].name}`] = access;
       }
     }
     if (b.bindings !== undefined) {

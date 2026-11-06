@@ -17,7 +17,7 @@ export const isShareUrl = (url: string) => /\/s\/[^/?#]+/.test(url.trim());
 /** Ergebnis eines Abgleichs als ein Satz für den Toast. */
 export function syncMessage(name: string, s: FileSyncStats): string {
   if (s.error) return `${name}: Abgleich fehlgeschlagen – ${s.error}`;
-  return `${name} synchronisiert: ${s.files} Dateien, ${s.added} neu, ${s.changed} geändert, ${s.deleted} entfernt, ${s.extracted} Textauszüge${s.truncated ? ' (nicht vollständig, der Rest folgt beim nächsten Lauf)' : ''}.`;
+  return `${name} synchronisiert: ${s.files} Dateien, ${s.added} neu, ${s.changed} geändert, ${s.deleted} entfernt, ${s.extracted} Textauszüge${s.ocr ? `, davon ${s.ocr} per Texterkennung` : ''}${s.truncated ? ' (nicht vollständig, der Rest folgt beim nächsten Lauf)' : ''}.`;
 }
 
 /** Sync-Stand einer Quelle: Fehler, Zeitpunkt oder „noch nie“. */

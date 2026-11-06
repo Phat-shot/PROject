@@ -61,6 +61,20 @@ export async function setTaskMilestones(db: Db, taskId: string, projectId: strin
   for (const id of ok) await db.query(`insert into milestone_tasks (milestone_id, task_id) values ($1,$2) on conflict do nothing`, [id, taskId]);
 }
 
+/**
+ * Ein Arbeitspaket mit einem Meilenstein verknüpfen (zusätzlich zu bestehenden Bezügen; KI-Aktion link_milestone). Nur Arbeitspakete
+ * desselben Projekts. Danach den Status des Meilensteins prüfen wie nach einem Statuswechsel. false = war schon verknüpft.
+ */
+export async function linkMilestoneTask(db: Db, milestoneId: string, taskId: string, actorId: string | null): Promise<boolean> {
+  const t = await db.maybeOne(`select t.parent_id from tasks t join milestones m on m.project_id = t.project_id where t.id = $1 and m.id = $2 and t.deleted_at is null`, [taskId, milestoneId]);
+  if (!t) throw badRequest('Meilenstein und Arbeitspaket gehören nicht zum selben Projekt');
+  if (t.parent_id) throw badRequest('Meilensteine hängen an Arbeitspaketen, nicht an Aufgaben');
+  const r = await db.query(`insert into milestone_tasks (milestone_id, task_id) values ($1,$2) on conflict do nothing returning milestone_id`, [milestoneId, taskId]);
+  if (!r.rows.length) return false;
+  await syncMilestonesOf(db, taskId, actorId);
+  return true;
+}
+
 export interface MsActor { id: string | null; orgId: string; name?: string }
 
 /** Meilenstein erreicht setzen bzw. wieder öffnen (PL oder „Projektplan ändern“; Automatik ohne Person). */

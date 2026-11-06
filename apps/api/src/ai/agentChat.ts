@@ -331,7 +331,7 @@ export function berlinWeek(now: Date): { today: string; sunday: string } {
 export interface KeyFigures { open: number; active: number; dueWeek: number; overdue: number; blocked: number; waiting: number }
 /**
  * Kennzahlen des Themas, vom System per SQL berechnet (das Modell zählt nie selbst): offen = nicht erledigt; in Arbeit =
- * aktive Spalte (nicht Geplant, Zurückgestellt oder erledigt); fällig diese Woche = Termin von heute bis Sonntag (Europe/Berlin);
+ * aktive Spalte oder „In Prüfung“ (Art review, wie bei der Eskalation; nicht Geplant, Zurückgestellt oder erledigt); fällig diese Woche = Termin von heute bis Sonntag (Europe/Berlin);
  * überfällig = Termin vor heute; blockiert; wartet = Wartezustand des Agenten gesetzt. Ohne taskIds zählen die Arbeitspakete
  * der Projekte (keine Aufgaben), mit taskIds diese Arbeitspakete und ihre Aufgaben. Sichtbarkeit wie der Kontext: im Projektkanal
  * ohne eingeschränkte Teilprojekte, in Direktnachrichten nur, was der Absender sieht.
@@ -341,7 +341,7 @@ export async function keyFigures(db: Db, q: { projectIds: string[]; taskIds?: st
   const ids = q.taskIds?.length ? q.taskIds : null;
   const r = await db.one(
     `select count(*) filter (where not c.is_done)::int as open,
-            count(*) filter (where c.kind = 'active')::int as active,
+            count(*) filter (where c.kind in ('active', 'review'))::int as active,
             count(*) filter (where not c.is_done and t.due_date >= $3::date and t.due_date <= $4::date)::int as due_week,
             count(*) filter (where not c.is_done and t.due_date < $3::date)::int as overdue,
             count(*) filter (where not c.is_done and t.blocked)::int as blocked,

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { testApp } from './helpers.js';
 import { flushAgentRuns } from '../src/ai/agentEvents.js';
-import { bareReady, berlinWeek, claimCheck } from '../src/ai/agentChat.js';
+import { bareReady, berlinWeek, claimCheck, keyFigures } from '../src/ai/agentChat.js';
 
 /** Lokales LLM: Chat-Läufe (erkennbar am System-Prompt) bekommen reply/notes, Arbeitspaket-Läufe keine Aktion. */
 const prompts: string[] = [];
@@ -311,6 +311,11 @@ test('Chat-Thema: Kennung, Projektname, Verlauf, „über alle Projekte“, Rüc
   const statusMsg = await say(pl, plDm, 'Status GEH?');
   p = prompts.at(-1)!;
   assert.ok(p.includes('Kennzahlen zu GEH: offen 5 · in Arbeit 2 · fällig diese Woche 1 · überfällig 1 · blockiert 1 · wartet 1'), p);
+  // „In Prüfung“ (Spaltenart review) zählt wie bei der Eskalation als in Arbeit
+  const rv = await mk('Abnahme prüfen', 'In Prüfung', null);
+  const kf = await keyFigures(t.db, { projectIds: [geh.id], viewerId: null });
+  assert.equal(kf.open, 6); assert.equal(kf.active, 3);
+  await t.db.query(`update tasks set deleted_at = now() where id = $1`, [rv.id]);
   assert.ok(p.includes(`- GEH-${a.number} „Angebot anfordern“`), 'eigene Arbeitspakete des Themas');
   assert.ok(p.includes('Weitere offene Arbeitspakete im Thema') && p.includes('Streng vertraulich'), 'fremde Arbeitspakete nur kompakt in der Liste für Aufträge (Konzept 7.2)');
 

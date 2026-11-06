@@ -251,7 +251,7 @@ Automatisiert (axe) im Build, manuell vor Go-Live durch externen Prüfer.`
     md: `# Statusbericht KW 41
 
 ## Zusammenfassung
-Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
+Ampel: gelb – Agenturentscheidung steht aus, Wireframes im Plan.
 
 ## Fortschritt seit letztem Bericht
 - Personas abgeschlossen

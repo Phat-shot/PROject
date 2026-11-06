@@ -1261,3 +1261,9 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .import-preview { max-height: 360px; overflow: auto; }
 .import-preview tr.row-error td { background: var(--danger-soft); }
 .import-preview tr.row-warn td:first-child { box-shadow: inset 3px 0 0 var(--warn-fill); }
+.result-lines { list-style: none; margin: 0; padding: 0; }
+.result-lines li { display: flex; gap: 6px; align-items: flex-start; }
+.result-lines li > .icon { flex: none; margin-top: 2px; }
+.result-lines .result-ok > .icon { color: var(--ok); }
+.result-lines .result-held > .icon { color: var(--warn); }
+.result-lines .result-denied > .icon { color: var(--danger); }

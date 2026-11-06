@@ -4,7 +4,7 @@ import { LABEL_COLORS, type Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Badge, Button, IconButton, Initials, keyboardShortcutsBlocked, Loading, Modal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
-import { IconAlert, IconCheck, IconCheckSquare, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
+import { IconAlert, IconArrowRight, IconCheck, IconCollapse, IconCheckSquare, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
 import { moveTaskTo, reviewOptsOf } from '../../lib/moveTask';
 import { SUBTASK_DRAG } from './MoveDialog';
 import { useCreate } from './create';
@@ -246,7 +246,7 @@ export function BoardView() {
                       {!isCollapsed && <span className="tools">
                         <span>{inCol.length}</span>
                         {canEdit && c.isDone && inCol.length > 0 && <Button size="sm" variant="link" loading={archive.busy} title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => archiveDone(c, total)}>Archivieren</Button>}
-                        <button title="Spalte einklappen" aria-label={`Spalte ${c.name} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, c.id]))}>«</button>
+                        <button title="Spalte einklappen" aria-label={`Spalte ${c.name} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, c.id]))}><IconCollapse size={14} /></button>
                       </span>}
                       {isCollapsed && <button className="btn sm link" aria-label={`Spalte ${c.name} ausklappen (${total})`} onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}
                     </h3>
@@ -266,7 +266,7 @@ export function BoardView() {
                     <span>{bc.group}</span>
                     {!gCollapsed && <span className="tools">
                       <span title={`${gLane} in dieser Zeile, ${gTotal} gesamt`}>{gLane}</span>
-                      <button title="Gruppe einklappen" aria-label={`Gruppe ${bc.group} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, gKey]))}>«</button>
+                      <button title="Gruppe einklappen" aria-label={`Gruppe ${bc.group} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, gKey]))}><IconCollapse size={14} /></button>
                     </span>}
                     {gCollapsed && <button className="btn sm link" aria-label={`Gruppe ${bc.group} ausklappen (${gTotal})`} onClick={() => { const n = new Set(collapsed); n.delete(gKey); setCollapsed(n); }}>{gTotal}</button>}
                   </h3>
@@ -379,7 +379,7 @@ function StatusMenu({ task }: { task: Task }) {
   const move = (columnId: string) => void run(async () => { setOpen(false); if (await moveTaskTo(dialog.form, task.id, detail.columns.find((c) => c.id === columnId)!, 0, reviewOptsOf(detail, task.reviewer?.userId))) await reloadTasks(); });
   return (
     <div className="status-menu" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => { e.stopPropagation(); if (e.key === 'Escape') setOpen(false); }}>
-      <button className="btn sm link status-btn" aria-label="Status ändern" aria-haspopup="menu" aria-expanded={open} title="Status ändern" onClick={() => setOpen((o) => !o)}>→</button>
+      <button className="btn sm link status-btn" aria-label="Status ändern" aria-haspopup="menu" aria-expanded={open} title="Status ändern" onClick={() => setOpen((o) => !o)}><IconArrowRight size={14} /></button>
       {open && <div className="status-pop" role="menu" aria-label="Status">
         {done && !task.done && <button role="menuitem" className="btn sm primary" disabled={busy} onClick={() => move(done.id)}><IconCheck /> Erledigt</button>}
         {detail.columns.filter((c) => c.id !== task.columnId && c.id !== (task.done ? '' : done?.id)).map((c) => <button key={c.id} role="menuitem" className="btn sm" disabled={busy} onClick={() => move(c.id)}>{c.name}</button>)}

@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { RESOURCE_KINDS, type Availability, type Group, type Resource, type ResourceBooking, type ResourceKind } from '@projekttool/shared';
 import { api, ApiError, fmtDate, fmtDateTime, today } from '../lib/api';
-import { Modal, useAsync, useDialog } from './ui';
+import { IconButton, Modal, useAsync, useDialog } from './ui';
 import { useData } from '../lib/useData';
-import { IconX } from './icons';
+import { IconChevronLeft, IconChevronRight, IconPlus, IconX } from './icons';
 import { DateInput } from './DateInput';
 
 /**
@@ -121,9 +121,9 @@ export function Occupancy({ bookings, rows, start, onPick, onBook }: { bookings:
   return (
     <div className="occupancy">
       <div className="row mb">
-        <button className="btn sm" onClick={() => setCursor(addDays(cursor, -7))}>‹</button>
+        <IconButton size="sm" label="Eine Woche zurück" onClick={() => setCursor(addDays(cursor, -7))}><IconChevronLeft /></IconButton>
         <strong>{fmtDate(iso(days[0]))} – {fmtDate(iso(days[13]))}</strong>
-        <button className="btn sm" onClick={() => setCursor(addDays(cursor, 7))}>›</button>
+        <IconButton size="sm" label="Eine Woche weiter" onClick={() => setCursor(addDays(cursor, 7))}><IconChevronRight /></IconButton>
         <button className="btn sm" onClick={() => { const d = new Date(); d.setHours(0, 0, 0, 0); setCursor(addDays(d, -((d.getDay() + 6) % 7))); }}>Heute</button>
         <span className="muted small">vorläufig gestrichelt · Konflikt rot · fremde Projekte nur „belegt“</span>
       </div>
@@ -132,7 +132,7 @@ export function Occupancy({ bookings, rows, start, onPick, onBook }: { bookings:
         {days.map((d) => <div key={iso(d)} className={`hd ${iso(d) === t ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'we' : ''}`}>{d.toLocaleDateString('de-DE', { weekday: 'short' })} {d.getDate()}.</div>)}
         {rows.length === 0 && <div className="empty" style={{ gridColumn: '1 / -1' }}>Keine Ressourcen oder Personen zum Anzeigen.</div>}
         {rows.map((r) => <>
-          <div key={`${r.key}-l`} className="rl"><span title={r.kind ? kindLabel(r.kind) : undefined}>{r.label}</span>{onBook && <button className="btn sm link" title="Buchen" onClick={() => onBook(r)}>+</button>}</div>
+          <div key={`${r.key}-l`} className="rl"><span title={r.kind ? kindLabel(r.kind) : undefined}>{r.label}</span>{onBook && <IconButton size="sm" variant="link" label={`${r.label} buchen`} onClick={() => onBook(r)}><IconPlus size={12} /></IconButton>}</div>
           {days.map((d) => { const k = iso(d); const bs = cell(r, k); return (
             <div key={`${r.key}-${k}`} className={`c ${k === t ? 'today' : ''} ${d.getDay() === 0 || d.getDay() === 6 ? 'we' : ''}`}>
               {bs.map((b) => <span key={b.id} className={`bk ${b.tentative ? 'tent' : ''} ${b.conflict ? 'conf' : ''} ${b.masked ? 'mask' : ''} ${b.kind}`} title={`${bookingTitle(b)} · ${spanText(b)}${b.projectKey ? ` · ${b.projectKey}` : ''}${b.tentative ? ' · vorläufig' : ''}${b.conflict ? ' · Konflikt' : ''}`} onClick={() => onPick?.(b)}>{b.allDay ? '' : `${new Date(b.startsAt).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })} `}{bookingTitle(b)}</span>)}

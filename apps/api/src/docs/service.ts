@@ -84,7 +84,7 @@ export const BUILTIN_TEMPLATES: { key: string; name: string; contentMd: string }
 
 ## Zusammenfassung
 
-Ampel: 🟢
+Ampel: grün
 
 ## Fortschritt seit letztem Bericht
 

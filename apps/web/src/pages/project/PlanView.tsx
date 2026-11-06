@@ -5,7 +5,7 @@ import { useAsync } from '../../components/ui';
 import { useProject } from '../ProjectPage';
 import { MilestoneForm, MilestoneList, SubprojectList } from './planForms';
 import { useCreate } from './create';
-import { IconDiamond } from '../../components/icons';
+import { IconDiamond, IconSubitem } from '../../components/icons';
 
 const DAY = 86400_000;
 const ZOOM: [number, string][] = [[2, 'Quartal'], [4, 'Monat'], [10, 'Woche'], [24, 'Tag']];
@@ -170,7 +170,7 @@ export function PlanView() {
             {rows.map((r) => (
               <tr key={r.kind + r.id} id={r.kind === 'sub' ? `sp-${r.id}` : undefined}>
                 <td className={`label ${r.kind === 'sub' ? 'sub' : ''}`} style={{ cursor: r.kind !== 'sub' || r.id !== 'none' ? 'pointer' : undefined }} title={r.kind === 'sub' ? 'Teilprojekt öffnen' : r.kind === 'ms' ? 'Meilenstein: Status und Arbeitspakete' : undefined} onClick={() => { if (r.kind === 'task') openTask(r.id); else if (r.kind === 'sub' && r.id !== 'none') openSubproject(r.id); else if (r.kind === 'ms') setMsEdit(r.id); }}>
-                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted">↳ </span>}{r.kind === 'ms' && <><span style={{ paddingLeft: 10 }} /><IconDiamond size={12} /> </>}{r.label}{r.kind === 'ms' && r.reached && <span className="badge ok ml-1">erreicht</span>}
+                  {r.kind === 'task' && <span style={{ paddingLeft: r.child ? 24 : 10 }} />}{r.child && <span className="muted"><IconSubitem size={12} /><span className="sr-only">Aufgabe: </span> </span>}{r.kind === 'ms' && <><span style={{ paddingLeft: 10 }} /><IconDiamond size={12} /> </>}{r.label}{r.kind === 'ms' && r.reached && <span className="badge ok ml-1">erreicht</span>}
                   {r.resp && <span className="muted"> · {r.resp}</span>}
                 </td>
                 <td className="bars" style={{ width }}>

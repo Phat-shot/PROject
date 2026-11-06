@@ -3,7 +3,8 @@ import type { Project, User, UserSettings } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { applyTheme, useAuth } from '../lib/auth';
 import { TopBar } from '../components/Layout';
-import { useAsync } from '../components/ui';
+import { IconButton, useAsync } from '../components/ui';
+import { IconArrowDown, IconArrowUp, IconX } from '../components/icons';
 import { useData } from '../lib/useData';
 import { MyNotifyCard } from '../components/NotifyRules';
 import { AbsencesCard } from '../components/Resources';
@@ -102,7 +103,7 @@ function PinsCard() {
       {error && <div className="error mb">{error}</div>}
       {pinned.length === 0 ? <div className="muted small mb">Nichts angeheftet.</div> : <table className="table mb"><tbody>
         {pinned.map((p, i) => <tr key={p.id}><td><span className="badge" style={{ marginRight: 6 }}>{p.key}</span>{p.name}</td>
-          <td className="nowrap"><button className="btn sm link" disabled={busy || i === 0} aria-label={`${p.key} nach oben`} onClick={() => move(i, -1)}>↑</button><button className="btn sm link" disabled={busy || i === pinned.length - 1} aria-label={`${p.key} nach unten`} onClick={() => move(i, 1)}>↓</button><button className="btn sm link" disabled={busy} aria-label={`${p.key} lösen`} onClick={() => void save(ids.filter((x) => x !== p.id))}>✕</button></td></tr>)}
+          <td className="nowrap"><IconButton size="sm" variant="link" disabled={busy || i === 0} label={`${p.key} nach oben`} onClick={() => move(i, -1)}><IconArrowUp /></IconButton><IconButton size="sm" variant="link" disabled={busy || i === pinned.length - 1} label={`${p.key} nach unten`} onClick={() => move(i, 1)}><IconArrowDown /></IconButton><IconButton size="sm" variant="link" disabled={busy} label={`${p.key} lösen`} onClick={() => void save(ids.filter((x) => x !== p.id))}><IconX /></IconButton></td></tr>)}
       </tbody></table>}
       {ids.length < MAX_PINNED && free.length > 0 && <div className="row small">
         <select aria-label="Projekt anheften" value={add} style={{ width: 'auto' }} onChange={(e) => setAdd(e.target.value)}><option value="">– Projekt –</option>{free.map((p) => <option key={p.id} value={p.id}>{p.key} · {p.name}</option>)}</select>

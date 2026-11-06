@@ -10,7 +10,7 @@ const del = vi.fn();
 vi.mock('../../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a), put: vi.fn(), del: (...a: unknown[]) => del(...a) }, ApiError: class extends Error {}, fmtDate: (d: string) => d, fmtDateTime: (d: string) => d }));
 vi.mock('../../lib/useAi', () => ({ invalidateAi: vi.fn(async () => undefined), useAiStatus: () => null }));
 import { ToastProvider } from '../../components/ui';
-import { FileSourcesSection } from './FileSources';
+import { FileSourcesSection, syncMessage } from './FileSources';
 
 const source: FileSource = {
   id: 's1', name: 'Pläne Kunde', kind: 'nextcloud_share', url: 'https://cloud.example.de/s/AbC', davUrl: 'https://cloud.example.de/public.php/webdav', username: null, hasSecret: false, rootPath: '/',
@@ -23,6 +23,13 @@ const browse = (path: string) => path === '/'
   : path === '/Projekte'
     ? { kind: 'webdav', path: '/Projekte', parent: '/', folders: [{ name: 'Halle 3', path: '/Projekte/Halle 3' }], files: 0 }
     : { kind: 'webdav', path, parent: '/Projekte', folders: [], files: 5 };
+
+describe('Sync-Meldung', () => {
+  it('nennt die Texterkennung, wenn Dateien per OCR gelesen wurden', () => {
+    expect(syncMessage('Scans', { files: 5, added: 3, changed: 0, deleted: 0, extracted: 3, ocr: 2, truncated: false })).toBe('Scans synchronisiert: 5 Dateien, 3 neu, 0 geändert, 0 entfernt, 3 Textauszüge, davon 2 per Texterkennung.');
+    expect(syncMessage('Scans', { files: 5, added: 0, changed: 0, deleted: 0, extracted: 0, ocr: 0, truncated: false })).not.toMatch(/Texterkennung/);
+  });
+});
 
 describe('Verwaltung › Dateiquellen', () => {
   beforeEach(() => {

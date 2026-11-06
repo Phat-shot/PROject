@@ -352,7 +352,7 @@ export async function askSynergy(db: Db, q: { relationId: string; agent: Asker; 
   const agents = await db.query(`select id from users where id = any($1::uuid[]) and kind = 'agent'`, [[r.a_resp, r.b_resp].filter(Boolean)]);
   const toPl = agents.rows.length > 0 || r.a_sp !== r.b_sp || !r.a_resp || !r.b_resp;
   const body = `${refA} „${r.a_title}“ und ${refB} „${r.b_title}“ hängen zusammen (${(r.signals ?? []).map((s: any) => s.detail).join('; ') || r.note || r.kind}). Wie weiter?`;
-  const res = await askQuestion(db, { taskId: r.task_a, asker: q.agent, kind: 'synergy', to: toPl ? 'pl' : null, body, options: SYNERGY_OPTIONS(refA), now: q.now, type: 'synergy', title: `${q.agent.name}: Zusammenhang ${refA} ↔ ${refB}`, context: { topic: 'synergy', relationId: r.id, lead: r.task_a } });
+  const res = await askQuestion(db, { taskId: r.task_a, asker: q.agent, kind: 'synergy', to: toPl ? 'pl' : null, body, options: SYNERGY_OPTIONS(refA), now: q.now, type: 'synergy', title: `${q.agent.name}: Zusammenhang ${refA} und ${refB}`, context: { topic: 'synergy', relationId: r.id, lead: r.task_a } });
   if ('error' in res) return res;
   await db.query(`update task_relations set status = 'asked', question_id = $2 where id = $1`, [r.id, res.question.id]);
   return { questionId: res.question.id };
