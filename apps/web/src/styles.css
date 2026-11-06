@@ -1178,3 +1178,19 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 /* Persönliches Projekt: Kennzeichen in der Seitenleiste, Hinweiskarte im Board zum Einrichten des Assistenten */
 .proj-link .personal-badge { margin-left: 4px; font-size: var(--fs-xs); flex: none; }
 .assistant-hint { align-items: center; }
+/* Dateiquellen: Ordnerwahl, Dateiliste und Vorschau (Doku › Dateien) */
+.table-wrap { overflow-x: auto; }
+.folder-picker .folder-path { background: var(--pill-bg); border: 1px solid var(--border); border-radius: var(--r-sm); padding: 2px 6px; font-size: var(--fs-sm); }
+.folder-browser { border: 1px solid var(--border); border-radius: var(--r-sm); padding: 8px; margin-top: 4px; display: flex; flex-direction: column; gap: 6px; }
+.folder-list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow: auto; display: flex; flex-direction: column; gap: 2px; }
+.folder-list .btn.link, .file-table .btn.link { display: inline-flex; align-items: center; gap: 6px; padding-left: 0; text-align: left; }
+.breadcrumb { font-size: var(--fs-sm); color: var(--muted); margin-bottom: 6px; overflow-wrap: anywhere; }
+.files-tree { margin-top: 6px; }
+.doc-tree .page.file-root .t { display: inline-flex; align-items: center; gap: 4px; }
+.file-table td { vertical-align: middle; }
+.file-table td a { display: inline-flex; align-items: center; gap: 6px; }
+.file-preview .file-frame { width: 100%; height: 70vh; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface); }
+.file-preview .file-image { max-width: 100%; max-height: 70vh; display: block; margin: 0 auto; }
+.file-preview .file-text { max-height: 70vh; overflow: auto; }
+.file-preview pre.file-text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: var(--fs-sm); background: var(--pill-bg); padding: 10px; border-radius: var(--r-sm); }
+.sidebar .proj-docs a.proj-sub .icon { vertical-align: -2px; }

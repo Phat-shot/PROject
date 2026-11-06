@@ -67,3 +67,18 @@ describe('Glocke (Kopfzeile)', () => {
     expect(screen.queryByLabelText('Klasse')).toBeNull();
   });
 });
+
+describe('Seitenleiste: Doku des geöffneten Projekts', () => {
+  it('zeigt eingebundene Dateiquellen unter „Dateien“ als eigene Ordner', async () => {
+    const pid = '11111111-1111-1111-1111-111111111111';
+    user = { ...base };
+    get.mockImplementation(async (url: string) => url === '/projects' ? { projects: [{ id: pid, key: 'BAU', name: 'Halle 3', status: 'active' }] }
+      : url === `/projects/${pid}/docs` ? { folders: [], pages: [] }
+      : url === `/projects/${pid}/files` ? { binding: null, path: '/', parent: null, roots: [{ bindingId: 'b1', sourceId: 's1', label: 'Pläne Halle 3', sourceName: 'Firmen-Nextcloud', kind: 'webdav', scope: 'org', subPath: null, lastSyncAt: null, lastError: null }], entries: [] }
+      : url.startsWith('/notifications') ? { notifications: [], unread: 0 } : {});
+    render(<MemoryRouter initialEntries={[`/projekte/${pid}/board`]}><Layout><div /></Layout></MemoryRouter>);
+    const link = await screen.findByRole('link', { name: /Pläne Halle 3/ });
+    expect(link).toHaveAttribute('href', `/projekte/${pid}/doku/dateien/b1`);
+    expect(screen.getByText('Dateien')).toHaveClass('proj-sub-h');
+  });
+});

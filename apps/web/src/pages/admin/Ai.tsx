@@ -231,13 +231,13 @@ export function LlmsCard() {
 }
 
 /** Mehrfachauswahl aktiver Personen (Freigabe „bestimmte Personen“ eines Mandanten-LLM für persönliche Projekte) mit Suchfeld. */
-export function PersonalUsersPicker({ users, value, onChange }: { users: User[]; value: string[]; onChange: (ids: string[]) => void }) {
+export function PersonalUsersPicker({ users, value, onChange, label = 'Personen, für deren persönliches Projekt das LLM frei ist' }: { users: User[]; value: string[]; onChange: (ids: string[]) => void; label?: string }) {
   const [q, setQ] = useState('');
   const n = q.trim().toLowerCase();
   const list = users.filter((u) => !n || u.name.toLowerCase().includes(n) || u.email.toLowerCase().includes(n));
   return (
     <div className="field">
-      <span>Personen, für deren persönliches Projekt das LLM frei ist ({value.length})</span>
+      <span>{label} ({value.length})</span>
       <input type="search" aria-label="Personen suchen" placeholder="Name oder E-Mail …" value={q} onChange={(e) => setQ(e.target.value)} />
       <div className="picker-list">
         {list.map((u) => <label key={u.id} className={`check small ${value.includes(u.id) ? 'on' : ''}`}><input type="checkbox" aria-label={`Person ${u.name}`} checked={value.includes(u.id)} onChange={(e) => onChange(e.target.checked ? [...value.filter((x) => x !== u.id), u.id] : value.filter((x) => x !== u.id))} /> {u.name} <span className="muted">{u.email}</span></label>)}

@@ -144,6 +144,8 @@ function ProjectBody() {
         <Route path="besprechungen" element={<Navigate to={`${base}/doku/besprechungen`} replace />} />
         <Route path="doku/besprechungen" element={<DocsView meetings />} />
         <Route path="mail/*" element={<MailRedirect />} />
+        <Route path="doku/dateien" element={<DocsView files />} />
+        <Route path="doku/dateien/:bindingId/*" element={<DocsView files />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
         <Route path="einstellungen/*" element={<ProjectSettingsPage />} />
         <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen/personen`} replace />} />

@@ -12,15 +12,16 @@ import { AiTab } from './Ai';
 import { DeadlinesTab } from './Deadlines';
 import { PlanningTab } from './Planning';
 import { DataTab } from './Data';
+import { FilesTab } from './Files';
 import { AiView } from '../AiView';
 
 /**
  * Projekt › Einstellungen (Konzept Einstellungen 4.2): Reiter Allgemein, Personen, Mail, Benachrichtigungen, KI, Fristen und Berichte,
- * Planung und Board, Daten. Alle Mitglieder lesen, die PL ändert; Reiter sind Routen unter /projekte/:id/einstellungen.
+ * Planung und Board, Dateien, Daten. Alle Mitglieder lesen, die PL ändert; Reiter sind Routen unter /projekte/:id/einstellungen.
  */
 export const PROJECT_SETTINGS_TABS: { key: string; label: string }[] = [
   { key: 'allgemein', label: 'Allgemein' }, { key: 'personen', label: 'Personen' }, { key: 'mail', label: 'Mail' }, { key: 'benachrichtigungen', label: 'Benachrichtigungen' },
-  { key: 'ki', label: 'KI' }, { key: 'fristen', label: 'Fristen und Berichte' }, { key: 'planung', label: 'Planung und Board' }, { key: 'daten', label: 'Daten' }
+  { key: 'ki', label: 'KI' }, { key: 'fristen', label: 'Fristen und Berichte' }, { key: 'planung', label: 'Planung und Board' }, { key: 'dateien', label: 'Dateien' }, { key: 'daten', label: 'Daten' }
 ];
 
 /** Einleitender Satz je Reiter mit Link ins Handbuch (das Handbuch kennt keine Anker, daher die Kapitelnummer im Linktext). */
@@ -32,6 +33,7 @@ const INTRO: Record<string, { text: ReactNode; chapter: string }> = {
   ki: { text: <>KI-Agenten im Projekt: einladen, einschränken, Projektagent, <Term k="policy">Policy</Term> und eigenes LLM. Die <Term k="grundmenge">Grundmenge</Term> bleibt immer frei; der <Term k="notaus">Notaus</Term> der Verwaltung geht vor.</>, chapter: 'Kapitel 11' },
   fristen: { text: <>Wann Verzug, <Term k="stillstand">Stillstand</Term> und Blockaden eskalieren und wie der Statusbericht aussieht.</>, chapter: 'Kapitel 10' },
   planung: { text: 'Teilprojekte, Meilensteine, Spalten des Boards und Ressourcen des Projekts.', chapter: 'Kapitel 4' },
+  dateien: { text: 'Ordner aus Nextcloud oder einem WebDAV-Speicher, die in der Doku unter „Dateien“ erscheinen und durchsucht werden; das Tool liest nur.', chapter: 'Kapitel 7' },
   daten: { text: 'Papierkorb, Audit-Log und Export der Projektdaten.', chapter: 'Kapitel 13' },
   'ki-laeufe': { text: <>Offene KI-Vorschläge zur Freigabe (<Term k="essenz">Essenz</Term> aus Mails, Agenten-Aktionen), Fragen ans Projekt, Agenten-Läufe und der Statusbericht-Entwurf.</>, chapter: 'Kapitel 11' }
 };
@@ -43,7 +45,7 @@ function SettingsIntro({ tab }: { tab: string }) {
 }
 
 export function ProjectSettingsPage() {
-  const elements: Record<string, ReactNode> = { allgemein: <GeneralTab />, personen: <PeopleTab />, mail: <MailTab />, benachrichtigungen: <NotifyTab />, ki: <AiTab />, fristen: <DeadlinesTab />, planung: <PlanningTab />, daten: <DataTab /> };
+  const elements: Record<string, ReactNode> = { allgemein: <GeneralTab />, personen: <PeopleTab />, mail: <MailTab />, benachrichtigungen: <NotifyTab />, ki: <AiTab />, fristen: <DeadlinesTab />, planung: <PlanningTab />, dateien: <FilesTab />, daten: <DataTab /> };
   // KI-Läufe und offene KI-Vorschläge (früher eigener Reiter): Route immer, der Unterreiter nur bei aktiver KI (Kopfzeile)
   const tabs = [...PROJECT_SETTINGS_TABS.map((t) => ({ ...t, element: <><SettingsIntro tab={t.key} />{elements[t.key]}</> })), { key: 'ki-laeufe', label: 'KI-Läufe', element: <><SettingsIntro tab="ki-laeufe" /><AiView /></> }];
   return <SettingsRoutes tabs={tabs} />;

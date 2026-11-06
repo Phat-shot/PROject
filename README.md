@@ -10,7 +10,7 @@ Gedacht ist PROject für kleine und mittlere Organisationen mit mehreren paralle
 
 ## Schnellstart
 
-Node 20 oder neuer. Ohne Postgres läuft eine eingebettete Datenbank (PGlite) als Datei unter `.data`.
+Node 22 oder neuer. Ohne Postgres läuft eine eingebettete Datenbank (PGlite) als Datei unter `.data`.
 
 ```bash
 npm install

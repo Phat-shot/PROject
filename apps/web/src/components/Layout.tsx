@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
-import type { DocFolder, DocPage, Notification, NotifyEvent, Project } from '@projekttool/shared';
+import type { DocFolder, DocPage, FileRoot, Notification, NotifyEvent, Project } from '@projekttool/shared';
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
@@ -15,7 +15,7 @@ import { Messenger, MessengerCtx } from './Messenger';
 import { OpenForMeList } from './OpenForMe';
 import { NotifIcon, NotificationItem, sortNotifications, useOpenNotification } from './Notifications';
 import { Button, IconButton, Loading, useAsync } from './ui';
-import { IconChevronDown, IconChevronRight, IconMenu, IconStar, IconX } from './icons';
+import { IconChevronDown, IconChevronRight, IconCloud, IconMenu, IconStar, IconX } from './icons';
 
 /** Öffnet die Seitenleiste auf schmalen Bildschirmen (Hamburger in der Kopfzeile). */
 const MenuCtx = createContext<() => void>(() => undefined);
@@ -150,14 +150,18 @@ export function Layout({ children }: { children: ReactNode }) {
 }
 
 /**
- * Doku als Untermenü des geöffneten Projekts (ohne eigene Überschrift): Besprechungen, die Ordner (öffnen ihre Ordnerseite) und die fünf zuletzt
- * geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
+ * Doku als Untermenü des geöffneten Projekts (ohne eigene Überschrift): Besprechungen, die Ordner (öffnen ihre Ordnerseite), unter „Dateien“
+ * die eingebundenen Ordner aus Dateiquellen (Nextcloud/WebDAV) und die fünf zuletzt geänderten Seiten. Ein Klick aufs Projekt selbst öffnet weiter das Board.
  */
 function ProjectDocsNav({ projectId }: { projectId: string }) {
   const nav = useNavigate();
   const [d, setD] = useState<{ folders: DocFolder[]; pages: DocPage[] } | null>(null);
-  const load = () => api.get<{ folders: DocFolder[]; pages: DocPage[] }>(`/projects/${projectId}/docs`).then(setD).catch(() => undefined);
-  useEffect(() => { setD(null); void load(); }, [projectId]);
+  const [roots, setRoots] = useState<FileRoot[]>([]);
+  const load = () => Promise.all([
+    api.get<{ folders: DocFolder[]; pages: DocPage[] }>(`/projects/${projectId}/docs`).then(setD).catch(() => undefined),
+    api.get<{ roots?: FileRoot[] }>(`/projects/${projectId}/files`).then((r) => setRoots(r?.roots ?? [])).catch(() => setRoots([]))
+  ]);
+  useEffect(() => { setD(null); setRoots([]); void load(); }, [projectId]);
   useRefresh(load, 120_000);
   const base = `/projekte/${projectId}/doku`;
   const openFolder = async (f: DocFolder) => {
@@ -171,6 +175,8 @@ function ProjectDocsNav({ projectId }: { projectId: string }) {
     <div className="proj-docs">
       <NavLink to={`${base}/besprechungen`} className="proj-sub">Besprechungen</NavLink>
       {d.folders.filter((f) => !f.parentId).map((f) => <NavLink key={f.id} to={f.pageId ? `${base}/${f.pageId}` : base} end className="proj-sub" onClick={(e) => { e.preventDefault(); void openFolder(f); }}><IconChevronRight size={12} /> {f.name}</NavLink>)}
+      {roots.length > 0 && <div className="proj-sub-h">Dateien</div>}
+      {roots.map((r) => <NavLink key={r.bindingId} to={`${base}/dateien/${r.bindingId}`} className="proj-sub" title={`${r.label} · Quelle: ${r.sourceName} (nur lesend)`}><IconCloud size={12} /> {r.label}</NavLink>)}
       {recent.length > 0 && <div className="proj-sub-h">Zuletzt geändert</div>}
       {recent.map((p) => <NavLink key={p.id} to={`${base}/${p.id}`} className="proj-sub recent" title={p.title}>{p.title}</NavLink>)}
     </div>

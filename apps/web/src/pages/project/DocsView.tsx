@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate } from '@projekttool/shared';
+import type { DocFolder, DocPage, DocPageSettings, DocPageVersion, DocShare, DocTemplate, FileListing } from '@projekttool/shared';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Modal, statusLabel, useAsync, useDialog } from '../../components/ui';
 import { HtmlView, RichEditor } from '../../components/RichEditor';
 import { IconButton } from '../../components/ui';
-import { IconChevronDown, IconChevronRight, IconMail, IconMore, IconX } from '../../components/icons';
+import { IconAlert, IconChevronDown, IconChevronRight, IconCloud, IconMail, IconMore, IconX } from '../../components/icons';
 import { useUnsavedChanges } from '../../lib/useUnsavedChanges';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { MeetingsView } from './MeetingsView';
+import { FilesView, filesPath } from './FilesView';
 
 interface DocsData { folders: DocFolder[]; pages: DocPage[]; templates: DocTemplate[] }
 interface ChildRow { id: string; title: string; status: string; version: number; updatedAt: string; templateKey: string | null }
@@ -18,15 +19,22 @@ interface PageData { page: DocPage; versions: DocPageVersion[]; attachments: { i
 
 const KIND_LABEL: Record<string, string> = { series: 'Besprechungsreihe', subproject: 'Teilprojekt', report: 'Berichte', custom: 'Sammlung', folder: 'Ordner' };
 
-/** Doku; mit meetings rechts die Besprechungen (Termin, Teilnehmer, Protokoll), links weiter der Seitenbaum. */
-export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
+/**
+ * Doku; mit meetings rechts die Besprechungen (Termin, Teilnehmer, Protokoll), mit files die eingebundenen Dateiquellen
+ * (Route doku/dateien/:bindingId/*), links weiter der Seitenbaum mit den Einbindungen unter „Dateien“.
+ */
+export function DocsView({ meetings = false, files = false }: { meetings?: boolean; files?: boolean } = {}) {
   const { detail } = useProject();
-  const { pageId } = useParams();
+  const params = useParams();
+  const pageId = files ? undefined : params.pageId;
+  const bindingId = files ? params.bindingId ?? null : null;
+  const filePath = '/' + (files ? params['*'] ?? '' : '');
   const nav = useNavigate();
   const docs = useData<DocsData>(`/projects/${detail.project.id}/docs`);
+  const fileRoots = useData<FileListing>(`/projects/${detail.project.id}/files`, [detail.project.id]);
   const mobile = useIsMobile();
   const [treeOpen, setTreeOpen] = useState(false);
-  const showTree = !mobile || (!pageId && !meetings) || treeOpen;
+  const showTree = !mobile || (!pageId && !meetings && !files) || treeOpen;
   const [newPage, setNewPage] = useState<{ folderId: string | null; parentPageId: string | null; inherited?: string | null } | null>(null);
   const [newFolder, setNewFolder] = useState(false);
   const [editFolder, setEditFolder] = useState<DocFolder | null>(null);
@@ -67,7 +75,7 @@ export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
   };
   return (
     <div className="docs-layout">
-      {mobile && (pageId || meetings) && <button className="btn sm tree-toggle" aria-expanded={treeOpen} onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? <><IconChevronDown /> Seitenbaum ausblenden</> : <><IconChevronRight /> Seitenbaum</>}</button>}
+      {mobile && (pageId || meetings || files) && <button className="btn sm tree-toggle" aria-expanded={treeOpen} onClick={() => setTreeOpen(!treeOpen)}>{treeOpen ? <><IconChevronDown /> Seitenbaum ausblenden</> : <><IconChevronRight /> Seitenbaum</>}</button>}
       {showTree && <div className="doc-tree" onClick={() => { if (mobile) setTreeOpen(false); }}>
         <div className="row between"><strong>Doku</strong>{me.role !== 'reader' && <button className="btn sm" onClick={() => setNewPage({ folderId: docs.data?.folders[0]?.id ?? null, parentPageId: null })}>+ Seite</button>}</div>
         <div className={`folder meetings-link ${meetings ? 'active' : ''}`}><span className="t" title="Besprechungen: Termine, Teilnehmer, Protokolle" onClick={() => nav(`${base}/besprechungen`)}>Besprechungen</span></div>
@@ -86,8 +94,17 @@ export function DocsView({ meetings = false }: { meetings?: boolean } = {}) {
         ))}
         {rootsIn(null).length > 0 && <><div className="folder">Ohne Ordner</div>{rootsIn(null).flatMap((root) => [row(root, 0), ...tree(all, root.id, 1)])}</>}
         {me.role === 'pl' && <button className="btn sm link mt" onClick={(e) => { e.stopPropagation(); setNewFolder(true); }}>+ Ordner</button>}
+        {((fileRoots.data?.roots ?? []).length > 0 || me.role === 'pl') && <div className="files-tree">
+          <div className={`folder ${files && !bindingId ? 'active' : ''}`}><span className="t" title="Dateien aus Nextcloud/WebDAV (nur lesend)" onClick={() => nav(`${base}/dateien`)}>Dateien</span>
+            {me.role === 'pl' && <span className="acts"><button title="Dateiquelle einbinden" aria-label="Dateiquelle einbinden" onClick={() => nav(`/projekte/${detail.project.id}/einstellungen/dateien`)}>+</button></span>}</div>
+          {(fileRoots.data?.roots ?? []).map((r) => <div key={r.bindingId} className={`page file-root ${bindingId === r.bindingId ? 'active' : ''}`} onClick={() => nav(filesPath(base, r.bindingId))}>
+            <span className="t" title={`${r.sourceName}${r.subPath ? ` › ${r.subPath}` : ''}`}><IconCloud size={12} /> {r.label}</span>
+            {r.lastError && <span title={`Quelle nicht erreichbar: ${r.lastError}`}><IconAlert size={12} /><span className="sr-only">Quelle nicht erreichbar</span></span>}
+          </div>)}
+          {fileRoots.data && (fileRoots.data.roots ?? []).length === 0 && <div className="page empty-folder"><span className="t muted">keine eingebunden</span></div>}
+        </div>}
       </div>}
-      {meetings ? <MeetingsView /> : pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
+      {files ? <FilesView projectId={detail.project.id} base={base} bindingId={bindingId} path={filePath} canManage={me.role === 'pl'} /> : meetings ? <MeetingsView /> : pageId ? <PageView key={pageId} pageId={pageId} docs={docs.data} reloadTree={docs.reload} onNewChild={(p, inherited) => setNewPage({ folderId: p.folderId, parentPageId: p.id, inherited })} onNewInFolder={(folderId) => setNewPage({ folderId, parentPageId: null })} /> : (
         <div className="doc-view">
           <h1>Dokumentation</h1>
           <p className="muted">Seiten mit Unterseiten, WYSIWYG-Editor, Versionen, Status Entwurf → In Prüfung → Final. Eine Oberseite (z. B. „JF Auftraggeber“ oder ein Teilprojekt) trägt Zusammenfassung und Teilnehmer, legt die Vorlage für ihre Unterseiten fest und das PDF-Layout.</p>
