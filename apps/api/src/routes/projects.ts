@@ -292,7 +292,7 @@ export async function projectRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/projects/:id/reporting/run', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
-    const result = await createReport(db, app.mail, req.params.id, { userId: user.id, manual: true });
+    const result = await createReport(db, app.mail, req.params.id, { userId: user.id, manual: true, fetchFn: app.fetchFn });
     return { result };
   });
 

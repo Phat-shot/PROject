@@ -8,6 +8,8 @@ import type { Db } from '../db.js';
 const turndown = new TurndownService({ headingStyle: 'atx', codeBlockStyle: 'fenced', bulletListMarker: '-', emDelimiter: '*', strongDelimiter: '**' });
 turndown.use(gfm);
 turndown.keep(['u']);
+// Diagramme (SVG der Berichte) haben im Markdown keine Entsprechung: ihre Beschriftungen würden als Textsalat landen
+turndown.remove(['svg'] as any);
 
 /** Markdown → HTML (Vorlagen, Altbestand, Mail-Aktionen). */
 export function mdToHtml(md: string): string {
@@ -27,7 +29,20 @@ export function htmlToText(html: string): string {
   return parse(html ?? '').textContent.replace(/\s+/g, ' ').trim();
 }
 
-const ALLOWED_TAGS = ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'code', 'pre', 'blockquote', 'hr', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col', 'img', 'a', 'span', 'div', 'sup', 'sub', 'mark'];
+/** Vektorgrafik der Berichte (Diagramme): nur Grundformen und Text, keine Skripte, Ereignisse oder foreignObject. */
+const SVG_TAGS = ['svg', 'g', 'rect', 'text', 'tspan', 'line', 'circle', 'path'];
+const SVG_PRESENTATION = ['fill', 'stroke', 'stroke-width', 'stroke-dasharray', 'stroke-linecap', 'opacity', 'fill-opacity', 'font-size', 'font-weight', 'font-family', 'text-anchor', 'dominant-baseline'];
+const SVG_ATTRS: Record<string, string[]> = {
+  svg: ['width', 'height', 'viewbox', 'viewBox', 'xmlns', 'role', 'aria-label', ...SVG_PRESENTATION],
+  g: ['transform', ...SVG_PRESENTATION],
+  rect: ['x', 'y', 'width', 'height', 'rx', 'ry', ...SVG_PRESENTATION],
+  text: ['x', 'y', 'dx', 'dy', ...SVG_PRESENTATION],
+  tspan: ['x', 'y', 'dx', 'dy', ...SVG_PRESENTATION],
+  line: ['x1', 'y1', 'x2', 'y2', ...SVG_PRESENTATION],
+  circle: ['cx', 'cy', 'r', ...SVG_PRESENTATION],
+  path: ['d', ...SVG_PRESENTATION]
+};
+const ALLOWED_TAGS = [...SVG_TAGS, 'p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike', 'code', 'pre', 'blockquote', 'hr', 'ul', 'ol', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col', 'img', 'a', 'span', 'div', 'sup', 'sub', 'mark'];
 /** Beliebiger Wert ohne Verschachtelung oder Funktionsaufrufe (url(), expression()) */
 const STYLE_VALUE = [/^(?!.*(?:url|expression|javascript)\s*\()[^;{}\\<>]+$/i];
 const ALLOWED_STYLES: Record<string, RegExp[]> = Object.fromEntries(['font-size', 'text-align', 'color', 'background-color', 'width', 'min-width', 'font-weight', 'font-style', 'text-decoration'].map((k) => [k, STYLE_VALUE]));
@@ -42,7 +57,7 @@ const DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp);/i;
 export function sanitizeHtml(html: string): string {
   return sanitize(html ?? '', {
     allowedTags: ALLOWED_TAGS,
-    allowedAttributes: { '*': ['style', 'class', 'title', 'data-type'], a: ['href', 'target', 'rel'], img: ['src', 'alt', 'width', 'height'], td: ['colspan', 'rowspan', 'colwidth'], th: ['colspan', 'rowspan', 'colwidth'], col: ['colwidth', 'width'], ol: ['start'] },
+    allowedAttributes: { ...SVG_ATTRS, '*': ['style', 'class', 'title', 'data-type'], a: ['href', 'target', 'rel'], img: ['src', 'alt', 'width', 'height'], td: ['colspan', 'rowspan', 'colwidth'], th: ['colspan', 'rowspan', 'colwidth'], col: ['colwidth', 'width'], ol: ['start'] },
     allowedStyles: { '*': ALLOWED_STYLES },
     allowedSchemes: ['http', 'https', 'mailto', 'tel'],
     allowedSchemesByTag: { img: ['data'] },

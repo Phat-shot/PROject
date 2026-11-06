@@ -372,7 +372,8 @@ test('Reporting: Policy, Fälligkeit, Bericht aus Vorlage mit Kennzahlen, Versan
   assert.ok(out.msg.attachments![0].content.subarray(0, 4).toString() === '%PDF');
   const page = (await t.api(pl).get(`/docs/pages/${r1.pageId}`)).json();
   assert.equal(page.page.status, 'final');
-  assert.ok(page.page.contentHtml.includes('Kennzahlen'));
+  assert.ok(page.page.contentHtml.includes('Gesamtstand'), 'Standardblöcke des Management-Reports');
+  assert.ok(page.page.contentHtml.includes('<svg'), 'grafisch (Standard)');
   assert.ok(page.page.contentHtml.includes('Nächste Meilensteine'));
   assert.equal(page.attachments.length, 1);
   assert.deepEqual(page.page.settings.recipients, ['gf@kunde.de', 'lenkung@kunde.de']);

@@ -68,6 +68,19 @@ export async function statusReportDraft(db: Db, cfg: AiConfig, fetchFn: typeof f
   return c.text;
 }
 
+/**
+ * Management-Summary für den blockbasierten Bericht: Lage in 3–5 Sätzen, Fortschritt, Risiken, Entscheidungsbedarf, nächste
+ * Schritte – aus den strukturierten Fakten der anderen Blöcke (keine eigene Datensuche, Zahlen exakt übernehmen). Markdown ohne H1.
+ */
+export async function managementSummary(db: Db, cfg: AiConfig, fetchFn: typeof fetch, user: User, projectId: string, facts: Record<string, unknown>): Promise<string> {
+  const pr = await db.one(`select name, key, description from projects where id = $1`, [projectId]);
+  const json = cut(JSON.stringify(facts, (k, v) => (k === 'id' || k === 'project' && typeof v === 'object' && v && 'id' in (v as any) ? (k === 'id' ? undefined : { key: (v as any).key, name: (v as any).name }) : v)), 9000);
+  const prompt = `Projekt ${pr.key} „${pr.name}“${pr.description ? `: ${cut(pr.description, 400)}` : ''}\nStand ${String(facts.today ?? '')}\n\nFakten des Berichts (JSON, automatisch erhoben; Zahlen exakt übernehmen, nichts hinzuerfinden):\n${json}\n\nSchreibe eine Management-Summary in Markdown mit genau diesen Abschnitten als Überschriften dritter Ebene: Lage (3–5 Sätze), Fortschritt, Risiken, Entscheidungsbedarf, Nächste Schritte. Knapp, sachlich, für die Geschäftsführung. Keine Überschrift erster oder zweiter Ebene, keine Einleitung.`;
+  const c = await complete(cfg, fetchFn, { meta: { feature: 'assist.report', projectId }, system: BASE_SYSTEM, maxTokens: 1200, prompt });
+  await logCall(db, cfg, user, projectId, 'management_summary', c, 'project', projectId);
+  return c.text;
+}
+
 export interface AskSource { type: 'task' | 'page' | 'mail'; id: string; title: string }
 
 /** Frage ans Projekt: Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe. */
