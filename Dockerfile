@@ -17,7 +17,7 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/
 COPY apps/web/package.json apps/web/
 COPY packages/shared/package.json packages/shared/
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev && mkdir -p apps/api/node_modules
 
 # Laufzeit: schlank, ohne Root
 FROM node:22-alpine
@@ -27,6 +27,8 @@ ARG GIT_SHA=dev
 ENV NODE_ENV=production PORT=3000 DATA_DIR=/data STATIC_DIR=/app/apps/web/dist APP_VERSION=$GIT_SHA SEED=false
 RUN apk add --no-cache curl tini && mkdir -p /data && chown node:node /data
 COPY --from=deps /app/node_modules ./node_modules
+# Nicht gehoistete Pakete der API (z. B. @fastify/static mit eigener glob-Version)
+COPY --from=deps /app/apps/api/node_modules apps/api/node_modules
 COPY --from=deps /app/package.json ./package.json
 COPY --from=deps /app/apps/api/package.json apps/api/package.json
 COPY --from=build /app/packages/shared/package.json packages/shared/package.json
