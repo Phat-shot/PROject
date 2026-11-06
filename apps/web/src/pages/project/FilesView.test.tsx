@@ -12,7 +12,7 @@ vi.mock('../ProjectPage', () => ({ useProject: () => ({ detail: { project: { id:
 import { DocsView } from './DocsView';
 
 const root = { bindingId: 'b1', sourceId: 's1', label: 'Pläne Halle 3', sourceName: 'Firmen-Nextcloud', kind: 'webdav', scope: 'org', subPath: '/Projekte/Halle 3', lastSyncAt: '2026-11-06T08:00:00Z', lastError: null };
-const file = (id: string, name: string, mime: string, textStatus: string | null, path: string) => ({ type: 'file', id, name, path, mime, size: 2048, modifiedAt: '2026-11-01T09:00:00Z', textStatus, bindingId: 'b1' });
+const file = (id: string, name: string, mime: string, textStatus: string | null, path: string, textNote: string | null = null) => ({ type: 'file', id, name, path, mime, size: 2048, modifiedAt: '2026-11-01T09:00:00Z', textStatus, textNote, bindingId: 'b1' });
 
 function listing(url: string) {
   const u = new URL(url, 'http://x');
@@ -20,7 +20,7 @@ function listing(url: string) {
   const binding = u.searchParams.get('binding');
   const path = u.searchParams.get('path') ?? '/';
   if (!binding) return { binding: null, path: '/', parent: null, roots: [root], entries: [{ type: 'folder', name: root.label, path: '/', bindingId: 'b1' }] };
-  if (path === '/') return { binding: root, path: '/', parent: null, roots: [root], entries: [{ type: 'folder', name: 'Statik', path: '/Statik', files: 2, bindingId: 'b1' }, file('f1', 'Notiz.md', 'text/markdown', 'ok', '/Notiz.md'), file('f2', 'Plan.pdf', 'application/pdf', 'skipped', '/Plan.pdf')] };
+  if (path === '/') return { binding: root, path: '/', parent: null, roots: [root], entries: [{ type: 'folder', name: 'Statik', path: '/Statik', files: 2, bindingId: 'b1' }, file('f1', 'Notiz.md', 'text/markdown', 'ok', '/Notiz.md'), file('f2', 'Plan.pdf', 'application/pdf', 'skipped', '/Plan.pdf'), file('f4', 'Scan.pdf', 'application/pdf', 'error', '/Scan.pdf', 'PDF ohne Textebene')] };
   if (path === '/Statik') return { binding: root, path: '/Statik', parent: '/', roots: [root], entries: [file('f3', 'Last.txt', 'text/plain', 'ok', '/Statik/Last.txt')] };
   return null;
 }
@@ -43,6 +43,8 @@ describe('Doku › Dateien', () => {
       if (l) return l;
       if (url === '/projects/p1/docs') return { folders: [], pages: [], templates: [] };
       if (url === '/files/f1/text') return { id: 'f1', name: 'Notiz.md', path: '/Notiz.md', projectId: 'p1', bindingId: 'b1', displayPath: 'Pläne Halle 3/Notiz.md', mime: 'text/markdown', size: 2048, modifiedAt: null, textStatus: 'ok', textNote: null, text: '# Baubesprechung\n\n- Termin **Montag**' };
+      if (url === '/files/f2/download?check=1') return { ok: true };
+      if (url === '/files/f4/download?check=1') throw new Error('Zugriff verweigert (HTTP 401)');
       if (url === '/files/f3/text') return { id: 'f3', name: 'Last.txt', path: '/Statik/Last.txt', projectId: 'p1', bindingId: 'b1', displayPath: '', mime: 'text/plain', size: 2048, modifiedAt: null, textStatus: 'ok', textNote: null, text: 'Lastannahmen <b>roh</b>' };
       throw new Error(`unerwartet ${url}`);
     });
@@ -92,12 +94,25 @@ describe('Doku › Dateien', () => {
     expect(await screen.findByRole('button', { name: 'Plan.pdf' })).toBeInTheDocument();
   });
 
-  it('PDF öffnet inline im iframe, ohne Textabruf', async () => {
+  it('PDF: Vorab-Check, dann inline im iframe, ohne Textabruf; Badge aus dem Index', async () => {
     renderAt('/projekte/p1/doku/dateien/b1');
     fireEvent.click(await screen.findByRole('button', { name: 'Plan.pdf' }));
     const dlg = await screen.findByRole('dialog', { name: 'Plan.pdf' });
-    expect(within(dlg).getByTitle('Vorschau Plan.pdf')).toHaveAttribute('src', '/api/files/f2/download?inline=1');
+    expect(await within(dlg).findByTitle('Vorschau Plan.pdf')).toHaveAttribute('src', '/api/files/f2/download?inline=1');
+    expect(get).toHaveBeenCalledWith('/files/f2/download?check=1');
     expect(get).not.toHaveBeenCalledWith('/files/f2/text');
+    expect(within(dlg).getByText('nicht durchsuchbar')).toBeInTheDocument();
+  });
+
+  it('PDF bei nicht erreichbarer Quelle: Meldung statt leerem iframe; Tooltip mit dem echten Grund', async () => {
+    renderAt('/projekte/p1/doku/dateien/b1');
+    const row = (await screen.findByRole('button', { name: 'Scan.pdf' })).closest('tr') as HTMLElement;
+    expect(within(row).getByText('nicht durchsuchbar')).toHaveAttribute('title', 'PDF ohne Textebene');
+    fireEvent.click(within(row).getByRole('button', { name: 'Scan.pdf' }));
+    const dlg = await screen.findByRole('dialog', { name: 'Scan.pdf' });
+    expect(await within(dlg).findByText('Quelle nicht erreichbar: Zugriff verweigert (HTTP 401)')).toBeInTheDocument();
+    expect(within(dlg).queryByTitle('Vorschau Scan.pdf')).toBeNull();
+    expect(within(dlg).getByText('nicht durchsuchbar')).toHaveAttribute('title', 'PDF ohne Textebene');
   });
 
   it('Fehler der Quelle verständlich; leerer Zustand ohne Einbindung', async () => {

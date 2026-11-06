@@ -8,7 +8,7 @@ import { getMembership, requireProject } from '../rights.js';
 import { seal, unseal } from '../secrets.js';
 import { PROJECT_LABEL_SQL, SQL } from '../projectPolicy.js';
 import { BINDING_OK_SQL, fileForUser, listProjectFiles, sourceAvailable, syncSource, targetOf } from '../files/service.js';
-import { getFile, normPath, parseSourceUrl, propfind, type DavTarget } from '../files/webdav.js';
+import { checkFile, getFile, normPath, parseSourceUrl, propfind, type DavTarget } from '../files/webdav.js';
 
 /**
  * Dateiquellen (Nextcloud-Freigabelink oder WebDAV-Konto, nur lesend) und Doku › Dateien.
@@ -62,8 +62,11 @@ export async function fileRoutes(app: FastifyInstance) {
       lastSyncAt: r.last_sync_at ?? null, lastError: r.last_error ?? null, lastStats: r.last_stats ?? null, files: extra.files, bindings: extra.bindings, createdAt: r.created_at };
   }
   /** Knappe Sicht einer Org-Quelle für die PL (ohne Adresse und Zugangsdaten). */
-  const mapAvailable = (r: any) => ({ id: r.id, name: r.name, kind: r.kind, scope: r.scope, rootPath: r.root_path, lastSyncAt: r.last_sync_at ?? null, lastError: r.last_error ?? null });
-  const mapBinding = (b: any) => ({ id: b.id, sourceId: b.source_id, sourceName: b.source_name, scope: b.scope, kind: b.kind, subPath: b.sub_path ?? null, label: b.folder_label, lastSyncAt: b.last_sync_at ?? null, lastError: b.last_error ?? null, active: Boolean(b.ok) });
+  const mapAvailable = (r: any) => ({ id: r.id, name: r.name, kind: r.kind, scope: r.scope, rootPath: r.root_path, lastSyncAt: r.last_sync_at ?? null, lastError: r.last_error ?? null, files: Number(r.files ?? 0) });
+  /** Anzahl nicht gelöschter Dateien der Quelle (Alias s) bzw. unter dem Unterordner der Einbindung (Alias b). */
+  const SOURCE_FILES_SQL = `(select count(*)::int from files f where f.source_id = s.id and f.deleted_at is null)`;
+  const BINDING_FILES_SQL = `(select count(*)::int from files f where f.source_id = b.source_id and f.deleted_at is null and (coalesce(b.sub_path, '/') = '/' or f.path = b.sub_path or left(f.path, length(b.sub_path) + 1) = b.sub_path || '/'))`;
+  const mapBinding = (b: any) => ({ id: b.id, sourceId: b.source_id, sourceName: b.source_name, scope: b.scope, kind: b.kind, subPath: b.sub_path ?? null, label: b.folder_label, lastSyncAt: b.last_sync_at ?? null, lastError: b.last_error ?? null, active: Boolean(b.ok), files: Number(b.files ?? 0) });
 
   // ---- Org-Admin: Quellen der Organisation
   app.get('/file-sources', async (req) => {
@@ -132,10 +135,12 @@ export async function fileRoutes(app: FastifyInstance) {
     if (!ok) throw forbidden('Sync nur durch Org-Admin oder die PL eines eingebundenen Projekts');
     if (!s.active) throw badRequest('Dateiquelle ist deaktiviert');
     const stats = await syncSource(db, app.fetchFn, s.id);
-    return { stats, source: s.scope === 'org' && !isAdmin(user) ? mapAvailable(await db.one(`select * from file_sources where id = $1`, [s.id])) : await mapSource(await db.one(`select * from file_sources where id = $1`, [s.id])) };
+    return { stats, source: s.scope === 'org' && !isAdmin(user) ? mapAvailable(await db.one(`select s.*, ${SOURCE_FILES_SQL} as files from file_sources s where s.id = $1`, [s.id])) : await mapSource(await db.one(`select * from file_sources where id = $1`, [s.id])) };
   });
 
-  // Ordnerwahl: PROPFIND Depth 1 auf eine eingegebene Adresse (Anlegen) oder eine gespeicherte Quelle (Einbinden mit Unterordner)
+  // Ordnerwahl: PROPFIND Depth 1 auf eine eingegebene Adresse (Anlegen) oder eine gespeicherte Quelle (Einbinden mit Unterordner,
+  // Pfad relativ zum Startordner). absolute: true (nur wer die Quelle verwaltet, beim Bearbeiten ohne erneutes Passwort): Pfad ab der
+  // WebDAV-Wurzel, damit sich der Startordner selbst ändern lässt.
   app.post<{ Body: any }>('/file-sources/browse', async (req) => {
     const user = requireUser(req);
     const b: any = req.body ?? {};
@@ -143,10 +148,12 @@ export async function fileRoutes(app: FastifyInstance) {
     if (b.sourceId) {
       const s = await db.maybeOne(`select * from file_sources where id = $1 and org_id = $2`, [String(b.sourceId), user.orgId]);
       if (!s) throw notFound('Dateiquelle nicht gefunden');
-      let ok = s.scope === 'org' ? isAdmin(user) : await isPlOf(user, s.owner_project_id);
-      if (!ok && b.projectId && (await isPlOf(user, String(b.projectId)))) ok = await sourceAvailable(db, s.id, String(b.projectId));
+      const manager = s.scope === 'org' ? isAdmin(user) : await isPlOf(user, s.owner_project_id);
+      let ok = manager;
+      if (b.absolute === true) { if (!manager) throw forbidden('Ordner außerhalb des Startordners nur für die Verwaltung der Quelle'); }
+      else if (!ok && b.projectId && (await isPlOf(user, String(b.projectId)))) ok = await sourceAvailable(db, s.id, String(b.projectId));
       if (!ok) throw forbidden('Keine Berechtigung für diese Dateiquelle');
-      target = targetOf(s); base = normPath(s.root_path);
+      target = targetOf(s); base = b.absolute === true ? '/' : normPath(s.root_path);
     } else {
       const pl = Boolean(await db.maybeOne(`select 1 from project_members where user_id = $1 and role = 'pl' limit 1`, [user.id]));
       if (!isAdmin(user) && !pl) throw forbidden('Nur Org-Admin oder Projektleitung');
@@ -167,9 +174,9 @@ export async function fileRoutes(app: FastifyInstance) {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const pid = req.params.id;
-    const available = (await db.query(`select s.* from file_sources s, projects p, (select $1::uuid as project_id) b where p.id = $1 and s.org_id = p.org_id and s.scope = 'org' and ${BINDING_OK_SQL} order by s.name`, [pid])).rows.map(mapAvailable);
+    const available = (await db.query(`select s.*, ${SOURCE_FILES_SQL} as files from file_sources s, projects p, (select $1::uuid as project_id) b where p.id = $1 and s.org_id = p.org_id and s.scope = 'org' and ${BINDING_OK_SQL} order by s.name`, [pid])).rows.map(mapAvailable);
     const own = await Promise.all((await db.query(`select * from file_sources where owner_project_id = $1 order by created_at`, [pid])).rows.map(mapSource));
-    const bindings = (await db.query(`select b.*, s.name as source_name, s.scope, s.kind, s.last_sync_at, s.last_error, ${BINDING_OK_SQL} as ok from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.project_id = $1 order by b.folder_label`, [pid])).rows.map(mapBinding);
+    const bindings = (await db.query(`select b.*, s.name as source_name, s.scope, s.kind, s.last_sync_at, s.last_error, ${BINDING_OK_SQL} as ok, ${BINDING_FILES_SQL} as files from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.project_id = $1 order by b.folder_label`, [pid])).rows.map(mapBinding);
     return { available, own, bindings };
   });
   app.post<{ Params: { id: string }; Body: any }>('/projects/:id/file-sources', async (req) => {
@@ -192,8 +199,8 @@ export async function fileRoutes(app: FastifyInstance) {
     if (await db.maybeOne(`select 1 from file_source_projects where source_id = $1 and project_id = $2 and coalesce(sub_path, '') = coalesce($3, '')`, [source.id, pid, sub])) throw conflict('Dieser Ordner ist schon eingebunden');
     const bind = await db.one(`insert into file_source_projects (source_id, project_id, sub_path, folder_label, created_by) values ($1,$2,$3,$4,$5) returning *`, [source.id, pid, sub, label, user.id]);
     await audit(db, { orgId: user.orgId, projectId: pid, userId: user.id, action: 'files.bind', objectType: 'file_source', objectId: source.id, details: { subPath: sub, label } });
-    const row = await db.one(`select b.*, s.name as source_name, s.scope, s.kind, s.last_sync_at, s.last_error, ${BINDING_OK_SQL} as ok from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.id = $1`, [bind.id]);
-    return { binding: mapBinding(row), source: source.scope === 'project' ? await mapSource(source) : mapAvailable(source) };
+    const row = await db.one(`select b.*, s.name as source_name, s.scope, s.kind, s.last_sync_at, s.last_error, ${BINDING_OK_SQL} as ok, ${BINDING_FILES_SQL} as files from file_source_projects b join file_sources s on s.id = b.source_id join projects p on p.id = b.project_id where b.id = $1`, [bind.id]);
+    return { binding: mapBinding(row), source: source.scope === 'project' ? await mapSource(source) : mapAvailable(await db.one(`select s.*, ${SOURCE_FILES_SQL} as files from file_sources s where s.id = $1`, [source.id])) };
   });
   app.delete<{ Params: { id: string; sourceId: string }; Querystring: { bindingId?: string } }>('/projects/:id/file-sources/:sourceId', async (req) => {
     const user = requireUser(req);
@@ -225,11 +232,16 @@ export async function fileRoutes(app: FastifyInstance) {
     const f = hit.file; const sub = hit.binding.sub_path && hit.binding.sub_path !== '/' ? hit.binding.sub_path : '';
     return { id: f.id, name: f.name, path: f.path, projectId: hit.binding.project_id, bindingId: hit.binding.id, displayPath: `${hit.binding.folder_label}${sub ? f.path.slice(sub.length) : f.path}`, mime: f.mime, size: f.size == null ? null : Number(f.size), modifiedAt: f.modified_at, textStatus: f.text_status, textNote: f.text_note ?? null, text: f.text_content ?? null };
   });
-  app.get<{ Params: { id: string }; Querystring: { inline?: string } }>('/files/:id/download', async (req, reply) => {
+  app.get<{ Params: { id: string }; Querystring: { inline?: string; check?: string } }>('/files/:id/download', async (req, reply) => {
     const user = requireUser(req);
     const hit = await fileForUser(db, user, req.params.id);
     if (!hit) throw notFound('Datei nicht gefunden');
     if (!hit.source.active) throw badRequest('Dateiquelle ist deaktiviert');
+    // Vorab-Check (Vorschau): Datei in der Quelle erreichbar? HEAD bzw. PROPFIND Depth 0, ohne Inhalt zu übertragen
+    if (req.query.check === '1') {
+      try { await checkFile(app.fetchFn, targetOf(hit.source), normPath(hit.source.root_path + '/' + hit.file.path)); } catch (e: any) { throw new HttpError(502, String(e?.message ?? e).slice(0, 200)); }
+      return { ok: true };
+    }
     let r: Response;
     try { r = await getFile(app.fetchFn, targetOf(hit.source), normPath(hit.source.root_path + '/' + hit.file.path), 10 * 60_000); } catch (e: any) { throw new HttpError(502, `Datei nicht abrufbar: ${String(e?.message ?? e).slice(0, 200)}`); }
     const name = String(hit.file.name);

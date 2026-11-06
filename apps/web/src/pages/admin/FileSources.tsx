@@ -67,12 +67,22 @@ export function FolderPicker({ label, body, value, onChange, disabledHint }: { l
 export interface SourceDraft { name: string; url: string; username: string; secret: string; rootPath: string }
 export const EMPTY_DRAFT: SourceDraft = { name: '', url: '', username: '', secret: '', rootPath: '/' };
 
-/** Felder für Name, Adresse, Benutzer/App-Passwort (Konto) bzw. Passwort (Freigabelink) und Startordner per Ordnerwahl. */
-export function SourceFields({ f, setF, hasSecret = false }: { f: SourceDraft; setF: (f: SourceDraft) => void; hasSecret?: boolean }) {
+/** Gespeicherte Quelle beim Bearbeiten: Adresse und Benutzer wie gespeichert → Ordnerwahl über sourceId (ohne Passwort). */
+export interface SavedSource { id: string; url: string; username: string | null; hasSecret: boolean }
+
+/**
+ * Felder für Name, Adresse, Benutzer/App-Passwort (Konto) bzw. Passwort (Freigabelink) und Startordner per Ordnerwahl. Beim Bearbeiten
+ * (saved) mit unveränderter Adresse und Benutzer und ohne neues Passwort durchsucht die Ordnerwahl die gespeicherte Quelle
+ * (sourceId, absolute Pfade ab der WebDAV-Wurzel); sonst die eingegebene Adresse samt Zugang.
+ */
+export function SourceFields({ f, setF, saved = null }: { f: SourceDraft; setF: (f: SourceDraft) => void; saved?: SavedSource | null }) {
   const share = isShareUrl(f.url);
-  const browseBody = { url: f.url.trim(), username: share ? null : f.username.trim() || null, secret: f.secret || null };
-  // Gespeichertes Passwort kennt die Oberfläche nicht: zum Durchsuchen neu eingeben
-  const hint = !f.url.trim() ? 'Erst die Adresse eingeben.' : !share && !f.username.trim() ? 'Erst Benutzer und App-Passwort eingeben.' : hasSecret && !f.secret ? 'Zum Durchsuchen das Passwort erneut eingeben (es wird nicht angezeigt).' : null;
+  const hasSecret = Boolean(saved?.hasSecret);
+  const unchanged = Boolean(saved) && f.url.trim() === saved!.url.trim() && (share || f.username.trim() === (saved!.username ?? '').trim());
+  const useSaved = unchanged && !f.secret;
+  const browseBody: Record<string, unknown> = useSaved ? { sourceId: saved!.id, absolute: true } : { url: f.url.trim(), username: share ? null : f.username.trim() || null, secret: f.secret || null };
+  // Gespeichertes Passwort kennt die Oberfläche nicht: nur bei geänderter Adresse bzw. geändertem Benutzer neu eingeben
+  const hint = !f.url.trim() ? 'Erst die Adresse eingeben.' : !share && !f.username.trim() ? 'Erst Benutzer und App-Passwort eingeben.' : hasSecret && !unchanged && !f.secret ? 'Adresse oder Benutzer geändert: zum Durchsuchen das Passwort erneut eingeben (es wird nicht angezeigt).' : null;
   return (
     <>
       <label className="field full"><span className="req">Name</span><input type="text" value={f.name} autoFocus placeholder="z. B. Pläne Kunde Müller" onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
@@ -86,7 +96,7 @@ export function SourceFields({ f, setF, hasSecret = false }: { f: SourceDraft; s
           <label className="field"><span>App-Passwort{hasSecret && <span className="muted"> · gesetzt, leer = unverändert</span>}</span><input type="password" value={f.secret} autoComplete="new-password" onChange={(e) => setF({ ...f, secret: e.target.value })} />
             <span className="muted small">Nextcloud: Einstellungen › Sicherheit › „Neues App-Passwort erstellen“, nie das Anmeldepasswort.</span></label>
         </>}
-      <FolderPicker key={`${browseBody.url}|${browseBody.username ?? ''}`} label="Startordner" body={browseBody} value={f.rootPath} onChange={(rootPath) => setF({ ...f, rootPath })} disabledHint={hint} />
+      <FolderPicker key={useSaved ? `saved|${saved!.id}` : `${String(browseBody.url)}|${String(browseBody.username ?? '')}`} label="Startordner" body={browseBody} value={f.rootPath} onChange={(rootPath) => setF({ ...f, rootPath })} disabledHint={hint} />
     </>
   );
 }
@@ -131,7 +141,7 @@ function SourceModal({ source, onClose, onSaved }: { source: FileSource | null; 
   return (
     <Modal title={source ? `Dateiquelle: ${source.name}` : 'Dateiquelle anlegen'} onClose={onClose} wide>
       <div className="form cols-2">
-        <SourceFields f={f} setF={(d) => setF({ ...f, ...d })} hasSecret={Boolean(source?.hasSecret)} />
+        <SourceFields f={f} setF={(d) => setF({ ...f, ...d })} saved={source ? { id: source.id, url: source.url, username: source.username, hasSecret: source.hasSecret } : null} />
         <label className="field full"><span>Projektfreigabe</span>
           <select value={f.projectScope} onChange={(e) => setF({ ...f, projectScope: e.target.value as AdminDraft['projectScope'] })}><option value="all">alle Projekte</option><option value="selected">ausgewählte Projekte</option><option value="none">keine (noch nicht freigegeben)</option></select>
           <span className="muted small">Freigegeben heißt: die PL kann die Quelle in ihrem Projekt einbinden (Einstellungen › Dateien).</span></label>

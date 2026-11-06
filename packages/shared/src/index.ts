@@ -1279,12 +1279,12 @@ export interface FileSource {
 }
 export interface FileSyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; truncated: boolean; error?: string | null }
 /** Org-Quelle aus Sicht der PL (ohne Adresse und Zugangsdaten) */
-export interface FileSourceAvailable { id: string; name: string; kind: FileSourceKind; scope: 'org' | 'project'; rootPath: string; lastSyncAt: string | null; lastError: string | null }
-export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean }
+export interface FileSourceAvailable { id: string; name: string; kind: FileSourceKind; scope: 'org' | 'project'; rootPath: string; lastSyncAt: string | null; lastError: string | null; /** nicht gelöschte Dateien der Quelle */ files: number }
+export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean; /** nicht gelöschte Dateien unter dem Unterordner der Einbindung */ files: number }
 export interface FileRoot { bindingId: string; sourceId: string; label: string; sourceName: string; kind: FileSourceKind; scope: 'org' | 'project'; subPath: string | null; lastSyncAt: string | null; lastError: string | null }
 export type FileEntry =
   | { type: 'folder'; name: string; path: string; bindingId: string; /** Dateien darunter (rekursiv) */ files?: number }
-  | { type: 'file'; id: string; name: string; path: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; bindingId: string };
+  | { type: 'file'; id: string; name: string; path: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; /** Grund zum Textstatus (z. B. „Dateityp ohne Textauszug“) */ textNote: string | null; bindingId: string };
 /** GET /projects/:id/files?binding=&path= */
 export interface FileListing { binding: FileRoot | null; path: string; parent: string | null; roots: FileRoot[]; entries: FileEntry[] }
 /** GET /files/:id/text */

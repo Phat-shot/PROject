@@ -97,4 +97,29 @@ describe('Verwaltung › Dateiquellen', () => {
     expect(patch.mock.calls[0][1]).toMatchObject({ name: 'Pläne Kunde', url: 'https://cloud.example.de/s/AbC', username: null, rootPath: '/', projectScope: 'all', personalUse: 'none', active: true });
     expect(patch.mock.calls[0][1]).not.toHaveProperty('secret');
   });
+
+  it('Bearbeiten: Ordnerwahl ohne Passwort ruft die sourceId-Variante (absolute); Hinweis nur bei geänderter Adresse', async () => {
+    const withSecret = { ...source, hasSecret: true, rootPath: '/Projekte' };
+    get.mockImplementation(async (url: string) => url === '/file-sources' ? { sources: [withSecret], projectSources: [] } : url === '/users' ? { users: [] } : {});
+    render(<FileSourcesSection />);
+    await screen.findByText('Pläne Kunde');
+    fireEvent.click(screen.getByRole('button', { name: 'Bearbeiten' }));
+    const q = within(await screen.findByRole('dialog', { name: 'Dateiquelle: Pläne Kunde' }));
+    expect(q.queryByText(/Passwort erneut eingeben/)).toBeNull();
+    fireEvent.click(q.getByRole('button', { name: 'Ordner wählen' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/file-sources/browse', { sourceId: 's1', absolute: true, path: '/Projekte' }));
+    // Startordner selbst ändern: eine Ebene hoch bis zur Wurzel
+    fireEvent.click(await q.findByRole('button', { name: 'hoch' }));
+    await waitFor(() => expect(post).toHaveBeenLastCalledWith('/file-sources/browse', { sourceId: 's1', absolute: true, path: '/' }));
+    fireEvent.click(q.getByRole('button', { name: 'Ordnerwahl schließen' }));
+    fireEvent.change(q.getByLabelText(/^Adresse/), { target: { value: 'https://cloud.example.de/s/Neu' } });
+    expect(q.getByText(/Adresse oder Benutzer geändert: zum Durchsuchen das Passwort erneut eingeben/)).toBeInTheDocument();
+    expect(q.getByRole('button', { name: 'Ordner wählen' })).toBeDisabled();
+    // Neues Passwort eingegeben: Ordnerwahl über die eingegebene Adresse
+    fireEvent.change(q.getByLabelText(/Passwort des Freigabelinks/), { target: { value: 'neu' } });
+    fireEvent.click(q.getByRole('button', { name: 'Ordner wählen' }));
+    await waitFor(() => expect(post).toHaveBeenLastCalledWith('/file-sources/browse', { url: 'https://cloud.example.de/s/Neu', username: null, secret: 'neu', path: '/' }));
+    fireEvent.click(q.getByRole('button', { name: 'Speichern' }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+  });
 });

@@ -30,6 +30,12 @@ const server = http.createServer((req, res) => {
   if (req.headers.authorization !== tree.auth) { res.writeHead(401, { 'www-authenticate': 'Basic realm="x"' }); return res.end(); }
   const rel = '/' + decodeURIComponent(url.pathname.slice(root.length)).split('/').filter(Boolean).join('/');
   const esc = (p: string) => root + p.split('/').map(encodeURIComponent).join('/');
+  if (req.method === 'HEAD') {
+    const f = tree.files.get(rel);
+    if (!f) { res.writeHead(404); return res.end(); }
+    res.writeHead(200, { 'content-type': f.type, 'content-length': String(f.data.length) });
+    return res.end();
+  }
   if (req.method === 'GET') {
     const f = tree.files.get(rel);
     if (!f) { res.writeHead(404); return res.end(); }
@@ -157,6 +163,21 @@ test('Org-Quelle: anlegen (Verbindungstest), PL bindet in zwei Projekten mit Unt
   assert.equal(src.files, 5); assert.equal(src.lastError, null); assert.equal(src.bindings.length, 3); assert.equal(src.lastStats.added, 5);
 });
 
+test('Einbindungen: Dateianzahl je Unterordner und Sync-Stand; verfügbare Quellen mit Gesamtzahl; Org-Quelle absolute nur für den Org-Admin', async () => {
+  const pl = await t.login('pl@demo.local');
+  const admin = await t.login('admin@demo.local');
+  const r = (await t.api(pl).get(`/projects/${web()}/file-sources`)).json();
+  const by = (label: string) => r.bindings.find((b: any) => b.label === label);
+  assert.equal(by('Verträge').files, 2); assert.equal(by('Nachträge').files, 1);
+  assert.ok(by('Verträge').lastSyncAt); assert.equal(by('Verträge').lastError, null);
+  assert.equal(r.available.find((s: any) => s.id === orgSource.id).files, 5);
+  assert.equal((await t.api(await t.login('anna@demo.local')).get(`/projects/${erp()}/file-sources`)).json().bindings[0].files, 5, 'ganze Quelle');
+  // absolute: nur wer die Quelle verwaltet (PL über die Projektfreigabe nicht)
+  assert.equal((await t.api(pl).post('/file-sources/browse', { sourceId: orgSource.id, projectId: web(), absolute: true, path: '/' })).statusCode, 403);
+  const abs = await t.api(admin).post('/file-sources/browse', { sourceId: orgSource.id, absolute: true, path: '/Vertraege' });
+  assert.equal(abs.statusCode, 200, abs.body); assert.deepEqual(abs.json().folders.map((f: any) => f.path), ['/Vertraege/2026']);
+});
+
 test('Doku › Dateien: Liste je Einbindung (Wurzel = Unterordner), Textauszug; Download nur mit Leserecht im passenden Projekt', async () => {
   const pl = await t.login('pl@demo.local');
   const max = await t.login('max@demo.local');
@@ -185,6 +206,29 @@ test('Doku › Dateien: Liste je Einbindung (Wurzel = Unterordner), Textauszug; 
   assert.equal(pdl.statusCode, 200); assert.equal(pdl.headers['content-type'], 'application/pdf'); assert.match(String(pdl.headers['content-disposition']), /^inline/);
   assert.equal((await t.api(anna).get(`/files/${plan}/download`)).statusCode, 200);
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where action = 'files.download' and object_id = $1`, [plan]).catch(() => true));
+  // Textstatus samt Grund in der Liste (ERP: ganze Quelle, Ordner Plaene)
+  const er = (await t.api(anna).get(`/projects/${erp()}/files`)).json().roots[0];
+  const plaene = (await t.api(anna).get(`/projects/${erp()}/files?binding=${er.bindingId}&path=/Plaene`)).json().entries;
+  const foto = plaene.find((e: any) => e.name === 'Foto.png');
+  assert.equal(foto.textStatus, 'skipped'); assert.equal(foto.textNote, 'Dateityp ohne Textauszug');
+  assert.equal(plaene.find((e: any) => e.name === 'Bauplan Halle.pdf').textNote, null);
+});
+
+test('Vorab-Check der Vorschau: ?check=1 prüft per HEAD ohne Inhalt; nicht erreichbar → 502 mit Grund', async () => {
+  const pl = await t.login('pl@demo.local');
+  const plan = await fileId('Bauplan Halle.pdf');
+  const gets = davRequests.filter((x) => x.startsWith('GET')).length;
+  const ok = await t.api(pl).get(`/files/${plan}/download?check=1`);
+  assert.equal(ok.statusCode, 200, ok.body); assert.deepEqual(ok.json(), { ok: true });
+  assert.ok(davRequests.at(-1)!.startsWith('HEAD '), davRequests.at(-1));
+  assert.equal(davRequests.filter((x) => x.startsWith('GET')).length, gets, 'kein Inhalt übertragen');
+  const node = trees['/public.php/webdav'].files.get('/Plaene/Bauplan Halle.pdf')!;
+  trees['/public.php/webdav'].files.delete('/Plaene/Bauplan Halle.pdf');
+  try {
+    const bad = await t.api(pl).get(`/files/${plan}/download?check=1`);
+    assert.equal(bad.statusCode, 502); assert.match(bad.json().error, /nicht gefunden \(HTTP 404\)/);
+  } finally { trees['/public.php/webdav'].files.set('/Plaene/Bauplan Halle.pdf', node); }
+  assert.equal((await t.api(await t.login('leser@demo.local')).get(`/files/${plan}/download?check=1`)).statusCode, 404, 'Rechte wie beim Download');
 });
 
 test('Sync: etag-Änderung aktualisiert Text, gelöschte Datei deleted_at, Fehler in last_error', async () => {
@@ -217,6 +261,12 @@ test('Konto-Quelle (WebDAV, Benutzer + App-Passwort) als Projektquelle der PL; L
   const st = (await t.api(pl).post(`/file-sources/${sid}/sync`)).json().stats;
   assert.equal(st.added, 1);
   assert.equal((await t.db.one(`select path from files where source_id = $1`, [sid])).path, '/Notizen Kickoff.txt', 'Pfad relativ zum Startordner');
+  // Ordnerwahl beim Bearbeiten ohne Passwort: sourceId mit absolute → Pfade ab der WebDAV-Wurzel; ohne absolute relativ zum Startordner
+  const abs = await t.api(pl).post('/file-sources/browse', { sourceId: sid, absolute: true, path: '/' });
+  assert.equal(abs.statusCode, 200, abs.body); assert.deepEqual(abs.json().folders.map((f: any) => f.path), ['/Projekt']);
+  const rel = await t.api(pl).post('/file-sources/browse', { sourceId: sid, path: '/' });
+  assert.deepEqual(rel.json().folders, []); assert.equal(rel.json().files, 1);
+  assert.equal((await t.api(await t.login('max@demo.local')).post('/file-sources/browse', { sourceId: sid, absolute: true, path: '/' })).statusCode, 403);
   // Anna (PL von ERP) sieht die Projektquelle von WEB nicht als verfügbar und darf sie nicht einbinden
   const anna = await t.login('anna@demo.local');
   assert.ok(!(await t.api(anna).get(`/projects/${erp()}/file-sources`)).json().available.some((s: any) => s.id === sid));

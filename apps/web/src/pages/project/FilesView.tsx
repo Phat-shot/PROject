@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import type { FileEntry, FileListing, FileRoot, FileText } from '@projekttool/shared';
-import { fmtDateTime } from '../../lib/api';
+import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
 import { Loading, Markdown, Modal } from '../../components/ui';
 import { IconAlert, IconCloud, IconDownload, IconFile, IconFolder, IconUp } from '../../components/icons';
@@ -33,20 +33,37 @@ const isMarkdown = (f: { name: string; mime: string | null }) => f.mime === 'tex
 /** Pfad in der Adresse: Segmente einzeln kodiert. */
 export const filesPath = (base: string, bindingId: string, path = '/') => `${base}/dateien/${bindingId}${path.split('/').filter(Boolean).map((s) => `/${encodeURIComponent(s)}`).join('')}`;
 
-/** Vorschau: PDF und Bilder inline aus der Quelle, sonst der Textauszug (Markdown gerendert); immer mit Download. */
+/**
+ * Vorschau: PDF und Bilder inline aus der Quelle, sonst der Textauszug (Markdown gerendert); immer mit Download. Vor dem PDF-iframe
+ * ein Vorab-Check (GET /files/:id/download?check=1), damit eine nicht erreichbare Quelle als Meldung statt als leerer Rahmen erscheint.
+ */
 function Preview({ file, onClose }: { file: FileItem; onClose: () => void }) {
   const inline = isPdf(file) || isImage(file);
   const text = useData<FileText>(inline ? null : `/files/${file.id}/text`, [file.id]);
   const [imgError, setImgError] = useState(false);
+  const [pdfCheck, setPdfCheck] = useState<{ ok: boolean; error?: string } | null>(null);
   const src = `/api/files/${file.id}/download?inline=1`;
+  const pdf = isPdf(file);
+  useEffect(() => {
+    if (!pdf) return;
+    let live = true;
+    setPdfCheck(null);
+    api.get<{ ok: boolean }>(`/files/${file.id}/download?check=1`)
+      .then(() => { if (live) setPdfCheck({ ok: true }); })
+      .catch((e: any) => { if (live) setPdfCheck({ ok: false, error: String(e?.message ?? e) }); });
+    return () => { live = false; };
+  }, [file.id, pdf]);
+  // Textstatus aus dem Index (Liste); bei Textdateien der aktuelle Stand aus /text
   return (
     <Modal title={file.name} onClose={onClose} wide>
       <div className="file-preview">
         <div className="row between wrap gap-1 mb">
-          <span className="muted small">{[fmtSize(file.size), file.modifiedAt ? `geändert ${fmtDateTime(file.modifiedAt)}` : ''].filter(Boolean).join(' · ')} {!inline && text.data && <TextBadge status={text.data.textStatus} note={text.data.textNote} />}</span>
+          <span className="muted small">{[fmtSize(file.size), file.modifiedAt ? `geändert ${fmtDateTime(file.modifiedAt)}` : ''].filter(Boolean).join(' · ')} {text.data ? <TextBadge status={text.data.textStatus} note={text.data.textNote} /> : <TextBadge status={file.textStatus} note={file.textNote} />}</span>
           <a className="btn sm" href={`/api/files/${file.id}/download`} download={file.name}><IconDownload size={14} /> Herunterladen</a>
         </div>
-        {isPdf(file) && <iframe title={`Vorschau ${file.name}`} src={src} className="file-frame" />}
+        {pdf && (!pdfCheck ? <Loading>Prüft die Quelle …</Loading>
+          : pdfCheck.ok ? <iframe title={`Vorschau ${file.name}`} src={src} className="file-frame" />
+          : <div className="error" role="alert">Quelle nicht erreichbar: {pdfCheck.error}</div>)}
         {isImage(file) && (imgError
           ? <div className="error">Bild nicht abrufbar: die Quelle ist gerade nicht erreichbar. Später erneut versuchen oder herunterladen.</div>
           : <img src={src} alt={file.name} className="file-image" onError={() => setImgError(true)} />)}
@@ -112,7 +129,7 @@ export function FilesView({ projectId, base, bindingId, path, canManage }: { pro
             {l.parent != null && <tr className="clickable" onClick={() => nav(filesPath(base, root.bindingId, l.parent!))}><td colSpan={4}><IconUp size={14} /> hoch</td></tr>}
             {l.entries.map((e) => e.type === 'folder'
               ? <tr key={`d${e.path}`} className="clickable" onClick={() => nav(filesPath(base, root.bindingId, e.path))}><td><Link to={filesPath(base, root.bindingId, e.path)} onClick={(ev) => ev.stopPropagation()}><IconFolder size={14} /> {e.name}</Link></td><td className="muted small">{e.files != null ? `${e.files} ${e.files === 1 ? 'Datei' : 'Dateien'}` : ''}</td><td /><td /></tr>
-              : <tr key={e.id} className="clickable" onClick={() => setPreview(e)}><td><button type="button" className="btn sm link file-name" onClick={(ev) => { ev.stopPropagation(); setPreview(e); }}><IconFile size={14} /> {e.name}</button></td><td className="small nowrap">{fmtSize(e.size)}</td><td className="small nowrap">{fmtDateTime(e.modifiedAt)}</td><td><TextBadge status={e.textStatus} /></td></tr>)}
+              : <tr key={e.id} className="clickable" onClick={() => setPreview(e)}><td><button type="button" className="btn sm link file-name" onClick={(ev) => { ev.stopPropagation(); setPreview(e); }}><IconFile size={14} /> {e.name}</button></td><td className="small nowrap">{fmtSize(e.size)}</td><td className="small nowrap">{fmtDateTime(e.modifiedAt)}</td><td><TextBadge status={e.textStatus} note={e.textNote} /></td></tr>)}
           </tbody>
         </table>}
       {preview && <Preview file={preview} onClose={() => setPreview(null)} />}

@@ -164,3 +164,20 @@ export async function getFile(fetchFn: typeof fetch, t: DavTarget, path: string,
   if (r.status !== 200) { await r.body?.cancel().catch(() => undefined); throw new Error(`Datei nicht abrufbar (HTTP ${r.status})`); }
   return r;
 }
+
+/**
+ * Erreichbarkeit einer Datei prüfen, ohne den Inhalt zu übertragen: HEAD; lehnt der Server HEAD ab (405/501), PROPFIND Depth 0.
+ * Wirft mit verständlichem Grund (Zugriff verweigert, nicht gefunden, HTTP-Status, Zeitlimit, Netzfehler).
+ */
+export async function checkFile(fetchFn: typeof fetch, t: DavTarget, path: string, timeoutMs = 15_000): Promise<void> {
+  let r = await davRequest(fetchFn, t, path, { method: 'HEAD' }, timeoutMs);
+  await r.body?.cancel().catch(() => undefined);
+  if (r.status === 405 || r.status === 501) {
+    r = await davRequest(fetchFn, t, path, { method: 'PROPFIND', headers: { depth: '0', 'content-type': 'application/xml; charset=utf-8' }, body: PROPFIND_BODY }, timeoutMs);
+    await r.body?.cancel().catch(() => undefined);
+    if (r.status === 207) return;
+  }
+  if (r.status === 401 || r.status === 403) throw new Error(`Zugriff verweigert (HTTP ${r.status})`);
+  if (r.status === 404) throw new Error('Datei in der Quelle nicht gefunden (HTTP 404)');
+  if (r.status !== 200 && r.status !== 204) throw new Error(`Quelle antwortet mit HTTP ${r.status}`);
+}

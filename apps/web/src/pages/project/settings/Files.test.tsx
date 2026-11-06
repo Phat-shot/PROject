@@ -6,22 +6,25 @@ import { MemoryRouter } from 'react-router-dom';
 const get = vi.fn();
 const post = vi.fn();
 const del = vi.fn();
-vi.mock('../../../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: vi.fn(), put: vi.fn(), del: (...a: unknown[]) => del(...a) }, ApiError: class extends Error {}, fmtDate: (d: string) => d, fmtDateTime: (d: string) => d }));
+const patch = vi.fn();
+vi.mock('../../../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: (...a: unknown[]) => patch(...a), put: vi.fn(), del: (...a: unknown[]) => del(...a) }, ApiError: class extends Error {}, fmtDate: (d: string) => d, fmtDateTime: (d: string) => d }));
 vi.mock('../../../lib/useAi', () => ({ invalidateAi: vi.fn(async () => undefined), useAiStatus: () => null }));
 let role = 'pl';
 vi.mock('../../ProjectPage', () => ({ useProject: () => ({ detail: { project: { id: 'p1', myMembership: { role } }, members: [] }, users: [], reload: vi.fn(), tasks: [], reloadTasks: vi.fn(), ai: null }), useProjectOptional: () => null }));
 import { ToastProvider } from '../../../components/ui';
 import { FilesTab } from './Files';
 
-const binding = { id: 'b1', sourceId: 'org1', sourceName: 'Firmen-Nextcloud', scope: 'org', kind: 'webdav', subPath: '/Projekte/Halle 3', label: 'Pläne Halle 3', lastSyncAt: null, lastError: null, active: true };
+const binding = { id: 'b1', sourceId: 'org1', sourceName: 'Firmen-Nextcloud', scope: 'org', kind: 'webdav', subPath: '/Projekte/Halle 3', label: 'Pläne Halle 3', lastSyncAt: null, lastError: null, active: true, files: 7 };
 let bindings: unknown[] = [];
+let own: unknown[] = [];
+const ownSource = { id: 'own1', name: 'Ablage', kind: 'webdav', url: 'https://cloud.example.de/remote.php/dav/files/lea', davUrl: 'https://cloud.example.de/remote.php/dav/files/lea', username: 'lea', hasSecret: true, rootPath: '/Projekt', scope: 'project', ownerProjectId: 'p1', projectScope: 'none', projectIds: [], personalUse: 'none', personalUserIds: [], active: true, lastSyncAt: null, lastError: null, lastStats: null, files: 3, bindings: [], createdAt: '2026-11-01' };
 
 describe('Projekt › Einstellungen › Dateien', () => {
   beforeEach(() => {
-    role = 'pl'; bindings = [];
-    get.mockReset(); post.mockReset(); del.mockReset();
+    role = 'pl'; bindings = []; own = [];
+    get.mockReset(); post.mockReset(); del.mockReset(); patch.mockReset();
     get.mockImplementation(async (url: string) => url === '/projects/p1/file-sources'
-      ? { available: [{ id: 'org1', name: 'Firmen-Nextcloud', kind: 'webdav', scope: 'org', rootPath: '/', lastSyncAt: null, lastError: null }], own: [], bindings }
+      ? { available: [{ id: 'org1', name: 'Firmen-Nextcloud', kind: 'webdav', scope: 'org', rootPath: '/', lastSyncAt: null, lastError: null, files: 9 }], own, bindings }
       : url === '/projects/p1/files' ? { binding: null, path: '/', parent: null, roots: [{ bindingId: 'b1', sourceId: 'org1', label: 'Pläne Halle 3', sourceName: 'Firmen-Nextcloud', kind: 'webdav', scope: 'org', subPath: '/Projekte/Halle 3', lastSyncAt: null, lastError: 'HTTP 401' }], entries: [] } : {});
     post.mockImplementation(async (url: string, body: any) => {
       if (url === '/file-sources/browse') return body.path === '/' ? { kind: 'webdav', path: '/', parent: null, folders: [{ name: 'Projekte', path: '/Projekte' }], files: 0 } : { kind: 'webdav', path: body.path, parent: '/', folders: [], files: 4 };
@@ -46,9 +49,10 @@ describe('Projekt › Einstellungen › Dateien', () => {
     await waitFor(() => expect(post).toHaveBeenCalledWith('/projects/p1/file-sources', { sourceId: 'org1', subPath: '/Projekte', label: 'Projektordner' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/file-sources/org1/sync'));
     expect(await screen.findByText('Projektordner synchronisiert: 4 Dateien, 4 neu, 0 geändert, 0 entfernt, 2 Textauszüge.')).toBeInTheDocument();
-    // Liste neu geladen: Einbindung mit Link in die Doku und Entfernen
+    // Liste neu geladen: Einbindung mit Link in die Doku, Dateianzahl unter dem Unterordner
     const link = await screen.findByRole('link', { name: 'Projektordner' });
     expect(link).toHaveAttribute('href', '/projekte/p1/doku/dateien/b1');
+    expect(within(link.closest('tr') as HTMLElement).getAllByRole('cell')[3]).toHaveTextContent(/^7$/);
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
@@ -63,6 +67,26 @@ describe('Projekt › Einstellungen › Dateien', () => {
     fireEvent.click(q.getByRole('button', { name: 'Anlegen und einbinden' }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/projects/p1/file-sources', { name: 'Ablage', url: 'https://cloud.example.de/s/XyZ', username: null, rootPath: '/', label: undefined }));
     await waitFor(() => expect(post).toHaveBeenCalledWith('/file-sources/org1/sync'));
+  });
+
+  it('Eigene Quelle bearbeiten: Ordnerwahl ohne Passwort über sourceId (absolute); geänderte Adresse verlangt das Passwort', async () => {
+    own = [ownSource];
+    bindings = [{ ...binding, id: 'b2', sourceId: 'own1', sourceName: 'Ablage', scope: 'project', subPath: null, label: 'Ablage', files: 3 }];
+    render(<MemoryRouter><FilesTab /></MemoryRouter>);
+    const row = (await screen.findByRole('link', { name: 'Ablage' })).closest('tr') as HTMLElement;
+    expect(within(row).getAllByRole('cell')[3]).toHaveTextContent(/^3$/);
+    fireEvent.click(within(row).getByRole('button', { name: 'Bearbeiten' }));
+    const q = within(await screen.findByRole('dialog', { name: 'Eigene Quelle: Ablage' }));
+    expect(q.queryByText(/Passwort erneut eingeben/)).toBeNull();
+    fireEvent.click(q.getByRole('button', { name: 'Ordner wählen' }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith('/file-sources/browse', { sourceId: 'own1', absolute: true, path: '/Projekt' }));
+    fireEvent.click(q.getByRole('button', { name: 'Ordnerwahl schließen' }));
+    fireEvent.change(q.getByLabelText('Benutzer'), { target: { value: 'max' } });
+    expect(q.getByText(/Adresse oder Benutzer geändert: zum Durchsuchen das Passwort erneut eingeben/)).toBeInTheDocument();
+    expect(q.getByRole('button', { name: 'Ordner wählen' })).toBeDisabled();
+    fireEvent.change(q.getByLabelText('Benutzer'), { target: { value: 'lea' } });
+    fireEvent.click(q.getByRole('button', { name: 'Speichern' }));
+    await waitFor(() => expect(patch).toHaveBeenCalledWith('/file-sources/own1', { name: 'Ablage', url: 'https://cloud.example.de/remote.php/dav/files/lea', username: 'lea', rootPath: '/Projekt' }));
   });
 
   it('Mitglieder sehen die Einbindungen nur lesend', async () => {

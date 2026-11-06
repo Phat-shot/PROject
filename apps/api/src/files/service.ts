@@ -104,13 +104,13 @@ export async function listProjectFiles(db: Db, projectId: string, bindingId: str
   const sub = b.sub_path && b.sub_path !== '/' ? b.sub_path : '';
   const abs = normPath(sub + rel);
   const prefix = abs === '/' ? '/' : abs + '/';
-  const rows = (await db.query(`select id, path, name, mime, size, modified_at, text_status from files where source_id = $1 and deleted_at is null and left(path, length($2)) = $2 order by path limit 20000`, [b.source_id, prefix])).rows as any[];
+  const rows = (await db.query(`select id, path, name, mime, size, modified_at, text_status, text_note from files where source_id = $1 and deleted_at is null and left(path, length($2)) = $2 order by path limit 20000`, [b.source_id, prefix])).rows as any[];
   const folders = new Map<string, number>(); const files: any[] = [];
   for (const f of rows) {
     const rest = f.path.slice(prefix.length);
     const i = rest.indexOf('/');
     if (i >= 0) { const name = rest.slice(0, i); folders.set(name, (folders.get(name) ?? 0) + 1); }
-    else files.push({ type: 'file', id: f.id, name: f.name, path: normPath(rel + '/' + f.name), mime: f.mime, size: f.size == null ? null : Number(f.size), modifiedAt: f.modified_at, textStatus: f.text_status, bindingId: b.id });
+    else files.push({ type: 'file', id: f.id, name: f.name, path: normPath(rel + '/' + f.name), mime: f.mime, size: f.size == null ? null : Number(f.size), modifiedAt: f.modified_at, textStatus: f.text_status, textNote: f.text_note ?? null, bindingId: b.id });
   }
   const entries = [...[...folders.entries()].sort((a, z) => a[0].localeCompare(z[0], 'de')).map(([name, n]) => ({ type: 'folder', name, path: normPath(rel + '/' + name), files: n, bindingId: b.id })), ...files];
   return { binding: mapRoot(b), path: rel, parent: rel === '/' ? null : normPath(rel.split('/').slice(0, -1).join('/')), roots: roots.map(mapRoot), entries };

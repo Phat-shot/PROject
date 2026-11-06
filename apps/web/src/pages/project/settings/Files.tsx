@@ -45,25 +45,28 @@ function BindModal({ projectId, available, onClose, onDone }: { projectId: strin
   );
 }
 
-/** Eigene Quelle des Projekts anlegen (gilt nur hier) und gleich einbinden. */
-function OwnSourceModal({ projectId, onClose, onDone }: { projectId: string; onClose: () => void; onDone: () => Promise<void> }) {
-  const [f, setF] = useState<SourceDraft>(EMPTY_DRAFT);
+/** Eigene Quelle des Projekts anlegen (gilt nur hier) und gleich einbinden, bzw. eine bestehende bearbeiten (source). */
+function OwnSourceModal({ projectId, source = null, onClose, onDone }: { projectId: string; source?: FileSource | null; onClose: () => void; onDone: () => Promise<void> }) {
+  const [f, setF] = useState<SourceDraft>(source ? { name: source.name, url: source.url, username: source.username ?? '', secret: '', rootPath: source.rootPath } : EMPTY_DRAFT);
   const [label, setLabel] = useState('');
   const { busy, error, run } = useAsync();
   const sync = useSync();
   const save = () => run(async () => {
-    const r = await api.post<{ binding: FileSourceBinding }>(`/projects/${projectId}/file-sources`, { ...draftBody(f), label: label.trim() || undefined });
-    await sync(r.binding.sourceId, r.binding.label);
+    if (source) await api.patch(`/file-sources/${source.id}`, draftBody(f));
+    else {
+      const r = await api.post<{ binding: FileSourceBinding }>(`/projects/${projectId}/file-sources`, { ...draftBody(f), label: label.trim() || undefined });
+      await sync(r.binding.sourceId, r.binding.label);
+    }
     await onDone();
   });
   return (
-    <Modal title="Eigene Quelle anlegen" onClose={onClose} wide>
+    <Modal title={source ? `Eigene Quelle: ${source.name}` : 'Eigene Quelle anlegen'} onClose={onClose} wide>
       <div className="form cols-2">
-        <SourceFields f={f} setF={setF} />
-        <label className="field full"><span>Anzeigename in der Doku</span><input type="text" value={label} placeholder={f.name || 'wie der Name'} onChange={(e) => setLabel(e.target.value)} /></label>
+        <SourceFields f={f} setF={setF} saved={source ? { id: source.id, url: source.url, username: source.username, hasSecret: source.hasSecret } : null} />
+        {!source && <label className="field full"><span>Anzeigename in der Doku</span><input type="text" value={label} placeholder={f.name || 'wie der Name'} onChange={(e) => setLabel(e.target.value)} /></label>}
         <p className="muted small full mb-0">Die Quelle gilt nur in diesem Projekt. Beim Speichern prüft das Tool die Verbindung.</p>
         {error && <div className="error full">{error}</div>}
-        <div className="full row"><button className="btn primary" disabled={busy || !f.name.trim() || !f.url.trim()} onClick={() => void save()}>Anlegen und einbinden</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+        <div className="full row"><button className="btn primary" disabled={busy || !f.name.trim() || !f.url.trim()} onClick={() => void save()}>{source ? 'Speichern' : 'Anlegen und einbinden'}</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
     </Modal>
   );
@@ -79,7 +82,7 @@ export function FilesTab() {
   const isPl = detail.project.myMembership.role === 'pl';
   const pl = useData<PlData>(isPl ? `/projects/${pid}/file-sources` : null, [pid, isPl]);
   const roots = useData<FileListing>(isPl ? null : `/projects/${pid}/files`, [pid, isPl]);
-  const [modal, setModal] = useState<'bind' | 'own' | null>(null);
+  const [modal, setModal] = useState<'bind' | 'own' | FileSource | null>(null);
   const dialog = useDialog();
   const sync = useSync();
   const { busy, error, run } = useAsync();
@@ -117,10 +120,11 @@ export function FilesTab() {
               <td><Link to={`${docs}/${b.id}`}>{b.label}</Link>{!b.active && <span className="badge ml-1" title="Quelle deaktiviert oder nicht mehr freigegeben">ruht</span>}</td>
               <td>{b.sourceName} <span className="muted small">· {b.scope === 'org' ? 'Organisation' : 'eigene'}</span></td>
               <td>{b.subPath ?? '/'}</td>
-              <td>{own.get(b.sourceId)?.files ?? '–'}</td>
+              <td>{b.files ?? own.get(b.sourceId)?.files ?? '–'}</td>
               <td><SyncState lastSyncAt={b.lastSyncAt} lastError={b.lastError} /></td>
               <td className="nowrap">
                 <button className="btn sm" disabled={busy || !b.active} onClick={() => void run(async () => { await sync(b.sourceId, b.label); await pl.reload(); })}>Jetzt synchronisieren</button>{' '}
+                {own.has(b.sourceId) && <><button className="btn sm" onClick={() => setModal(own.get(b.sourceId)!)}>Bearbeiten</button>{' '}</>}
                 <button className="btn sm danger" disabled={busy} onClick={() => unbind(b)}>Entfernen</button>
               </td>
             </tr>
@@ -130,6 +134,7 @@ export function FilesTab() {
       </SettingsCard>
       {modal === 'bind' && <BindModal projectId={pid} available={available} onClose={() => setModal(null)} onDone={done} />}
       {modal === 'own' && <OwnSourceModal projectId={pid} onClose={() => setModal(null)} onDone={done} />}
+      {modal && typeof modal === 'object' && <OwnSourceModal projectId={pid} source={modal} onClose={() => setModal(null)} onDone={done} />}
     </>
   );
 }
