@@ -32,8 +32,8 @@ describe('ChatPane', () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
     expect(get).toHaveBeenCalledWith(base);
     expect(get).toHaveBeenCalledWith(`${base}?thread=m1`);
-    // Thread schließen: das Intervall fragt nur noch den Kanal ab
-    fireEvent.click(screen.getByRole('button', { name: '✕' }));
+    // Thread zuklappen (er steht direkt unter der Nachricht): das Intervall fragt nur noch den Kanal ab
+    fireEvent.click(screen.getByRole('button', { expanded: true }));
     await flush();
     get.mockClear();
     await act(async () => { await vi.advanceTimersByTimeAsync(5000); });

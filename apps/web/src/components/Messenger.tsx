@@ -11,6 +11,8 @@ export interface Conversation {
   lastBody: string | null; lastUser: string | null; lastAt: string | null; unread: number;
   /** persönlicher Assistent (Agent im persönlichen Projekt): angepinnt oben */
   pinned?: boolean;
+  /** von mir archiviert und seitdem keine neue Nachricht */
+  archived?: boolean;
 }
 interface Hit { id: string; channelId: string; threadId: string | null; body: string; createdAt: string; userName: string; kind: 'project' | 'dm'; title: string | null; projectKey: string | null }
 interface Person { id: string; name: string; email: string; kind: 'person' | 'agent' }
@@ -57,7 +59,28 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
     if (!channelId && !mobile && pin) onSelect(pin.channelId);
   }, [convs]);
   const needle = q.trim().toLowerCase();
-  const list = (convs ?? []).filter((c) => !needle || c.title.toLowerCase().includes(needle) || (c.subtitle ?? '').toLowerCase().includes(needle));
+  const matching = (convs ?? []).filter((c) => !needle || c.title.toLowerCase().includes(needle) || (c.subtitle ?? '').toLowerCase().includes(needle));
+  // Archivierte unten in einer eigenen, eingeklappten Gruppe; bei der Suche alle zusammen
+  const list = needle ? matching : matching.filter((c) => !c.archived);
+  const archived = needle ? [] : matching.filter((c) => c.archived);
+  const [showArchived, setShowArchived] = useState(false);
+  const archive = async (c: Conversation, v: boolean) => {
+    await api.put(`/chat/channels/${c.channelId}/archive`, { archived: v });
+    if (v && c.channelId === channelId) onSelect(null);
+    await load(); onRead?.();
+  };
+  const item = (c: Conversation) => (
+    <div key={c.channelId} className={`msg-item-wrap ${c.archived ? 'archived' : ''}`}>
+      <button className={`msg-item ${c.channelId === channelId ? 'sel' : ''} ${c.unread ? 'unread' : ''}`} onClick={() => onSelect(c.channelId)}>
+        <span className={`msg-avatar ${c.kind === 'project' ? 'proj' : c.partner?.kind === 'agent' ? 'agent' : ''} ${c.pinned ? 'pinned' : ''}`} title={c.pinned ? 'Dein Assistent, angepinnt' : undefined}>{c.kind === 'project' ? (c.projectKey ?? '#').slice(0, 3) : c.partner?.kind === 'agent' ? 'KI' : initials(c.title)}</span>
+        <span className="msg-main">
+          <span className="row between"><span className="msg-title ell">{c.title}{c.pinned && <span className="badge" style={{ marginLeft: 6 }}>Assistent</span>}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
+          <span className="row between"><span className="muted small ell">{c.lastBody ? `${c.kind === 'project' && c.lastUser ? `${c.lastUser}: ` : ''}${c.lastBody}` : c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.subtitle}</span>{c.unread > 0 && <span className="badge danger">{c.unread}</span>}</span>
+        </span>
+      </button>
+      {!c.pinned && <button className="msg-arch" title={c.archived ? 'Aus dem Archiv holen' : 'Archivieren (kommt mit der nächsten Nachricht zurück)'} aria-label={c.archived ? 'Aus dem Archiv holen' : 'Archivieren'} onClick={() => void archive(c, !c.archived)}>{c.archived ? '↩' : '🗄'}</button>}
+    </div>
+  );
   const current = convs?.find((c) => c.channelId === channelId) ?? null;
   const start = async (p: Person) => {
     const r = await api.post<{ channelId: string }>('/chat/dm', { userId: p.id });
@@ -78,15 +101,11 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
           {picking && <PeoplePicker exclude={new Set((convs ?? []).filter((c) => c.partner).map((c) => c.partner!.id))} onPick={(p) => void start(p)} onCancel={() => setPicking(false)} />}
           {error && <div className="error small">{error}</div>}
           {!convs && !error && <div className="muted small" style={{ padding: 10 }}>Lade …</div>}
-          {list.map((c) => (
-            <button key={c.channelId} className={`msg-item ${c.channelId === channelId ? 'sel' : ''} ${c.unread ? 'unread' : ''}`} onClick={() => onSelect(c.channelId)}>
-              <span className={`msg-avatar ${c.kind === 'project' ? 'proj' : c.partner?.kind === 'agent' ? 'agent' : ''} ${c.pinned ? 'pinned' : ''}`} title={c.pinned ? 'Dein Assistent, angepinnt' : undefined}>{c.kind === 'project' ? (c.projectKey ?? '#').slice(0, 3) : c.partner?.kind === 'agent' ? 'KI' : initials(c.title)}</span>
-              <span className="msg-main">
-                <span className="row between"><span className="msg-title ell">{c.title}{c.pinned && <span className="badge" style={{ marginLeft: 6 }}>Assistent</span>}</span><span className="muted small nowrap">{short(c.lastAt)}</span></span>
-                <span className="row between"><span className="muted small ell">{c.lastBody ? `${c.kind === 'project' && c.lastUser ? `${c.lastUser}: ` : ''}${c.lastBody}` : c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.subtitle}</span>{c.unread > 0 && <span className="badge danger">{c.unread}</span>}</span>
-              </span>
-            </button>
-          ))}
+          {list.map(item)}
+          {archived.length > 0 && <>
+            <button className="msg-group msg-group-btn" aria-expanded={showArchived} onClick={() => setShowArchived(!showArchived)}>{showArchived ? '▾' : '▸'} Archiviert ({archived.length})</button>
+            {showArchived && archived.map(item)}
+          </>}
           {convs && list.length === 0 && !hits.length && <div className="muted small" style={{ padding: 10 }}>{needle ? 'Kein Gespräch gefunden.' : 'Noch keine Gespräche. Über „+ Neu“ eine Person oder einen KI-Agenten anschreiben.'}</div>}
           {hits.length > 0 && <>
             <div className="msg-group">Nachrichten</div>
@@ -99,7 +118,7 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
           </>}
         </div>
         <div className="msg-pane">
-          {current ? <Conversation c={current} threadId={threadId ?? null} msgId={msgId ?? null} onBack={() => onSelect(null)} onThread={(t) => onSelect(current.channelId, t)} onSent={() => void load()} />
+          {current ? <Conversation c={current} threadId={threadId ?? null} msgId={msgId ?? null} onBack={() => onSelect(null)} onThread={(t) => onSelect(current.channelId, t)} onSent={() => void load()} onArchive={current.pinned ? undefined : () => void archive(current, !current.archived)} />
             : channelId && convs ? <div className="muted small" style={{ padding: 24 }}>Gespräch nicht gefunden oder nicht mehr zugänglich.</div>
               : <div className="msg-empty muted small">Gespräch links wählen. Chat ist der Weg zwischen Projektbeteiligten, auch mit KI-Agenten (im Projektkanal per @Name); Mail bleibt für Externe.</div>}
         </div>
@@ -111,7 +130,7 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
 function initials(name: string) { return name.split(/\s+/).filter(Boolean).slice(0, 2).map((x) => x[0]!.toUpperCase()).join(''); }
 
 /** Verlauf eines Gesprächs; im Projektkanal mit Threads, @Erwähnung über Projektmitglieder (auch Agenten) und Moderation durch die PL. */
-function Conversation({ c, threadId, msgId, onBack, onThread, onSent }: { c: Conversation; threadId: string | null; msgId: string | null; onBack: () => void; onThread: (id: string | null) => void; onSent: () => void }) {
+function Conversation({ c, threadId, msgId, onBack, onThread, onSent, onArchive }: { c: Conversation; threadId: string | null; msgId: string | null; onBack: () => void; onThread: (id: string | null) => void; onSent: () => void; onArchive?: () => void }) {
   const detail = useData<{ project: { myMembership: Membership }; members: { userId: string; name: string; kind?: string }[] }>(c.projectId ? `/projects/${c.projectId}` : null, [c.projectId]);
   const members = useMemo(() => (detail.data?.members ?? []).map((m) => ({ userId: m.userId, name: m.name })), [detail.data]);
   const agentHint = c.partner?.kind === 'agent' ? ' Der Agent antwortet aus seinen Arbeitspaketen.' : '';
@@ -119,7 +138,8 @@ function Conversation({ c, threadId, msgId, onBack, onThread, onSent }: { c: Con
     <>
       <div className="msg-pane-head">
         <button className="btn sm msg-back" onClick={onBack} aria-label="Zurück zur Liste">←</button>
-        <div className="ell"><strong>{c.title}</strong> <span className="muted small">{c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.partner?.kind === 'agent' ? 'KI-Agent' : c.partner?.email}</span></div>
+        <div className="ell" style={{ flex: 1 }}><strong>{c.title}</strong> <span className="muted small">{c.kind === 'project' ? `Projektkanal ${c.projectKey}` : c.partner?.kind === 'agent' ? 'KI-Agent' : c.partner?.email}</span></div>
+        {onArchive && <button className="btn sm" title={c.archived ? 'Aus dem Archiv holen' : 'Archivieren: das Gespräch verschwindet aus der Liste, bis eine neue Nachricht kommt'} onClick={onArchive}>{c.archived ? 'Aus dem Archiv' : 'Archivieren'}</button>}
       </div>
       <ChatPane key={c.channelId} channelId={c.channelId} members={members} canModerate={detail.data?.project.myMembership.role === 'pl'}
         threads initialThread={threadId} highlightId={msgId} onSent={onSent} onThreadChange={(t) => { if ((t ?? null) !== threadId) onThread(t); }}

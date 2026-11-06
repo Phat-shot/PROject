@@ -939,3 +939,50 @@ button.lane-name.link:hover { color: var(--primary, inherit); }
 .sidebar .proj-open .open-for-me .ofm { flex-wrap: wrap; color: #d6dcea; border-top-color: rgba(255, 255, 255, 0.1); }
 .sidebar .proj-open .open-for-me .ofm:hover { background: rgba(255, 255, 255, 0.07); }
 .sidebar .proj-open .open-for-me .ofm .x { flex-basis: 100%; white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+
+/* Chat: Blasen, Thread im Verlauf, Archiv (moderner, auch mobil) */
+.chat-list { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 2px; }
+.chat-list > div { display: flex; flex-direction: column; }
+.chat-msg { position: relative; max-width: min(78%, 680px); align-self: flex-start; margin: 3px 0; padding: 7px 12px 6px; border-radius: 16px 16px 16px 4px; background: color-mix(in srgb, var(--muted) 11%, var(--surface)); }
+.chat-msg:hover { background: color-mix(in srgb, var(--muted) 15%, var(--surface)); }
+.chat-msg.mine:hover { background: color-mix(in srgb, var(--primary) 16%, var(--surface)); }
+.chat-msg.mine { align-self: flex-end; border-radius: 16px 16px 4px 16px; background: var(--primary-soft); }
+.chat-msg.mine .chat-head strong { color: var(--primary); }
+.chat-msg.system { align-self: stretch; max-width: none; border-radius: 10px; border-left: 3px solid var(--primary); }
+.chat-head { gap: 6px; font-size: 12px; }
+.chat-head .btn.link { padding: 0 2px; }
+.chat-body { line-height: 1.45; }
+.chat-day { position: sticky; top: 0; z-index: 1; align-self: center; margin: 12px 0 6px; padding: 2px 10px; border-radius: 999px; background: var(--surface); border: 1px solid var(--border); }
+.chat-thread-btn { margin-top: 2px; font-size: 12px; font-weight: 600; }
+.chat-thread-btn.open { color: var(--primary); }
+.chat-thread-inline { align-self: stretch; margin: 2px 0 10px 18px; padding: 6px 8px 8px 12px; border-left: 2px solid var(--primary); border-radius: 0 12px 12px 0; background: color-mix(in srgb, var(--primary) 4%, var(--surface)); display: flex; flex-direction: column; }
+.chat-thread-inline .chat-msg { max-width: 92%; }
+.chat-thread-inline .chat-compose { border-top: 0; padding: 6px 0 0; }
+.chat-compose { gap: 8px; padding: 10px 12px; }
+.chat-compose textarea { border-radius: 20px; padding: 9px 14px; }
+.chat-compose > .btn.primary { border-radius: 999px; padding-left: 16px; padding-right: 16px; }
+.msg-item-wrap { position: relative; }
+.msg-item { border-bottom: 0; border-radius: 10px; margin: 2px 6px; width: calc(100% - 12px); padding: 9px 10px; }
+.msg-arch { position: absolute; right: 12px; bottom: 8px; border: 0; background: var(--surface); border-radius: 6px; padding: 1px 5px; cursor: pointer; opacity: 0; font-size: 13px; }
+.msg-item-wrap:hover .msg-arch, .msg-arch:focus-visible { opacity: 1; }
+.msg-item-wrap.archived .msg-item { opacity: 0.75; }
+.msg-group-btn { border: 0; background: none; text-align: left; cursor: pointer; width: 100%; font: inherit; font-size: 11px; }
+.msg-pane-head { padding: 4px 6px 8px; border-bottom: 1px solid var(--border); }
+@media (max-width: 900px) {
+  .msg-arch { opacity: 1; }
+  .chat-msg { max-width: 88%; }
+  .chat-main { border: 0; border-radius: 0; }
+  .msg-pane { padding: 0; }
+  .msg-pane-head { position: sticky; top: 0; z-index: 2; background: var(--surface); padding: 8px 10px; }
+  .msg-head { position: sticky; top: 0; z-index: 2; background: var(--surface); }
+  .msg-avatar { width: 40px; height: 40px; }
+  .chat-compose { position: sticky; bottom: 0; background: var(--surface); padding-bottom: max(10px, env(safe-area-inset-bottom)); }
+}
+/* Leiste: Doku als Untermenü des geöffneten Projekts */
+.sidebar .proj-docs { display: flex; flex-direction: column; margin: 0 0 6px 18px; padding-left: 8px; border-left: 1px solid rgba(255, 255, 255, 0.12); }
+.sidebar .proj-docs a.proj-sub { padding: 3px 8px; font-size: 12.5px; color: #b9c3d9; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sidebar .proj-docs a.proj-sub.head { font-weight: 600; color: #d6dcea; }
+.sidebar .proj-docs a.proj-sub.active { background: rgba(255, 255, 255, 0.1); color: #fff; }
+.sidebar .proj-docs a.proj-sub.recent { color: #9aa7c2; }
+.sidebar .proj-sub-h { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: #7f8aa3; padding: 6px 8px 2px; }
+.chat-thread-inline .chat-compose { position: static; background: transparent; padding-bottom: 0; }

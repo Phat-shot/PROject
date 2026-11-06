@@ -16,7 +16,7 @@ const dayLabel = (iso: string) => new Date(iso).toLocaleDateString('de-DE', { we
 const timeLabel = (iso: string) => new Date(iso).toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' });
 
 /**
- * Kanalansicht: Nachrichten (nach Tag gruppiert), Thread rechts, Eingabe mit @Erwähnung.
+ * Kanalansicht: Nachrichten (nach Tag gruppiert), Thread aufklappbar direkt unter seiner Nachricht, Eingabe mit @Erwähnung.
  * Holt alle 5 s neue Nachrichten und die Antworten des gerade offenen Threads; „Ältere laden“ blättert zurück.
  * Wer im Projektkanal nur mitliest (implizite Leser), sieht statt der Eingabe einen Hinweis.
  */
@@ -56,7 +56,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     try { setQuestion((await api.get<{ question: Question | null }>(`/chat/messages/${id}`)).question); } catch { setQuestion(null); }
   };
   useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (threadRef.current) void loadThread(threadRef.current); }, 5000); return () => clearInterval(h); }, [channelId]);
-  useEffect(() => { threadRef.current = thread; if (thread) void loadThread(thread); else { setReplies([]); setQuestion(null); } onThreadChange?.(thread); }, [thread]);
+  useEffect(() => { threadRef.current = thread; setReplies([]); setQuestion(null); if (thread) void loadThread(thread).then(() => document.getElementById(`thread-${thread}`)?.scrollIntoView?.({ block: 'nearest' })); onThreadChange?.(thread); }, [thread]);
   // Deep-Link: zur Nachricht scrollen, hervorheben, Fokus ins Antwortfeld des Threads
   useEffect(() => { setHighlight(highlightId ?? null); }, [highlightId]);
   useEffect(() => {
@@ -127,21 +127,32 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
-        <button className="btn sm link chat-thread-btn" onClick={() => setThread(m.id)}>{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
+        <button className={`btn sm link chat-thread-btn ${thread === m.id ? 'open' : ''}`} aria-expanded={thread === m.id} onClick={() => setThread(thread === m.id ? null : m.id)}>{thread === m.id ? '▾ ' : m.replyCount > 0 ? '▸ ' : ''}{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt && thread !== m.id ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}
     </div>
   );
-  const root = thread ? msgs.find((m) => m.id === thread) : null;
+  // Aufgeklappter Thread direkt unter seiner Nachricht: Frage-Kopf, Antworten, Eingabe
+  const inlineThread = (id: string) => (
+    <div className="chat-thread-inline" id={`thread-${id}`}>
+      {question && <QuestionHead q={question} onChanged={() => { void loadThread(id); void load(); }} />}
+      {replies.map((m) => <div key={m.id}>{Msg({ m, inThread: true })}</div>)}
+      {canWrite && <div className="chat-compose" ref={replyBox}>
+        <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten … (Enter sendet)" onSubmit={() => void send(reply, id)} enterSends />
+        <button className="btn primary sm" disabled={!reply.trim()} onClick={() => void send(reply, id)}>Antworten</button>
+      </div>}
+    </div>
+  );
   let lastDay = '';
   return (
-    <div className={`chat ${thread ? 'with-thread' : ''}`}>
+    <div className="chat">
       {rating.modal}
       <div className="chat-main">
         {error && <div className="error mb">{error}</div>}
         <div className="chat-list" ref={listRef} onScroll={onScroll}>
           {hasMore && <div className="center"><button className="btn sm" onClick={() => void older()}>Ältere laden</button></div>}
           {msgs.length === 0 && <div className="muted small center" style={{ padding: 24 }}>{emptyText ?? 'Noch keine Nachrichten.'}</div>}
-          {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}</div>; })}
+          {msgs.map((m) => { const d = dayLabel(m.createdAt); const sep = d !== lastDay; lastDay = d; return <div key={m.id}>{sep && <div className="chat-day">{d}</div>}{Msg({ m, inThread: false })}{threads && thread === m.id && inlineThread(m.id)}</div>; })}
+          {threads && thread && !msgs.some((m) => m.id === thread) && <div className="muted small center">Der Thread gehört zu einer älteren Nachricht: „Ältere laden“.</div>}
           {busy.length > 0 && <div className="muted small chat-busy" role="status">{busy.map((b) => b.name).join(', ')} {busy.length > 1 ? 'denken' : 'denkt'} nach … <span title="Lokale Modelle antworten bei belegter GPU später; die Antwort erscheint hier von selbst">(kann dauern)</span></div>}
         </div>
         {canWrite ? <div className="chat-compose">
@@ -149,18 +160,6 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
           <button className="btn primary" disabled={!text.trim()} onClick={() => void send(text, null)}>Senden</button>
         </div> : <div className="muted small chat-compose">Im Projektkanal schreiben nur Mitglieder des Projekts; du liest mit.</div>}
       </div>
-      {thread && (
-        <div className="chat-thread">
-          <div className="row between mb"><strong>Thread</strong><button className="btn sm" onClick={() => setThread(null)}>✕</button></div>
-          {question && <QuestionHead q={question} onChanged={() => { void loadThread(thread); void load(); }} />}
-          {root ? Msg({ m: root, inThread: true }) : <div className="muted small">Ursprungsnachricht nicht mehr in der Ansicht.</div>}
-          <div className="chat-replies">{replies.map((m) => <div key={m.id}>{Msg({ m, inThread: true })}</div>)}</div>
-          {canWrite && <div className="chat-compose" ref={replyBox}>
-            <MentionInput value={reply} onChange={setReply} members={members} placeholder="Antworten … (Enter sendet)" onSubmit={() => void send(reply, thread)} enterSends />
-            <button className="btn primary" disabled={!reply.trim()} onClick={() => void send(reply, thread)}>Antworten</button>
-          </div>}
-        </div>
-      )}
     </div>
   );
 }

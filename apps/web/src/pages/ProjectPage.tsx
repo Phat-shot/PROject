@@ -13,9 +13,7 @@ import { TimeView } from './project/TimeView';
 import { SubprojectDrawer } from './project/SubprojectDrawer';
 import { TaskDrawer } from './project/TaskDrawer';
 import { RaidView } from './project/RaidView';
-import { AiView } from './project/AiView';
 import { AnalyticsView } from './project/AnalyticsView';
-import { MeetingsView } from './project/MeetingsView';
 import { useOpenChat } from '../components/Messenger';
 import { api } from '../lib/api';
 import { useProjectPolicy } from '../lib/useProjectPolicy';
@@ -95,40 +93,42 @@ function ProjectBody() {
   const sub = loc.pathname.slice(base.length).split('/')[1] ?? '';
   const isPl = p.myMembership.role === 'pl';
   const aiStatus = useAiStatus();
-  // Die Leiste zeigt nur Projekte; alle Bereiche des Projekts stehen als Reiter in der Kopfzeile, Einstellungen zuletzt
+  // Bereiche des Projekts als Reiter, Einstellungen zuletzt; Kalender gehört zum Plan, Besprechungen zur Doku, KI-Läufe zu den Einstellungen
   const tabs = [
     { to: `${base}/board`, label: 'Board' },
     { to: `${base}/plan`, label: 'Plan' },
-    { to: `${base}/kalender`, label: 'Kalender' },
-    { to: `${base}/besprechungen`, label: 'Besprechungen' },
     { to: `${base}/doku`, label: 'Doku' },
     { to: `${base}/raid`, label: 'Risiken' },
     ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
     { to: `${base}/auswertung`, label: 'Auswertung' },
-    ...(aiStatus?.enabled || aiStatus?.killswitch ? [{ to: `${base}/ki`, label: 'KI' }] : []),
     { to: `${base}/einstellungen`, label: 'Einstellungen' }
   ];
+  const ai = Boolean(aiStatus?.enabled || aiStatus?.killswitch);
+  const settingsTabs = [...PROJECT_SETTINGS_TABS, ...(ai ? [{ key: 'ki-laeufe', label: 'KI-Läufe' }] : [])];
   const taskId = params.get('task');
   const spId = params.get('sp');
   return (
     <>
       <TopBar title={<><Link to={`/dashboard?projekt=${id}`} style={{ color: 'inherit' }} title="Dashboard dieses Projekts"><span className="badge" style={{ marginRight: 8 }}>{p.key}</span>{p.name}</Link>{badge && <span className="badge" style={{ marginLeft: 8 }} title={badge.title}>{badge.text}</span>}{p.status === 'archived' && <span className="badge" style={{ marginLeft: 8 }}>archiviert</span>}</>} tabs={tabs} tabsBelow />
-      {sub === 'einstellungen' && <nav className="subtabs">{PROJECT_SETTINGS_TABS.map((t) => <NavLink key={t.key} to={`${base}/einstellungen/${t.key}`}>{t.label}</NavLink>)}</nav>}
+      {sub === 'einstellungen' && <nav className="subtabs">{settingsTabs.map((t) => <NavLink key={t.key} to={`${base}/einstellungen/${t.key}`}>{t.label}</NavLink>)}</nav>}
+      {sub === 'plan' && <nav className="subtabs"><NavLink to={`${base}/plan`} end>Gantt und Listen</NavLink><NavLink to={`${base}/plan/kalender`}>Kalender</NavLink></nav>}
       <Routes>
         <Route index element={<Navigate to={`${base}/board`} replace />} />
         <Route path="board" element={<BoardView />} />
         <Route path="plan" element={<PlanView />} />
-        <Route path="kalender" element={<CalendarView />} />
+        <Route path="plan/kalender" element={<CalendarView />} />
+        <Route path="kalender" element={<Navigate to={`${base}/plan/kalender`} replace />} />
         <Route path="zeiten" element={<TimeView />} />
         <Route path="auswertung" element={<AnalyticsView />} />
-        <Route path="besprechungen" element={<MeetingsView />} />
+        <Route path="besprechungen" element={<Navigate to={`${base}/doku/besprechungen`} replace />} />
+        <Route path="doku/besprechungen" element={<DocsView meetings />} />
         <Route path="mail/*" element={<MailRedirect />} />
         <Route path="doku/:pageId?" element={<DocsView />} />
         <Route path="einstellungen/*" element={<ProjectSettingsPage />} />
         <Route path="mitglieder" element={<Navigate to={`${base}/einstellungen/personen`} replace />} />
         <Route path="audit" element={<Navigate to={`${base}/einstellungen/daten`} replace />} />
         <Route path="raid" element={<RaidView />} />
-        <Route path="ki" element={<AiView />} />
+        <Route path="ki" element={<Navigate to={`${base}/einstellungen/ki-laeufe`} replace />} />
         <Route path="chat" element={<ProjectChatRedirect />} />
         <Route path="workflows" element={<Navigate to={`/workflows?projekt=${id}`} replace />} />
         <Route path="workflows/:runId" element={<RunRedirect />} />

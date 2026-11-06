@@ -68,7 +68,7 @@ export function MeetingsView() {
       <div className="row mb">
         <button className="btn primary" onClick={() => setEdit('new')}>Besprechung anlegen</button>
         <span className="muted small">Termin, Teilnehmer und Protokoll an einem Ort. Einladungen gehen mit Kalendereintrag über das Projektkonto, Aktionspunkte werden Arbeitspakete.</span>
-        <Link className="btn sm right" to={`${base}/kalender`}>Kalender</Link>
+        <Link className="btn sm right" to={`${base}/plan/kalender`}>Kalender</Link>
       </div>
       {error && <div className="error mb">{error}</div>}
       <div className="card mb">

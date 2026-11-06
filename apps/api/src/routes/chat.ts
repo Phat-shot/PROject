@@ -276,6 +276,18 @@ export async function chatRoutes(app: FastifyInstance) {
     return { ok: true };
   });
 
+  // Archivieren je Person: das Gespräch steht unter „Archiviert“, bis eine neue Nachricht kommt
+  app.put<{ Params: { cid: string }; Body: { archived: boolean } }>('/chat/channels/:cid/archive', async (req) => {
+    const user = requireUser(req);
+    const { channel } = await channelAccess(user, req.params.cid);
+    if (req.body?.archived) {
+      await db.query(`insert into chat_archive (channel_id, user_id) values ($1,$2) on conflict (channel_id, user_id) do update set archived_at = now()`, [channel.id, user.id]);
+      await markRead(channel.id, user.id);
+    }
+    else await db.query(`delete from chat_archive where channel_id = $1 and user_id = $2`, [channel.id, user.id]);
+    return { ok: true, archived: Boolean(req.body?.archived) };
+  });
+
   app.post<{ Params: { cid: string } }>('/chat/channels/:cid/read', async (req) => {
     const user = requireUser(req);
     const { channel } = await channelAccess(user, req.params.cid);
@@ -398,6 +410,9 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const ts = (x: any) => (x.lastAt ? new Date(x.lastAt).getTime() : 0);
     for (const c of out) if (assistant && c.partner?.id === assistant.id) { c.pinned = true; c.subtitle = 'Dein Assistent (persönliches Projekt)'; }
+    // Archiviert, solange seit dem Archivieren keine Nachricht kam
+    const arch = new Map((await db.query(`select channel_id, archived_at from chat_archive where user_id = $1`, [user.id])).rows.map((r: any) => [r.channel_id as string, new Date(r.archived_at).getTime()]));
+    for (const c of out) c.archived = arch.has(c.channelId) && ts(c) <= arch.get(c.channelId)!;
     out.sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || ts(b) - ts(a) || a.title.localeCompare(b.title, 'de'));
     return { conversations: out };
   });

@@ -158,3 +158,32 @@ test('KI: Org-Admin legt LLM und Agent an, PL lädt ihn ein und schränkt ein', 
   await page.getByRole('button', { name: 'Speichern' }).click();
   await expect(row).toContainText('hier aus: Mail zusammenfassen');
 });
+
+test('Projekt: Doku als Untermenü in der Leiste, Besprechungen in der Doku, Kalender im Plan; Chat-Thread klappt im Verlauf auf', async ({ page }) => {
+  await login(page);
+  const projects = await page.evaluate(async () => (await (await fetch('/api/projects')).json()).projects);
+  const web = projects.find((p: any) => p.key === 'WEB');
+  await page.goto(`/projekte/${web.id}/board`);
+  const docs = page.locator('.sidebar .proj-docs');
+  await expect(docs.getByRole('link', { name: 'Doku' })).toHaveCount(0);
+  await docs.getByRole('link', { name: 'Besprechungen' }).click();
+  await expect(page).toHaveURL(new RegExp(`/projekte/${web.id}/doku/besprechungen$`));
+  await expect(page.getByRole('button', { name: 'Besprechung anlegen' })).toBeVisible();
+  await expect(page.locator('.topbar .tabs').getByRole('link', { name: 'Besprechungen' })).toHaveCount(0);
+  await page.goto(`/projekte/${web.id}/kalender`);
+  await expect(page).toHaveURL(new RegExp(`/projekte/${web.id}/plan/kalender$`));
+  await expect(page.locator('.subtabs').getByRole('link', { name: 'Kalender' })).toHaveClass(/active/);
+  // Chat: Thread unter der Nachricht
+  await page.goto('/chat');
+  await page.locator('.msg-item', { hasText: 'Website-Relaunch' }).first().click();
+  await page.getByPlaceholder(/Nachricht an WEB/).fill('Thread-Probe');
+  await page.keyboard.press('Enter');
+  const msg = page.locator('.chat-msg', { hasText: 'Thread-Probe' });
+  await msg.getByRole('button', { name: 'Antworten' }).click();
+  const inline = page.locator('.chat-thread-inline');
+  await expect(inline).toBeVisible();
+  await inline.getByPlaceholder(/Antworten/).fill('Antwort inline');
+  await page.keyboard.press('Enter');
+  await expect(inline.locator('.chat-msg', { hasText: 'Antwort inline' })).toBeVisible();
+  await expect(page.locator('.chat-thread')).toHaveCount(0);
+});

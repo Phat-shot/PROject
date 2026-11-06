@@ -46,7 +46,7 @@ export function MailAiRunCard({ run, showMail = false, onChanged }: { run: MailA
           return <li key={i}>
             <span className="small">{label(a)}</span> <span className={`badge ${cls}`}>{st}</span>
             {r.taskId && <button className="btn sm link" onClick={() => openTask(r.taskId!)}>{r.ref ?? 'öffnen'}</button>}
-            {r.meetingId && <Link className="btn sm link" to={`${base}/besprechungen`}>Kalender</Link>}
+            {r.meetingId && <Link className="btn sm link" to={`${base}/doku/besprechungen`}>Besprechung</Link>}
             {r.sent && <span className="badge ok">gesendet</span>}
             {r.scheduled && <span className="badge" title="Arbeitszeitfenster für Mails nach außen">Versand geplant {r.scheduled}</span>}
             {r.draftId && !r.scheduled && <Link className="btn sm link" to={`${base}/mail/freigaben`}>Entwurf</Link>}
