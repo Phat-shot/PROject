@@ -6,24 +6,25 @@ import { useProject } from '../ProjectPage';
 
 /**
  * Struktur ändern: Aufgabe in ein anderes Arbeitspaket (POST /tasks/:id/reparent), Aufgabe zum Arbeitspaket machen (parentId null,
- * Teilprojekt wählbar), Arbeitspaket einem Teilprojekt zuordnen, Checklistenpunkt in ein anderes Arbeitspaket bzw. eine andere
- * Aufgabe verschieben (POST /tasks/:id/checklist/:itemId/move) oder zur Aufgabe machen (…/promote). Das Ziel wird über
+ * Teilprojekt wählbar), Arbeitspaket einem Teilprojekt zuordnen, Checklistenpunkt in eine andere Aufgabe verschieben
+ * (POST /tasks/:id/checklist/:itemId/move; Checklisten gehören zu Aufgaben) oder zur Aufgabe machen (…/promote), Aufgabe zum
+ * Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets machen (POST /tasks/:id/demote {toTaskId}). Das Ziel wird über
  * Kennung oder Titel gesucht; alles bleibt im selben Projekt (Projektwechsel: CopyMove).
  */
 export const SUBTASK_DRAG = 'application/x-projekttool-subtask';
 
-/** Ziel-Arbeitspaket (oder -Aufgabe) suchen: Kennung oder Titel, nur offene, ohne das ausgeschlossene. */
-export function TargetPicker({ value, onChange, exclude = [], withSubtasks = false, label = 'Ziel-Arbeitspaket' }: { value: string; onChange: (id: string) => void; exclude?: string[]; withSubtasks?: boolean; label?: string }) {
+/** Ziel-Arbeitspaket (oder -Aufgabe) suchen: Kennung oder Titel, ohne das ausgeschlossene; onlySubtasks: nur Aufgaben. */
+export function TargetPicker({ value, onChange, exclude = [], withSubtasks = false, onlySubtasks = false, label = 'Ziel-Arbeitspaket' }: { value: string; onChange: (id: string) => void; exclude?: string[]; withSubtasks?: boolean; onlySubtasks?: boolean; label?: string }) {
   const { detail, tasks } = useProject();
   const [q, setQ] = useState('');
   const list = useMemo(() => {
     const needle = q.trim().toLowerCase();
     return tasks
-      .filter((x) => !x.archivedAt && !x.deletedAt && (withSubtasks || !x.parentId) && !exclude.includes(x.id))
+      .filter((x) => !x.archivedAt && !x.deletedAt && (onlySubtasks ? x.parentId != null : withSubtasks || !x.parentId) && !exclude.includes(x.id))
       .filter((x) => !needle || `${detail.project.key}-${x.number}`.toLowerCase().includes(needle) || x.title.toLowerCase().includes(needle))
       .sort((a, b) => Number(a.done) - Number(b.done) || Number(Boolean(a.parentId)) - Number(Boolean(b.parentId)) || a.number - b.number)
       .slice(0, 40);
-  }, [tasks, q, exclude.join(','), withSubtasks]);
+  }, [tasks, q, exclude.join(','), withSubtasks, onlySubtasks]);
   const spName = (id: string | null) => (id ? detail.subprojects.find((s) => s.id === id)?.name ?? null : null);
   return (
     <div className="field">
@@ -33,7 +34,7 @@ export function TargetPicker({ value, onChange, exclude = [], withSubtasks = fal
         {list.map((x) => (
           <label key={x.id} className={`check small ${value === x.id ? 'on' : ''}`}>
             <input type="radio" name="move-target" checked={value === x.id} onChange={() => onChange(x.id)} />
-            <span className="tkey">{detail.project.key}-{x.number}</span> {x.parentId ? <span className="muted">Aufgabe · </span> : null}{x.title}{x.done && <span className="muted"> · erledigt</span>}{spName(x.subprojectId) && <span className="muted"> · {spName(x.subprojectId)}</span>}
+            <span className="tkey">{detail.project.key}-{x.number}</span> {x.parentId && !onlySubtasks ? <span className="muted">Aufgabe · </span> : null}{x.title}{onlySubtasks && x.parentId && <span className="muted"> · in {tasks.find((p) => p.id === x.parentId)?.title ?? 'Arbeitspaket'}</span>}{x.done && <span className="muted"> · erledigt</span>}{spName(x.subprojectId) && <span className="muted"> · {spName(x.subprojectId)}</span>}
           </label>
         ))}
         {list.length === 0 && <span className="muted small">Kein Treffer.</span>}
@@ -76,15 +77,15 @@ export function MoveTaskDialog({ task, mode, onClose, onDone }: { task: Task; mo
   );
 }
 
-/** Checklistenpunkt in ein anderes Arbeitspaket oder eine andere Aufgabe verschieben. */
+/** Checklistenpunkt in eine andere Aufgabe verschieben (Checklisten gehören zu Aufgaben; Arbeitspakete sind kein Ziel). */
 export function MoveItemDialog({ task, item, onClose, onDone }: { task: Task; item: ChecklistItem; onClose: () => void; onDone: () => Promise<void> | void }) {
   const [target, setTarget] = useState('');
   const { busy, error, run } = useAsync();
   return (
     <Modal title="Checklistenpunkt verschieben" onClose={onClose}>
       <div className="stack">
-        <p className="muted small m-0">„{item.title}“ wandert ans Ende der Checkliste des Ziels; beide Seiten bekommen einen Log-Eintrag.</p>
-        <TargetPicker value={target} onChange={setTarget} exclude={[task.id]} withSubtasks label="Ziel (Arbeitspaket oder Aufgabe)" />
+        <p className="muted small m-0">„{item.title}“ wandert ans Ende der Checkliste der gewählten Aufgabe; beide Seiten bekommen einen Log-Eintrag. Checklisten gehören zu Aufgaben, Arbeitspakete sind kein Ziel.</p>
+        <TargetPicker value={target} onChange={setTarget} exclude={[task.id]} onlySubtasks label="Ziel-Aufgabe" />
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !target} onClick={() => void run(async () => { await api.post(`/tasks/${task.id}/checklist/${item.id}/move`, { toTaskId: target }); await onDone(); onClose(); })}>Verschieben</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
@@ -109,6 +110,42 @@ export function PromoteItemDialog({ task, item, members, onClose, onDone }: { ta
         </div>
         {error && <div className="error">{error}</div>}
         <div className="row"><button className="btn primary" disabled={busy || !title.trim()} onClick={() => void run(async () => { const r = await api.post<{ task: Task }>(`/tasks/${task.id}/checklist/${item.id}/promote`, { title: title.trim(), dueDate: due || null, responsibleUserId: resp || null }); await onDone(r.task.id); onClose(); })}>Aufgabe anlegen</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Aufgabe wird Checklistenpunkt einer anderen Aufgabe desselben Arbeitspakets (POST /tasks/:id/demote {toTaskId}).
+ * Gibt es genau eine andere Aufgabe, ist sie vorausgewählt; ohne andere Aufgabe geht es nicht.
+ */
+export function DemoteDialog({ task, onClose, onDone }: { task: Task; onClose: () => void; onDone: (r: { task: Task; ap: Task; itemId: string }) => Promise<void> | void }) {
+  const { detail, tasks } = useProject();
+  const others = useMemo(() => tasks.filter((x) => x.parentId === task.parentId && x.id !== task.id && !x.archivedAt && !x.deletedAt)
+    .sort((a, b) => Number(a.done) - Number(b.done) || a.position - b.position || a.number - b.number), [tasks, task.id, task.parentId]);
+  const [target, setTarget] = useState(others.length === 1 ? others[0].id : '');
+  const { busy, error, run } = useAsync();
+  const sel = others.find((x) => x.id === target);
+  return (
+    <Modal title="Zu Checklistenpunkt machen" onClose={onClose}>
+      <div className="stack">
+        {others.length === 0
+          ? <p className="m-0">Im Arbeitspaket „{task.parent?.title ?? ''}“ gibt es keine andere Aufgabe. Checklistenpunkte gehören zu Aufgaben: lege dort zuerst eine Aufgabe an.</p>
+          : <>
+            <div className="field"><span>Ziel-Aufgabe</span>
+              <div className="picker-list" role="listbox" aria-label="Ziel-Aufgabe">
+                {others.map((x) => (
+                  <label key={x.id} className={`check small ${target === x.id ? 'on' : ''}`}>
+                    <input type="radio" name="demote-target" checked={target === x.id} onChange={() => setTarget(x.id)} />
+                    <span className="tkey">{detail.project.key}-{x.number}</span> {x.title}{x.done && <span className="muted"> · erledigt</span>}
+                  </label>
+                ))}
+              </div>
+            </div>
+            <p className="muted small m-0">„{task.title}“ wird Checklistenpunkt der Aufgabe {sel ? `„${sel.title}“` : '…'}. Verloren gehen eigener Status, Termin, Beschreibung und Labels; Log und Kommentare werden als ein Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern dorthin. Nicht möglich mit Zeitbuchungen, verknüpften Mails oder offenen Fragen.</p>
+          </>}
+        {error && <div className="error">{error}</div>}
+        <div className="row"><button className="btn primary danger" disabled={busy || !target} onClick={() => void run(async () => { const r = await api.post<{ task: Task; ap: Task; itemId: string }>(`/tasks/${task.id}/demote`, { toTaskId: target }); await onDone(r); onClose(); })}>Zu Checklistenpunkt machen</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
     </Modal>
   );

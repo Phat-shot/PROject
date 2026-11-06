@@ -44,7 +44,7 @@ test('Doku-Editor: Fett, Unterstrichen, Schriftgröße, Tabelle, Speichern ohne 
   const html: string = await page.evaluate(async (pid) => (await (await fetch(`/api/docs/pages/${pid}`)).json()).page.contentHtml, created.page.id);
   expect(html).toMatch(/<strong>/);
   expect(html).toMatch(/<u>/);
-  expect(html).toMatch(/font-size: 20px/);
+  expect(html).toMatch(/font-size: ?20px/);
   expect((html.match(/<th/g) ?? []).length).toBe(4);
   expect(errors).toEqual([]);
 });

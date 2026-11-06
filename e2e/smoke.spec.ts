@@ -12,10 +12,14 @@ test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten',
   const title = `E2E ${Date.now()}`;
   await page.getByPlaceholder('Titel eingeben, Enter zum Anlegen').fill(title);
   await page.getByPlaceholder('Titel eingeben, Enter zum Anlegen').press('Enter');
-  await expect(page.locator('.drawer')).toContainText('Checkliste');
-  await page.locator('.drawer input[placeholder^="Neuer Punkt"]').fill('Erster Schritt');
-  await page.locator('.drawer input[placeholder^="Neuer Punkt"]').press('Enter');
-  await expect(page.locator('.drawer .checklist input.inline-text').first()).toHaveValue('Erster Schritt');
+  // Checklisten gehören zu Aufgaben: erst eine Aufgabe anlegen, dann einen Punkt daran
+  await expect(page.locator('.drawer')).toContainText('Aufgaben');
+  await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').fill('Erster Schritt');
+  await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').press('Enter');
+  const item = page.locator('.drawer input[aria-label="Neuer Checklistenpunkt für „Erster Schritt“"]');
+  await item.fill('Punkt eins');
+  await item.press('Enter');
+  await expect(page.locator('.drawer')).toContainText('Punkt eins');
   await page.getByRole('button', { name: 'Schließen' }).click();
   await expect(page.locator('.task-card', { hasText: title })).toBeVisible();
 });
@@ -40,7 +44,8 @@ test('Bestehendes Arbeitspaket aus dem Board öffnen zeigt den Drawer mit Felder
   await login(page);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
   await page.locator('.topbar .tabs').getByRole('link', { name: 'Board', exact: true }).click();
-  await page.locator('.task-card').first().click();
+  // Kopf der Karte anklicken (aufgeklappte Aufgaben in der Karte haben eigene Bedienelemente)
+  await page.locator('.task-card').first().click({ position: { x: 20, y: 12 } });
   await expect(page.locator('.drawer')).toContainText('Zuständig');
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
   await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();
@@ -61,7 +66,7 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   await page.getByRole('link', { name: 'Projekte', exact: true }).click();
   await expect(page.locator('table.portfolio tbody tr')).toHaveCount(1);
   await page.locator('.sidebar').getByRole('link', { name: /Website-Relaunch/ }).first().click();
-  await page.locator('.task-card', { hasText: 'CMS-Auswahl' }).click();
+  await page.locator('.task-card', { hasText: 'CMS-Auswahl' }).click({ position: { x: 20, y: 12 } });
   await expect(page.locator('.drawer')).toContainText('Aufgaben');
   const title = `E2E Aufgabe ${Date.now()}`;
   await page.locator('.drawer input[placeholder^="Neue Aufgabe"]').fill(title);
@@ -71,9 +76,9 @@ test('Dashboard nach Projekt filtern, Reiter Projekte, Aufgabe im Arbeitspaket a
   await expect(row).toBeVisible();
   await expect(row.locator('.st-panel')).toContainText('Alle Details');
   // Alle Details und zurück ins Arbeitspaket
-  await row.getByRole('button', { name: 'Alle Details ↗' }).click();
+  await row.getByRole('button', { name: /^Alle Details/ }).click();
   await expect(page.locator('.drawer')).toContainText('Log und Kommentare');
-  await page.locator('.drawer').getByRole('button', { name: /^← CMS-Auswahl/ }).click();
+  await page.locator('.drawer').getByRole('button', { name: /CMS-Auswahl/ }).first().click();
   await expect(page.locator('.drawer .subtasks li.open', { hasText: title })).toBeVisible();
   // Im Board: Aufgabe in der Karte des Arbeitspakets
   await page.locator('.drawer').getByRole('button', { name: 'Schließen' }).click();

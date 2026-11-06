@@ -4,11 +4,11 @@ Vollständige Anleitung für alle Benutzer von PROject. Für den schnellen Einst
 
 ## 1. Grundbegriffe
 
-**Struktur:** Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task.
+**Struktur:** Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Checklistenpunkt. Checklisten gehören zu Aufgaben; letzter Punkt erledigt → Aufgabe erledigt; alle Aufgaben erledigt → Arbeitspaket erledigt (beides abschaltbar).
 
 - **Arbeitspaket (AP):** ein Ergebnis mit Termin, Priorität und Zuständigkeit. Jedes AP hat eine Kennung aus Projektkürzel und Nummer (`WEB-12`), ein Log, Anhänge, verknüpfte Mails und eine eigene Antwortadresse für Mails.
 - **Aufgabe:** zuweisbarer Schritt eines AP (entspricht dem Vorgang nach DIN 69901). Sie hat eigenen Status, Termine, Log, Antwortadresse und kann einem KI-Agenten zugewiesen werden. Aufgaben haben keine weiteren Aufgaben. Das Teilprojekt folgt immer dem AP.
-- **Task:** Punkt der Checkliste eines AP oder einer Aufgabe, optional mit eigener Zuständigkeit (auch extern per Mail-Adresse).
+- **Checklistenpunkt** (früher „Task“): Punkt der Checkliste einer Aufgabe, optional mit eigener Zuständigkeit (auch extern per Mail-Adresse). Ein AP hat keine eigene Checkliste mehr; ältere Punkte am AP stehen dort als „Checkliste (Altbestand)“ und lassen sich in eine Aufgabe überführen.
 - **Teilprojekt:** Gruppe von APs mit Verantwortlichem und Zeitraum; kann eingeschränkt sichtbar sein (siehe unten).
 - **Meilenstein:** Termin im Plan, optional einem Teilprojekt zugeordnet.
 
@@ -32,7 +32,7 @@ PL und Stellvertretung sind immer einzelne Personen; KI-Agenten werden nie Grupp
 
 ### Eingeschränkte Teilprojekte
 
-Ein eingeschränktes Teilprojekt sehen nur PL, Verantwortliche, benannte Benutzer und Gruppen. Das gilt für alles am AP: Log, Tasks, Anhänge, Zeiten, Kopien von Mails, Verschieben, Kopieren und Eskalieren, dazu Agentenläufe, KI-Vorschläge, Aktionspunkte von Besprechungen, Mail-Entwürfe und RAID-Einträge zum AP, Meilensteine, Übersicht, Warnungen sowie Kopieren und Verschieben des ganzen Teilprojekts. Kopien von Mails im AP lesen nur ausdrückliche Mitglieder (direkt oder über Gruppe), nicht die impliziten Leser eines für alle sichtbaren Projekts.
+Ein eingeschränktes Teilprojekt sehen nur PL, Verantwortliche, benannte Benutzer und Gruppen. Das gilt für alles am AP: Log, Checklistenpunkte, Anhänge, Zeiten, Kopien von Mails, Verschieben, Kopieren und Eskalieren, dazu Agentenläufe, KI-Vorschläge, Aktionspunkte von Besprechungen, Mail-Entwürfe und RAID-Einträge zum AP, Meilensteine, Übersicht, Warnungen sowie Kopieren und Verschieben des ganzen Teilprojekts. Kopien von Mails im AP lesen nur ausdrückliche Mitglieder (direkt oder über Gruppe), nicht die impliziten Leser eines für alle sichtbaren Projekts.
 
 ## 2. Navigation
 
@@ -51,7 +51,7 @@ Ein eingeschränktes Teilprojekt sehen nur PL, Verantwortliche, benannte Benutze
 Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern.
 
 - **Meine Arbeit:** offene, überfällige und bald fällige APs und Aufgaben, Blockaden und Eskalationen, Soll/Ist je Projekt, nächste Termine, was auf dich wartet (Mail-Entwürfe zur Freigabe, Seiten in Prüfung), Meldungen (ein Klick öffnet das Ziel und markiert sie als gelesen, wie in der Glocke).
-- **Geklammerte Sicht** darunter: Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task mit allem, was dir zugewiesen oder vererbt ist. Tasks lassen sich dort direkt abhaken.
+- **Geklammerte Sicht** darunter: Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Checklistenpunkt mit allem, was dir zugewiesen oder vererbt ist. Checklistenpunkte lassen sich dort direkt abhaken.
 - **Projekte:** alle Projekte mit Ampel (von der PL gesetzt oder berechnet), Fortschritt, Verzug, Blockaden, roten Risiken, nächstem Meilenstein, Budget; Auslastung je Person und gebuchte Zeiten über Projekte (CSV).
 - **Alle Arbeitspakete:** Liste über alle Projekte mit Filtern (nur meine, überfällig, fällig in 7 Tagen, blockiert/eskaliert/Konflikt, ohne Termin).
 - **Mit Projektfilter** zeigt „Meine Arbeit“ das Projekt-Dashboard: Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, Risiken, offene Freigaben, Aktivität, danach die eigene Arbeit im Projekt.
@@ -59,13 +59,13 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 ## 4. Projekte und Planung
 
 - **Neues Projekt:** Kürzel, Name, Beschreibung, optional eine Vorlage (Spalten, Teilprojekte, Meilensteine, Labels, Doku-Ordner, Termine relativ zum Projektstart). Wer anlegt, wird PL.
-- **Einstellungen (PL):** Allgemein (Name, Beschreibung, Sichtbarkeit, Ampel, Zeiterfassung, Budget, als Vorlage speichern, archivieren), Personen (Mitglieder, Gruppen, Einladungen, Kontakte), Mail (Konten, Ansichten, Mail-Rückfrage, Außenkommunikation), Benachrichtigungen, KI (Agenten, Projektagent, Agenten-Policy).
+- **Einstellungen (PL):** Allgemein (Name, Beschreibung, Sichtbarkeit, Ampel, Zeiterfassung, Budget, Automatik „erledigt“ für Arbeitspakete und Aufgaben, als Vorlage speichern, archivieren), Personen (Mitglieder, Gruppen, Einladungen, Kontakte), Mail (Konten, Ansichten, Mail-Rückfrage, Außenkommunikation), Benachrichtigungen, KI (Agenten, Projektagent, Agenten-Policy).
 - **Weitere Reiter:** Fristen und Berichte (Eskalation, Reporting), Planung und Board (Teilprojekte, Meilensteine, Spalten, WIP-Limits, Labels, Ressourcen), Daten (Papierkorb, Audit-Log), KI-Läufe (Kapitel 13).
 - **Plan:** Balken von Start bis Deadline, Punkt bei reiner Deadline, Sammelbalken je Teilprojekt, Meilensteine, Abhängigkeiten Ende → Anfang. Aufgaben stehen eingerückt unter ihrem AP. Balken ziehen verschiebt, die rechte Kante ändert die Deadline. Unterreiter **Kalender** zeigt Deadlines, Meilensteine, Besprechungen und Belegungen des Projekts.
 - **Konflikte** (Deadline nach Teilprojekt-Ende, Start vor Ende des Vorgängers) werden markiert; nichts verschiebt sich automatisch. „Nachfolger verschieben“ zeigt eine Vorschau und informiert die Betroffenen.
 - **Termine ändern** dürfen die PL, wer „Projektplan ändern“ hat, und die zuständige Person.
 
-## 5. Arbeitspakete, Aufgaben und Tasks
+## 5. Arbeitspakete, Aufgaben und Checklisten
 
 ### Board
 
@@ -94,17 +94,19 @@ Knopf klicken, Titel eingeben (Enter), danach öffnet die Maske mit allen Felder
 
 - Alle Felder direkt editierbar: Status, Teilprojekt, Zuständig (Mitglied, Agent, externer Kontakt), Priorität, Labels, Start, Deadline, Schätzung, Beschreibung (Markdown).
 - **Außenbeschreibung (für Externe):** was Externe zu diesem AP erfahren dürfen; KI-Agenten schreiben Externen nur daraus, aus Log-Einträgen „für Externe sichtbar“ und aus freigegebenen Seiten (KI-Handbuch Kapitel 7). Pflegen PL und „Projektplan ändern“.
-- **Aufgaben:** neue Aufgabe mit Titel und optional Zuständigem (danach öffnet ihre Maske, zurück über den Link zum AP); Häkchen setzt auf Erledigt bzw. zurück. Klick öffnet die Aufgabe mit allen Feldern und eigenem Log.
-- **Checkliste** (Tasks): Punkte mit eigener Zuständigkeit, neuer Punkt mit Enter; bei externer Zuständigkeit „Nachfragen“ per Mail, die Antwort erscheint beim Task.
+- **Aufgaben:** neue Aufgabe mit Titel und optional Zuständigem (danach öffnet ihre Maske, zurück über den Link zum AP); Häkchen setzt auf Erledigt bzw. zurück. Klick auf den Titel klappt die Aufgabe im AP auf (Termin, Beschreibung, Checkliste, Log), „Alle Details“ öffnet sie ganz.
+- **Checkliste** (Checklistenpunkte) **gehört zu Aufgaben:** In der Aufgabe Punkte mit eigener Zuständigkeit anlegen, neuer Punkt mit Enter; bei externer Zuständigkeit „Nachfragen“ per Mail, die Antwort erscheint beim Punkt. Am AP gibt es kein Eingabefeld für Checklistenpunkte („Checklistenpunkte gehören zu Aufgaben – lege oben eine Aufgabe an.“).
+- **Automatisch erledigt:** Ist der letzte Checklistenpunkt einer Aufgabe abgehakt, wandert die Aufgabe in die Erledigt-Spalte (Kennzeichen „automatisch erledigt“, Hinweis „Aufgabe automatisch erledigt“, Meldung an die Zuständigen); ein wieder geöffneter oder neuer offener Punkt holt sie in die vorherige Spalte zurück. Sind alle Aufgaben erledigt, ist auch das AP erledigt. Vorgabe je Projekt unter Einstellungen › Allgemein, je AP bzw. Aufgabe unter „Einstellungen“ › „Automatisch erledigt“ (wie im Projekt / an / aus).
+- **Checkliste (Altbestand):** Punkte, die noch direkt am AP hängen, bleiben abhakbar und löschbar. „In Aufgabe überführen“ macht daraus eine neue Aufgabe (Titel abgefragt, Vorgabe „Checkliste“) mit genau diesen Punkten; einzelne Punkte lassen sich auch in eine Aufgabe umwandeln oder in eine andere Aufgabe verschieben.
 - **Vorgänger** (Ende → Anfang) und **Wiederholung** (täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit).
 - **Blockiert melden** mit Grund; **eskalieren** eine Stufe höher (Zuständige, Teilprojekt-Verantwortliche, PL); die PL setzt Eskalationen zurück.
 - **Mails:** „Mail aus Arbeitspaket schreiben“, „Stand nachfragen“; Antworten an die Antwortadresse (Plus-Code) landen automatisch im AP. Ist das AP aus einer Mail entstanden, steht oben „Entstanden aus Mail von …“ und nach Erledigung „Ursprungsmail beantworten“ (KI-Handbuch Kapitel 3).
 - **Log und Kommentare:** `@Name` benachrichtigt die Person. Systemeinträge (Status, Eskalation, Agent, Mail) stehen im selben Log. Das Häkchen **„für Externe sichtbar“** beim Kommentieren macht den Eintrag Teil des Außenkontexts (Kennzeichen am Eintrag). Nachträglich umschalten („für Externe freigeben“ / „nur intern“) dürfen PL und „Projektplan ändern“, bei eigenen Einträgen auch die verfassende Person.
 - **Agent am AP:** „Jetzt laufen lassen“, „Agent pausieren“ (PL), Wartezustand, offene Fragen, Freigaben, Quellen, verwandte Arbeitspakete, Ressourcen, Berichtswunsch und Selbstständigkeit je AP (KI-Handbuch Kapitel 4 und 9).
 - **Kopieren / Verschieben …** Das Menü „Verschieben …“ hält die Struktur beweglich, alles im selben Projekt mit Log-Eintrag an Quelle und Ziel, Audit und Meldung an die Zuständigen:
-  - **Aufgabe:** „In anderes Arbeitspaket …“ (Ziel per Kennung oder Titel suchen; Checkliste, Anhänge, Log und Zeiten gehen mit, das Teilprojekt folgt dem Ziel), „Zum Arbeitspaket machen …“ (eigene Karte in der Spalte des bisherigen AP, Teilprojekt wählbar), „Zu Checklistenpunkt machen“ (nur ohne Zeitbuchungen, verknüpfte Mails und offene Fragen; Log und Kommentare werden als ein Eintrag am AP zusammengefasst, Anhänge und Checkliste wandern dorthin; Status, Termin, Beschreibung und Labels entfallen, mit Rückfrage).
+  - **Aufgabe:** „In anderes Arbeitspaket …“ (Ziel per Kennung oder Titel suchen; Checkliste, Anhänge, Log und Zeiten gehen mit, das Teilprojekt folgt dem Ziel), „Zum Arbeitspaket machen …“ (eigene Karte in der Spalte des bisherigen AP, Teilprojekt wählbar), „Zu Checklistenpunkt machen …“ (die Aufgabe wird Punkt einer anderen Aufgabe desselben AP: Ziel-Aufgabe wählen, bei genau einer ist sie vorausgewählt; ohne andere Aufgabe nicht möglich; nur ohne Zeitbuchungen, verknüpfte Mails und offene Fragen; Log und Kommentare werden als ein Eintrag an der Ziel-Aufgabe zusammengefasst, Anhänge und Checkliste wandern dorthin; Status, Termin, Beschreibung und Labels entfallen; danach öffnet die Ziel-Aufgabe).
   - **Arbeitspaket:** „Teilprojekt ändern …“ (Aufgaben folgen) und „In anderes Projekt …“ (bisheriger Dialog mit Auswahl, was mitgeht; PL oder „Projektplan ändern“). Auch in der Teilprojekt-Maske steht je AP eine Auswahl des Teilprojekts.
-  - **Checklistenpunkt:** Menü je Punkt mit „In Aufgabe umwandeln …“ (Titel, Termin, Zuständigkeit; der Punkt entfällt, Mails dazu bleiben am AP), „Verschieben nach …“ (anderes AP oder andere Aufgabe) und „Löschen“.
+  - **Checklistenpunkt:** Menü je Punkt mit „In Aufgabe umwandeln …“ (Titel, Termin, Zuständigkeit; der Punkt entfällt, Mails dazu bleiben an der Quelle), „In andere Aufgabe verschieben …“ (Ziel ist immer eine Aufgabe, kein Arbeitspaket) und „Löschen“.
   - **Ziehen:** Aufgaben aus der Aufgabenliste des AP oder aus der aufgeklappten Karte lassen sich auf eine andere AP-Karte im Board ziehen (gestrichelter Rahmen = Ziel); das hängt sie um, der Status bleibt. Ziehen in eine Spalte setzt wie bisher den Status.
   - **Archivieren**, **Löschen** (PL; Papierkorb 30 Tage, Aufgaben gehen mit). Im Chat erledigt der KI-Agent dasselbe mit dem Befehl `move` (KI-Handbuch Kapitel 4).
 
@@ -254,7 +256,7 @@ Jede KI-Aktion prüft in dieser Reihenfolge: **Notaus** → **Rechte des Agenten
 Vollständig im **KI-Handbuch**. In Kürze:
 
 1. **Einrichten:** Verwalter des LLM legt den Agenten an (Persona, Unterschrift, Rechte, Obergrenze, Tagesbudget); die PL lädt ihn ein (Mitglied oder stellvertretende PL, „darf Mails senden“) und weist AP, Aufgabe oder Teilprojekt zu. Der erste Lauf startet sofort.
-2. **Was er tut:** liest das AP, schreibt Log, setzt Status, hakt Tasks ab, plant Aufgaben und Termine (vorläufig), fragt Projektbeteiligte per Chat (offene Frage), Externe per Mail (nur Außenkontext, Außenprüfung), wartet, fasst nach, eskaliert an die PL, beantwortet zum Abschluss die Ursprungsmail. Nie Projekte, Mitglieder, Einstellungen; nie Zusagen.
+2. **Was er tut:** liest das AP, schreibt Log, setzt Status, hakt Checklistenpunkte ab, plant Aufgaben und Termine (vorläufig), fragt Projektbeteiligte per Chat (offene Frage), Externe per Mail (nur Außenkontext, Außenprüfung), wartet, fasst nach, eskaliert an die PL, beantwortet zum Abschluss die Ursprungsmail. Nie Projekte, Mitglieder, Einstellungen; nie Zusagen.
 3. **Steuern:** Agenten-Policy (Selbstständigkeit, Bestätigungen, Denktiefe), Einschränken im Projekt, Pause je AP, Befehle im Chat (Auftrag, note, pause, approve, policy, report, refer).
 4. **Kontrollieren:** Projekt › Einstellungen › KI-Läufe, das Log des AP, Postfach › Zur Freigabe, KI-Log und Feedback in der Verwaltung.
 
@@ -266,7 +268,7 @@ Drei Einstellungsseiten mit denselben Reitern in derselben Reihenfolge (Konzept:
 
 | Reiter | Meine Einstellungen | Projekt › Einstellungen | Verwaltung |
 | --- | --- | --- | --- |
-| Allgemein | Name, Theme, Bestätigungskarten im Chat, Telefonnummer (für Anrufe beim KI-Agenten), angeheftete Projekte | Name, Kürzel, Beschreibung, Sichtbarkeit, Status, Ampel, Zeiterfassung, Budget; als Vorlage speichern, archivieren | Firma, Akzentfarbe, Fußzeile (PDF), Module: Zeiterfassung, persönliche Projekte |
+| Allgemein | Name, Theme, Bestätigungskarten im Chat, Telefonnummer (für Anrufe beim KI-Agenten), angeheftete Projekte | Name, Kürzel, Beschreibung, Sichtbarkeit, Status, Ampel, Zeiterfassung, Budget, „Arbeitspaket automatisch erledigt …“ und „Aufgabe automatisch erledigt, wenn alle Checklistenpunkte erledigt sind“; als Vorlage speichern, archivieren | Firma, Akzentfarbe, Fußzeile (PDF), Module: Zeiterfassung, persönliche Projekte |
 | Personen | – | Mitglieder (Personen, Gruppen; Agenten mit LLM und Kurzfassung ihrer Rechte, verwaltet unter KI), Einladungen, Kontakte und Stakeholder (mit „nach außen“), Steckbrief | Benutzer, Einladungen, Gruppen, verantwortliche PL je Projekt |
 | Mail | eigene Konten (IMAP, Microsoft 365, Google) | Postfächer des Projekts (Bindung, Standard, neu), Ansichten und Filter (Ordner „KI Bearbeiten“, Agent je Ansicht), Mail-Rückfrage (erbt vom Mandanten), Außenkommunikation, Erinnerungen an Externe | Org-Postfach und zentrale Postfächer, Vorgaben (Mail-Rückfrage, Außenprüfung, Arbeitszeitfenster), Übersicht aller Konten |
 | Benachrichtigungen | Chat und Mail je Ereignisklasse, je Projekt abweichen, stummschalten | Regelmatrix mit Sperren, Doku-Seite, „Wer bekommt was?“ | Tages-Digest, Regelmatrix mit Sperren |

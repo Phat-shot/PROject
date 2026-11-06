@@ -5,7 +5,7 @@ import { useProject } from '../ProjectPage';
 /**
  * Ein Rahmen zum Anlegen: nur den Titel eingeben (im Kontext schon gesetzt, was feststeht: Teilprojekt, Über-AP, Spalte),
  * danach öffnet die Maske mit allen Feldern. Gilt für Arbeitspakete, Aufgaben und Teilprojekte; Meilensteine haben keine
- * eigene Maske und brauchen dazu nur das Datum. Checklistenpunkte entstehen inline im Arbeitspaket.
+ * eigene Maske und brauchen dazu nur das Datum. Checklistenpunkte entstehen inline in der Aufgabe (Checklisten gehören zu Aufgaben).
  */
 export function useCreate() {
   const { detail, reload, reloadTasks, openTask, openSubproject } = useProject();

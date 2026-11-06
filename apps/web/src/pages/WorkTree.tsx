@@ -17,8 +17,8 @@ export interface WorkItem { ap: Task; mine: boolean; tasks: { item: ChecklistIte
 export interface WorkNode { p: WorkProject; leadIsMe: boolean; lanes: WorkLane[] }
 
 /**
- * Baum Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task: nur was mir zugewiesen ist, ausdrücklich oder geerbt
- * (Projektleitung → Teilprojekt → Arbeitspaket → Aufgabe → Task). Explizit anderen zugewiesene Elemente fallen heraus.
+ * Baum Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Checklistenpunkt: nur was mir zugewiesen ist, ausdrücklich oder geerbt
+ * (Projektleitung → Teilprojekt → Arbeitspaket → Aufgabe → Checklistenpunkt). Explizit anderen zugewiesene Elemente fallen heraus.
  */
 export function buildWorkTree(projects: WorkProject[], me: string | undefined, showDone: boolean): WorkNode[] {
   return projects.map((p) => {
