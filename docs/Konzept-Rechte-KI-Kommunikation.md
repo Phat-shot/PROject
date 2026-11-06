@@ -1,5 +1,9 @@
 # Integriertes Konzept PROject: Rechte, KI-Steuerung, Kommunikation, Agenten, Externe, Ressourcen
 
+> **Zielgruppe:** Entwickler. Hauptkonzept; die Bedienung steht im Handbuch und KI-Handbuch.
+> **Stand der Umsetzung (06.11.2026):** Phasen P0 bis P10 umgesetzt (KI-Freigaben und Notaus, Außengrenze, Gruppen, Benachrichtigungsregeln, offene Fragen, Agenten-Policy, Chat-Steuerung, Online-Recherche, Projektwissen, Ressourcen; Migrationen 043–053), Ergänzungen 17.2a/17.2b, 18 und 19 umgesetzt (Postfach-Arten 058, Mail nur durch Agenten 059, Einsatz 060, Ungelesen 061). Überholt durch Migration 063: die KI-Freigaben-Matrix `ai_policies` (Kapitel 3) ist durch Rechte am Agenten (`users.agent_rights`, Obergrenze `users.agent_policy`) und Einschränkung im Projekt ersetzt; die Prüfreihenfolge Notaus → Rechte → Einschränkung → LLM → Budget gilt weiter (siehe Konzept-Einstellungen, Nachtrag 063, und Konzept-LLM-Agenten-Einsatz).
+> **Offen:** P11 Portal für Externe (Entscheidung 2), lesender Kalender-Abgleich.
+
 ## Entscheidungen (18.10.2026)
 
 | Nr. | Frage | Entscheidung |
@@ -1434,6 +1438,15 @@ Aus Verwalter und Bindungen ergibt sich die **Art** (`accountKind`), die die Obe
 - **Zentrale Postfächer** haben `mail_accounts.offered_to_all`: dann holt jede PL sie selbst in ihr normales Projekt (`bindReason`), sonst bietet sie nur der Org-Admin an; persönliche Projekte nur ausdrücklich durch den Org-Admin. `GET /projects/:id/mail/accounts` listet sie unter `bindable`. Anlegen mit `kind: 'central'` (POST, OAuth `kind=central`): keine erste Bindung.
 - **Projektpostfächer** gehören genau einem Projekt; `setManager` auf ein Projekt löst Bindungen an andere Projekte und setzt `offered_to_all` zurück.
 
+### 17.2b Mails bearbeiten nur Agenten (Ergänzung 20.10.2026, Migration 059)
+
+- Die „Projekt-KI“ als Bearbeiterin im Auftrag einer Person entfällt (Freigabe `mail.process`, Spalte `mail_views.ai_process_by`). Es handelt immer ein Agent; seine Rolle entscheidet (`mailModeOf`): **(stellvertretende) PL → process** (direkt, Freigabe `agent.mail`), **Mitglied → triage** (Vorschläge, Freigabe `mail.triage`). Der Projektagent mit Mail-Modus „triage“ schlägt nur vor.
+- Welcher Agent: für Projektkonten der Projektagent (Mail-Modus nicht aus), sonst der Agent an der Ansicht (`agent_user_id`). Der Ordner „KI Bearbeiten“ (`ai_process`) ist eine Ansicht mit Agent, deren Mails sofort bearbeitet werden; einrichten mit Wahl des Agenten (Vorgabe Projektagent). Verschieben in der App in einen solchen Ordner löst die Bearbeitung sofort aus (bisher erst beim nächsten Sync).
+- An der Mail: *Agent schlägt vor* (`POST /mail/mails/:id/ai-suggest`, Lauf triage mit `actor_user_id` = fragende Person; die Antwort kommt als Direktnachricht des Agenten mit Vorschlagsliste und Link, angenommen wird an der Mail; Essenz- und Zusammenfassungs-Ergebnisse gehen ebenfalls per Direktnachricht, wenn das Projekt einen Agenten hat) und *Agent übernimmt* (`ai-process`, nur Agent als stellv. PL).
+- Fehler eines Agentenlaufs (fehlendes Recht, Konflikt, KI-Dienst) meldet der Agent per Direktnachricht an Stufe 0 der Kette, dieselbe Störung nur einmal.
+- Chat-Bestätigungskarten nur bei Bedarf (abgelehnt, angehalten, Auftrag, Bestätigung); `users.settings.chatCards = 'all'` zeigt sie auch für Kleinigkeiten.
+- Mail-Standard aller Meldungsklassen: Digest (Tabelle 4.1).
+
 ### 17.3 Datenmodell (Migrationsnummer bei Umsetzung nach `ls apps/api/migrations`)
 
 ```sql
@@ -1527,12 +1540,3 @@ Alles andere (Board, Plan, Doku, Besprechungen, Kalender, Workflows, Zeiten, Res
 - **Bestand (Leitlinie 0.6):** Die Migration trägt für jedes persönliche Projekt, das heute ein `all`-Profil als Projekt-KI nutzt oder in dem ein Agent (PL-Agent oder Org-Agent, Profil oder Standardprofil) auf einem `all`-Profil läuft, eine Auswahl in `ai_profile_projects` ein (Audit `ai.profile.personal_scope.migrated`); so ändert sich für Bestand nichts, neue persönliche Projekte sehen standardmäßig keine Org-Profile, und der Org-Admin kann die Altfreigaben als „ausgewählt: persönlich (Name)“ entziehen.
 - Stellen: client.ts:55–57 (SQL), 71–78 (aiStatus: `personalScope`), 98–104 (aiConfigForAgent mit projectId), policy.ts:192–194 (Aufruf mit `project.id`), routes/ai.ts (POST/PATCH /ai/profiles), AdminPage (Profilkarte: Kästchen nur bei „alle Projekte“, bei „ausgewählte“ Hinweis), shared (`AiStatus.profiles[].personalScope`), Handbuch §11.
 - Tests: `project_llms.test.ts` (persönliches Projekt sieht Org-Profil nur mit Flag/Auswahl; eigenes LLM wie bisher), `personal_project.test.ts` (Profil A bekommt `personalScope` oder erwartet erst 400 „Dieses LLM ist im Projekt nicht verfügbar“, dann Freigabe), `agent_chat.test.ts` (DM an Org-Agent liefert keine APs aus persönlichen Projekten ohne Freigabe), `ai_policy.test.ts` (Spur „Profil im persönlichen Projekt nicht freigegeben“), Migrationstest für den Backfill.
-
-## 17.3 Mails bearbeiten nur Agenten (Ergänzung 20.10.2026, Migration 059)
-
-- Die „Projekt-KI“ als Bearbeiterin im Auftrag einer Person entfällt (Freigabe `mail.process`, Spalte `mail_views.ai_process_by`). Es handelt immer ein Agent; seine Rolle entscheidet (`mailModeOf`): **(stellvertretende) PL → process** (direkt, Freigabe `agent.mail`), **Mitglied → triage** (Vorschläge, Freigabe `mail.triage`). Der Projektagent mit Mail-Modus „triage“ schlägt nur vor.
-- Welcher Agent: für Projektkonten der Projektagent (Mail-Modus nicht aus), sonst der Agent an der Ansicht (`agent_user_id`). Der Ordner „KI Bearbeiten“ (`ai_process`) ist eine Ansicht mit Agent, deren Mails sofort bearbeitet werden; einrichten mit Wahl des Agenten (Vorgabe Projektagent). Verschieben in der App in einen solchen Ordner löst die Bearbeitung sofort aus (bisher erst beim nächsten Sync).
-- An der Mail: *Agent schlägt vor* (`POST /mail/mails/:id/ai-suggest`, Lauf triage mit `actor_user_id` = fragende Person; die Antwort kommt als Direktnachricht des Agenten mit Vorschlagsliste und Link, angenommen wird an der Mail; Essenz- und Zusammenfassungs-Ergebnisse gehen ebenfalls per Direktnachricht, wenn das Projekt einen Agenten hat) und *Agent übernimmt* (`ai-process`, nur Agent als stellv. PL).
-- Fehler eines Agentenlaufs (fehlendes Recht, Konflikt, KI-Dienst) meldet der Agent per Direktnachricht an Stufe 0 der Kette, dieselbe Störung nur einmal.
-- Chat-Bestätigungskarten nur bei Bedarf (abgelehnt, angehalten, Auftrag, Bestätigung); `users.settings.chatCards = 'all'` zeigt sie auch für Kleinigkeiten.
-- Mail-Standard aller Meldungsklassen: Digest (Tabelle 4.1).

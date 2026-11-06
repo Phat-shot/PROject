@@ -1,5 +1,9 @@
 # Konzept KI-Agent: Verhalten, Rechte, Wissen, Steuerung
 
+> **Zielgruppe:** Entwickler. Verhalten, Denktiefe, Ton, Chat-Thema und Policy der Agenten; die Bedienung steht im KI-Handbuch.
+> **Stand der Umsetzung (06.11.2026):** Schritte A bis H aus Kapitel 12 umgesetzt (Chat-Thema und claimCheck, `personal_scope`, offene Fragen, Regel A mit `gateAction`, Chat-Befehle, Recherche und Arbeitszeitfenster, Wissen/Projektagent/Synergien/Denktiefe mit `agent_runs.cost`; Migrationen 047–053 sowie KI-Feedback 064). KI-Handbuch und Hilfe in der App (Kapitel 11) vorhanden. Überholt durch Migration 063: Leitsatz 0.2 und Kapitel 8 (KI-Freigaben, „Projekt-KI“): im Projekt gibt es nur Agenten mit Rechten am Agenten und Einschränkung im Projekt.
+> **Offen:** `effort`-Parameter für Anthropic bei Denktiefe; Bestätigungsklassen je Agent im Projekt nur per API.
+
 Stand 19.10.2026, aufbauend auf `docs/Konzept-Rechte-KI-Kommunikation.md` (Hauptkonzept; Abschnitte 3, 5, 6, 7, 8, 9) und dem Code bis P4 (Commit 4acc946). Dieses Konzept legt fest, **wie** ein Agent sich verhält und **was** sich daran je Agent steuern lässt. Es präzisiert die Abschnitte 6–8 des Hauptkonzepts und ändert sie an den ausdrücklich genannten Stellen (6.3 Felder von Regel A, 7.2 Kontext im Chat, 7.3 Befehl `policy`, 11 Sheet). Geprüft gegen den Code durch eine Kritikrunde; die Korrekturen sind eingearbeitet.
 
 ## 0. Leitsätze

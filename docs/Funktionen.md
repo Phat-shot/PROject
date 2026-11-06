@@ -1,0 +1,192 @@
+# Funktionsübersicht
+
+Zielgruppe: alle, die wissen wollen, was PROject heute kann (Entscheider, Projektleitung, Administratoren). Für die Bedienung siehe [Kurzanleitung](Kurzanleitung.md) und [Handbuch](Handbuch.md), für KI-Agenten das [KI-Handbuch](KI-Handbuch.md), für Installation und Betrieb [Betrieb](Betrieb.md). Entwickler finden Datenmodell und Regeln in den Konzept-Dokumenten; die „Technischen Hinweise“ je Thema nennen nur die Einstiegspunkte.
+
+Grundsatz: Aufgaben, Projektplan, Mail, Doku und Chat liegen auf **einem Datenmodell** mit zentraler Rechteprüfung in der API. Alle Abläufe laufen regelbasiert über API und Worker; KI ist das letzte Modul und greift nur als Vorschlag oder als Agent in zugewiesener Arbeit ein („Regel vor KI“).
+
+## 1. Projekte und Struktur
+
+### Projekte, Rollen, Rechte
+- Projekte mit Kürzel; Rollen PL, Mitglied, Leser; ein zweiter PL als Stellvertretung. Die verantwortliche PL übergibt ihre Rolle nur selbst; der Org-Admin kann sie ohne Inhaltszugriff neu bestimmen (nie sich selbst), die bisherige PL bekommt eine Meldung.
+- Einzelrechte („opt.“), z. B. „Projektplan ändern“, „Freigeben“, „Final setzen“, „KI nutzen“ („KI nutzen“ vorbelegt: Mitglied an, Leser aus). Leser mit „KI nutzen“ dürfen nur Fragen ans Projekt stellen und mit Agenten chatten.
+- Projekt-Sichtbarkeit „nur Mitglieder“ oder „alle Benutzer des Mandanten (lesend)“.
+- Org-Admins sehen Projektinhalte nur als Mitglied; keine externen Gäste. Mandanten-ID (`org_id`) von Anfang an im Datenmodell.
+
+### Hierarchie
+- Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task (Checkliste). Verantwortung wird vererbt (Aufgabe → Arbeitspaket → Teilprojekt → PL) und als „geerbt“ markiert.
+- **Aufgabe** als Zwischenebene zwischen Arbeitspaket und Task (Vorgang nach DIN 69901, Activity nach PMBOK, in Tools Sub-task): eine Ebene tief, mit eigener Zuständigkeit, Status, Terminen, Log, Mail-Antwortadresse, Anhängen und KI-Agent. Das Teilprojekt folgt dem Arbeitspaket. Archiv, Papierkorb, Kopieren und Verschieben nehmen die Aufgaben mit. Das Board zeigt Aufgaben als eigene Karten unter ihrem Arbeitspaket (Schalter „Aufgaben“); WIP-Limit, Fortschritt und Portfolio zählen nur Arbeitspakete, die Karte zeigt „Aufgaben erledigt / gesamt“, der Plan rückt Aufgaben unter ihrem Arbeitspaket ein.
+- „Meine Arbeit“ zeigt geklammert nur eigene und vererbte Zuständigkeit. Arbeitspakete, Tasks und Teilprojekte sind direkt editierbar. Ein Wechsel der Verantwortung fragt, ob direkt zugewiesene Arbeitspakete mit übertragen werden.
+- Zuweisung an Benutzer oder externe Mail-Adresse (Projektkontakte). Tasks mit externer Mail-Zuständigkeit: „Stand nachfragen“ aus Arbeitspaket und Task mit vorbelegter Mail; die Antwort landet über die Antwortadresse im Arbeitspaket.
+
+### Gruppen und eingeschränkte Teilprojekte
+- Berechtigungsgruppen des Mandanten mit Verwaltern (pflegen die Mitglieder ihrer Gruppe; alle Gruppen: Org-Admin und Org-Recht „Gruppen verwalten“).
+- Gruppen als Projektmitglied (Leser oder Mitglied plus Einzelrechte, Herkunft je Mitglied): Direkteintrag überschreibt alle Gruppen, zwischen Gruppen gilt die höchste Rolle, Einzelrechte ODER-verknüpft; nie Agenten, nie in persönlichen Projekten. Abgleich bei Gruppenänderungen, SSO, Deaktivieren und Reaktivieren.
+- Eingeschränkte Teilprojekte (nur PL, Verantwortliche, benannte Benutzer und Gruppen) gelten an allen Wegen zum AP (Log, Tasks, Anhänge, Zeiten, Mail-Kopien, Verschieben, Kopieren, Eskalieren, Bezüge aus Zeiten, Besprechungen, Mail-Entwürfen und RAID) und in Listen (Agentenläufe, KI-Vorschläge samt Meldung, Aktionspunkte, Zeitauswertung, Meilensteine, Übersicht, Warnungen), auch beim Kopieren und Verschieben ganzer Teilprojekte. Mail-Kopien im AP sehen nur ausdrückliche Mitglieder. Gruppen auch in Mail-Ansicht-Rechten.
+- „Deine Rechte“ in den Projekteinstellungen mit Begründung je KI-Funktion.
+
+### Benutzer und Mandant
+- Benutzer einladen per Mail über das Org-Postfach, Annahme mit Passwort unter `/einladung/:token`, manuelles Anlegen als Fallback.
+- Benutzerverwaltung: globale Rolle, Org-Rechte, deaktivieren und reaktivieren; eigener Zugang und letzter aktiver Org-Admin geschützt (W10). Projekt archivieren (W11).
+- Interaktives, überspringbares Tutorial beim ersten Login, jederzeit neu startbar.
+- Hilfe in der App (unten links): Kurzanleitung, Handbuch, KI-Handbuch („KI-Agenten“) und KI-Sheet aus `docs/`, beim Build eingebunden und damit immer passend zur installierten Version.
+
+## 2. Navigation und Dashboard
+
+### Leiste
+- „PROject“ oben öffnet das Dashboard; darunter bis zu fünf angeheftete Projekte (☆/★, Benutzereinstellung, ohne Auswahl die ersten fünf), „Alle Projekte“ klappt die übrigen aus. Ein Klick aufs Projekt öffnet das Board; unter dem geöffneten Projekt steht die Doku als Untermenü (Besprechungen, Ordner, zuletzt geänderte Seiten).
+- Bereiche des Projekts als Reiter in der Kopfzeile: Board, Plan (mit Unterreiter Kalender), Doku (mit Besprechungen), Risiken, Zeiten, Auswertung, Einstellungen (mit Unterreiter KI-Läufe). Alte Adressen leiten weiter.
+- Danach global: Chat, Postfach, Kalender, Workflows; unter „Einstellungen“ Meine Einstellungen und Verwaltung; unten Abmelden, Tutorial, Hilfe. Dashboard, Workflows und Chat gibt es nur global.
+- Zähler „Offen für dich“ am Dashboard und je Projekt; Ungelesen-Zähler an Chat und Postfach.
+
+### Dashboard
+- Nur global, nach Projekt filterbar. Reiter „Meine Arbeit“ (Soll/Ist der eigenen Arbeit: offen, überfällig, fällig, blockiert, im Plan; Termine, Meldungen, geklammerte Sicht Projekt › Teilprojekt › Arbeitspaket › Aufgabe › Task), „Projekte“ (früher Portfolio: Ampel manuell oder berechnet, Fortschritt, Verzug, Meilenstein, Budget, Auslastung und Zeiten über Projekte) und „Alle Arbeitspakete“.
+- Mit Projektfilter zeigt „Meine Arbeit“ das Projekt-Dashboard (Kennzahlen, Fortschritt je Teilprojekt, Überfälliges, Konflikte, Meilensteine, Auslastung, offene Freigaben, Aktivität) und die eigene Arbeit im Projekt.
+- „Meine Aufgaben“ über alle Projekte, Suche (auch nach Kennung), Audit-Log je Projekt (Mitglieder sehen eigene Aktionen).
+
+## 3. Board, Plan, Termine
+
+### Kanban-Board
+- Spalten pro Projekt mit WIP-Limit; Spaltenarten Geplant / aktive Spalten / Wartet / Zurückgestellt / Erledigt (nur aktive Spalten zählen als Stillstand für die Eskalation). „Wartet“ fragt nach Grund und Frist.
+- Swimlanes je Teilprojekt, Drag & Drop inkl. Sortierung, Labels, Filterleiste (Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, Archiv), Tastaturkürzel f/q/n/x, Karten-Badges (Fälligkeit farbig, Beschreibung, Kommentare, Anhänge, Mails, Checklisten-Fortschritt), Schnellanlage, Spalten einklappen, Archivieren, Mehrfachauswahl für Sammelaktionen.
+- Wiederkehrende Aufgaben (W6): täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit.
+- Board und Plan als CSV (Excel).
+
+### Plan und Konflikte
+- Balken Start–Deadline, Punkt bei reiner Deadline, Teilprojekt-Sammelbalken, Meilensteine, Abhängigkeiten Ende → Anfang, Gantt-Zoom.
+- Konflikte werden markiert, nichts verschiebt sich automatisch; „Nachfolger verschieben“ mit Vorschau (W7).
+
+### Eskalation und Reporting (Regel vor KI)
+- Eskalationsregelwerk je Projekt: Verzug, Stillstand („hängt“) und Blockaden eskalieren entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt (intern oder extern per Mail, als Entwurf zur Freigabe oder direkt). Kritikalität aus Priorität, Nachfolgern, nahem Meilenstein und Blockade halbiert die Fristen; jede Stufe mit Benachrichtigung und Log-Eintrag, automatische Rücksetzung; „Blockiert“-Meldung an der Aufgabe; Warnungen in der Übersicht; manuelle Eskalation.
+- Reporting je Projekt: Vorlage (z. B. Statusbericht) im Rhythmus wöchentlich / zweiwöchentlich / monatlich; der Worker legt die Seite unter der gewählten Oberseite oder im Ordner „Berichte“ an, ergänzt Kennzahlen (Fortschritt, erledigt seit letztem Bericht, Verzug, Blockaden, Eskalationen, Meilensteine, gebuchte Zeit) und versendet sie als PDF über das Projektkonto an den Empfängerkreis; Modus „Prüfung“ (Entwurf, PL setzt final und versendet) oder „direkt“; manueller Lauf „Jetzt erzeugen“.
+
+### Besprechungen und Kalender
+- Besprechung als Objekt (Doku › Besprechungen): Termin, Ort, Agenda, Teilnehmer aus Mitgliedern, Kontakten und freien Adressen, Zuordnung zu einer Besprechungsreihe; von KI eingetragene Termine sind vorläufig, bis ein Mitglied sie bestätigt.
+- Protokollseite aus der Vorlage der Reihe (sonst „Protokoll“ im Ordner „Protokolle“) mit Termin und Teilnehmern vorbelegt; Aktionspunkte direkt als Arbeitspakete mit Zuständigem und Termin, bestehende Arbeitspakete verknüpfen; das Arbeitspaket zeigt die Besprechung.
+- Einladung mit Kalendereintrag (ICS, METHOD:REQUEST) über das Projektkonto an alle Teilnehmer, Aktualisierung mit Sequenz; ICS-Download; Besprechungen im Projekt- und Gesamtkalender und im ICS-Abo.
+- Kalender schreiben: Termin mit einem Klick in Microsoft 365 (Graph, persönliches OAuth-Konto mit Calendars.ReadWrite), Google Kalender (calendar.events) oder per CalDAV (Nextcloud, iCloud, Fastmail; Zugang in den Benutzereinstellungen, Passwort verschlüsselt); erneutes Eintragen aktualisiert den Eintrag.
+
+### Ressourcen und Personen im Kalender
+- Ressourcen des Mandanten (Pool) und des Projekts, Abwesenheiten, Belegungen hart/weich inkl. Besprechungen der Person; Kalender-Modus „Belegung“ mit Ampel und Konfliktbehandlung; Freigabegruppe → vorläufige Anfrage; Person-Ressourcen am AP zählen als Aufgabenbezug; ICS mit Belegungen, Ressourcen-Feed und Räumen als Teilnehmer; Agenten buchen immer vorläufig.
+
+### Zeiten und Auswertung
+- Zeiterfassung als optionales Modul je Projekt: Buchung je Aufgabe oder frei, Schätzung je Aufgabe, Budget je Projekt, Auswertung je Person und Teilprojekt, CSV-Export, „Meine Zeiten“; Mitglieder sehen eigene Buchungen, PL alle (auch im AP).
+- Auswertung je Projekt (W9): Durchsatz je Woche (angelegt/erledigt), Durchlaufzeit (Median, Durchschnitt, längste), Verzug nach Alter, Eskalationen je Zeitraum und aktuell, je Teilprojekt; Zeitraum wählbar, alles als CSV. Zeiten über alle Projekte unter Dashboard › Projekte je Projekt und Person.
+- Risiken (RAID): Risiken mit Wahrscheinlichkeit und Auswirkung, Annahmen, Issues, Entscheidungen.
+
+### Workflows
+- Vorlagen für feste Abläufe, mandantenweit; Läufe isoliert oder in einem Projekt, mit Projektfilter; Schritte an KI-Agenten.
+
+## 4. Benachrichtigungen und Kommunikationsregeln
+
+- In-App-Benachrichtigungen: Zuweisung, Kommentar, @-Erwähnung, bald fällig, überfällig, Termin verschoben, Freigabe wartet, Seite in Prüfung, externe Bearbeitung; nur an aktive Personen (nie an KI-Agenten); Klick in Glocke oder Dashboard öffnet das Ziel und markiert gelesen. @-Erwähnungen in Kommentaren mit Vervollständigung über Projektmitglieder.
+- Kommunikationsregeln mit Vererbung Org → Projekt → Arbeitspaket → Benutzer (auch je Projekt und am AP): je Ereignisklasse (Frage, Entscheidung, Bestätigung, Überschneidung, vorläufiger Termin, Auftragsvorschlag, Rückfrage von extern, Zwischenstand, Zuweisung, Blockiert, Eskalation, Prüfung/Freigabe, Mail am AP, Log, Fälligkeit, Chat, Buchung, Information) Empfängerrollen mit „sonst“, Kanäle Chat (aus, Thread, Projektkanal), Mail (aus, sofort, Digest zur Stunde des Mandanten in Europe/Berlin), Log, Doku-Seite „Entscheidungen und Meldungen“, Fristen (Nachfassen, Weitergabe, Verfall) und Häufigkeit von Zwischenständen.
+- Sperren nur durch Org und PL (oberste Sperre gewinnt); Benutzer stellen nur Chat und Mail ein (je Projekt, stummschalten); Berichtswunsch am AP; Vorschau „Wer bekommt was?“.
+- Digest-Mails (nur Meldungen von vor der Digest-Stunde des Tages) mit PDF-Anhang bei Seitenbezug, ohne Org-Postfach über das Projektkonto. Klasse „Mail am AP“ bei jeder neuen Zuordnung einer Mail.
+
+### Technische Hinweise
+- `notify()` löst die Regel je Person auf (Mail-Modus, Klasse und Bezug in der Meldung, In-App immer), `dispatch()` die Empfängerrollen (Gruppen nur mit Projektsicht). Systembeiträge im Chat (`chat_messages.kind = 'system'`) kommen nur aus Services und lösen keine Läufe aus. Mail-Zuordnung in `mail/link.ts`. Die bisherige Mail-Einstellung wurde als Benutzerregel übernommen. Details: [Konzept-Rechte-KI-Kommunikation.md](Konzept-Rechte-KI-Kommunikation.md) Kapitel 4.
+
+## 5. Mail
+
+### Konten und Ansichten
+- Konten mit Verwalter (Person, Projekt, Org-Admin) und Bindungen (Organisation, Projekt mit Standard-Ausgangskonto, persönlich); Rechte und Inhaltsgrenzen hängen an der Bindung der Ansicht. Adapter: IMAP/SMTP, Microsoft Graph und Dev-Postfach im Speicher; OAuth2 für Microsoft 365 (Graph oder IMAP-XOAUTH2) und Google (IMAP/SMTP-XOAUTH2) mit Token-Refresh, Knöpfe „Mit Microsoft 365/Google verbinden“.
+- Vier Postfach-Arten: Org-Postfach (nur Systemmails, ohne Projektbindung), zentrale Postfächer der Organisation (Org-Admin bietet sie an oder gibt sie „für alle Projekte wählbar“ frei), Projektpostfächer genau eines Projekts, persönliche Konten.
+- Konto ≠ Ansicht: geteilt werden nur Ansichten (Filter: Ordner, Absender/Domain, Empfänger, Betreff, Stichwort, ab Datum). Gespeichert werden **nur Treffer** einer Ansicht; Kopfdaten werden vor dem Laden des Bodys geprüft.
+- Rechte je Ansicht pro Person oder Rolle: Lesen, Entwurf, Senden, KI, Aufgabe erzeugen; aus persönlichen Konten sendet nur der Eigentümer.
+
+### Postfach
+- Ein Postfach für alles: vereinigte Sicht aller Postfächer mit Leserecht, jede Mail einmal, Filter Postfach und Projekt, „Zur Freigabe“ mit den Entwürfen der KI-Agenten oben; Ungelesen-Zähler global, je Projekt und je Postfach aus derselben Quelle; Ungelesen je Person (fett mit Punkt, Öffnen gilt als gelesen).
+- Ordner (Posteingang, Gesendet, Archiv, Papierkorb, Unterordner), Filter je Ansicht; Mails archivieren, löschen, verschieben, Unterordner anlegen (IMAP und Datenbank synchron).
+- HTML-Mails werden bereinigt (DOMPurify) in einem Sandbox-iframe ohne Skripte angezeigt; externe Bilder (Tracking-Pixel) bleiben blockiert, bis man sie lädt.
+
+### Mail und Projekt
+- Mail → Aufgabe (W3, vorbefüllt), Aufgabe → Mail (W4), verknüpfen oder kopieren (Kopie mit Bestätigung und Audit).
+- Inhalt ins Projekt (Log-Zitat, Arbeitspaket mit Mailtext): Rückfrage mit Namensliste, wenn Mitglieder die Mail dadurch erstmals sehen; aus persönlichen Konten übernimmt nur der Eigentümer Inhalte, andere nur Absender, Datum und Betreff. Zuständige müssen aktive Projektmitglieder sein, KI-Agenten weist auch hier nur die PL zu.
+- Aktionen an einer Mail in vier Reihen (Mail, Projekt ohne KI, Agent schlägt vor, Agent übernimmt): verknüpfen/kopieren, ins Aufgaben-Log übernehmen, Aufgabe anpassen (Mail als Beleg), Aufgabe erstellen, in Doku ablegen (eigene Seite), an Seite anhängen (Abschnitt); KI: Zusammenfassen, Essenz → Arbeitspaket, Essenz → Seite, „Bearbeiten lassen“.
+- Ursprungsmail: aus einer Mail entstandene Arbeitspakete/Aufgaben merken sich die Mail (umschaltbar), Sprung in beide Richtungen; erledigt und unbeantwortet → „Ursprungsmail beantworten“ mit aufbereitetem Ergebnis (optional mit KI), Antwort aus dem Konto der Mail im selben Verlauf.
+- Entwürfe ohne Senderecht gehen in die Freigabe-Liste; der Worker versendet. Antworten Externer werden per Plus-Adresse (`projekt-x+t<code>@…`) der Aufgabe zugeordnet, Fallback In-Reply-To.
+
+### Mail-KI
+- Mail-KI nur durch Agenten (keine „Projekt-KI“ im Auftrag einer Person): Info an die PL als Direktnachricht des Agenten; autonomer Versand der Antwort nur als stellv. PL mit Senderecht, „darf Mails senden“ und Policy „Selbstständig“ nach Außenprüfung (nie erster Kontakt, nur im Arbeitszeitfenster). Ein Agent als (stellvertretende) PL legt aus einer Mail direkt Arbeitspaket/Aufgabe mit Ursprungsmail, Zuweisung, vorläufigem Termin und Antwortentwurf an und legt die Mail ab; als Mitglied schlägt er dieselben Aktionen vor. Auslöser: neue Mail der Projektkonten (Projektagent), Ordner „KI Bearbeiten“, „Bearbeiten lassen“ und „Vorschläge zur Mail“. Offene Punkte gehen als Mail-Rückfrage an die PL, ins Projekt oder an den Absender (einstellbar je Projekt mit Vorgabe des Mandanten). Einmal je Mail und Projekt, Tagesbudget, Audit. Ausführlich: [KI-Handbuch](KI-Handbuch.md).
+
+### Technische Hinweise
+- Bindungen in `mail_account_uses`; Postfach-Arten (`accountKind`, Migration 058); Ungelesen (Migration 061, `GET /mail/unread`, `POST /mail/mails/:id/read`); Mail-KI nur durch Agenten (Migration 059); Variablen `OAUTH_*` in [Betrieb.md](Betrieb.md). Konzept: [Konzept-Rechte-KI-Kommunikation.md](Konzept-Rechte-KI-Kommunikation.md) Kapitel 17.
+
+## 6. Doku (à la Confluence)
+
+- WYSIWYG-Editor (TipTap/ProseMirror): Überschriften, Schriftgrößen, Fett/Kursiv/Unterstrichen, Listen, Tabellen, Bilder (Upload, Drag & Drop, Einfügen), Links, Zitate; HTML als Speicherformat, Markdown abgeleitet für Suche und Mail-Aktionen; serverseitige Bereinigung.
+- Ordner mit Verteiler, Seitenbaum mit Unterseiten; jede Seite kann Oberseite sein (Besprechungsreihe, Teilprojekt, Berichte): Zusammenfassung und Teilnehmer auf der Oberseite, Vorlage für neue Unterseiten wird vererbt, Unterseiten-Index, PDF-Layout je Oberseite.
+- Versionen bei jeder Änderung, Konfliktschutz bei veralteter Version.
+- Status Entwurf → In Prüfung → Final; Final sperrt; Versand finaler Seiten als **PDF-Anhang** an den Verteiler über das Projektkonto (W5); die versendete PDF wird an der Seite abgelegt; PDF-Ansicht jeder Seite, auch über Freigabe-Links.
+- Vorlagen: Besprechungsprotokoll, Statusbericht, Konzept, RAID-Log, Änderungsantrag, Kickoff, Lessons Learned; Vorlagen-Editor in der Verwaltung.
+- PDF aus dem Seiten-HTML (pdfkit): Titelblock, Metadaten, Schriftgrößen, verschachtelte Listen, Tabellen-Zebra, Bilder, Kopf- und Fußzeile; Stil je Mandant, überschreibbar je Oberseite.
+- Freigabe per Link: Seite (wahlweise mit Unterseiten) an eine Mail-Adresse, lesend oder schreibend, mit Ablauf, widerrufbar, Versand über das Projektkonto; externe Änderungen werden mit der Adresse versioniert und gemeldet (`/s/<token>`).
+- Anhänge an Seiten und Aufgaben. Agentenzugriff je Ordner (schreiben, lesen, kein; vererbt).
+
+## 7. Chat
+
+- Regulärer Weg der Kommunikation zwischen Projektbeteiligten (Mail bleibt primär für Externe): Projektkanal je Projekt mit Threads und @Erwähnungen (schreiben nur eingetragene Mitglieder, implizite Leser lesen mit), Direktnachrichten mit Personen und KI-Agenten, Ungelesen-Zähler.
+- Desktop: Knopf unten rechts öffnet den Messenger als Overlay (Suche oben über Gespräche und Nachrichten, links alle Gespräche nach letzter Aktivität, rechts der Verlauf); der Leisteneintrag „Chat“ öffnet ihn ebenso; mobil Vollbild unter `/chat` mit fester Kopf- und Eingabezeile. Threads klappen direkt unter ihrer Nachricht auf. Gespräche lassen sich je Person archivieren und kommen mit der nächsten Nachricht zurück.
+- Persönlicher Assistent: der aktive Agent im persönlichen Projekt ist angepinnt, am Desktop öffnet er sich von selbst. Aufträge des Eigentümers im persönlichen Projekt sind Erledigungen: Zwischenstände je Schritt im Chat, Erledigt ohne Bestätigung und dann archiviert, Mail-Entwürfe ohne Projektkonto als Karte im Chat (senden, ändern, verwerfen).
+- KI-Agenten chatten: Antwort auf Direktnachrichten, auf @Name im Projektkanal (im Thread) und in Threads, in denen sie schon geantwortet haben, wenn die fragende Person „KI nutzen“ hat oder PL ist und der Agent das Recht „Chat“ hat. Auskunft nur über eigene Arbeitspakete aus Projekten und Teilprojekten, die die fragende Person sehen darf. Jeder Chat-Lauf zählt gegen das Tagesbudget und steht im Audit.
+- **Thema je Nachricht** bestimmt das System: Projektkanal = Kanalprojekt (Thread: Arbeitspaket der Thread-Wurzel), Direktnachricht = genannte Kennungen/Projekte, „über alle Projekte“ = alle gemeinsamen Projekte, sonst Zuordnung über Inhalte (Suche in Doku und Arbeitspaketen aller gemeinsamen Projekte), ohne Treffer persönliches Projekt bzw. Rückfrage ohne LLM-Aufruf. Kein Gedächtnis außerhalb eines Threads. Kennzahlen-Zeile (offen, in Arbeit, fällig diese Woche, überfällig, blockiert, wartet) berechnet das System per SQL; Status auf Nachfrage hat ein festes Format.
+- **claimCheck**: Behauptungen in der ersten Person ohne ausgeführte Aktion ersetzt das System durch „Das konnte ich nicht ausführen: …“ und vermerkt es im Lauf. Ohne Persona schreibt der Agent im Team Du, nach außen Sie.
+
+### Technische Hinweise
+- `/chat/conversations` (pinned), `/chat/assistant`, `GET /mail/drafts/:id`; Themenzuordnung in `resolveChatScope`; Archiv je Person (Migration 072).
+
+## 8. KI (letztes Modul, Regel vor KI)
+
+Ausführliche Anleitung: [KI-Handbuch](KI-Handbuch.md). Konzepte: [Konzept-KI-Agent.md](Konzept-KI-Agent.md), [Konzept-LLM-Agenten-Einsatz.md](Konzept-LLM-Agenten-Einsatz.md), [Konzept-Rechte-KI-Kommunikation.md](Konzept-Rechte-KI-Kommunikation.md).
+
+### LLMs und Agenten
+- LLMs und Agenten mit Verwalter (Organisation oder Projekt) und Einsatz (alle, ausgewählte, nur eigenes Projekt): ein Agent läuft nur in Projekten, die sein Einsatz umfasst und in denen sein LLM freigegeben ist (geprüft beim Aufnehmen, als Projektagent und bei jedem Lauf; Gründe für die PL, Folgen-Warnungen für die Verwaltung). Verwaltung › KI als ein Ablauf: LLM anlegen → Agenten am LLM anlegen und berechtigen → PL lädt sie ins Projekt ein und schränkt ein. Projekteinstellungen › KI bündelt Agenten im Projekt, Projektagent, Policy und eigenes LLM.
+- KI-Profile je Mandant: beliebig viele; je Profil lokales LLM mit OpenAI-kompatibler API (vLLM, Ollama, LM Studio, llama.cpp; Adresse, Modell, optional Schlüssel, JSON per json_schema) oder Anthropic über das offizielle SDK (Structured Outputs, Refusal-Fallback); Schlüssel nur schreibend und verschlüsselt, alternativ `ANTHROPIC_API_KEY` (nur für Profile des Mandanten). Denkmodus je lokalem Profil abschaltbar (Modelle mit Thinking wie Qwen), je Agent überschreibbar; Kontextgröße und Zeitlimit je Profil. Freigabe je Profil für alle, ausgewählte oder keine Projekte (persönliche Projekte nur mit „auch in persönlichen Projekten“ oder per Auswahl).
+- Im Projekt gibt es nur Agenten, kein Projekt-LLM: auch die Assistenz führt ein Agent aus (Projektagent, sonst der einzige geeignete, sonst Auswahl am Knopf). Eigenes LLM je Projekt, wenn der Mandant es erlaubt (aus / nur persönliche Projekte / alle): die PL verwaltet es samt Agenten, der Org-Admin sieht Metadaten und Verbrauch und kann sperren.
+- Jede Anfrage im Audit mit Profil, Modell und Token; KI-Log in der Verwaltung (90 Tage, ohne Inhalte).
+
+### Agenten als Benutzer
+- Angelegt und berechtigt vom Verwalter ihres LLM, mit Persona (eine Zeile Schreibstil) und freier Unterschrift, kein Login, nie verantwortliche PL oder Org-Admin. Die PL lädt sie als Mitglied oder stellvertretende PL ein („darf Mails senden“ abschaltbar) und macht sie zuständig für Arbeitspakete, Aufgaben oder Teilprojekte.
+- Agenten planen (Aufgaben/Arbeitspakete mit Terminen, Zuweisungen, Kalendertermine nur vorläufig; Terminvorschläge Externer erst nach Rückfrage beim Ansprechpartner), als stellv. PL im ganzen Projekt mit Teilprojekten und Meilensteinen; nie Projekte, Mitglieder oder Einstellungen. Zum Abschluss beantworten sie die Ursprungsmail.
+- Läufe sofort bei Zuweisung, Kommentar oder Mail; Wiedervorlage, Nachfassen und Eskalation an die PL nach Frist (Worker jede Minute). Log-Einträge unter eigenem Namen, Status, Tasks, Fragen per Chat (offene Frage mit Kette ohne KI), Externe per Mail (Versandstatus schreibt das System). PDF nur von finalen Seiten. Ereignisse während eines Laufs lösen genau einen Folgelauf aus. Tagesbudget je Agent, Pause je Arbeitspaket; jeder Lauf mit Begründung, Aktionen und Token unter Einstellungen › KI-Läufe.
+
+### Rechte, Policy, Steuerung
+- Rechte der Agenten (Funktionen je Bereich Assistenz, Mail, Arbeit, Aktionen; Standard alles außer Online-Recherche) und Obergrenze (höchste Selbstständigkeit, erzwungene Bestätigungen, höchste Denktiefe) setzt der Verwalter des LLM; die PL schaltet im Projekt nur ab. Prüfung: Notaus → Rechte des Agenten → Einschränkung im Projekt → LLM → Budget, mit Begründung und Spur; Personen brauchen „KI nutzen“. Gesperrte Läufe stehen als übersprungen im Protokoll (ohne LLM-Aufruf, nicht budgetwirksam). Notaus für den ganzen Mandanten.
+- Agenten-Policy: Selbstständigkeit je Projekt → Agent im Projekt → Arbeitspaket (selbstständig, Rückfrage bei wichtigen Schritten, Rückfrage bei allem) mit Aktionsklassen (finalize, distribute, send_external, close, restructure, plan, assign, schedule, foreign); angehaltene Aktionen werden Vorschläge mit Karte im Chat, Arbeitspaket und KI-Läufen, Ausführung nach Bestätigung mit den Rechten des Agenten, Ablehnung mit Grund und 14-Tage-Sperre, Verfall nach 14 Tagen. Workflow-Schritte an Agenten. Bestandsprojekte selbstständig, neue Projekte mit Rückfrage bei wichtigen Schritten.
+- Steuerung im Chat: Befehle order, note, pause, resume, stop, priority, approve, reject, policy, report, refer; Gate nach Absenderrolle; Aufträge mit den Rechten des Auftraggebers, Systemkarte mit Ergebnissen, Rückgängig 10 Minuten.
+- Denktiefe (quick, standard, deep) mit Grenze je Org und Projekt; deep zählt doppelt im Tagesbudget.
+- Online-Recherche: Leserunde über Anthropic web_search oder SearXNG/Brave (nur GET, SSRF-Schutz, Größenlimit); Recht „Online-Recherche“ (Standard aus) plus Freigabe am LLM; Grenzen je Lauf und Tag, Domains erlaubt oder gesperrt, Suchbegriffe ohne Adressen/Namen; Quellen an Arbeitspaket und Seite. Arbeitszeitfenster für Mails nach außen (Standard Mo–Fr 07–19 Europe/Berlin), außerhalb geplanter Versand.
+- Projektwissen: Projektüberblick (Struktur per Code, Steckbrief vom Projektagenten), passende Seiten und ähnliche Arbeitspakete per Suche, Aktionen `search`, `read_task`, `relate`, `withdraw` (zwei Leserunden, sechs Zugriffe), Kontextbudget 45 % des Kontextfensters mit fester Kürzreihenfolge; Überschneidungen (Synergien) mit Entscheidung durch Personen; werktäglicher Projektdurchlauf des Projektagenten.
+- KI-Feedback: Daumen an Chat-Antworten und Läufen; automatisch aus Ablehnungen, Bearbeitungen vorher/nachher, claimCheck, abgelehnten Chat-Befehlen und Laufehlern; Liste mit Filtern und Export JSONL/CSV für die KI-Verwaltung.
+- KI-Sheet: fester Block ganz vorne im Systemprompt jedes Agentenlaufs (1280 Token, für alle Agenten und Projekte gleich, Prefix-Caching), danach Regeln je Laufart und zuletzt Name, Projekt und Persona; Text in `apps/api/src/ai/sheet.ts` und [KI-Sheet.md](KI-Sheet.md) (Test hält beide gleich).
+
+### Informationsgrenze für Externe
+- Empfängerklassen je Mail (intern, Org-Benutzer ohne Zugriff, Extern mit Bezug zum AP, Extern ohne Bezug; die strengste gilt). Agenten-Mails und Antworten auf Ursprungsmails an Nicht-Interne formuliert ein eigener kleiner KI-Aufruf mit nur dem Außenkontext neu (Außenbeschreibung, Log-Einträge „für Externe sichtbar“, freigegebene Seiten, externes Profil); danach prüft das System deterministisch auf fremde Kennungen, Titel anderer APs, interne Adressen, andere Projekte, App-Links, nicht freigegebene Anhänge. Funde halten die Mail als Entwurf an („Außenprüfung angehalten“), der erste Kontakt zu einer Adresse ohne Bezug ist immer ein Entwurf. Fragen Externer außerhalb ihrer Aufgabe gibt der Agent weiter. Stufe streng oder nur prüfen (Verwaltung › Mail); jede Prüfung im Audit.
+
+### Assistenz
+- Rechte: „KI nutzen“ und „Freigeben“ in der Projektmitgliedschaft, „KI“ je Mail-Ansicht; alle KI-Aktionen an Mails brauchen beides.
+- Zusammenfassen direkt (an der Mail gespeichert, zusätzlich als Direktnachricht des Agenten); Essenz → Arbeitspaket und Essenz → Seite nur als Vorschlag mit Freigabe und Bearbeitung vor dem Anwenden; Frage ans Projekt (RAG-lite: Stichwortsuche über Arbeitspakete, Seiten und lesbare Mails, Antwort mit Quellenangabe); Statusbericht-Entwurf aus Kennzahlen, RAID, Ampel und Log.
+
+### Technische Hinweise
+- Einsatz (Migration 060), Rechte und Obergrenze (`users.agent_rights`, `users.agent_policy`, Migration 063 ersetzt die KI-Freigaben-Matrix; Einschränkung `project_members.agent_policy.deny`), Prüfung `checkAi`, Fähigkeiten `/projects/:id/ai/capabilities`; Feedback (`ai_feedback`, Migration 064, `ai/feedback.ts`, `GET /ai/feedback`, `GET /ai/feedback/export`); Außenprüfung in `outbound_checks` und Audit `ai.outbound`; Policy-Vorschläge `ai_proposals` kind agent_action; Recherche `agent_web_sources`, `agent_runs.web_searches`; geplante Mails `mail_drafts` status scheduled; Ressourcen `resources/service.ts`, Routen `/resources`, `/bookings`, `/availability`, `/absences`; Denktiefe `agent_runs.cost`; Wissen `ai/knowledge.ts` (`agentVisibility`, `search`, `findCandidates`, `fitBudget`, `projectDigest`), `task_relations`, `POST /relations/:id/decide`, `runProjectReviews`, `POST /projects/:id/agent-review`; `cache_control` bei Anthropic. Structured-Output-Schemas ohne Union-Typen. Konzept-Dokumente nennen die Migrationen 043–053.
+
+## 9. Persönliches Projekt (Assistent)
+
+Ein Projekt wie jedes andere mit neun gebündelten Abweichungen: Anlegen für Projektersteller oder alle Benutzer (Mandanteneinstellung), startet leer ohne Vorlage, nur Ersteller (PL) und KI-Agenten, keine Gruppen und Einladungen, nur für Mitglieder sichtbar, Org-Admin ohne Inhalte/Konten/Liste/PL-Wechsel und Audit ohne Details, nur eigene Postfächer ohne Org-Rückfall, Org-KI nur mit Freigabe, keine Systembeiträge im Projektkanal, Beschriftung „persönlich (Name)“.
+
+Technischer Hinweis: `apps/api/src/projectPolicy.ts`, Web `useProjectPolicy`.
+
+## 10. Telefonie (sipgate)
+
+KI-Agent am Telefon über sipgate Flow: nimmt Anliegen auf (Arbeitspaket mit Gesprächsverlauf, Meldung an die PL), gibt internen Anrufern den Stand (erkannt an der Telefonnummer unter Meine Einstellungen), schlägt Termine vor (vorläufig); je Rufnummer Projekt, Agent und schnelles KI-Profil; Anruf-Log auch ohne KI über sipgate.io; Verwaltung › Telefonie. Einrichtung: [Telefonie.md](Telefonie.md).
+
+## 11. Identität und Sicherheit
+
+- Single Sign-on per OIDC (Entra ID, Keycloak, Authentik …) mit Zuordnung per E-Mail, optionaler Auto-Anlage (Mandant per `OIDC_ORG_ID`), Name aus den Claims und Abgleich der Berechtigungsgruppen über den Gruppen-Claim; Passwort-Login, Passwort-Reset und 2FA (TOTP, Code gilt nur einmal) bleiben.
+- Rate-Limit für Login und Reset, Sicherheits-Header inklusive Content-Security-Policy (nur eigene Skripte), Sitzungen per httpOnly-Cookie, CSRF-Prüfung über Origin/Referer.
+- Gespeicherte Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel) verschlüsselt (AES-256-GCM, Schlüssel `SECRET_KEY` oder `DATA_DIR/secret.key`); Uploads ohne ausführbare Dateien, aktive Inhalte nur als Download; ausgehende Verbindungen zu Benutzer-Zielen (CalDAV, IMAP/SMTP, eigene LLMs, Recherche) nicht ins interne Netz (`OUTBOUND_ALLOW_HOSTS` für Ausnahmen); `npm audit` für Produktionsabhängigkeiten in der CI.
+- Audit-Log schreibt ausschließlich API/Worker; Org-Admin exportiert Metadaten über alle Projekte.
+
+## 12. Noch nicht enthalten
+
+Lesender Kalender-Abgleich (fremde Termine ins Tool), Row-Level Security in der Datenbank (Rechte liegen zentral in der API), Office-Bearbeitung im Browser (braucht einen externen Dienst wie Collabora/OnlyOffice), Portal für Externe mit eigenem Login. Offen aus den Systemprüfungen: Meilenstein-Status „erreicht“ und Bezug Meilenstein ↔ AP, benannter Prüfer bei „In Prüfung“, Import, Absprung Auslastung → Board-Filter, AP ↔ Doku-Seite, Brotkrumen, eigener Datepicker.

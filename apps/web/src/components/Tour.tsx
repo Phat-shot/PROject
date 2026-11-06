@@ -29,8 +29,8 @@ export function Tour({ userId, isAdmin, projects, onDone }: { userId: string; is
     { title: 'Chat', text: 'Der reguläre Weg zwischen Projektbeteiligten: Projektkanäle mit Threads und Direktnachrichten, auch mit KI-Agenten (im Projektkanal per @Name). Am Desktop öffnet der Knopf unten rechts den Messenger mit Suche oben, Gesprächen links und Verlauf rechts.', target: '[data-tour="chat"]' },
     { title: 'Suche und Benachrichtigungen', text: 'Die Suche findet Arbeitspakete, Seiten und Mails. Die Glocke sammelt Zuweisungen, Erwähnungen, Fristen und Eskalationen.', target: '.topbar .search-box' },
     { title: 'Meine Einstellungen', text: 'Profil und Theme, eigene Mail-Konten, Benachrichtigungen, Kalender-Abo und Passwort. Projektpostfächer pflegt die PL in den Projekteinstellungen, die Organisation ihre in der Verwaltung; geteilt werden nie ganze Konten, sondern nur gefilterte Ansichten.', target: '[data-tour="benutzer"]' },
-    ...(isAdmin ? [{ title: 'Verwaltung', text: 'Mandant in denselben Reitern wie Projekt und Person: Allgemein, Personen, Mail, Benachrichtigungen, KI, Planung und Board, Sicherheit, Daten.', target: '[data-tour="verwaltung"]' }] : []),
-    { title: 'Hilfe', text: 'Kurzanleitung, Handbuch und das KI-Sheet der Agenten stehen unter „Hilfe“ unten links, immer passend zur installierten Version.', target: '[data-tour="hilfe"]' },
+    ...(isAdmin ? [{ title: 'Verwaltung', text: 'Mandant in denselben Reitern wie Projekt und Person: Allgemein, Personen, Mail, Benachrichtigungen, KI, Planung und Board, Telefonie, Sicherheit, Daten.', target: '[data-tour="verwaltung"]' }] : []),
+    { title: 'Hilfe', text: 'Kurzanleitung mit Glossar, Handbuch, KI-Handbuch („KI-Agenten“: Agenten einsetzen, steuern, häufige Fragen) und das KI-Sheet der Agenten stehen unter „Hilfe“ unten links, immer passend zur installierten Version.', target: '[data-tour="hilfe"]' },
     { title: 'Fertig', text: 'Viel Erfolg. Das Tutorial lässt sich jederzeit unten links neu starten.' }
   ];
   const step = steps[Math.min(i, steps.length - 1)];
