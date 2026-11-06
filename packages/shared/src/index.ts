@@ -134,12 +134,70 @@ export interface ReportingPolicy {
   parentPageId: string | null;
   lastRunOn: string | null;
   lastPageId: string | null;
+  /** Aufbau des Berichts: Blöcke untereinander; leer/undefined = Standard „Management-Report“ (DEFAULT_REPORT_BLOCKS) */
+  blocks?: ReportBlock[];
+  /** Texte regelbasiert („rules“) oder von der Projekt-KI formuliert („ai“, fällt ohne Agent/Freigabe auf rules zurück) */
+  textSource?: 'rules' | 'ai';
+  /** Grafische Ausarbeitung (Diagramme als SVG in Seite und PDF) für alle Blöcke, die es unterstützen */
+  graphic?: boolean;
 }
 
 /** Code-Standards der Projekt-Policies ohne Org-Ebene; die Oberfläche zeigt „Standard“, solange ein Projekt nichts Eigenes gesetzt hat. */
 export const DEFAULT_ESCALATION: EscalationPolicy = { enabled: true, stageDays: [2, 5, 10], staleDays: 7, contactUserId: null, contactEmail: null, externalMode: 'proposal' };
 export const DEFAULT_REMINDERS: ReminderPolicy = { enabled: false, daysBefore: [3, 0], overdueEveryDays: 3, includeInternal: false };
-export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1, recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null };
+/** Zeitraum eines Berichtsblocks: seit dem letzten Bericht, letzte Woche/Monat/Quartal oder n Tage */
+export type ReportPeriod = 'since_last' | 'week' | 'month' | 'quarter' | 'days';
+
+/** Blocktypen des Berichts (untereinander angeordnet) */
+export type ReportBlockType =
+  | 'summary'      // Gesamtstand: Ampel, Fortschritt Soll/Ist, Kennzahlen
+  | 'changes'      // Änderungen im Zeitraum: erledigt, neu, Termine verschoben, Statuswechsel
+  | 'overdue'      // Überfällige Arbeitspakete
+  | 'blocked'      // Blockiert und eskaliert
+  | 'milestones'   // Nächste und erreichte Meilensteine
+  | 'subprojects'  // Fortschritt je Teilprojekt
+  | 'risks'        // RAID-Register (offene Risiken/Issues/Entscheidungen)
+  | 'time'         // Gebuchte Zeit im Zeitraum (je Person / Teilprojekt)
+  | 'decisions'    // Entscheidungen und Meldungen (Log) im Zeitraum
+  | 'outlook'      // Ausblick: fällig in den nächsten n Tagen
+  | 'ai_summary'   // Management-Summary als KI-Text (Fallback: Regeltext)
+  | 'text';        // Freitext der PL
+
+export interface ReportBlock {
+  id: string;
+  type: ReportBlockType;
+  /** Überschrift; leer = Standardtitel des Typs */
+  title?: string;
+  /** Zeitraum (nur Blöcke mit Zeitbezug) */
+  period?: ReportPeriod;
+  /** Tage für period = 'days' bzw. Vorschau-Horizont bei 'outlook' */
+  days?: number;
+  /** Diagramm statt/zusätzlich zur Tabelle, wenn der Typ es unterstützt */
+  chart?: boolean;
+  /** Maximale Listenlänge */
+  limit?: number;
+  /** Freitext (type = 'text') als Markdown */
+  text?: string;
+}
+
+export const REPORT_BLOCK_LABEL: Record<ReportBlockType, string> = {
+  summary: 'Gesamtstand', changes: 'Änderungen im Zeitraum', overdue: 'Überfällig', blocked: 'Blockiert und eskaliert', milestones: 'Meilensteine',
+  subprojects: 'Teilprojekte', risks: 'Risiken und Entscheidungen (RAID)', time: 'Gebuchte Zeit', decisions: 'Entscheidungen und Meldungen', outlook: 'Ausblick',
+  ai_summary: 'Management-Summary (KI)', text: 'Freitext'
+};
+
+/** Standard „Management-Report“: Gesamtstand, Änderungen seit dem letzten Bericht, Risiken, Meilensteine, Ausblick */
+export const DEFAULT_REPORT_BLOCKS: ReportBlock[] = [
+  { id: 'b1', type: 'summary', chart: true },
+  { id: 'b2', type: 'changes', period: 'since_last', chart: true, limit: 15 },
+  { id: 'b3', type: 'overdue', limit: 10 },
+  { id: 'b4', type: 'blocked', limit: 10 },
+  { id: 'b5', type: 'milestones', limit: 5 },
+  { id: 'b6', type: 'risks', limit: 10 },
+  { id: 'b7', type: 'outlook', days: 14, limit: 10 }
+];
+
+export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey: 'statusbericht', interval: 'weekly', weekday: 5, dayOfMonth: 1, recipients: [], mode: 'proposal', parentPageId: null, lastRunOn: null, lastPageId: null, blocks: DEFAULT_REPORT_BLOCKS, textSource: 'rules', graphic: true };
 
 export interface EscalationRow {
   taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
