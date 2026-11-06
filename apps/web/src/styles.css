@@ -278,6 +278,7 @@ table.table { width: 100%; border-collapse: collapse; }
 .drawer .body { padding: 16px 18px; overflow: auto; flex: 1; }
 .modal { position: fixed; inset: 0; display: grid; place-items: center; background: var(--backdrop); z-index: 30; }
 .modal .card { width: min(560px, 95vw); max-height: 90vh; overflow: auto; }
+.modal .card.wide { width: min(920px, 95vw); }
 
 /* Gantt */
 .gantt { overflow-x: auto; }

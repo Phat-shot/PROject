@@ -208,7 +208,13 @@ export function useDirty(value: unknown): { dirty: boolean; reset: () => void } 
   return { dirty: cur !== base, reset: () => setBase(cur) };
 }
 
-interface LayerProps { title: ReactNode; onClose: () => void; children: ReactNode; /** Ungespeicherte Eingaben: Schließen fragt nach */ dirty?: boolean }
+interface LayerProps {
+  title: ReactNode; onClose: () => void; children: ReactNode;
+  /** Ungespeicherte Eingaben: Schließen fragt nach */
+  dirty?: boolean;
+  /** Breites Modal (z. B. Berichtsvorschau) */
+  wide?: boolean;
+}
 /** Schließen mit Dirty-Prüfung („Eingaben verwerfen?“). */
 function useRequestClose(onClose: () => void, dirty?: boolean) {
   const dialog = useDialog();
@@ -244,14 +250,14 @@ export function Drawer({ title, onClose, children, actions, dirty }: LayerProps 
   );
 }
 
-export function Modal({ title, onClose, children, dirty }: LayerProps) {
+export function Modal({ title, onClose, children, dirty, wide }: LayerProps) {
   const ref = useRef<HTMLDivElement>(null);
   const titleId = useId();
   const close = useRequestClose(onClose, dirty);
   useDialogLayer(ref, () => void close());
   return (
     <div className="modal" onMouseDown={(e) => { if (e.target === e.currentTarget) void close(); }}>
-      <div className="card" role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} tabIndex={-1}>
+      <div className={wide ? 'card wide' : 'card'} role="dialog" aria-modal="true" aria-labelledby={titleId} ref={ref} tabIndex={-1}>
         <div className="row between mb"><h2 className="m-0" id={titleId}>{title}</h2><IconButton label="Schließen" size="sm" onClick={() => void close()}><IconX /></IconButton></div>
         {children}
       </div>

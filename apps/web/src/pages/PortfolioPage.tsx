@@ -167,7 +167,7 @@ export function PortfolioReportDialog({ projects, onClose }: { projects: { id: s
   const toggle = (id: string) => setSelected((xs) => (xs.includes(id) ? xs.filter((x) => x !== id) : [...xs, id]));
   const none = !all && selected.length === 0;
   return (
-    <Modal title="Management-Report (Portfolio)" onClose={onClose}>
+    <Modal title="Management-Report (Portfolio)" onClose={onClose} wide>
       <div className="form">
         <p className="muted small">Gesamtübersicht aller gewählten Projekte mit Ampel, Fortschritt, Verzug und nächstem Meilenstein; dazu je Projekt die gewählten Zusatzblöcke im Zeitraum.</p>
         <div className="row small">

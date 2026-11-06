@@ -186,7 +186,7 @@ export function reportQuery(params: Record<string, unknown>): string {
 /** Vorschau eines Berichts (HTML aus der API, bereinigt mit SVG-Profil) mit Hinweis und „Als PDF“ in neuem Tab. */
 export function ReportPreviewModal({ title, html, hint, pdfUrl, onClose }: { title: string; html: string; hint?: string; pdfUrl: string; onClose: () => void }) {
   return (
-    <Modal title={title} onClose={onClose}>
+    <Modal title={title} onClose={onClose} wide>
       <div className="row between mb">
         <span className="muted small">{hint ?? 'Entwurf, nicht gespeichert.'}</span>
         <Button size="sm" icon={<IconArrowUpRight />} onClick={() => window.open(pdfUrl, '_blank', 'noopener')}>Als PDF</Button>
