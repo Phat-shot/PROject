@@ -3,7 +3,7 @@ import { Link, Navigate, NavLink, Route, Routes, useLocation, useNavigate, usePa
 import { useAuth } from '../lib/auth';
 import type { AiCapabilities, AiProposal, BoardColumn, Label, Membership, Project, ProjectGroup, Subproject, Task, User } from '@projekttool/shared';
 import { useData } from '../lib/useData';
-import { TopBar } from '../components/Layout';
+import { TopBar, type TopTab } from '../components/Layout';
 import { BoardView } from './project/BoardView';
 import { PlanView } from './project/PlanView';
 import { DocsView } from './project/DocsView';
@@ -91,6 +91,23 @@ function useOpenProposals(projectId: string, enabled: boolean) {
   return d.data?.proposals.length ?? 0;
 }
 
+/**
+ * Bereiche des Projekts als Reiter, Einstellungen zuletzt; Kalender gehört zum Plan, Besprechungen zur Doku, KI-Läufe zu den
+ * Einstellungen. Schlankes persönliches Projekt (project.slim): nur Board, Doku und Einstellungen (plus KI); die Routen bleiben.
+ */
+export function projectTabs({ base, slim, timeTracking, aiTab, openProposals }: { base: string; slim: boolean; timeTracking: boolean; aiTab: boolean; openProposals: number }): TopTab[] {
+  return [
+    { to: `${base}/board`, label: 'Board' },
+    ...(slim ? [] : [{ to: `${base}/plan`, label: 'Plan' }]),
+    { to: `${base}/doku`, label: 'Doku' },
+    ...(slim ? [] : [{ to: `${base}/raid`, label: 'Risiken' }]),
+    ...(!slim && timeTracking ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
+    ...(slim ? [] : [{ to: `${base}/auswertung`, label: 'Auswertung' }]),
+    ...(aiTab ? [{ to: `${base}/einstellungen/ki-laeufe`, label: 'KI', badge: openProposals, badgeTitle: `${openProposals} offene KI-Vorschläge zur Freigabe` }] : []),
+    { to: `${base}/einstellungen`, label: 'Einstellungen', end: false, exclude: aiTab ? `${base}/einstellungen/ki-laeufe` : undefined }
+  ];
+}
+
 function ProjectBody() {
   const { detail, openTask, openSubproject, ai: caps } = useProject();
   const [params] = useSearchParams();
@@ -107,17 +124,7 @@ function ProjectBody() {
   // Reiter „KI“ nur mit Agent im Projekt: zeigt die Zahl offener Vorschläge (Freigaben) und führt zu Einstellungen › KI-Läufe
   const hasAgent = Boolean(caps && caps.agents.length > 0);
   const openProposals = useOpenProposals(id, hasAgent && ai);
-  // Bereiche des Projekts als Reiter, Einstellungen zuletzt; Kalender gehört zum Plan, Besprechungen zur Doku, KI-Läufe zu den Einstellungen
-  const tabs = [
-    { to: `${base}/board`, label: 'Board' },
-    { to: `${base}/plan`, label: 'Plan' },
-    { to: `${base}/doku`, label: 'Doku' },
-    { to: `${base}/raid`, label: 'Risiken' },
-    ...(timeTracking && (p.timeTrackingEnabled || isPl) ? [{ to: `${base}/zeiten`, label: 'Zeiten' }] : []),
-    { to: `${base}/auswertung`, label: 'Auswertung' },
-    ...(hasAgent && ai ? [{ to: `${base}/einstellungen/ki-laeufe`, label: 'KI', badge: openProposals, badgeTitle: `${openProposals} offene KI-Vorschläge zur Freigabe` }] : []),
-    { to: `${base}/einstellungen`, label: 'Einstellungen', end: false, exclude: hasAgent && ai ? `${base}/einstellungen/ki-laeufe` : undefined }
-  ];
+  const tabs = projectTabs({ base, slim: Boolean(p.slim), timeTracking: Boolean(timeTracking && (p.timeTrackingEnabled || isPl)), aiTab: hasAgent && ai, openProposals });
   const settingsTabs = [...PROJECT_SETTINGS_TABS, ...(ai ? [{ key: 'ki-laeufe', label: 'KI-Läufe' }] : [])];
   const taskId = params.get('task');
   const spId = params.get('sp');

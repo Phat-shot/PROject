@@ -1175,3 +1175,6 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .col-section.collapsed { padding-bottom: 2px; }
 .col-empty.none { border: 0; padding: 2px 0 4px; text-align: left; margin-left: 6px; }
 @media (pointer: coarse), (hover: none) { .col-section h4 .section-toggle { min-height: 44px; } }
+/* Persönliches Projekt: Kennzeichen in der Seitenleiste, Hinweiskarte im Board zum Einrichten des Assistenten */
+.proj-link .personal-badge { margin-left: 4px; font-size: var(--fs-xs); flex: none; }
+.assistant-hint { align-items: center; }

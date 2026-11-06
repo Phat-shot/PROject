@@ -4,6 +4,7 @@ import type { DocFolder, DocPage, Notification, NotifyEvent, Project } from '@pr
 import { NOTIFY_EVENTS } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api } from '../lib/api';
+import { projectPolicy } from '../lib/useProjectPolicy';
 import { Tour, tourDone } from './Tour';
 import { useChatUnread } from '../lib/useChatUnread';
 import { useMailUnread } from '../lib/useMailUnread';
@@ -87,7 +88,7 @@ export function Layout({ children }: { children: ReactNode }) {
       <div key={p.id} className={`proj ${sel ? 'open' : ''}`}>
         <div className="proj-row">
           <NavLink to={`${base}/board`} className={() => (sel ? 'proj-link sel' : 'proj-link')} data-tour={tourId} title={`${p.name}: Board öffnen`}>
-            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>
+            <span className="badge">{p.key}</span><span className="ell">{p.name}</span>{projectPolicy(p).badge && <span className="badge personal-badge" title={projectPolicy(p).badge!.title}>{projectPolicy(p).badge!.text}</span>}
           </NavLink>
           {(open.byProject[p.id] ?? 0) > 0 && <button className={`badge warn nav-count ${expanded === p.id ? 'on' : ''}`} title="Offen für dich in diesem Projekt: aufklappen" aria-label={`${open.byProject[p.id]} offen für dich in ${p.name}: aufklappen`} aria-expanded={expanded === p.id} onClick={() => setExpanded(expanded === p.id ? null : p.id)}>{open.byProject[p.id]}</button>}
           <button className={`pin ${pin ? 'on' : ''}`} disabled={(!pin && pinnedIds.length >= MAX_PINNED) || pinAction.busy} title={pinLabel} aria-label={`${p.name}: ${pinLabel}`} aria-pressed={pin} onClick={() => togglePin(p.id)}><IconStar size={14} fill={pin ? 'currentColor' : 'none'} /></button>

@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmtDate } from '../../../lib/api';
-import { Modal, roleLabel, useAsync, useDialog, Term } from '../../../components/ui';
+import { Loading, Modal, roleLabel, useAsync, useDialog, Term } from '../../../components/ui';
 import { AgentPolicyEditor, EffectivePolicyText } from '../../../components/AgentPolicy';
 import { AgentEditorModal, RightsEditor, rightsSummary } from '../../../components/AgentEditor';
-import { AGENT_MODES, AI_FEATURES, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature, type EffectiveAgentPolicy } from '@projekttool/shared';
+import { AGENT_MODES, AI_FEATURES, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature, type AssistantState, type EffectiveAgentPolicy } from '@projekttool/shared';
 import { useProject } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
 import { ReadOnlyNote, SettingsCard } from '../../../components/settings/Settings';
 import { rightsText } from './People';
+import { projectPolicy } from '../../../lib/useProjectPolicy';
 
 type OwnLlm = { id: string; name: string; provider: 'local' | 'anthropic'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; adminBlocked: boolean; thinkingOff: boolean; webSearch?: boolean; tokensIn: number; tokensOut: number; lastUsedAt: string | null };
 type ProjectLlms = { available: { id: string; name: string; provider: string; model: string; own: boolean }[]; own: OwnLlm[]; canAddOwn: boolean; addOwnReason?: string | null; ownLlmAllowed?: boolean };
@@ -262,15 +263,90 @@ function OwnLlmCard() {
   }
 }
 
+type AssistantProfile = AssistantState['profiles'][number];
+const profileLabel = (p: AssistantProfile) => `${p.name} (${p.own ? 'eigenes LLM' : 'Mandant'} · ${p.model})`;
+
 /**
- * Projekt › Einstellungen › KI: Agenten im Projekt (einladen, einschränken), Projektagent, Agenten-Policy, eigenes LLM mit seinen
- * Agenten, eigene Rechte.
+ * Dein Assistent (C): im persönlichen Projekt legt die Eigentümerin ihren Assistenten selbst an (Name, LLM aus den für sie freien
+ * Profilen, Persona). Ohne freies LLM oder bei Sperre stehen die Gründe; danach Name, LLM, Budget, Chat, Bearbeiten, Pause.
+ */
+export function AssistantCard() {
+  const { detail, reload } = useProject();
+  const id = detail.project.id;
+  const st = useData<AssistantState>(`/projects/${id}/assistant`, [id]);
+  const [f, setF] = useState({ name: 'Assistent', profileId: '', persona: '' });
+  const [edit, setEdit] = useState(false);
+  const { busy, error, run } = useAsync();
+  const data = st.data;
+  if (st.error) return <SettingsCard title="Dein Assistent"><div className="error small">{st.error}</div></SettingsCard>;
+  if (!data) return <SettingsCard title="Dein Assistent"><Loading /></SettingsCard>;
+  const profileId = f.profileId || data.profiles[0]?.id || '';
+  const after = async () => { await st.reload(); await reload(); };
+  const a = data.assistant;
+  return (
+    <SettingsCard title="Dein Assistent" id="assistent" action={a ? <Link className="btn sm primary" to={`/chat/${a.channelId}`}>Chat öffnen</Link> : undefined}
+      hint="Dein persönlicher KI-Assistent arbeitet nur in diesem Projekt, antwortet auf Direktnachrichten im Chat, legt Aufgaben, Checklistenpunkte und Termine an und schreibt Mails über deine eigenen Konten.">
+      {a ? <>
+        <dl className="kv">
+          <dt>Name</dt><dd>{a.name} {a.active ? <span className="badge ok">aktiv</span> : <span className="badge" title="Pausiert: antwortet nicht, bis du ihn wieder aktivierst">pausiert</span>}</dd>
+          <dt>LLM</dt><dd>{a.profileName ?? <span className="muted">kein LLM</span>}</dd>
+          <dt>Persona</dt><dd>{a.persona ?? <span className="muted">Standardstil</span>}</dd>
+          <dt>Tagesbudget</dt><dd>{a.dailyBudget ?? <span className="muted">Vorgabe des Mandanten</span>}</dd>
+        </dl>
+        {data.blocked.length > 0 && <div className="notice small mt"><strong>Zurzeit gesperrt:</strong><ul className="m-0 mt-1 ml-4">{data.blocked.map((b) => <li key={b}>{b}</li>)}</ul></div>}
+        {error && <div className="error small mt">{error}</div>}
+        <div className="row mt">
+          <button className="btn sm" onClick={() => setEdit(true)}>Bearbeiten</button>
+          <button className="btn sm" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: !a.active }); await after(); })}>{a.active ? 'Pausieren' : 'Aktivieren'}</button>
+        </div>
+        {edit && <AssistantEditModal assistant={a} profiles={data.profiles} onClose={() => setEdit(false)} onSaved={async () => { setEdit(false); await after(); }} />}
+      </> : <>
+        {data.blocked.length > 0 && <div className="notice small mb"><strong>Noch kein Assistent möglich:</strong><ul className="m-0 mt-1 ml-4">{data.blocked.map((b) => <li key={b}>{b}</li>)}</ul></div>}
+        {data.profiles.length === 0 && <p className="small">Kein LLM frei. Eigenes LLM unten unter <a href="#llm">Eigenes LLM</a> (Projekt › Einstellungen › KI) eintragen oder den Admin um Freigabe eines Mandanten-LLM für dein persönliches Projekt bitten.</p>}
+        {data.canCreate && <div className="form">
+          <div className="grid cols-2">
+            <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+            <label className="field"><span>LLM</span><select aria-label="LLM" value={profileId} onChange={(e) => setF({ ...f, profileId: e.target.value })}>{data.profiles.map((p) => <option key={p.id} value={p.id}>{profileLabel(p)}</option>)}</select></label>
+          </div>
+          <label className="field"><span>Persona (optional)</span><input type="text" value={f.persona} placeholder="z. B. knapp, duzt mich, erinnert von sich aus an Termine" onChange={(e) => setF({ ...f, persona: e.target.value })} /></label>
+          {error && <div className="error small">{error}</div>}
+          <div><button className="btn primary" disabled={busy || !f.name.trim() || !profileId} onClick={() => void run(async () => { await api.post(`/projects/${id}/assistant`, { name: f.name.trim(), profileId, persona: f.persona.trim() || null }); await after(); })}>Assistent anlegen</button></div>
+        </div>}
+      </>}
+    </SettingsCard>
+  );
+}
+
+function AssistantEditModal({ assistant, profiles, onClose, onSaved }: { assistant: NonNullable<AssistantState['assistant']>; profiles: AssistantProfile[]; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [f, setF] = useState({ name: assistant.name, persona: assistant.persona ?? '', aiProfileId: assistant.aiProfileId ?? '', dailyBudget: assistant.dailyBudget == null ? '' : String(assistant.dailyBudget) });
+  const { busy, error, run } = useAsync();
+  const known = profiles.some((p) => p.id === f.aiProfileId);
+  return (
+    <Modal title={`Assistent: ${assistant.name}`} onClose={onClose}>
+      <div className="form">
+        <label className="field"><span>Name</span><input type="text" value={f.name} autoFocus onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
+        <label className="field"><span>LLM</span><select aria-label="LLM" value={f.aiProfileId} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}>
+          {!known && <option value={f.aiProfileId}>{assistant.profileName ?? 'bisheriges LLM'} (nicht mehr frei)</option>}
+          {profiles.map((p) => <option key={p.id} value={p.id}>{profileLabel(p)}</option>)}</select></label>
+        <label className="field"><span>Persona</span><input type="text" value={f.persona} onChange={(e) => setF({ ...f, persona: e.target.value })} /></label>
+        <label className="field"><span>Tagesbudget (Läufe je Tag, leer = Vorgabe des Mandanten)</span><input className="w-120" type="number" min={1} value={f.dailyBudget} onChange={(e) => setF({ ...f, dailyBudget: e.target.value })} /></label>
+        {error && <div className="error small">{error}</div>}
+        <div className="row"><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/agents/${assistant.id}`, { name: f.name.trim(), persona: f.persona.trim() || null, ...(f.aiProfileId && f.aiProfileId !== assistant.aiProfileId ? { aiProfileId: f.aiProfileId } : {}), dailyBudget: f.dailyBudget ? Number(f.dailyBudget) : null }); await onSaved(); })}>Speichern</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+      </div>
+    </Modal>
+  );
+}
+
+/**
+ * Projekt › Einstellungen › KI: im persönlichen Projekt zuerst der Assistent; dann Agenten im Projekt (einladen, einschränken),
+ * Projektagent, Agenten-Policy, eigenes LLM mit seinen Agenten, eigene Rechte.
  */
 export function AiTab() {
   const { detail } = useProject();
   const isPl = detail.project.myMembership.role === 'pl';
   return (
     <>
+      {projectPolicy(detail.project).assistant && isPl && <AssistantCard />}
       <SettingsCard title="KI" action={<Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch">Hilfe</Link>} hint="Im Projekt arbeiten nur Agenten. Was ein Agent darf, legt der Verwalter seines LLM fest; hier lädst du ihn ein und kannst nur weiter einschränken.">
         {!isPl && <ReadOnlyNote who="PL" />}
         <AgentsInProject readOnly={!isPl} />

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import type { AgentUser, AiFeedbackEntry, AiProfile } from '@projekttool/shared';
-import { AGENT_MODES, AI_FEEDBACK_KINDS } from '@projekttool/shared';
+import type { AgentUser, AiFeedbackEntry, AiProfile, PersonalUse, User } from '@projekttool/shared';
+import { AGENT_MODES, AI_FEEDBACK_KINDS, PERSONAL_USES } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
@@ -146,22 +146,24 @@ function AgentRows({ agents, onEdit, onToggle, busy, orgBudget }: { agents: Agen
 }
 
 /** LLMs der Organisation, je LLM mit seinen Agenten (anlegen, berechtigen, Einsatz). */
-function LlmsCard() {
+export function LlmsCard() {
   const st = useAiStatus();
   const agents = useData<{ agents: AgentUser[] }>('/agents');
   const projects = useData<{ projects: { id: string; label: string }[] }>('/ai/release-projects');
   const [edit, setEdit] = useState<AiProfile | 'new' | null>(null);
   const [agentEdit, setAgentEdit] = useState<{ llmId: string; agent: AgentUser | null } | null>(null);
-  const empty = { name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalScope: false, webSearch: false, contextTokens: '', timeoutS: '' };
+  const people = useData<{ users: User[] }>('/users');
+  const empty = { name: '', provider: 'local' as 'local' | 'anthropic', baseUrl: '', model: '', apiKey: '', thinkingOff: false, projectScope: 'all' as 'all' | 'selected' | 'none', projectIds: [] as string[], personalUse: 'none' as PersonalUse, personalUserIds: [] as string[], webSearch: false, contextTokens: '', timeoutS: '' };
   const [f, setF] = useState(empty);
   const [msg, setMsg] = useState<string | null>(null);
   const [warnings, setWarnings] = useState<string[]>([]);
   const dialog = useDialog();
   const { busy, error, run } = useAsync();
   if (!st) return null;
-  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? empty : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: p.projectScope ?? 'all', projectIds: p.projectIds ?? [], personalScope: Boolean(p.personalScope), webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '', timeoutS: p.timeoutS ? String(p.timeoutS) : '' }); };
+  const open = (p: AiProfile | 'new') => { setEdit(p); setF(p === 'new' ? empty : { name: p.name, provider: p.provider, baseUrl: p.baseUrl ?? '', model: p.model, apiKey: '', thinkingOff: p.thinkingOff, projectScope: p.projectScope ?? 'all', projectIds: p.projectIds ?? [], personalUse: p.personalUse ?? (p.personalScope ? 'all' : 'none'), personalUserIds: p.personalUserIds ?? [], webSearch: Boolean(p.webSearch), contextTokens: p.contextTokens ? String(p.contextTokens) : '', timeoutS: p.timeoutS ? String(p.timeoutS) : '' }); };
   const label = (id: string) => projects.data?.projects.find((x) => x.id === id)?.label ?? '?';
-  const scopeText = (p: AiProfile) => p.projectScope === 'selected' ? <span title={(p.projectIds ?? []).map(label).join(', ')}>{(p.projectIds ?? []).length} ausgewählte Projekte</span> : p.projectScope === 'none' ? <span className="muted">kein Projekt (nur Verbindungstest)</span> : <>alle Projekte{p.personalScope ? ' und persönliche' : ''}</>;
+  const personalText = (p: AiProfile) => { const use = p.personalUse ?? (p.personalScope ? 'all' : 'none'); return use === 'all' ? ' · persönliche Projekte: alle' : use === 'users' ? ` · persönliche Projekte: ${(p.personalUserIds ?? []).length} Personen` : ''; };
+  const scopeText = (p: AiProfile) => p.projectScope === 'selected' ? <span title={(p.projectIds ?? []).map(label).join(', ')}>{(p.projectIds ?? []).length} ausgewählte Projekte{personalText(p)}</span> : p.projectScope === 'none' ? <span className="muted">kein Projekt (nur Verbindungstest)</span> : <>alle Projekte{personalText(p)}</>;
   const after = async (w?: string[]) => { await invalidateAi(); await agents.reload(); setWarnings(w ?? []); };
   const toggle = (a: AgentUser) => void (a.active
     ? dialog.confirm({ title: 'Agent deaktivieren', text: `${a.name} deaktivieren? Zuweisungen werden entfernt, Mitgliedschaften und Historie bleiben.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/agents/${a.id}`, { active: false }); await after(r.warnings); }); })
@@ -205,18 +207,42 @@ function LlmsCard() {
               <label className="field" title="So lange wartet das Tool auf eine Antwort; mit Denkmodus brauchen kleine Modelle oft Minuten"><span>Zeitlimit in Sekunden (leer = 600)</span><input type="number" min={30} max={3600} step={30} value={f.timeoutS} placeholder="600" onChange={(e) => setF({ ...f, timeoutS: e.target.value })} /></label>
             </div>}
             <label className="check full" title="Dazu braucht der Agent das Recht „Online-Recherche“; lokale LLMs brauchen einen Suchdienst (Grenzen und Vorgaben), Anthropic-LLMs suchen über das Server-Tool web_search"><input type="checkbox" checked={f.webSearch} onChange={(e) => setF({ ...f, webSearch: e.target.checked })} /> Online-Recherche mit diesem LLM erlaubt</label>
-            <ScopeEditor scope={f.projectScope} projectIds={f.projectIds} onChange={(projectScope, projectIds) => setF({ ...f, projectScope, projectIds, personalScope: projectScope === 'all' && f.personalScope })} />
-            {f.projectScope === 'all' && <label className="check full"><input type="checkbox" checked={f.personalScope} onChange={(e) => setF({ ...f, personalScope: e.target.checked })} /> auch in persönlichen Projekten <span className="muted small">(sonst sehen persönliche Projekte nur ihr eigenes LLM)</span></label>}
+            <ScopeEditor scope={f.projectScope} projectIds={f.projectIds} onChange={(projectScope, projectIds) => setF({ ...f, projectScope, projectIds })} />
             {f.projectScope === 'selected' && <span className="muted small full">Persönliche Projekte stehen als „persönlich (Name)“ in der Liste und werden einzeln ausgewählt. Agenten mit diesem LLM laufen nur in den gewählten Projekten.</span>}
+            {f.projectScope !== 'none' && <div className="full stack gap-1">
+              <label className="field"><span>Für persönliche Projekte</span>
+                <select className="w-auto" aria-label="Für persönliche Projekte" value={f.personalUse} onChange={(e) => setF({ ...f, personalUse: e.target.value as PersonalUse })}>
+                  <option value="none">gesperrt</option><option value="all">alle</option><option value="users">bestimmte Personen</option>
+                </select>
+                <span className="muted small">Mandanten-LLMs sind für persönliche Projekte standardmäßig gesperrt. Freigegeben steht das LLM dort dem Assistenten und den Agenten der Person zur Wahl ({PERSONAL_USES.find((u) => u.key === f.personalUse)?.label}).</span></label>
+              {f.personalUse === 'users' && <PersonalUsersPicker users={(people.data?.users ?? []).filter((u) => u.active && u.kind !== 'agent')} value={f.personalUserIds} onChange={(personalUserIds) => setF({ ...f, personalUserIds })} />}
+            </div>}
             {error && <div className="error full">{error}</div>}
             <div className="full row">
-              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalScope: f.personalScope, webSearch: f.webSearch, contextTokens: f.contextTokens ? Number(f.contextTokens) : null, timeoutS: f.timeoutS ? Number(f.timeoutS) : null }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/ai/profiles', body) : await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, body); setEdit(null); await after(r.warnings); })}>Speichern</button>
+              <button className="btn primary" disabled={busy || !f.name.trim() || (f.provider === 'local' ? !f.baseUrl || !f.model : false)} onClick={() => void run(async () => { const body = { name: f.name, provider: f.provider, baseUrl: f.baseUrl || null, model: f.model || st.models[0], apiKey: f.apiKey || undefined, thinkingOff: f.thinkingOff, projectScope: f.projectScope, projectIds: f.projectIds, personalUse: f.projectScope === 'none' ? 'none' : f.personalUse, personalUserIds: f.personalUse === 'users' ? f.personalUserIds : [], webSearch: f.webSearch, contextTokens: f.contextTokens ? Number(f.contextTokens) : null, timeoutS: f.timeoutS ? Number(f.timeoutS) : null }; const r = edit === 'new' ? await api.post<{ warnings?: string[] }>('/ai/profiles', body) : await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, body); setEdit(null); await after(r.warnings); })}>Speichern</button>
               {edit !== 'new' && <button className="btn" disabled={busy} onClick={() => void run(async () => { const r = await api.patch<{ warnings?: string[] }>(`/ai/profiles/${edit.id}`, { active: !edit.active }); setEdit(null); await after(r.warnings); })}>{edit.active ? 'Deaktivieren' : 'Aktivieren'}</button>}
               <button className="btn" onClick={() => setEdit(null)}>Abbrechen</button>
             </div>
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+/** Mehrfachauswahl aktiver Personen (Freigabe „bestimmte Personen“ eines Mandanten-LLM für persönliche Projekte) mit Suchfeld. */
+export function PersonalUsersPicker({ users, value, onChange }: { users: User[]; value: string[]; onChange: (ids: string[]) => void }) {
+  const [q, setQ] = useState('');
+  const n = q.trim().toLowerCase();
+  const list = users.filter((u) => !n || u.name.toLowerCase().includes(n) || u.email.toLowerCase().includes(n));
+  return (
+    <div className="field">
+      <span>Personen, für deren persönliches Projekt das LLM frei ist ({value.length})</span>
+      <input type="search" aria-label="Personen suchen" placeholder="Name oder E-Mail …" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="picker-list">
+        {list.map((u) => <label key={u.id} className={`check small ${value.includes(u.id) ? 'on' : ''}`}><input type="checkbox" aria-label={`Person ${u.name}`} checked={value.includes(u.id)} onChange={(e) => onChange(e.target.checked ? [...value.filter((x) => x !== u.id), u.id] : value.filter((x) => x !== u.id))} /> {u.name} <span className="muted">{u.email}</span></label>)}
+        {list.length === 0 && <span className="muted small">Niemand gefunden.</span>}
+      </div>
     </div>
   );
 }

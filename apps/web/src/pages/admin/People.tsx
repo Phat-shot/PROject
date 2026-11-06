@@ -1,9 +1,9 @@
 import { useState } from 'react';
-import { ORG_RIGHTS, type AdminProject, type Group, type Invitation, type User } from '@projekttool/shared';
+import { ORG_RIGHTS, type AdminProject, type Group, type Invitation, type OrgSettings, type User } from '@projekttool/shared';
 import { Link } from 'react-router-dom';
 import { api, fmtDateTime } from '../../lib/api';
 import { useData } from '../../lib/useData';
-import { Modal, useAsync, useDialog } from '../../components/ui';
+import { Modal, toast, useAsync, useDialog } from '../../components/ui';
 import { useAuth } from '../../lib/auth';
 import { IconX } from '../../components/icons';
 
@@ -24,17 +24,36 @@ export function UsersCard({ users, reload }: { users: User[]; reload: () => Prom
   const { error, run, busy } = useAsync();
   const dialog = useDialog();
   const [create, setCreate] = useState(false);
+  const org = useData<{ settings: OrgSettings }>('/org/settings');
+  const [personalMsg, setPersonalMsg] = useState<{ userId: string; project: { id: string; key: string; name: string } } | null>(null);
   const patch = (u: User, body: Record<string, unknown>) => void run(async () => { await api.patch(`/users/${u.id}`, body); await reload(); });
+  // Persönliches Projekt je Person (A): null = Mandantenregel, true = frei (Projekt wird angelegt), false = gesperrt (KI darin aus)
+  const tenantRule = org.data?.settings.personalProjects ? 'freigegeben' : 'gesperrt';
+  const personalTitle = (u: User) => u.personalProjectAllowed === true ? 'Wirksam: freigegeben (eigene Regel; das Projekt wird angelegt, falls keines da ist)'
+    : u.personalProjectAllowed === false ? 'Wirksam: gesperrt (eigene Regel; das Projekt bleibt, die KI darin ist aus)'
+      : `Wirksam: ${tenantRule} (Mandantenregel „Persönliche Projekte“ unter Verwaltung › Allgemein)`;
+  const setPersonal = (u: User, v: string) => void run(async () => {
+    const r = await api.patch<{ personalProject?: { id: string; key: string; name: string }; notice?: string }>(`/users/${u.id}`, { personalProjectAllowed: v === '' ? null : v === 'true' });
+    if (r.notice) toast(r.notice, { kind: 'info', timeout: 8000 });
+    setPersonalMsg(r.personalProject ? { userId: u.id, project: r.personalProject } : null);
+    await reload();
+  });
   return (
     <div className="card">
       <div className="row between mb"><h2 className="m-0">Benutzer</h2><button className="btn sm" onClick={() => setCreate(true)}>Benutzer manuell anlegen</button></div>
       {create && <CreateUser onClose={() => setCreate(false)} onCreated={async () => { setCreate(false); await reload(); }} />}
       {error && <div className="error mb">{error}</div>}
-      <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th /></tr></thead><tbody>
+      <table className="table"><thead><tr><th>Name</th><th>E-Mail</th><th>Globale Rolle</th><th title="Org-Rechte neben der Rolle; der Org-Admin hat alle">Org-Rechte</th><th title={`Persönliches Projekt mit Assistent: Mandantenregel (zurzeit ${tenantRule}), frei oder gesperrt`}>Persönliches Projekt</th><th /></tr></thead><tbody>
         {users.map((u) => <tr key={u.id} className={u.active ? undefined : 'muted'}>
           <td>{u.name}{!u.active && <span className="badge ml-1">deaktiviert</span>}</td><td>{u.email}</td>
           <td>{u.kind === 'agent' ? <span className="badge">KI-Agent</span> : <select className="w-auto" aria-label={`Globale Rolle ${u.name}`} value={u.globalRole} disabled={busy || !u.active} onChange={(e) => patch(u, { globalRole: e.target.value })}>{Object.entries(globalLabel).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>}{u.totpEnabled && <span className="badge ok ml-1" title="Zweiter Faktor aktiv">2FA</span>}</td>
           <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : u.globalRole === 'org_admin' ? <span className="muted">alle</span> : ORG_RIGHTS.map((r) => <label key={r.key} className="check" title={ORG_RIGHT_HINT[r.key]}><input type="checkbox" disabled={busy || !u.active} checked={Boolean(u.orgRights?.includes(r.key))} onChange={(e) => { const rest = (u.orgRights ?? []).filter((x) => x !== r.key); patch(u, { orgRights: e.target.checked ? [...rest, r.key] : rest }); }} /> {r.label}</label>)}</td>
+          <td className="small">{u.kind === 'agent' ? <span className="muted">–</span> : <>
+            <select className="w-auto" aria-label={`Persönliches Projekt ${u.name}`} title={personalTitle(u)} value={u.personalProjectAllowed === true ? 'true' : u.personalProjectAllowed === false ? 'false' : ''} disabled={busy || !u.active} onChange={(e) => setPersonal(u, e.target.value)}>
+              <option value="">Mandantenregel ({tenantRule})</option><option value="true">frei</option><option value="false">gesperrt</option>
+            </select>
+            {personalMsg?.userId === u.id && <div className="muted">Persönliches Projekt: <Link to={`/projekte/${personalMsg.project.id}/board`}>{personalMsg.project.key} {personalMsg.project.name}</Link></div>}
+          </>}</td>
           <td className="nowrap">{u.totpEnabled && <button className="btn sm" disabled={busy} style={{ marginRight: 6 }} onClick={() => void dialog.confirm({ title: 'Zweiten Faktor zurücksetzen', text: `${u.name} meldet sich danach wieder nur mit dem Passwort an und kann den zweiten Faktor neu einrichten.`, confirmLabel: 'Zurücksetzen' }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/totp/reset`); await reload(); }); })}>2FA zurücksetzen</button>}
             {u.kind !== 'agent' && !u.active && <button className="btn sm" disabled={busy} onClick={() => patch(u, { active: true })}>Reaktivieren</button>}
             {u.kind !== 'agent' && u.active && u.id !== me?.id && <button className="btn sm danger" disabled={busy} onClick={() => void dialog.confirm({ title: 'Benutzer deaktivieren', text: `${u.name} deaktivieren? Der Login endet, persönliche Mail-Konten werden getrennt, Zuständigkeiten fallen auf die Vererbung zurück, Mitgliedschaften über Gruppen ruhen bis zur Reaktivierung.`, confirmLabel: 'Deaktivieren', danger: true }).then((ok) => { if (ok) void run(async () => { await api.post(`/users/${u.id}/deactivate`); await reload(); }); })}>Deaktivieren</button>}</td>
@@ -83,7 +102,7 @@ const WEEK = 7 * 86400_000;
 
 export function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
   const { data, reload } = useData<{ invitations: Invitation[]; hasOrgAccount: boolean }>('/invitations');
-  const [f, setF] = useState({ email: '', name: '', globalRole: 'user' });
+  const [f, setF] = useState({ email: '', name: '', globalRole: 'user', personalProject: true });
   const [msg, setMsg] = useState<{ ok: boolean; text: string; link?: string } | null>(null);
   const { busy, error, run } = useAsync();
   void onAccepted; void WEEK;
@@ -99,16 +118,17 @@ export function InvitationsCard({ onAccepted }: { onAccepted: () => void }) {
         <button className="btn primary" disabled={busy || !f.email || !f.name} onClick={() => void run(async () => {
           const r = await api.post<{ invitation: Invitation; sent: boolean; error?: string }>('/invitations', f);
           setMsg(r.sent ? { ok: true, text: `Einladung an ${r.invitation.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: r.invitation.link });
-          setF({ email: '', name: '', globalRole: 'user' });
+          setF({ email: '', name: '', globalRole: 'user', personalProject: true });
           await reload();
         })}>Einladen</button>
       </div>
+      <label className="check mt small"><input type="checkbox" checked={f.personalProject} onChange={(e) => setF({ ...f, personalProject: e.target.checked })} /> Persönliches Projekt freigeben (Assistent) <span className="muted">– die Person bekommt beim Annehmen ein eigenes Projekt, in dem sie ihren Assistenten einrichten kann; gilt auch, wenn der Mandantenschalter „Persönliche Projekte“ aus ist.</span></label>
       {error && <div className="error mt">{error}</div>}
       {msg && <div className={`mt small ${msg.ok ? 'muted' : ''}`} style={msg.ok ? undefined : { color: 'var(--warn)' }}>{msg.text}{msg.link && <> · <button className="btn sm link" onClick={() => void copy(msg.link!)}>Link kopieren</button></>}</div>}
       {data && data.invitations.length > 0 && (
         <table className="table mt"><thead><tr><th>Name</th><th>E-Mail</th><th>Rolle</th><th>Status</th><th /></tr></thead><tbody>
           {data.invitations.map((i) => <tr key={i.id}>
-            <td>{i.name}</td><td>{i.email}</td><td><span className="badge">{globalLabel[i.globalRole]}</span></td>
+            <td>{i.name}</td><td>{i.email}</td><td><span className="badge">{globalLabel[i.globalRole]}</span>{i.personalProject && <span className="badge ml-1" title="Persönliches Projekt mit Assistent wird beim Annehmen angelegt">persönlich</span>}</td>
             <td className="small">{i.sentAt ? <>verschickt {fmtDateTime(i.sentAt)}</> : <span className="text-warn">nicht verschickt{i.sendError ? `: ${i.sendError}` : ''}</span>}<div className="muted">gültig bis {fmtDateTime(i.expiresAt)}</div></td>
             <td className="nowrap"><button className="btn sm link" onClick={() => void copy(i.link)}>Link kopieren</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ sent: boolean; error?: string }>(`/invitations/${i.id}/resend`); setMsg(r.sent ? { ok: true, text: `Erneut an ${i.email} verschickt.` } : { ok: false, text: r.error ?? 'Nicht verschickt.', link: i.link }); await reload(); })}>Erneut senden</button><button className="btn sm link" onClick={() => void run(async () => { await api.del(`/invitations/${i.id}`); await reload(); })} aria-label="Entfernen"><IconX /></button></td>
           </tr>)}

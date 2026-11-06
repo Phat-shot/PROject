@@ -14,6 +14,7 @@ import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { EMPTY_FILTER, isFilterActive, readFilter, writeFilter, type BoardFilter } from '../../lib/boardFilter';
 import { groupColumns } from '../../lib/columnGroups';
+import { projectPolicy } from '../../lib/useProjectPolicy';
 
 type Filter = BoardFilter;
 const EMPTY = EMPTY_FILTER;
@@ -155,6 +156,7 @@ export function BoardView() {
 
   return (
     <div className="content">
+      {projectPolicy(detail.project).assistant && detail.project.myMembership.role === 'pl' && <AssistantHint projectId={detail.project.id} />}
       {mobile && !showFilters ? (
         <div className="filterbar compact">
           <input ref={searchRef} type="text" aria-label="Filtern" placeholder="Filtern …" value={f.q} onChange={(e) => setF({ ...f, q: e.target.value })} />
@@ -497,6 +499,23 @@ function CardSubtasks({ kids, open: initial, canEdit }: { kids: Task[]; open: bo
           <span className="sub-who" title={k.responsible.name ?? k.responsible.email ?? ''}>{k.responsible.name ? <Initials name={k.responsible.name} /> : null}</span>
         </span>}
       </li>)}</ul>}
+    </div>
+  );
+}
+
+const HINT_KEY = (id: string) => `pt:assistant-hint:${id}`;
+const hintDismissed = (id: string) => { try { return localStorage.getItem(HINT_KEY(id)) === '1'; } catch { return false; } };
+
+/** Persönliches Projekt ohne Assistenten: Hinweis zum Einrichten (Einstellungen › KI), schließbar und je Projekt gemerkt. */
+export function AssistantHint({ projectId }: { projectId: string }) {
+  const [closed, setClosed] = useState(() => hintDismissed(projectId));
+  const st = useData<{ assistant: { id: string } | null }>(closed ? null : `/projects/${projectId}/assistant`, [projectId]);
+  if (closed || !st.data || st.data.assistant) return null;
+  const close = () => { try { localStorage.setItem(HINT_KEY(projectId), '1'); } catch { /* privater Modus */ } setClosed(true); };
+  return (
+    <div className="notice ok small mb row between gap-2 assistant-hint" role="status">
+      <span><strong>Richte deinen Assistenten ein.</strong> Dein persönlicher KI-Assistent legt aus Chat und Mails Aufgaben und Termine an: <Link to={`/projekte/${projectId}/einstellungen/ki`}>Einstellungen › KI</Link>.</span>
+      <IconButton label="Hinweis schließen" size="sm" onClick={close}><IconX /></IconButton>
     </div>
   );
 }

@@ -4,6 +4,8 @@
  */
 export interface ProjectPolicyUi {
   personal: boolean;
+  /** Persönlicher Assistent (Karte unter Einstellungen › KI, Hinweis im Board) und Schalter „Alle Bereiche anzeigen“ */
+  assistant: boolean;
   /** Kennzeichen in Listen und Kopfzeile */
   badge: { text: string; title: string } | null;
   /** Mitglieder: nur Eigentümer und Agenten; Gruppen; Einladungen */
@@ -20,6 +22,7 @@ export function projectPolicy(p: { personal?: boolean | null }): ProjectPolicyUi
   const personal = Boolean(p.personal);
   return {
     personal,
+    assistant: personal,
     badge: personal ? { text: 'persönlich', title: PERSONAL_BADGE_TITLE } : null,
     members: {
       onlyOwnerAndAgents: personal, groups: !personal, invitations: !personal,

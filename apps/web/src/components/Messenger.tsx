@@ -63,7 +63,8 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
   const needle = q.trim().toLowerCase();
   const matching = (convs ?? []).filter((c) => !needle || c.title.toLowerCase().includes(needle) || (c.subtitle ?? '').toLowerCase().includes(needle));
   // Archivierte unten in einer eigenen, eingeklappten Gruppe; bei der Suche alle zusammen
-  const list = needle ? matching : matching.filter((c) => !c.archived);
+  // Der Assistent (angepinnt) steht immer oben, darunter die Gespräche nach letzter Aktivität
+  const list = (needle ? matching : matching.filter((c) => !c.archived)).sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)));
   const archived = needle ? [] : matching.filter((c) => c.archived);
   const [showArchived, setShowArchived] = useState(false);
   const archive = async (c: Conversation, v: boolean) => {
@@ -103,7 +104,10 @@ export function Messenger({ channelId, threadId, msgId, onSelect, onClose, onRea
           {picking && <PeoplePicker exclude={new Set((convs ?? []).filter((c) => c.partner).map((c) => c.partner!.id))} onPick={(p) => void start(p)} onCancel={() => setPicking(false)} />}
           {error && <div className="error small">{error}</div>}
           {!convs && !error && <div className="pad-10"><Loading /></div>}
-          {list.map(item)}
+          {list.some((c) => c.pinned) && !needle && <div className="msg-group">Dein Assistent</div>}
+          {list.filter((c) => c.pinned).map(item)}
+          {list.some((c) => c.pinned) && !needle && list.some((c) => !c.pinned) && <div className="msg-group">Gespräche</div>}
+          {list.filter((c) => !c.pinned).map(item)}
           {archived.length > 0 && <>
             <button className="msg-group msg-group-btn" aria-expanded={showArchived} onClick={() => setShowArchived(!showArchived)}>{showArchived ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} Archiviert ({archived.length})</button>
             {showArchived && archived.map(item)}
