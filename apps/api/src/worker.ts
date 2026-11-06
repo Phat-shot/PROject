@@ -17,6 +17,7 @@ import { expireProposals } from './ai/agentApproval.js';
 import { runScheduledMails } from './ai/scheduledMail.js';
 import { runProjectReviews } from './ai/knowledge.js';
 import { runUnconfirmedBookings } from './resources/service.js';
+import { runFileSync } from './files/service.js';
 
 /** Tägliche Regelläufe: Erinnerungen (fällig bald, überfällig; Empfänger nach Regel N, Standard die zuständige Person) und Wiederholungen „vor Fälligkeit“. */
 export async function runDailyRules(db: Db, today = new Date().toISOString().slice(0, 10)) {
@@ -59,13 +60,17 @@ export async function runCleanup(db: Db) {
 
 /**
  * Worker: regelbasierte Abläufe ohne KI. Je Lauf: Mail-Synchronisation aller Konten, abgelaufene Sitzungen,
- * Benachrichtigungen per Mail (sofort bzw. Digest zur Stunde der Org in Europe/Berlin); einmal täglich Erinnerungen,
+ * Benachrichtigungen per Mail (sofort bzw. Digest zur Stunde der Org in Europe/Berlin), Dateiquellen alle FILE_SYNC_INTERVAL_MS
+ * (Standard 15 min); einmal täglich Erinnerungen,
  * Wiederholungen, Eskalationen, Reports und das Aufräumen alter Meldungen.
  */
 export function startWorker(db: Db, mail: MailService, opts: { intervalMs: number }) {
   let running = false;
   let lastAgents = 0;
   let lastDaily = '';
+  // Dateiquellen (Nextcloud/WebDAV): eigener Intervall, Standard 15 Minuten; läuft entkoppelt, damit ein langsamer Server Mails und Agenten nicht aufhält
+  const fileEvery = Math.max(60_000, Number(process.env.FILE_SYNC_INTERVAL_MS ?? 15 * 60_000) || 15 * 60_000);
+  let lastFiles = 0; let filesRunning = false;
   const tick = async () => {
     if (running) return;
     running = true;
@@ -76,6 +81,10 @@ export function startWorker(db: Db, mail: MailService, opts: { intervalMs: numbe
         if (r.error) console.warn(`[worker] Sync ${a.id} fehlgeschlagen: ${r.error}`);
       }
       await db.query(`delete from sessions where expires_at < now()`);
+      if (!filesRunning && Date.now() - lastFiles >= fileEvery) {
+        lastFiles = Date.now(); filesRunning = true;
+        void runFileSync(db, fetch).catch((e) => console.error('[worker] Dateiquellen', e)).finally(() => { filesRunning = false; });
+      }
       await runNotificationMails(db, mail);
       if (Date.now() - lastAgents >= 60_000) { lastAgents = Date.now(); await runQuestions(db); await expireWaits(db); await supersedeStaleNotifications(db); await expireProposals(db); await runScheduledMails(db, mail); await runProjectReviews(db, mail, fetch); await runAgents(db, mail, fetch); await runQueuedMailAi(db, mail, fetch); await runWorkflows(db, mail); }
       const today = new Date().toISOString().slice(0, 10);

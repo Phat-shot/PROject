@@ -91,6 +91,13 @@ export const TEXT = {
 export const SQL = {
   isPersonal: (p = 'p') => `${p}.personal`,
   notPersonal: (p = 'p') => `not ${p}.personal`,
+  /**
+   * 6 (Dateiquellen wie LLM-Profile): Org-Quelle s im Projekt p freigegeben? Persönliche Projekte nur mit personal_use (all oder
+   * users mit dem Eigentümer), alle anderen nach project_scope (all, selected mit Freigabeliste).
+   */
+  orgFileSourceReleased: (s = 's', p = 'p') => `case when ${p}.personal
+        then (${s}.personal_use = 'all' or (${s}.personal_use = 'users' and exists (select 1 from file_source_personal_users pu where pu.source_id = ${s}.id and pu.user_id = ${p}.created_by)))
+        else (${s}.project_scope = 'all' or (${s}.project_scope = 'selected' and exists (select 1 from file_source_release_projects rp where rp.source_id = ${s}.id and rp.project_id = ${p}.id))) end`,
 };
 
 /** Projektname für Org-Admin und Begründungen (Aliase p = projects, ow = Ersteller); persönliche Projekte nur als „persönlich (Eigentümer)“. */

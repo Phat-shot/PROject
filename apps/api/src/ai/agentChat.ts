@@ -6,11 +6,11 @@ import { aiConfigFor, completeJson } from './client.js';
 import { aiAllowed } from './policy.js';
 import { queueAgentRun } from './agentEvents.js';
 import { styleText } from './agent.js';
-import { AGENT_SHEET, CHAT_RULES } from './sheet.js';
+import { AGENT_SHEET, CHAT_RULES, DATA_RULE } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, calendarText } from './plan.js';
 import { isInternal } from '../outbound.js';
 import { answerQuestion, isSmallTalk, type QuestionRow } from '../questions.js';
-import { search as knowledgeSearch, searchText, tokens, type SearchHit } from './knowledge.js';
+import { fileHitsText, mailHitsText, search as knowledgeSearch, searchSources, searchText, tokens, type SearchHit } from './knowledge.js';
 import { SQL } from '../projectPolicy.js';
 import { COMMAND_TYPES, allowedCommands, commandsText, postResults, runCommands, senderRole, type ChatCommand, type CommandCtx } from './chatCommands.js';
 import { effectiveAgentPolicy, policyText } from './agentPolicy.js';
@@ -614,11 +614,18 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Wissen zur Zuordnung (Direktnachricht): Treffer der Inhaltssuche je Projekt und eine Übersicht aller gemeinsamen Projekte
   let knowledge = '';
   if (scope.hits?.size) knowledge += `Treffer zur Nachricht in Doku und Arbeitspaketen (nur, was du und ${msg.user_name} sehen dürft):\n${scope.projects.filter((p) => scope.hits!.has(p.id)).map((p) => `## ${p.key} „${p.name}“\n${searchText(scope.hits!.get(p.id)!)}`).join('\n')}\n`;
+  // Mails und Dateien zur Nachricht: EINE Suche über alle Projekte des Themas (Vereinigung der Ansichten bzw. Dateiquellen, jede
+  // Mail und Datei einmal); in Direktnachrichten nur, was auch die fragende Person lesen darf, im Projektkanal nur Ansichten, die
+  // alle Mitglieder lesen dürfen. Im Chat gibt es keine Leserunden: nur Ausschnitte, ganze Mails/Dateien liest der Lauf am Arbeitspaket
+  if (scope.how !== 'general' && scope.projectIds.length && tokens(msg.body).length && !small) {
+    const src = await searchSources(db, { projectIds: scope.projectIds, agentId: agent.id, viewerId: project ? null : msg.user_id, allMembers: Boolean(project), query: msg.body, source: ['mails', 'files'], max: 6 });
+    if (src.mails?.length || src.files?.length) knowledge += `Treffer zur Nachricht in Mails und Dateien (nur, was du und ${project ? 'alle Mitglieder des Kanals' : msg.user_name} lesen dürft; nur Ausschnitte, Quelle nennen):\n${[src.mails?.length ? mailHitsText(src.mails) : '', src.files?.length ? fileHitsText(src.files) : ''].filter(Boolean).join('\n')}\n`;
+  }
   if (!project && (scope.common?.length ?? 0) > 1 && scope.how !== 'general') {
     const ov = await db.query(`select p.id, p.key, p.name, p.description, ${SQL.isPersonal('p')} as own, (select string_agg(x.name, ', ' order by x.position) from (select s2.id as subproject_id, s2.name, s2.position from subprojects s2 where s2.project_id = p.id) x where ${visibleSubprojectSql(2, 'x')} and ${visibleSubprojectSql(3, 'x')}) as sps from projects p where p.id = any($1::uuid[]) order by p.key`, [scope.common!.map((p) => p.id), msg.user_id, agent.id]);
     if (ov.rows.length) knowledge += `Gemeinsame Projekte (nur zur Zuordnung; Inhalte nur aus dem Thema und den Treffern):\n${ov.rows.map((p: any) => `- ${p.key} „${p.name}“${p.own ? ' (persönliches Projekt des Absenders)' : ''}${p.description ? `: ${cut(String(p.description).replace(/\s+/g, ' '), 160)}` : ''}${p.sps ? ` · Teilprojekte: ${cut(p.sps, 160)}` : ''}`).join('\n')}\n`;
   }
-  const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
+  const system = `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n${DATA_RULE}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   // Steht die Nachricht schon als Rückmeldung im Log eines Arbeitspakets (Antwort auf eine Frage des Agenten), keine zweite Notiz dazu
   const logged = await db.query(
     `select c.task_id, p.key, t.number from task_comments c join tasks t on t.id = c.task_id join projects p on p.id = t.project_id
@@ -654,7 +661,7 @@ Thema: ${theme}
 ${scope.intent === 'personal' ? `Rolle: Du bist hier persönlicher Assistent von ${msg.user_name}.\n` : ''}Absender: ${msg.user_name} – ${scope.how === 'general' ? 'allgemeine Anfrage: keine Befehle, keine Notizen' : commandsText(role, allowed, policy)}${scope.how === 'open' ? ` · Projekt für Aufträge: order.project (Kürzel) setzen${cmdProject ? `, sonst ${cmdProject.key}` : ''}` : cmdProject || scope.how === 'general' ? '' : scope.projects.length > 1 ? ' · Projekt für Aufträge nicht eindeutig: order.project (Kürzel) setzen oder nachfragen' : ''}
 ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt ${cmdProject!.key}`}: ${policyText(policy)} Aufträge im Chat: ${policy.chatOrders} (${policy.origin.chatOrders}).\n` : ''}${approvals.rows.length ? `Offene Bestätigungen von dir (approve/reject zeigt die Karte; die Person entscheidet per Klick):
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
-` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen steht); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
+` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen und unter „Treffer zur Nachricht in Mails und Dateien“ steht; ganze Mails und Dateien liest du erst im Lauf am Arbeitspaket); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
 ${personalDocs}${knowledge}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
 ${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}${waitDates(t.agent_wait)}` : ''}${t.agent_next_check_at ? ` · Wiedervorlage ${dmy(t.agent_next_check_at)}` : ''}${t.agent_paused ? ' · Agent pausiert (eine fällige Frist hebt die Pause auf; run startet sofort)' : ''} (taskId ${t.id})${t.open_items ? `\n  Offene Tasks: ${cut(t.open_items, 500)}` : ''}${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
 ${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):

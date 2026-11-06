@@ -1260,3 +1260,32 @@ export interface AiProfile { id: string; name: string; provider: 'anthropic' | '
 export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
 export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (👍 1, 👎 -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
+
+/** Dateiquelle (Nextcloud-Freigabelink oder WebDAV-Konto, nur lesend); Geheimnis nie, nur hasSecret. */
+export type FileSourceKind = 'nextcloud_share' | 'webdav';
+export interface FileSourceBindingRef { id: string; projectId: string; project: string; subPath: string | null; label: string }
+export interface FileSource {
+  id: string; name: string; kind: FileSourceKind;
+  /** eingegebene Adresse (Freigabelink bzw. WebDAV-Adresse) und abgeleitete WebDAV-Wurzel */
+  url: string; davUrl: string; username: string | null; hasSecret: boolean;
+  /** Startordner innerhalb der WebDAV-Wurzel ('/' = alles) */
+  rootPath: string;
+  /** org: Org-Admin, Freigabe für Projekte; project: Quelle eines Projekts (ownerProjectId) */
+  scope: 'org' | 'project'; ownerProjectId: string | null;
+  projectScope: 'all' | 'selected' | 'none'; projectIds: string[];
+  personalUse: PersonalUse; personalUserIds: string[];
+  active: boolean; lastSyncAt: string | null; lastError: string | null;
+  lastStats: FileSyncStats | null; files: number; bindings: FileSourceBindingRef[]; createdAt: string;
+}
+export interface FileSyncStats { files: number; added: number; changed: number; deleted: number; extracted: number; truncated: boolean; error?: string | null }
+/** Org-Quelle aus Sicht der PL (ohne Adresse und Zugangsdaten) */
+export interface FileSourceAvailable { id: string; name: string; kind: FileSourceKind; scope: 'org' | 'project'; rootPath: string; lastSyncAt: string | null; lastError: string | null }
+export interface FileSourceBinding { id: string; sourceId: string; sourceName: string; scope: 'org' | 'project'; kind: FileSourceKind; subPath: string | null; label: string; lastSyncAt: string | null; lastError: string | null; /** Einbindung gilt (Quelle aktiv und freigegeben) */ active: boolean }
+export interface FileRoot { bindingId: string; sourceId: string; label: string; sourceName: string; kind: FileSourceKind; scope: 'org' | 'project'; subPath: string | null; lastSyncAt: string | null; lastError: string | null }
+export type FileEntry =
+  | { type: 'folder'; name: string; path: string; bindingId: string; /** Dateien darunter (rekursiv) */ files?: number }
+  | { type: 'file'; id: string; name: string; path: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; bindingId: string };
+/** GET /projects/:id/files?binding=&path= */
+export interface FileListing { binding: FileRoot | null; path: string; parent: string | null; roots: FileRoot[]; entries: FileEntry[] }
+/** GET /files/:id/text */
+export interface FileText { id: string; name: string; path: string; projectId: string; bindingId: string; displayPath: string; mime: string | null; size: number | null; modifiedAt: string | null; textStatus: 'ok' | 'skipped' | 'error' | null; textNote: string | null; text: string | null }

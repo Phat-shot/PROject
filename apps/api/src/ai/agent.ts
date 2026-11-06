@@ -12,7 +12,7 @@ import { htmlToMd, mdToHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
 import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
-import { AGENT_SHEET, DATA_RULE, TASK_RULES, mailData } from './sheet.js';
+import { AGENT_SHEET, DATA_RULE, SOURCES_RULES, TASK_RULES, mailData } from './sheet.js';
 import { STRUCTURE_RULES, applyPlanningDepth, planningDepthText } from './structure.js';
 import { demoteBlocker, demoteTask, moveItem, promoteItem, reparentTask, type StructureActor } from '../tasks/structure.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
@@ -28,7 +28,8 @@ import { DEPTH_LIMITS, actionFingerprint, actionLabel, classLabel, classifyActio
 import { externalWindow, inWindow, nextWindowStart, research, sourcesSection, webAvailable, windowText, type WebSource } from './web.js';
 import type { ExternalWindow } from '@projekttool/shared';
 import { BOOKING_SELECT, BookingConflict, busyOf, createBooking, dayRange, findResourceByName, fmtSpan, syncMeetingBookings, syncTaskBookings } from '../resources/service.js';
-import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchText, withdrawRelation, type RelationKind } from './knowledge.js';
+import { RELATION_SELECT, acceptRelation, askSynergy, candidatesText, createRelation, digestText, estTokens, findCandidates, fitBudget, projectDigest, search as knowledgeSearch, searchKinds, searchText, withdrawRelation, mailViewScope, readFileText, readMailText, SearchCache, type RelationKind, type SearchSource } from './knowledge.js';
+import { fileScopes } from '../files/service.js';
 import { recordFeedback } from './feedback.js';
 import { SQL } from '../projectPolicy.js';
 
@@ -76,7 +77,9 @@ export type AgentAction =
   | { type: 'send_invite'; meetingId: string; text?: string | null }
   | { type: 'book_resource'; resource: string; startsAt?: string | null; endsAt?: string | null; startDate?: string | null; dueDate?: string | null; text?: string | null }
   | { type: 'research'; text: string }
-  | { type: 'search'; text: string }
+  | { type: 'search'; text: string; source?: SearchSource | null; from?: string | null; since?: string | null; until?: string | null }
+  | { type: 'read_mail'; id: string }
+  | { type: 'read_file'; id: string }
   | { type: 'read_task'; ref: string }
   | { type: 'relate'; ref: string; kind?: RelationKind | null; text?: string | null }
   | { type: 'withdraw'; ref: string }
@@ -86,7 +89,7 @@ export type AgentAction =
   | { type: 'demote_aufgabe'; ref: string }
   | { type: 'move_item'; itemId: string; target: string }
   | { type: 'none'; reason?: string };
-const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task']);
+const READ_TYPES = new Set(['read_page', 'research', 'search', 'read_task', 'read_mail', 'read_file']);
 /** Leserunden und Zugriffe je Denktiefe: DEPTH_LIMITS (Standard zwei Runden, sechs Zugriffe; research zählt gegen das Recherche-Budget) */
 
 export interface AgentWait { kind: 'reply' | 'date' | 'task' | 'info'; reason: string; since: string; remindAt?: string | null; escalateAt?: string | null; reminded?: boolean; escalated?: boolean; /** offene Frage, auf deren Antwort gewartet wird (Nachfassen und Weitergabe laufen über die Frage) */ questionId?: string | null }
@@ -121,8 +124,8 @@ const SCHEMA = {
     actions: { type: 'array', items: { type: 'object', additionalProperties: false,
       required: ['type', 'text', 'column', 'itemId', 'to', 'subject', 'reason', 'kind', 'checkAfterHours', 'until', 'remindAfterHours', 'escalateAfterHours', 'pageId', 'title', 'folder', 'status', 'ref', 'responsible', 'startDate', 'dueDate', 'subproject', 'items', 'startsAt', 'endsAt', 'location', 'questionId', 'meetingId', 'target'],
       properties: {
-        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
-        text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten und Arbeitspakete); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
+        type: { type: 'string', enum: ['comment', 'describe', 'set_status', 'check_item', 'add_item', 'update_item', 'mail', 'reply_origin', 'chat', 'read_page', 'doc_create', 'doc_update', 'doc_append', 'doc_status', 'doc_move', 'folder_create', 'doc_send_pdf', 'create_aufgabe', 'create_ap', 'assign', 'set_dates', 'create_subproject', 'create_milestone', 'create_event', 'update_event', 'cancel_event', 'send_invite', 'blocked', 'escalate', 'ask', 'resolve', 'refer', 'wait', 'research', 'search', 'read_task', 'read_mail', 'read_file', 'relate', 'withdraw', 'book_resource', 'move_aufgabe', 'move_ap', 'promote_item', 'demote_aufgabe', 'move_item', 'none'] },
+        text: { type: 'string', description: 'comment: Log-Text; describe: neue Beschreibung dieses Arbeitspakets (Markdown); research: Suchfrage für die Online-Recherche (ohne Namen, Adressen, Interna); search: Suchbegriffe für die Projektsuche (Seiten, Arbeitspakete, Mails, Dateien); relate: Begründung des Zusammenhangs; mail/doc_send_pdf: Mailtext; reply_origin: Antworttext an den Absender der Ursprungsmail; ask: die Frage (ein Thema, klar, mit gewünschtem Termin); chat: Chat-Nachricht ohne erwartete Antwort; escalate: Text an die PL; resolve: warum die Frage erledigt ist; refer: Frage des Externen, die nicht zu seiner Aufgabe gehört (für den nächsten Menschen der Kette); add_item/update_item: Task-Text; doc_create/doc_update/doc_append: Seiteninhalt in Markdown (doc_update ersetzt den ganzen Inhalt); create_aufgabe/create_ap/create_event: Beschreibung; sonst leer' },
         column: { type: 'string', description: 'set_status: Zielstatus (exakt aus der Liste); sonst leer' },
         itemId: { type: 'string', description: 'check_item/update_item/promote_item/move_item: itemId aus der Task-Liste; sonst leer' },
         target: { type: 'string', description: 'move_aufgabe: Kennung des Ziel-Arbeitspakets; move_item: Kennung der Ziel-Aufgabe; demote_aufgabe: Kennung der Aufgabe, deren Task sie wird (leer = die einzige andere offene Aufgabe des AP); sonst leer' },
@@ -148,7 +151,11 @@ const SCHEMA = {
         reason: { type: 'string', description: 'wait: worauf genau gewartet wird (Pflicht); blocked: Grund; none: Grund; sonst leer' },
         kind: { type: 'string', description: 'wait: genau einer der Werte reply, date, task, info; ask: question (Information, Termin, Zusage) oder decision (Entscheidung außerhalb deiner Zuständigkeit); relate: related, sync, duplicate oder dependency; sonst leer' },
         checkAfterHours: { type: 'number', description: 'wait: Stunden bis zur nächsten Prüfung; sonst leer' },
-        until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); sonst leer' },
+        until: { type: 'string', description: 'wait mit kind date: Zeitpunkt als YYYY-MM-DDTHH:MM (Europe/Berlin), YYYY-MM-DD oder HH:MM (heute, sonst morgen); search: Ende des Zeitraums YYYY-MM-DD; sonst leer' },
+        source: { type: 'string', description: 'search: all (Standard), docs, tasks, mails oder files; sonst leer' },
+        from: { type: 'string', description: 'search: Absender (Name oder Adresse), sucht dann nur Mails; sonst leer' },
+        since: { type: 'string', description: 'search: Beginn des Zeitraums YYYY-MM-DD; sonst leer' },
+        id: { type: 'string', description: 'read_mail: mail:<id> aus den Suchtreffern; read_file: file:<id>; sonst leer' },
         remindAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zum Nachfassen; ask: gewünschte Frist in Stunden (verkürzt nur den Standard); sonst leer' },
         escalateAfterHours: { type: 'number', description: 'wait mit kind reply: Stunden bis zur Eskalation an die PL; sonst leer' },
         questionId: { type: 'string', description: 'resolve: questionId der offenen Frage aus „Offene Fragen“; sonst leer' }
@@ -486,6 +493,7 @@ export async function applyAgentActions(ctx: RunCtx, actions0: AgentAction[], op
       else if (a.type === 'research') errors.push('research ohne weitere Aktionen verworfen');
       else if (a.type === 'search') errors.push('search ohne weitere Aktionen verworfen');
       else if (a.type === 'read_task') errors.push('read_task ohne weitere Aktionen verworfen');
+      else if (a.type === 'read_mail' || a.type === 'read_file') errors.push(`${a.type} ohne weitere Aktionen verworfen`);
       else if (a.type === 'relate') {
         // Synergie (Konzept 6.7): Beziehung zwischen den Arbeitspaketen; nach Policy synergies fragen (ask) oder Querverweis (use, nur related/sync)
         const other = await findTaskByRef(db, task.project_id, a.ref);
@@ -891,6 +899,9 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const found = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: `${task.title} ${cut(task.description, 400)}`, maxTitles: 10, maxExcerpts: 3 });
   const foundPages = found.pages.length ? found.pages : pages.rows.slice(0, 10).map((p: any) => ({ id: p.id, title: p.title, status: p.status, folder: p.folder ?? null, excerpt: null }));
   const similar = found.tasks.filter((x) => x.id !== task.id && x.id !== task.parent_id).slice(0, 5);
+  // Weitere Quellen der Suche: Mail-Ansichten mit KI-Recht und Dateiquellen des Projekts (nur Hinweis, Inhalte per search/read_mail/read_file)
+  const mailViewsN = (await mailViewScope(db, { projectIds: [task.project_id], agentId: agent.id })).length;
+  const fileRoots = [...new Set((await fileScopes(db, [task.project_id])).map((x) => x.label))];
   const candidates = policy.synergies === 'off' || !dl.candidates ? [] : await findCandidates(db, { projectId: task.project_id, taskId: task.parent_id ?? task.id, agentId: agent.id, max: dl.candidates });
   const relations = await db.query(`${RELATION_SELECT} where (r.task_a = $1 or r.task_b = $1) and r.status <> 'rejected' order by r.created_at desc limit 5`, [task.parent_id ?? task.id]);
   const relText = (r: any) => { const otherIsB = r.task_a === (task.parent_id ?? task.id); return `${r.key}-${otherIsB ? r.b_number : r.a_number} „${cut(otherIsB ? r.b_title : r.a_title, 60)}“ · ${{ related: 'verwandt', sync: 'synchron', duplicate: 'Doppelarbeit', dependency: 'Abhängigkeit' }[String(r.kind)] ?? r.kind} · ${{ suggested: 'vorgeschlagen', asked: 'nachgefragt', accepted: 'bestätigt' }[String(r.status)] ?? r.status}`; };
@@ -898,7 +909,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Systemblöcke (Konzept 6.8): fest (KI-Sheet und Regeln, für alle Läufe gleich), je Agent und Projekt (Name, Rolle, Stil), je Projekt und Sichtbarkeit (Überblick); Anthropic cacht die Blöcke
-  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${STRUCTURE_RULES}\n\n${DATA_RULE}`;
+  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${STRUCTURE_RULES}\n\n${DATA_RULE}\n\n${SOURCES_RULES}`;
   const sysAgent = `# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
   let systemBlocks = [sysFixed, sysAgent, digestText(digest)];
   let system = systemBlocks.join('\n\n');
@@ -918,7 +929,8 @@ ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('
 ${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${mailData(x.subject ?? '')}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? `<<<MAIL ${mailData(cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500))} MAIL>>>` : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
     { key: 'pages', text: `Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (${found.pages.length ? 'passend zum Arbeitspaket; weitere per search' : 'neueste; passende per search'}):
-${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}` },
+${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}
+Weitere Quellen per search: ${mailViewsN ? `Mails aus ${mailViewsN} Ansicht${mailViewsN === 1 ? '' : 'en'} (source mails, read_mail)` : 'keine Mail-Ansicht mit KI-Recht'}; ${fileRoots.length ? `Dateiquellen ${fileRoots.map((l) => `„${l}“`).join(', ')} (source files, read_file)` : 'keine Dateiquellen'}` },
     { key: 'similar', text: `${similar.length ? `Ähnliche Arbeitspakete (per read_task lesbar): ${similar.map((x) => `${x.ref} „${cut(x.title, 60)}“ · ${x.status}`).join('; ')}\n` : ''}${candidates.length ? `Mögliche Überschneidungen (prüfen, ggf. read_task; bei echtem Zusammenhang relate, sonst nichts):\n${candidatesText(candidates)}\n` : ''}${relations.rows.length ? `Beziehungen dieses Arbeitspakets (nicht erneut melden): ${relations.rows.map(relText).join('; ')}\n` : ''}`.replace(/\n$/, '') },
     { key: 'members', keep: true, text: `Projektmitglieder: ${members.rows.map((x: any) => `${x.name} <${x.email}>${x.role === 'pl' ? (x.is_deputy ? ' (PL-Stellvertretung)' : ' (PL)') : ''}${x.kind === 'agent' ? ' (Agent)' : ''}`).join(', ')}
 Deine Zuständigkeit: ${basis}${requester ? `; übertragen von ${requester.name} per Chat-Auftrag. Das ist die verbindliche Zuweisung; ein Arbeitspaket braucht kein Teilprojekt. Frag nicht nach Struktur oder Zuweisung, erledige die Arbeit` : ''}.
@@ -950,8 +962,9 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     let inputTokens = 0; let outputTokens = 0; let model = '';
     let j: any = {};
     let actions: AgentAction[] = [];
-    // Leserunden: read_page, search und read_task liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
+    // Leserunden: read_page, search, read_task, read_mail und read_file liefern Inhalte, danach entscheidet das Modell erneut (max. zwei Leserunden, zusammen sechs Zugriffe)
     let accesses = 0;
+    const searchCache = new SearchCache();
     for (let round = 0; round <= dl.rounds; round++) {
       // Denkmodus ausdrücklich an: Denk-Token zählen bei lokalen Servern zu max_tokens, deshalb mehr Spielraum; gründlich bekommt mehr Platz
       const r = await completeJson(cRun, fetchFn, { meta: { feature: 'agent.run', projectId: task.project_id, taskId: task.id }, system, systemBlocks, cacheBlocks: 3, prompt: prompt + extra, maxTokens: 2500 + (policy.depth === 'deep' ? 2000 : 0), schema: SCHEMA });
@@ -960,7 +973,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
       actions = Array.isArray(j.actions) ? j.actions.slice(0, 25) : [];
       const reads = actions.filter((a) => a.type === 'read_page');
       const searches = actions.filter((a) => a.type === 'research');
-      const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task');
+      const lookups = actions.filter((a) => a.type === 'search' || a.type === 'read_task' || a.type === 'read_mail' || a.type === 'read_file');
       if (!reads.length && !searches.length && !lookups.length) break;
       if (round === dl.rounds) { errors.push(`Lesen abgebrochen: mehr als ${dl.rounds === 1 ? 'eine Leserunde' : `${dl.rounds} Leserunden`} (Denktiefe ${policy.depth})`); actions = actions.filter((a) => !READ_TYPES.has(a.type)); break; }
       const texts: string[] = [];
@@ -971,8 +984,16 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         accesses++;
         if (a.type === 'search') {
           const q = cut((a as any).text, 200);
-          const r2 = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: q, maxTitles: 10, maxExcerpts: 3 });
-          texts.push(`### Suche „${q}“\n${searchText(r2)}`);
+          const opts = { source: ((a as any).source || 'all') as SearchSource, from: (a as any).from || null, since: (a as any).since || null, until: (a as any).until || null };
+          const label = `### Suche „${q}“${opts.source !== 'all' ? ` in ${opts.source}` : ''}${opts.from ? ` von ${cut(opts.from, 80)}` : ''}${opts.since || opts.until ? ` (${opts.since ?? '…'} – ${opts.until ?? '…'})` : ''}`;
+          // Laufcache: dieselbe Suche (normalisierter Text, Quelle, Filter) nur einmal je Lauf; zählt nicht gegen das Zugriffslimit
+          if (!searchCache.claim(q, opts)) { accesses--; texts.push(`${label}: bereits gesucht, siehe oben`); continue; }
+          const r2 = await knowledgeSearch(db, { projectId: task.project_id, agentId: agent.id, query: q, maxTitles: 10, maxExcerpts: 3, ...opts });
+          texts.push(`${label}\n${searchText(r2, searchKinds(opts))}`);
+        } else if (a.type === 'read_mail') {
+          texts.push((await readMailText(db, { projectIds: [task.project_id], agentId: agent.id, id: (a as any).id })).text);
+        } else if (a.type === 'read_file') {
+          texts.push((await readFileText(db, { projectIds: [task.project_id], agentId: agent.id, id: (a as any).id })).text);
         } else {
           const ref = String((a as any).ref ?? '').trim();
           const other = await findTaskByRef(db, task.project_id, ref);
@@ -1009,7 +1030,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
         texts.push(`### „${page.title}“ (pageId ${page.id}, ${page.status}, Version ${page.version})\n${cut(md, 6000) || '(leer)'}`);
       }
       const others = actions.filter((a) => !READ_TYPES.has(a.type));
-      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page, search oder read_task für bereits Gelesenes, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
+      extra += `\n\nGelesene Seiten (Markdown) und Recherche-Ergebnisse:\n${texts.join('\n\n')}\n${others.length ? 'Deine übrigen Aktionen der vorigen Antwort wurden NICHT ausgeführt, weil du erst gelesen bzw. recherchiert hast. Gib jetzt alle Aktionen erneut an, die ausgeführt werden sollen.' : 'Gib jetzt deine Aktionen an.'} Kein erneutes read_page, search, read_task, read_mail oder read_file für bereits Gelesenes, keine erneute research zur gleichen Frage; Netzfunde nur mit Quelle (URL) übernehmen.`;
       actions = [];
     }
     const res = await applyAgentActions(ctx, actions, { hold: true });
@@ -1033,7 +1054,7 @@ Entscheide, was jetzt sinnvoll ist. Keine Wiederholung bereits erledigter oder b
     // Angehaltene Aktionen: Vorschläge an einer Frage approval (Karte im Chat, Meldung, Log, Warten des Agenten)
     if (res.held.length) await holdProposals(ctx, res.held, run.id);
     // Zwischenstand (Klasse progress): an Auftraggeber und Berichtswünsche am AP, gefiltert nach every; Inhalt aus den ausgeführten Aktionen
-    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'search', 'read_task', 'chat'].includes(x.type));
+    const content = applied.filter((x) => !['none', 'wait', 'read_page', 'search', 'read_task', 'read_mail', 'read_file', 'chat'].includes(x.type));
     if (content.length) {
       const doneCols = new Set(columns.rows.filter((x: any) => x.is_done).map((x: any) => x.name));
       const done = content.some((x: any) => x.type === 'set_status' && doneCols.has(x.column));

@@ -63,9 +63,11 @@ Quelle: `.env.example` (Entwicklung) und `deploy/.env.example` (Produktion). Wer
 | `PUBLIC_URL` | ja (Produktion) | `http://localhost:5173` | Öffentliche Basis-URL für Links in Mails, Freigabe-Links, OAuth-/OIDC-Redirects |
 | `SEED` | nein | nicht gesetzt | `true` legt beim ersten Start Demodaten an (nur zum Ausprobieren, in Produktion gesperrt; Abschnitt 4) |
 | `SYNC_INTERVAL_MS` | nein | `60000` | Takt des Workers (Mail-Synchronisation, Agenten-Wiedervorlagen, Erinnerungen) |
+| `FILE_SYNC_INTERVAL_MS` | nein | `900000` (15 min) | Abgleich der Dateiquellen (Nextcloud/WebDAV), mindestens 60000; läuft neben dem Worker-Takt, ein langsamer Server hält Mails und Agenten nicht auf |
+| `FILE_SYNC_MAX_FILES` | nein | `5000` | Höchstzahl Dateien je Quelle im Index; darüber bleibt der Index unvollständig (Hinweis an der Quelle), gelöscht wird dann nichts |
 | `COOKIE_SECURE` | ja (Produktion) | `false` | `true` hinter TLS: Session-Cookie nur über HTTPS, setzt HSTS |
 | `TRUST_PROXY` | nein | Produktion: `loopback,linklocal,uniquelocal` | Adressen oder Netze der vertrauenswürdigen Reverse-Proxys für `X-Forwarded-For` (Drosselung und Protokoll je Client); `true` vertraut jedem Proxy (nicht verwenden) |
-| `OUTBOUND_ALLOW_HOSTS` | nein | leer | Interne Ziele, die Benutzer eintragen dürfen (CalDAV, IMAP/SMTP, eigenes LLM, Recherche): Hostnamen (auch `*.domain`) oder Netze, kommagetrennt, z. B. `nextcloud.lan,10.0.5.0/24` |
+| `OUTBOUND_ALLOW_HOSTS` | nein | leer | Interne Ziele, die Benutzer eintragen dürfen (CalDAV, IMAP/SMTP, eigenes LLM, Recherche, Dateiquellen): Hostnamen (auch `*.domain`) oder Netze, kommagetrennt, z. B. `nextcloud.lan,10.0.5.0/24` |
 | `SECRET_KEY` | nein | leer | Schlüssel für gespeicherte Geheimnisse (AES-256-GCM); leer = Datei `DATA_DIR/secret.key` beim ersten Start erzeugt. Selbst gesetzt: mindestens 32 Byte Zufall, z. B. `openssl rand -hex 32`; nach dem ersten Start nicht mehr ändern. Bestandswerte (`enc1:`) bleiben lesbar und werden beim nächsten Speichern neu verpackt (`enc2:`) |
 | `PASSWORD_SCRYPT_N` | nein | `131072` | Arbeitsfaktor der Passwort-Hashes (scrypt N, Zweierpotenz ≥ 16384); nur für Tests oder sehr schwache Hardware senken |
 | `ANTHROPIC_API_KEY` | nein | leer | Anthropic-Schlüssel aus der Umgebung, nur für KI-Profile des Mandanten (nie für eigene LLMs der Projekte); alternativ im Profil hinterlegen |
@@ -128,6 +130,14 @@ Vor einem Update ein Backup ziehen (Abschnitt 6). Zurück auf eine ältere Versi
 - Interne Ziele (CalDAV, IMAP/SMTP, eigene LLMs der PL) sind gesperrt, bis sie in `OUTBOUND_ALLOW_HOSTS` stehen; öffentliche Server und LLM-Profile des Org-Admins sind nicht betroffen.
 - SSO: liefert der IdP kein `email_verified`, `OIDC_TRUST_EMAIL=true` setzen.
 - Verhalten für Benutzer: Passwort-Reset mit aktivem zweiten Faktor meldet nicht mehr direkt an; ein TOTP-Code gilt nur einmal, nach 5 falschen Codes neu anmelden; Agenten antworten Erstabsendern nie selbstständig; Root-Compose startet Demodaten nur noch mit `SEED=true` und veröffentlicht den Port nur auf localhost; Android: am Release hängt nur die signierte APK.
+
+### Dateiquellen (Nextcloud, WebDAV)
+
+- **Nur lesend:** Das Tool sendet `PROPFIND` (Tiefe 1, Ordner für Ordner, höchstens 12 Ebenen und 1000 Ordner) und `GET`; es schreibt nie in die Cloud. Gespeichert werden Metadaten und Textauszüge (bis 200 kB je Datei, Dateien bis 20 MB); Downloads gehen live durch.
+- **Freigabelink:** `https://host/s/<token>` (auch mit Unterpfad, z. B. `https://host/nextcloud/index.php/s/<token>`) wird zu `https://host/public.php/webdav/` mit Basic-Anmeldung `<token>:<Passwort>`. Für einen Projektordner reicht ein Link „Nur lesen“, bei Bedarf mit Passwort und Ablaufdatum.
+- **Konto:** `https://host/remote.php/dav/files/<benutzer>/` mit Benutzername und **App-Passwort** (Nextcloud: Einstellungen › Sicherheit › Geräte & Sitzungen). Am besten ein eigenes technisches Konto, dem die Ordner nur lesend freigegeben sind. Passwörter liegen verschlüsselt (`enc2`, Schlüssel `SECRET_KEY` bzw. `secret.key`).
+- **Netz:** Alle Aufrufe laufen durch den SSRF-Schutz (keine internen Adressen, DNS-Pinning, keine Weiterleitungen, Zeitlimit 30 s je PROPFIND, 60 s je Textauszug). Eine Nextcloud im eigenen Netz muss in `OUTBOUND_ALLOW_HOSTS` stehen; leitet der Server um (z. B. http → https), die endgültige Adresse eintragen.
+- **Last:** Nur geänderte Dateien (ETag) werden geladen, je Abgleich höchstens 300 Textauszüge, der Rest folgt im nächsten Lauf. Fehler stehen an der Quelle (`last_error`) und im Server-Log (`[worker] Dateiquelle …`).
 
 ## 6. Backup und Restore
 

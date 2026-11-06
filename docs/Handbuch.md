@@ -184,6 +184,17 @@ Ursprungsmail, Ordner „KI Bearbeiten“, Agent an einer Ansicht, Projektagent 
 - **Agentenzugriff je Ordner** (Ordner bearbeiten): schreiben, nur lesen oder kein Zugriff; vererbt an Unterordner.
 - Faustregel: Was länger gilt als ein Log-Eintrag (Protokoll, Konzept, Entscheidung), gehört auf eine Seite; ins Log kommt die Kurzfassung.
 
+### Dateiquellen (Nextcloud, WebDAV)
+
+Pläne, Verträge und Protokolle, die in einer Nextcloud oder einem anderen WebDAV-Speicher liegen, erscheinen unter **Doku › Dateien**, ohne sie hochzuladen. Das Tool liest nur: es legt nichts an, ändert und löscht nichts in der Cloud.
+
+- **Quelle:** entweder ein **Freigabelink** (`https://cloud.example.de/s/AbC123`, bei geschützten Links mit Passwort) oder ein **Konto** (WebDAV-Adresse `https://cloud.example.de/remote.php/dav/files/<benutzer>/` bzw. nur `https://cloud.example.de`, dazu Benutzername und **App-Passwort**; in Nextcloud unter Einstellungen › Sicherheit › „Neues App-Passwort erstellen“, nie das Anmeldepasswort). Optional ein Startordner, ab dem gelesen wird. Beim Speichern prüft das Tool die Verbindung.
+- **Quellen der Organisation** legt der Org-Admin an (Verwaltung › Dateiquellen) und gibt sie frei wie LLMs: für alle Projekte, ausgewählte oder keine; für **persönliche Projekte** getrennt (keine, alle, ausgewählte Personen; Standard keine).
+- **Einbinden (PL):** Einstellungen › Dateiquellen zeigt verfügbare Quellen; „Einbinden“ mit Ordnerwahl (Unterordner) und Anzeigename, z. B. „Pläne Halle 3“. Dieselbe Quelle kann mehrfach (anderer Unterordner) und in mehreren Projekten eingebunden sein; gelesen und durchsucht wird sie trotzdem nur einmal. Eine **eigene Quelle** des Projekts legt die PL dort selbst an; sie gilt nur in diesem Projekt. „Lösen“ entfernt die Einbindung, eine eigene Quelle verschwindet danach samt Index.
+- **Lesen:** Wer im Projekt mindestens Leserecht hat, sieht die eingebundenen Ordner mit Unterordnern und Dateien, öffnet den Textauszug und lädt die Datei (sie kommt live aus der Cloud, nichts wird im Tool gespeichert außer Name, Größe, Datum und Textauszug). Dateien außerhalb des eingebundenen Unterordners sieht man nicht.
+- **Aktualität:** Das Tool gleicht die Quellen alle 15 Minuten ab (Betrieb: `FILE_SYNC_INTERVAL_MS`), „Jetzt abgleichen“ sofort. Neu und geändert erkennt es am ETag; gelöschte Dateien verschwinden. Ein Fehler (Passwort geändert, Link abgelaufen) steht an der Quelle.
+- **Suche und Agenten:** Für .txt, .md, .csv, .html, .pdf (mit Textebene) und .docx wird ein Textauszug gespeichert (bis 20 MB je Datei, Text bis 200 kB); andere Dateien findet man über den Namen. Agenten durchsuchen die Dateien des Projekts und lesen Auszüge (KI-Handbuch Kapitel 5); der Projektagent sieht im Durchlauf „Neue Dateien seit letztem Lauf“.
+
 ## 8. Besprechungen und Kalender
 
 - **Besprechung** (Doku › Besprechungen, auch in der Leiste unter dem Projekt): Termin, Ort, Agenda, Teilnehmer (Mitglieder, Kontakte, freie Adressen), Zuordnung zu einer Besprechungsreihe.
