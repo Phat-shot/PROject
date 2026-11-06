@@ -541,6 +541,27 @@ test('Spaltenarten: Geplant und Zurückgestellt, Eskalation nur in aktiven Spalt
   assert.ok(!rows.some((r) => r.taskId === task.id && r.staleDays > 0), 'zurückgestellt ist kein Stillstand');
 });
 
+test('Spaltengruppen: Standard gruppiert Geplant, Wartet und Zurückgestellt als „Nicht in Arbeit“; PUT /columns nimmt group entgegen (leer → null)', async () => {
+  const pl = await t.login('pl@demo.local');
+  // Demoprojekt und neues Projekt ohne Vorlage: Gruppe „Nicht in Arbeit“ an den drei Arten, sonst keine
+  for (const id of [t.ids.projects.web, (await t.api(pl).post('/projects', { key: 'GRP', name: 'Gruppen' })).json().project.id]) {
+    const cols = (await t.api(pl).get(`/projects/${id}`)).json().columns;
+    assert.deepEqual(cols.map((c: any) => [c.kind, c.group]), [['backlog', 'Nicht in Arbeit'], ['active', null], ['active', null], ['active', null], ['waiting', 'Nicht in Arbeit'], ['parked', 'Nicht in Arbeit'], ['done', null]]);
+  }
+  const p = (await t.api(pl).post('/projects', { key: 'GRP2', name: 'Gruppen 2' })).json().project;
+  const cols = (await t.api(pl).get(`/projects/${p.id}`)).json().columns;
+  const body = cols.map((c: any) => ({ id: c.id, name: c.name, kind: c.kind, wipLimit: c.wipLimit, group: c.kind === 'active' ? ' Arbeit ' : c.kind === 'done' ? '' : null }));
+  body.push({ name: 'Später', kind: 'backlog', wipLimit: null, group: 'Nicht in Arbeit' });
+  const r = await t.api(pl).put(`/projects/${p.id}/columns`, { columns: body });
+  assert.equal(r.statusCode, 200, r.body);
+  const after = r.json().columns;
+  assert.deepEqual(after.map((c: any) => c.group), [null, 'Arbeit', 'Arbeit', 'Arbeit', null, null, null, 'Nicht in Arbeit']);
+  assert.equal((await t.api(pl).get(`/projects/${p.id}`)).json().columns.at(-1).group, 'Nicht in Arbeit');
+  // Mitglied ohne PL darf nicht
+  const max = await t.login('max@demo.local');
+  assert.equal((await t.api(max).put(`/projects/${p.id}/columns`, { columns: body })).statusCode, 403);
+});
+
 test('Mail: Ordner, Archivieren, Papierkorb, Verschieben in Unterordner mit Rechten und Audit', async () => {
   const pl = await t.login('pl@demo.local');
   const leser = await t.login('leser@demo.local');

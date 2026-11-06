@@ -31,6 +31,7 @@ Fachbegriffe und Anglizismen, wie sie in der Oberfläche vorkommen:
 - **Thread:** Antworten auf eine Chat-Nachricht, zusammengefasst direkt unter ihr (aufklappen mit „n Antworten“). Fragen der Agenten sind Thread-Wurzeln; wer im Thread antwortet, beantwortet die Frage.
 - **Ursprungsmail:** die Mail, aus der ein AP oder eine Aufgabe entstanden ist. Das AP merkt sie sich; „Ursprungsmail beantworten“ schreibt das Ergebnis als Antwort im selben Mailverlauf.
 - **WIP-Limit:** Höchstzahl offener APs je Spalte (Work in Progress); darüber färbt sich die Spalte rot.
+- **Spaltengruppe:** mehrere Spalten (z. B. Geplant, Wartet, Zurückgestellt als „Nicht in Arbeit“) als eine Board-Spalte mit Abschnitten untereinander; einstellbar unter Einstellungen › Planung und Board › Spalten bearbeiten.
 - **Workflow:** mandantenweite Vorlage für feste Abläufe (AP → Timer → AP → Warten auf Freigabe oder Mail → Mail). Ein Lauf startet isoliert oder in einem Projekt; jeder erledigte Schritt löst den nächsten aus.
 
 ## Navigation

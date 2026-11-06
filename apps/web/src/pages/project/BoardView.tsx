@@ -13,6 +13,7 @@ import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
 import { useProject } from '../ProjectPage';
 import { useIsMobile } from '../../lib/useMedia';
 import { EMPTY_FILTER, isFilterActive, readFilter, writeFilter, type BoardFilter } from '../../lib/boardFilter';
+import { groupColumns } from '../../lib/columnGroups';
 
 type Filter = BoardFilter;
 const EMPTY = EMPTY_FILTER;
@@ -110,6 +111,8 @@ export function BoardView() {
     return out.filter((g) => g.tasks.length > 0 || !active);
   }, [filtered, lanes, detail.subprojects, active]);
 
+  // Spaltengruppen (Einstellungen › Planung und Board): gleiche Gruppe = eine Board-Spalte mit Abschnitten untereinander
+  const boardCols = useMemo(() => groupColumns(detail.columns), [detail.columns]);
   // Schnell anlegen nur in einer Spalte je Teilprojekt (erste aktive, sonst erste): weniger Knöpfe, gleicher Weg
   const addColumnId = (detail.columns.find((c) => c.kind === 'active') ?? detail.columns[0])?.id;
   // Anlegen in jeder Spalte außer „Wartet“ (braucht Grund und Frist) und „Erledigt“; `n` öffnet das Feld der ersten aktiven Spalte
@@ -193,40 +196,79 @@ export function BoardView() {
         <div key={g.key} className={`swimlane ${closed ? 'collapsed' : ''}`}>
           {g.name && <h2><button className="lane-toggle" title={closed ? 'Ausklappen' : 'Einklappen'} aria-label={`${g.name}: ${closed ? 'ausklappen' : 'einklappen'}`} aria-expanded={!closed} onClick={() => toggleLane(g.key)}>{closed ? <IconChevronRight /> : <IconChevronDown />}</button>{g.key !== 'none' && g.key !== 'all' ? <button className="lane-name link" title="Teilprojekt öffnen (Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine)" onClick={() => openSubproject(g.key)}>{g.name}</button> : <span className="lane-name">{g.name}</span>}<Badge>{g.tasks.length}</Badge>{g.key !== 'none' && <SubprojectResp id={g.key} />}{g.key !== 'none' && g.key !== 'all' && <Button size="sm" className="lane-config" icon={<IconSettings />} title="Teilprojekt konfigurieren: Verantwortung, Zeitraum, Beschreibung, Sichtbarkeit, Meilensteine" onClick={() => openSubproject(g.key)}>Teilprojekt</Button>}</h2>}
           {g.name && closed ? null : <div className="board">
-            {detail.columns.map((c) => {
-              const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
-              const total = columnCount(c.id);
-              const over = c.wipLimit != null && total > c.wipLimit;
-              const isCollapsed = collapsed.has(c.id);
+            {boardCols.map((bc) => {
               const laneKey = g.key;
-              return (
-                <div key={c.id} className={`column kind-${c.kind} ${over ? 'wip-over' : ''} ${isCollapsed ? 'collapsed' : ''} ${drop?.col === c.id && drop.lane === laneKey ? 'over' : ''}`}
-                  onDragOver={(e) => { if (canEdit && drag) { e.preventDefault(); if (!drop || drop.col !== c.id || drop.lane !== laneKey) setDrop({ col: c.id, lane: laneKey, index: inCol.length }); } }}
-                  onDragLeave={(e) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDrop(null); }}
-                  onDrop={(e) => { e.preventDefault(); void onDrop(laneKey, c.id); }}>
-                  <h3>
-                    <span>{c.name}{!isCollapsed && c.kind === 'backlog' && <span className="kind"><Term k="stillstand">geplant</Term></span>}{!isCollapsed && c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{!isCollapsed && c.kind === 'waiting' && <span className="kind" title="Wartet auf Rückmeldung mit Frist; ohne Lösung bis zur Frist → Zurückgestellt">Frist</span>}{!isCollapsed && c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</span>
-                    {!isCollapsed && <span className="tools">
-                      <span>{inCol.length}</span>
-                      {canEdit && c.isDone && inCol.length > 0 && <Button size="sm" variant="link" loading={archive.busy} title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => archiveDone(c, total)}>Archivieren</Button>}
-                      <button title="Spalte einklappen" aria-label={`Spalte ${c.name} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, c.id]))}>«</button>
-                    </span>}
-                    {isCollapsed && <button className="btn sm link" aria-label={`Spalte ${c.name} ausklappen (${total})`} onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}
-                  </h3>
+              // Abschnitt einer Spalte: Kopf (Name, Art, Zähler, WIP, Einklappen), Karten, „Hier ablegen“, Schnellanlage; eigenes Drop-Ziel
+              const section = (c: typeof bc.columns[number], inGroup: boolean) => {
+                const inCol = g.tasks.filter((x) => x.columnId === c.id).sort((a, b) => a.position - b.position);
+                const total = columnCount(c.id);
+                const over = c.wipLimit != null && total > c.wipLimit;
+                const isCollapsed = collapsed.has(c.id);
+                const isOver = drop?.col === c.id && drop.lane === laneKey;
+                const dropProps = {
+                  onDragOver: (e: React.DragEvent) => { if (canEdit && drag) { e.preventDefault(); e.stopPropagation(); if (!drop || drop.col !== c.id || drop.lane !== laneKey) setDrop({ col: c.id, lane: laneKey, index: inCol.length }); } },
+                  onDragLeave: (e: React.DragEvent) => { if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) setDrop(null); },
+                  onDrop: (e: React.DragEvent) => { e.preventDefault(); e.stopPropagation(); void onDrop(laneKey, c.id); }
+                };
+                const kindHint = <>{c.kind === 'backlog' && <span className="kind"><Term k="stillstand">geplant</Term></span>}{c.kind === 'parked' && <span className="kind" title="Zurückgestellt: ruht, keine Eskalation">ruht</span>}{c.kind === 'waiting' && <span className="kind" title="Wartet auf Rückmeldung mit Frist; ohne Lösung bis zur Frist → Zurückgestellt">Frist</span>}{c.wipLimit != null && <span className="count" title="WIP-Limit"> · {total}/{c.wipLimit}</span>}</>;
+                const body = <>
                   {!isCollapsed && inCol.map((x, i) => (
                     <TaskCard key={x.id} task={x} t={t} soon={soon} canEdit={canEdit}
                       kids={kidsAll.get(x.id) ?? []} kidsOpen={showSubs}
                       selectable={selectMode} selected={selected.has(x.id)}
                       dragging={drag === x.id}
-                      dropMarker={drop && drop.col === c.id && drop.lane === laneKey ? (drop.index === i ? 'before' : drop.index === i + 1 && i === inCol.length - 1 ? 'after' : null) : null}
+                      dropMarker={isOver ? (drop!.index === i ? 'before' : drop!.index === i + 1 && i === inCol.length - 1 ? 'after' : null) : null}
                       onDragStart={() => setDrag(x.id)}
                       onDragEnd={() => { setDrag(null); setDrop(null); }}
                       onDragOverCard={(e) => { if (!drag || drag === x.id) return; e.preventDefault(); e.stopPropagation(); const r = (e.currentTarget as HTMLElement).getBoundingClientRect(); const before = e.clientY < r.top + r.height / 2; setDrop({ col: c.id, lane: laneKey, index: before ? i : i + 1 }); }}
                       onClick={(e) => { if (canEdit && (selectMode || e.ctrlKey || e.metaKey)) { if (!selectMode) setSelectMode(true); toggleSelect(x.id); } else openTask(x.id); }} />
                   ))}
-                  {!isCollapsed && inCol.length === 0 && drag && <div className="col-empty">Hier ablegen</div>}
+                  {!isCollapsed && inCol.length === 0 && (drag ? <div className="col-empty">Hier ablegen</div> : inGroup && <div className="col-empty none muted small" aria-label="leer">–</div>)}
                   {!isCollapsed && canEdit && !f.archived && !c.isDone && c.kind !== 'waiting' && <QuickAdd columnId={c.id} subprojectId={laneKey === 'none' || laneKey === 'all' ? null : laneKey} workflow={c.id === addColumnId}
                     open={adding === `${laneKey}|${c.id}`} onOpen={() => setAdding(`${laneKey}|${c.id}`)} onClose={() => setAdding(null)} />}
+                </>;
+                if (inGroup) return (
+                  <section key={c.id} className={`col-section kind-${c.kind} ${over ? 'wip-over' : ''} ${isCollapsed ? 'collapsed' : ''} ${isOver ? 'over' : ''}`} aria-label={`Abschnitt ${c.name}`} {...dropProps}>
+                    <h4>
+                      <button className="section-toggle" aria-expanded={!isCollapsed} aria-label={`Abschnitt ${c.name} ${isCollapsed ? 'ausklappen' : 'einklappen'} (${total})`} title={isCollapsed ? 'Abschnitt ausklappen' : 'Abschnitt einklappen'}
+                        onClick={() => { const n = new Set(collapsed); if (isCollapsed) n.delete(c.id); else n.add(c.id); setCollapsed(n); }}>{isCollapsed ? <IconChevronRight size={12} /> : <IconChevronDown size={12} />}<span>{c.name}</span>{!isCollapsed && kindHint}</button>
+                      <span className="tools"><span>{isCollapsed ? total : inCol.length}</span>{canEdit && c.isDone && inCol.length > 0 && !isCollapsed && <Button size="sm" variant="link" loading={archive.busy} title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => archiveDone(c, total)}>Archivieren</Button>}</span>
+                    </h4>
+                    {body}
+                  </section>
+                );
+                return (
+                  <div key={c.id} className={`column kind-${c.kind} ${over ? 'wip-over' : ''} ${isCollapsed ? 'collapsed' : ''} ${isOver ? 'over' : ''}`} {...dropProps}>
+                    <h3>
+                      <span>{c.name}{!isCollapsed && kindHint}</span>
+                      {!isCollapsed && <span className="tools">
+                        <span>{inCol.length}</span>
+                        {canEdit && c.isDone && inCol.length > 0 && <Button size="sm" variant="link" loading={archive.busy} title="Alle erledigten Arbeitspakete vom Board nehmen, Historie bleibt" onClick={() => archiveDone(c, total)}>Archivieren</Button>}
+                        <button title="Spalte einklappen" aria-label={`Spalte ${c.name} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, c.id]))}>«</button>
+                      </span>}
+                      {isCollapsed && <button className="btn sm link" aria-label={`Spalte ${c.name} ausklappen (${total})`} onClick={() => { const n = new Set(collapsed); n.delete(c.id); setCollapsed(n); }}>{total}</button>}
+                    </h3>
+                    {body}
+                  </div>
+                );
+              };
+              if (!bc.group) return section(bc.columns[0], false);
+              // Spaltengruppe: ein Kopf mit Gesamtzahl, darunter je Spalte ein Abschnitt
+              const gKey = bc.key;
+              const gCollapsed = collapsed.has(gKey);
+              const gTotal = bc.columns.reduce((n, c) => n + columnCount(c.id), 0);
+              const gLane = bc.columns.reduce((n, c) => n + g.tasks.filter((x) => x.columnId === c.id).length, 0);
+              return (
+                <div key={gKey} className={`column group ${gCollapsed ? 'collapsed' : ''}`} role="group" aria-label={`Spaltengruppe ${bc.group}`}>
+                  <h3>
+                    <span>{bc.group}</span>
+                    {!gCollapsed && <span className="tools">
+                      <span title={`${gLane} in dieser Zeile, ${gTotal} gesamt`}>{gLane}</span>
+                      <button title="Gruppe einklappen" aria-label={`Gruppe ${bc.group} einklappen`} onClick={() => setCollapsed(new Set([...collapsed, gKey]))}>«</button>
+                    </span>}
+                    {gCollapsed && <button className="btn sm link" aria-label={`Gruppe ${bc.group} ausklappen (${gTotal})`} onClick={() => { const n = new Set(collapsed); n.delete(gKey); setCollapsed(n); }}>{gTotal}</button>}
+                  </h3>
+                  {!gCollapsed && bc.columns.map((c) => section(c, true))}
                 </div>
               );
             })}

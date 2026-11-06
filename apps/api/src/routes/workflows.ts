@@ -124,7 +124,7 @@ export async function workflowRoutes(app: FastifyInstance) {
     let key = ''; for (let i = n.c + 1; i < n.c + 1000; i++) { key = `WF${i}`; if (!(await db.maybeOne(`select 1 from projects where org_id = $1 and key = $2`, [user.orgId, key]))) break; }
     const p = await db.one(`insert into projects (org_id, key, name, description, created_by, kind, visibility) values ($1,$2,$3,$4,$5,'workflow','members') returning *`, [user.orgId, key, name, `Isolierter Lauf des Workflows „${d.name}“`, user.id]);
     await db.query(`insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`, [p.id, user.id]);
-    for (const [i, [cname, kind]] of DEFAULT_COLUMNS.entries()) await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, cname, i, kind === 'done', kind]);
+    for (const [i, [cname, kind, group]] of DEFAULT_COLUMNS.entries()) await db.query(`insert into board_columns (project_id, name, position, is_done, kind, group_name) values ($1,$2,$3,$4,$5,$6)`, [p.id, cname, i, kind === 'done', kind, group]);
     await audit(db, { orgId: user.orgId, projectId: p.id, userId: user.id, action: 'project.create', objectType: 'project', objectId: p.id, details: { key, name, kind: 'workflow' } });
     return { run: await startRun(user, d, { name, vars: req.body?.vars, projectId: p.id, standalone: true }) };
   });

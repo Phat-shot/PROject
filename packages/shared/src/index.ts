@@ -382,6 +382,8 @@ export interface BoardColumn {
   /** backlog = Geplant, active = in Bearbeitung, parked = Zurückgestellt, done = Erledigt */
   kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done';
   wipLimit: number | null;
+  /** Spaltengruppe: Spalten mit gleichem Namen erscheinen im Board als eine Spalte mit Abschnitten untereinander */
+  group: string | null;
 }
 
 export interface Label {
@@ -1105,7 +1107,7 @@ export interface ProjectHealth {
 
 /** Projektvorlage: Struktur, die ein neues Projekt vorbelegt; Termine relativ zum Projektstart */
 export interface ProjectTemplateSpec {
-  columns?: { name: string; kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done'; wipLimit: number | null }[];
+  columns?: { name: string; kind: 'backlog' | 'active' | 'waiting' | 'parked' | 'done'; wipLimit: number | null; /** Spaltengruppe (siehe BoardColumn.group) */ group?: string | null }[];
   labels?: { name: string; color: string }[];
   subprojects?: { name: string; startOffsetDays: number | null; endOffsetDays: number | null }[];
   folders?: string[];

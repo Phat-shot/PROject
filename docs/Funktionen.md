@@ -49,6 +49,7 @@ Grundsatz: Aufgaben, Projektplan, Mail, Doku und Chat liegen auf **einem Datenmo
 
 ### Kanban-Board
 - Spalten pro Projekt mit WIP-Limit; Spaltenarten Geplant / aktive Spalten / Wartet / Zurückgestellt / Erledigt (nur aktive Spalten zählen als Stillstand für die Eskalation). „Wartet“ fragt nach Grund und Frist.
+- Spaltengruppen: Spalten mit gleicher Gruppe als eine Board-Spalte mit Abschnitten untereinander (Standard: Geplant, Wartet und Zurückgestellt als „Nicht in Arbeit“; bestehende Projekte per Knopf in den Spalteneinstellungen); jeder Abschnitt bleibt eigene Spalte mit eigenem Drop-Ziel, Zähler, WIP-Limit und Schnellanlage.
 - Swimlanes je Teilprojekt, Drag & Drop inkl. Sortierung, Labels, Filterleiste (Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, Archiv), Tastaturkürzel f/q/n/x, Karten-Badges (Fälligkeit farbig, Beschreibung, Kommentare, Anhänge, Mails, Checklisten-Fortschritt), Schnellanlage, Spalten einklappen, Archivieren, Mehrfachauswahl für Sammelaktionen.
 - Wiederkehrende Aufgaben (W6): täglich, wöchentlich, monatlich, n-ter Wochentag; nächste Instanz nach Erledigung oder vor Fälligkeit.
 - Board und Plan als CSV (Excel).

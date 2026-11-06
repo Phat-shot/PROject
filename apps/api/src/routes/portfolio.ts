@@ -103,7 +103,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
     const b = req.body ?? ({} as any);
     if (!b.name?.trim()) throw badRequest('Name erforderlich');
     const p = await db.one(`select * from projects where id = $1`, [req.params.id]);
-    const cols = await db.query(`select name, kind, wip_limit from board_columns where project_id = $1 order by position`, [p.id]);
+    const cols = await db.query(`select name, kind, wip_limit, group_name from board_columns where project_id = $1 order by position`, [p.id]);
     const labels = await db.query(`select name, color from labels where project_id = $1 order by position, name`, [p.id]);
     const subs = await db.query(`select name, start_date, end_date from subprojects where project_id = $1 order by position`, [p.id]);
     const folders = await db.query(`select name from doc_folders where project_id = $1 and parent_id is null order by position, name`, [p.id]);
@@ -112,7 +112,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
     const base = dates.length ? dates.reduce((a, c) => (a < c ? a : c)) : null;
     const off = (d: string | null) => (d && base ? diffDays(base, d) : null);
     const spec: ProjectTemplateSpec = {
-      columns: cols.rows.map((c: any) => ({ name: c.name, kind: c.kind, wipLimit: c.wip_limit ?? null })),
+      columns: cols.rows.map((c: any) => ({ name: c.name, kind: c.kind, wipLimit: c.wip_limit ?? null, group: c.group_name ?? null })),
       labels: labels.rows.map((l: any) => ({ name: l.name, color: l.color })),
       subprojects: subs.rows.map((s: any) => ({ name: s.name, startOffsetDays: off(dateStr(s.start_date)), endOffsetDays: off(dateStr(s.end_date)) })),
       folders: folders.rows.map((f: any) => f.name),
@@ -145,7 +145,7 @@ export async function portfolioRoutes(app: FastifyInstance) {
 export async function applyTemplate(db: FastifyInstance['db'], projectId: string, spec: ProjectTemplateSpec, startDate: string) {
   if (spec.columns?.length) {
     await db.query(`delete from board_columns where project_id = $1`, [projectId]);
-    for (const [i, c] of spec.columns.entries()) await db.query(`insert into board_columns (project_id, name, position, is_done, kind, wip_limit) values ($1,$2,$3,$4,$5,$6)`, [projectId, c.name, i, c.kind === 'done', c.kind, c.wipLimit ?? null]);
+    for (const [i, c] of spec.columns.entries()) await db.query(`insert into board_columns (project_id, name, position, is_done, kind, wip_limit, group_name) values ($1,$2,$3,$4,$5,$6,$7)`, [projectId, c.name, i, c.kind === 'done', c.kind, c.wipLimit ?? null, typeof c.group === 'string' && c.group.trim() ? c.group.trim().slice(0, 60) : null]);
   }
   for (const [i, l] of (spec.labels ?? []).entries()) await db.query(`insert into labels (project_id, name, color, position) values ($1,$2,$3,$4)`, [projectId, l.name, l.color, i]);
   for (const [i, s] of (spec.subprojects ?? []).entries()) await db.query(`insert into subprojects (project_id, name, start_date, end_date, position) values ($1,$2,$3,$4,$5)`, [projectId, s.name, s.startOffsetDays == null ? null : addDays(startDate, s.startOffsetDays), s.endOffsetDays == null ? null : addDays(startDate, s.endOffsetDays), i]);

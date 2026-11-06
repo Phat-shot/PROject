@@ -24,7 +24,10 @@ import type { AgentMode, AgentPolicy } from '@projekttool/shared';
 import type { AgentMailMode, MailInquiry, PlanningDepth } from '@projekttool/shared';
 import { PLANNING_DEPTHS } from '@projekttool/shared';
 
-export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done'][] = [['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']];
+/** Standardspalten neuer Projekte: Geplant, Wartet und Zurückgestellt bilden die Gruppe „Nicht in Arbeit“ (eine Board-Spalte mit drei Abschnitten) */
+export const DEFAULT_COLUMNS: [string, 'backlog' | 'active' | 'waiting' | 'parked' | 'done', string | null][] = [['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'active', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]];
+/** Gruppenname bereinigt: leer → null */
+export const groupName = (g: unknown): string | null => (typeof g === 'string' && g.trim() ? g.trim().slice(0, 60) : null);
 
 export function mapProject(r: any): Project {
   return {
@@ -101,8 +104,8 @@ export async function projectRoutes(app: FastifyInstance) {
       `insert into project_members (project_id, user_id, role, can_edit_plan, can_approve, can_finalize, can_use_ai) values ($1,$2,'pl',true,true,true,true)`,
       [p.id, user.id]
     );
-    for (const [i, [name, kind]] of DEFAULT_COLUMNS.entries()) {
-      await db.query(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5)`, [p.id, name, i, kind === 'done', kind]);
+    for (const [i, [name, kind, group]] of DEFAULT_COLUMNS.entries()) {
+      await db.query(`insert into board_columns (project_id, name, position, is_done, kind, group_name) values ($1,$2,$3,$4,$5,$6)`, [p.id, name, i, kind === 'done', kind, group]);
     }
     if (policy.scaffold.defaultFolders) await createDefaultFolders(db, p.id);
     if (template) await applyTemplate(db, p.id, template.spec ?? {}, startDate ?? new Date().toISOString().slice(0, 10));
@@ -451,7 +454,7 @@ export async function projectRoutes(app: FastifyInstance) {
   });
 
   // Board-Spalten
-  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; kind?: string; wipLimit?: number | null }[] } }>('/projects/:id/columns', async (req) => {
+  app.put<{ Params: { id: string }; Body: { columns: { id?: string; name: string; isDone?: boolean; kind?: string; wipLimit?: number | null; group?: string | null }[] } }>('/projects/:id/columns', async (req) => {
     const user = requireUser(req);
     await requireProject(db, user, req.params.id, 'pl');
     const cols = req.body?.columns ?? [];
@@ -462,11 +465,12 @@ export async function projectRoutes(app: FastifyInstance) {
     if (!cols.some((c) => c.kind === 'done' || (!c.kind && c.isDone))) throw badRequest('Eine Spalte muss „Erledigt“ sein');
     for (const [i, c] of cols.entries()) {
       const kind = c.kind && kinds.includes(c.kind) ? c.kind : c.isDone ? 'done' : 'active';
+      const group = groupName(c.group);
       if (c.id) {
-        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6, kind = $7 where id = $1 and project_id = $5`, [c.id, c.name, i, kind === 'done', req.params.id, c.wipLimit || null, kind]);
+        await db.query(`update board_columns set name = $2, position = $3, is_done = $4, wip_limit = $6, kind = $7, group_name = $8 where id = $1 and project_id = $5`, [c.id, c.name, i, kind === 'done', req.params.id, c.wipLimit || null, kind, group]);
         keep.add(c.id);
       } else {
-        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [req.params.id, c.name, i, kind === 'done', c.wipLimit || null, kind]);
+        const r = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind, group_name) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [req.params.id, c.name, i, kind === 'done', c.wipLimit || null, kind, group]);
         keep.add(r.id);
       }
     }
@@ -725,5 +729,5 @@ export async function projectRoutes(app: FastifyInstance) {
 }
 
 export function mapColumn(r: any) {
-  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, kind: r.kind ?? (r.is_done ? 'done' : 'active'), wipLimit: r.wip_limit ?? null };
+  return { id: r.id, projectId: r.project_id, name: r.name, position: r.position, isDone: r.is_done, kind: r.kind ?? (r.is_done ? 'done' : 'active'), wipLimit: r.wip_limit ?? null, group: r.group_name ?? null };
 }

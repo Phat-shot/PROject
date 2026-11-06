@@ -55,8 +55,9 @@ export async function seed(db: Db) {
   await member(web.id, leser, 'reader');
 
   const cols: Record<string, string> = {};
-  for (const [i, [name, kind]] of ([['Geplant', 'backlog'], ['Offen', 'active'], ['In Arbeit', 'active'], ['In Prüfung', 'active'], ['Wartet', 'waiting'], ['Zurückgestellt', 'parked'], ['Erledigt', 'done']] as const).entries()) {
-    const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind) values ($1,$2,$3,$4,$5,$6) returning id`, [web.id, name, i, kind === 'done', name === 'In Arbeit' ? 3 : null, kind]);
+  // Geplant, Wartet und Zurückgestellt als Gruppe „Nicht in Arbeit“: eine Board-Spalte mit drei Abschnitten
+  for (const [i, [name, kind, group]] of ([['Geplant', 'backlog', 'Nicht in Arbeit'], ['Offen', 'active', null], ['In Arbeit', 'active', null], ['In Prüfung', 'active', null], ['Wartet', 'waiting', 'Nicht in Arbeit'], ['Zurückgestellt', 'parked', 'Nicht in Arbeit'], ['Erledigt', 'done', null]] as const).entries()) {
+    const c = await db.one(`insert into board_columns (project_id, name, position, is_done, wip_limit, kind, group_name) values ($1,$2,$3,$4,$5,$6,$7) returning id`, [web.id, name, i, kind === 'done', name === 'In Arbeit' ? 3 : null, kind, group]);
     cols[name] = c.id;
   }
   const labels: Record<string, string> = {};
@@ -313,8 +314,8 @@ Ampel: 🟡 – Agenturentscheidung steht aus, Wireframes im Plan.
   await member(erp.id, pl, 'member');
   await member(erp.id, max, 'member');
   const erpCols: string[] = [];
-  for (const [i, [name, kind]] of ([['Backlog', 'backlog'], ['Sprint', 'active'], ['Test', 'active'], ['Fertig', 'done']] as const).entries()) {
-    erpCols.push((await db.one(`insert into board_columns (project_id, name, position, is_done, kind) values ($1,$2,$3,$4,$5) returning id`, [erp.id, name, i, kind === 'done', kind])).id);
+  for (const [i, [name, kind, group]] of ([['Backlog', 'backlog', 'Nicht in Arbeit'], ['Sprint', 'active', null], ['Test', 'active', null], ['Fertig', 'done', null]] as const).entries()) {
+    erpCols.push((await db.one(`insert into board_columns (project_id, name, position, is_done, kind, group_name) values ($1,$2,$3,$4,$5,$6) returning id`, [erp.id, name, i, kind === 'done', kind, group])).id);
   }
   await createDefaultFolders(db, erp.id);
   await db.query(
