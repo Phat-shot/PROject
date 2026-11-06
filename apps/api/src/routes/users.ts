@@ -214,7 +214,7 @@ export async function userRoutes(app: FastifyInstance) {
     try {
       await app.mail.sendFromAccount(account, {
         to: [inv.email], subject: project ? `Einladung zum Projekt „${project.name}“ – PROject (${org.name})` : `Einladung zu PROject (${org.name})`,
-        text: `Guten Tag ${inv.name},\n\n${inviter.name} hat Sie ${project ? `zum Projekt „${project.name}“ (${project.key}) in PROject` : `zu PROject, dem Projekttool von ${org.name},`} eingeladen.\n\nBitte legen Sie hier Ihr Passwort fest:\n${link}\n\nDer Link ist 14 Tage gültig.\n\nMit freundlichen Grüßen\n${org.name}`,
+        text: `Hallo ${inv.name},\n\n${inviter.name} hat dich ${project ? `zum Projekt „${project.name}“ (${project.key}) in PROject` : `zu PROject, dem Projekttool von ${org.name},`} eingeladen.\n\nLeg hier dein Passwort fest:\n${link}\n\nDer Link ist 14 Tage gültig.\n\nViele Grüße\n${org.name}`,
         userId: inviter.id
       });
       await app.db.query(`update invitations set sent_at = now(), send_error = null where id = $1`, [inv.id]);

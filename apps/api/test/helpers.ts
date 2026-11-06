@@ -6,6 +6,8 @@ import { seed, seedDevMails, DEMO_PASSWORD } from '../src/seed.js';
 export async function testApp(opts: { fetchFn?: typeof fetch } = {}) {
   process.env.DATABASE_URL = 'memory';
   process.env.NODE_ENV = 'test';
+  // Hunderte Anmeldungen je Lauf: scrypt mit dem kleinsten erlaubten Arbeitsfaktor (ein eigener Test prüft das Rehash auf den Standard)
+  process.env.PASSWORD_SCRYPT_N ??= '16384';
   const db = await createDb();
   await runMigrations(db);
   const ids = await seed(db);

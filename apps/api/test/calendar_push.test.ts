@@ -35,7 +35,7 @@ test('Kalenderziele: ohne Einrichtung keine; CalDAV speichern prüft per PROPFIN
   assert.equal(ok.json().ok, true, ok.body);
   assert.equal(ok.json().test.displayName, 'Privat');
   const row = await t.db.one(`select caldav_password from users where id = $1`, [t.ids.users.pl]);
-  assert.match(row.caldav_password, /^enc1:/);
+  assert.match(row.caldav_password, /^enc2:/);
   const targets = (await t.api(pl).get('/me/calendar-targets')).json();
   assert.deepEqual(targets.targets.map((x: any) => x.key), ['caldav']);
   assert.equal(targets.caldav.user, 'petra');

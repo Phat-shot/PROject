@@ -3,7 +3,7 @@ import type { ExternalWindow } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { unseal } from '../secrets.js';
 import { isIP } from 'node:net';
-import { isPublicAddress, outboundHostError } from '../netGuard.js';
+import { isPublicAddress, outboundUrlError, pinnedFetch } from '../netGuard.js';
 import type { AiConfig } from './client.js';
 import { aiAllowed } from './policy.js';
 
@@ -70,7 +70,8 @@ const domainOk = (u: URL, s: WebSettings) => { const h = u.hostname.toLowerCase(
 async function fetchExcerpt(fetchFn: typeof fetch, url: URL, maxChars = 1500): Promise<string | null> {
   const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 10_000);
   try {
-    const r = await fetchFn(url.toString(), { method: 'GET', redirect: 'manual', headers: { accept: 'text/html,text/plain;q=0.9,*/*;q=0.5', 'user-agent': 'Projekttool-Recherche/1.0 (nur lesen)' }, signal: ctrl.signal });
+    // Adresse geprüft, Auflösung gepinnt, keine Weiterleitung (pinnedFetch)
+    const r = await pinnedFetch(fetchFn, url.toString(), { method: 'GET', headers: { accept: 'text/html,text/plain;q=0.9,*/*;q=0.5', 'user-agent': 'Projekttool-Recherche/1.0 (nur lesen)' }, signal: ctrl.signal }, 'Recherche');
     if (!r.ok) return null;
     const type = r.headers.get('content-type') ?? '';
     if (!/text\/html|text\/plain|application\/xhtml/i.test(type)) return null;
@@ -87,7 +88,10 @@ async function fetchExcerpt(fetchFn: typeof fetch, url: URL, maxChars = 1500): P
 interface Hit { url: string; title: string | null; snippet: string | null }
 async function searchLocal(fetchFn: typeof fetch, s: WebSettings, query: string): Promise<Hit[]> {
   if (s.provider === 'searxng') {
-    const r = await fetchFn(`${s.url}/search?q=${encodeURIComponent(query)}&format=json&language=de`, { headers: { accept: 'application/json' } });
+    // Adresse stammt aus den Org-Einstellungen: vor jedem Aufruf prüfen (SSRF), Auflösung pinnen, keine Weiterleitung
+    const blocked = await outboundUrlError(String(s.url ?? ''));
+    if (blocked) throw new Error(`SearXNG: ${blocked}`);
+    const r = await pinnedFetch(fetchFn, `${s.url}/search?q=${encodeURIComponent(query)}&format=json&language=de`, { headers: { accept: 'application/json' } }, 'SearXNG');
     if (!r.ok) throw new Error(`SearXNG antwortet mit HTTP ${r.status}`);
     const j: any = await r.json();
     return (Array.isArray(j.results) ? j.results : []).slice(0, 8).map((x: any) => ({ url: String(x.url ?? ''), title: x.title ? String(x.title) : null, snippet: x.content ? String(x.content) : null }));
@@ -134,7 +138,7 @@ export async function research(db: Db, cfg: AiConfig, fetchFn: typeof fetch, q: 
     const sources: WebSource[] = []; const lines: string[] = [];
     for (const [i, h] of hits.entries()) {
       // Hostnamen erst nach der DNS-Auflösung prüfen (z. B. 127.0.0.1.nip.io)
-      const excerpt = i < 3 && !(await outboundHostError(h.u!.hostname)) ? await fetchExcerpt(fetchFn, h.u!) : null;
+      const excerpt = i < 3 ? await fetchExcerpt(fetchFn, h.u!) : null;
       sources.push({ url: h.u!.toString(), title: h.title, citedText: (excerpt ?? h.snippet ?? '').slice(0, 500) || null });
       lines.push(`[${i + 1}] ${h.title ?? h.u!.hostname} – ${h.u}\n${excerpt ?? h.snippet ?? '(kein Text abgerufen)'}`);
     }

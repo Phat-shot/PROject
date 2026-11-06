@@ -11,7 +11,7 @@ import { aiConfigFor, complete, parseJson, type AiConfig } from './client.js';
 import { effectiveAgentPolicy } from './agentPolicy.js';
 import { audienceOf, guardOutbound, recordCheck } from '../outbound.js';
 import { externalWindow, inWindow, nextWindowStart } from './web.js';
-import { AGENT_SHEET, MAIL_RULES } from './sheet.js';
+import { AGENT_SHEET, DATA_RULE, MAIL_RULES, mailData } from './sheet.js';
 import { EFFECTIVE_JOINS, EFFECTIVE_RESPONSIBLE_SQL, agentChatMessage, cleanTitle, createPlannedEvent, createPlannedTask, findTaskByRef, fmtWhen, resolvePerson, ymd, type PlanActor } from './plan.js';
 import { parseUntil, styleText } from './agent.js';
 import { queueAgentRun, queueMailAi } from './agentEvents.js';
@@ -194,12 +194,14 @@ export async function runMailAi(db: Db, mailSvc: MailService, fetchFn: typeof fe
     const account = await db.one<AccountRow>(`select * from mail_accounts where id = $1`, [m.account_id]);
     const folders = await mailSvc.providerFor(account).listFolders(account).catch(() => []);
     const people = await mailboxPeople(db, project.id, m);
-    const system = `${AGENT_SHEET}\n\n${MAIL_RULES}\n\n${header}`;
+    const system = `${AGENT_SHEET}\n\n${MAIL_RULES}\n\n${DATA_RULE}\n\n${header}`;
     const prompt = `Heute: ${now.toISOString().slice(0, 10)} (${now.toLocaleDateString('de-DE', { weekday: 'long', timeZone: 'Europe/Berlin' })})
 Mail von ${m.from_name ? `${m.from_name} <${m.from_addr}>` : m.from_addr} an ${(m.to_json ?? []).join(', ')}${(m.cc_json ?? []).length ? `, Cc ${m.cc_json.join(', ')}` : ''}, ${fmtWhen(new Date(m.date))}
 Postfach: ${m.account_address}${m.use === 'personal' ? ' (persönlich)' : m.use === 'project' ? ' (Projektkonto)' : ''} · angesprochen („du“, „Sie“, „ihr“) ist: ${people.map((x) => `${x.name} <${x.email}>`).join(', ') || 'die Projektleitung'}, nicht du
-Betreff: ${m.subject ?? ''}
-${cut(m.text_body ?? m.snippet, 6000) || '(kein Text)'}
+<<<MAIL
+Betreff: ${mailData(m.subject ?? '')}
+${mailData(cut(m.text_body ?? m.snippet, 6000)) || '(kein Text)'}
+MAIL>>>
 
 Teilprojekte: ${subprojects.rows.map((x: any) => `„${x.name}“${x.start_date || x.end_date ? ` (${d10(x.start_date)} – ${d10(x.end_date)})` : ''}`).join(', ') || '–'}
 Offene Arbeitspakete und Aufgaben (zuletzt geändert zuerst):

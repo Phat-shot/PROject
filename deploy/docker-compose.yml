@@ -53,6 +53,7 @@ services:
       DATABASE_URL: postgres://projekttool:${POSTGRES_PASSWORD}@db:5432/projekttool
       PORT: "3000"
       DATA_DIR: /data
+      # Demodaten nur opt-in (SEED=true) und nie in NODE_ENV=production; das Image läuft als production
       SEED: ${SEED:-false}
       SYNC_INTERVAL_MS: ${SYNC_INTERVAL_MS:-60000}
       COOKIE_SECURE: "true"
@@ -84,7 +85,8 @@ services:
       - "traefik.http.services.projekttool.loadbalancer.server.port=3000"
       - "traefik.docker.network=proxy"
 
-  # Tägliches Backup der Datenbank nach ./backups (pg_dump, 14 Tage Aufbewahrung)
+  # Tägliches Backup nach ./backups (14 Tage Aufbewahrung): pg_dump der Datenbank und ein Archiv des App-Datenvolumens
+  # (secret.key, Uploads). Ohne secret.key sind die gesicherten Geheimnisse (Mail-Passwörter, OAuth-Tokens, KI-Schlüssel) wertlos.
   backup:
     image: postgres:16-alpine
     container_name: projekttool-backup
@@ -97,6 +99,7 @@ services:
       PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
       - ./backups:/backups
+      - appdata:/appdata:ro
     networks:
       - internal
     entrypoint: ["/bin/sh", "-c"]
@@ -104,7 +107,8 @@ services:
       - |
         while true; do
           pg_dump -h db -U projekttool -d projekttool -Fc -f /backups/projekttool-$(date +%F).dump && \
-          find /backups -name 'projekttool-*.dump' -mtime +14 -delete
+          tar -czf /backups/projekttool-appdata-$(date +%F).tar.gz -C /appdata . && \
+          find /backups \( -name 'projekttool-*.dump' -o -name 'projekttool-appdata-*.tar.gz' \) -mtime +14 -delete
           sleep 86400
         done
 

@@ -15,7 +15,7 @@ test('HTML-Bereinigung entfernt Skripte und unsichere Stile, erhält Schriftgrö
   const dirty = '<h2 style="font-size: 20px; position: fixed">T</h2><script>alert(1)</script><p onclick="x()">a <span style="font-size: 18px">groß</span> <a href="javascript:evil()">l</a></p><table><tr><th>A</th></tr><tr><td>1</td></tr></table><iframe src="x"></iframe>';
   const clean = sanitizeHtml(dirty);
   assert.ok(!/script|iframe|onclick|position|javascript/i.test(clean));
-  assert.ok(clean.includes('font-size: 18px'));
+  assert.match(clean, /font-size:\s*18px/);
   assert.ok(clean.includes('<table>'));
   assert.match(htmlToMd('<h2>Titel</h2><p>Text mit <strong>fett</strong></p><table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>'), /## Titel[\s\S]*\*\*fett\*\*[\s\S]*\| A \| B \|/);
   assert.match(mdToHtml('# H\n\n- a\n- b'), /<h1>H<\/h1>[\s\S]*<ul>/);
@@ -28,7 +28,7 @@ test('HTML-Bereinigung: Inhalt unbekannter Elemente wird mitbereinigt, Links nur
   for (const href of ['java&#9;script:alert(1)', 'java&Tab;script:alert(1)', '&#106;avascript:alert(1)', ' vbscript:x', 'data:text/html,x']) assert.equal(sanitizeHtml(`<a href="${href}">t</a>`), '<a>t</a>', href);
   for (const href of ['https://example.com/a', '/projekte/x?a=b:c', 'mailto:a@example.com', '#anker']) assert.ok(sanitizeHtml(`<a href="${href}">t</a>`).includes('href='), href);
   assert.ok(sanitizeHtml('<img src="data:image/png;base64,AAA">').includes('src='));
-  assert.equal(sanitizeHtml('<img src="data:text/html,x">'), '<img>');
+  assert.match(sanitizeHtml('<img src="data:text/html,x">'), /^<img \/?>$/);
 });
 
 test('Seite im WYSIWYG-Format anlegen, bearbeiten, Version und Markdown abgeleitet', async () => {
@@ -38,7 +38,7 @@ test('Seite im WYSIWYG-Format anlegen, bearbeiten, Version und Markdown abgeleit
   const created = await t.api(pl).post(`/projects/${t.ids.projects.web}/docs/pages`, { title: 'Editor-Test', folderId: folder.id, contentHtml: '<h1>Editor-Test</h1><p>Erster <em>Absatz</em> <span style="font-size: 20px">groß</span></p><script>x()</script>' });
   assert.equal(created.statusCode, 200, created.body);
   const page = created.json().page;
-  assert.ok(page.contentHtml.includes('font-size: 20px'));
+  assert.match(page.contentHtml, /font-size:\s*20px/);
   assert.ok(!page.contentHtml.includes('<script'));
   assert.match(page.contentMd, /\*Absatz\*/);
   const upd = await t.api(pl).patch(`/docs/pages/${page.id}`, { contentHtml: page.contentHtml + '<table><tr><th>Spalte</th></tr><tr><td>Wert</td></tr></table>', baseVersion: 1 });

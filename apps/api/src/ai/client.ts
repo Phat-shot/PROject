@@ -3,6 +3,7 @@ import { externalWindow, webSettings } from './web.js';
 import type { AiDecision, WebSearchSettings, ExternalWindow } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { HttpError } from '../errors.js';
+import { pinnedFetch } from '../netGuard.js';
 import { unseal } from '../secrets.js';
 import { checkAi, type AiQuery } from './policy.js';
 import { projectLabelSql, SQL } from '../projectPolicy.js';
@@ -214,7 +215,8 @@ async function completeLocal(cfg: AiConfig, fetchFn: typeof fetch, opts: Complet
     const timer = setTimeout(() => ac.abort(), timeoutS * 1000);
     let res: Response;
     try {
-      res = await fetchFn(url, {
+      // Ziel stammt aus den Einstellungen: Adresse geprüft, Auflösung gepinnt, keine Weiterleitung (pinnedFetch)
+      res = await pinnedFetch(fetchFn, url, {
         method: 'POST', signal: ac.signal, headers: { 'content-type': 'application/json', ...(cfg.apiKey ? { authorization: `Bearer ${cfg.apiKey}` } : {}) },
         body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, temperature: 0.2, stream: true, stream_options: { include_usage: true }, messages: [{ role: 'system', content: system }, { role: 'user', content: opts.prompt }], ...(opts.schema ? { response_format: { type: 'json_schema', json_schema: { name: 'antwort', schema: opts.schema } } } : {}), ...(thinking !== undefined ? { chat_template_kwargs: { enable_thinking: thinking } } : {}) })
       });

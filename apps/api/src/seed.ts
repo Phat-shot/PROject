@@ -6,6 +6,16 @@ import { mdToHtml } from './docs/html.js';
 
 export const DEMO_PASSWORD = 'demo1234';
 
+/**
+ * Demodaten (bekanntes Passwort) nur auf ausdrücklichen Wunsch: SEED=true. In der Produktion nie, auch nicht mit SEED=true;
+ * reason erklärt, warum nicht geseedet wird (für das Log beim Start).
+ */
+export function seedAllowed(env: NodeJS.ProcessEnv = process.env): { allowed: boolean; reason: string | null } {
+  if (env.SEED !== 'true') return { allowed: false, reason: env.SEED === undefined || env.SEED === '' || env.SEED === 'false' ? null : `SEED=${env.SEED} ist kein „true“: keine Demodaten` };
+  if (env.NODE_ENV === 'production') return { allowed: false, reason: 'SEED=true wird in NODE_ENV=production ignoriert: Demodaten mit bekanntem Passwort (admin@demo.local / demo1234) gibt es nur außerhalb der Produktion' };
+  return { allowed: true, reason: null };
+}
+
 /** Legt Demodaten an, wenn noch kein Mandant existiert. */
 export async function seedIfEmpty(db: Db): Promise<boolean> {
   const any = await db.maybeOne(`select id from orgs limit 1`);

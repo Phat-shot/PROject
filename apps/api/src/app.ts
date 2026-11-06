@@ -104,9 +104,13 @@ export async function buildApp(opts: AppOptions): Promise<FastifyInstance> {
     req.user = await userFromToken(opts.db, req.cookies[SESSION_COOKIE]);
   });
 
-  // CSRF: ändernde Anfragen mit Sitzungs-Cookie müssen von der eigenen Herkunft kommen (Origin bzw. Referer gegen Host und PUBLIC_URL)
+  // CSRF: ändernde Anfragen mit Sitzungs-Cookie müssen von der eigenen Herkunft kommen (Origin bzw. Referer gegen Host und PUBLIC_URL).
+  // Auth-POSTs (Login, Zweiter Faktor, Passwort vergessen/zurücksetzen, Logout) auch ohne Sitzung: sonst Login-CSRF
+  // (eine fremde Seite meldet den Browser in einem fremden Konto an).
   app.addHook('onRequest', async (req, reply) => {
-    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method) || !req.cookies?.[SESSION_COOKIE]) return;
+    if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return;
+    const authPost = req.url.split('?')[0].startsWith('/api/auth/');
+    if (!authPost && !req.cookies?.[SESSION_COOKIE]) return;
     const src = req.headers.origin ?? (req.headers.referer ? safeOrigin(req.headers.referer) : null);
     if (!src) return; // kein Browser-Kontext (API-Client, Tests)
     const host = String(req.headers['x-forwarded-host'] ?? req.headers.host ?? '').split(',')[0].trim();

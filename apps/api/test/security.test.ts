@@ -41,8 +41,14 @@ test('CSRF: ändernde Anfragen mit Sitzung und fremder Herkunft werden abgelehnt
   assert.equal(proxied.statusCode, 200, 'hinter Traefik zählt X-Forwarded-Host');
   const read = await t.app.inject({ method: 'GET', url: '/api/auth/me', cookies: pl, headers: { origin: 'https://evil.example', host: 'project.example' } });
   assert.equal(read.statusCode, 200);
-  const noSession = await t.app.inject({ method: 'POST', url: '/api/auth/login', headers: { origin: 'https://evil.example', host: 'project.example' }, payload: { email: 'x@y.z', password: 'nein' } });
-  assert.equal(noSession.statusCode, 401, 'ohne Sitzung keine CSRF-Prüfung, Login prüft selbst');
+  // Login-CSRF: Auth-POSTs prüfen die Herkunft auch ohne Sitzung (fremde Seite darf den Browser nicht in ein fremdes Konto anmelden)
+  const noSession = await t.app.inject({ method: 'POST', url: '/api/auth/login', headers: { origin: 'https://evil.example', host: 'project.example' }, payload: { email: 'pl@demo.local', password: 'demo1234' } });
+  assert.equal(noSession.statusCode, 403, 'Login von fremder Herkunft abgelehnt');
+  const ownLogin = await t.app.inject({ method: 'POST', url: '/api/auth/login', headers: { origin: 'https://project.example', host: 'project.example' }, payload: { email: 'pl@demo.local', password: 'demo1234' } });
+  assert.equal(ownLogin.statusCode, 200, ownLogin.body);
+  const apiClient = await t.app.inject({ method: 'POST', url: '/api/auth/login', payload: { email: 'x@y.z', password: 'nein' } });
+  assert.equal(apiClient.statusCode, 401, 'ohne Origin (API-Client) prüft der Login selbst');
+  for (const url of ['/api/auth/forgot', '/api/auth/login/totp', '/api/auth/logout']) assert.equal((await t.app.inject({ method: 'POST', url, headers: { origin: 'https://evil.example', host: 'project.example' }, payload: { email: 'pl@demo.local', challenge: 'x', code: '1' } })).statusCode, 403, url);
 });
 
 test('Upload: ausführbare Dateien abgelehnt, HTML nur als Download, normale Datei inline', async () => {

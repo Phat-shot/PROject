@@ -13,6 +13,7 @@ import { htmlToMd, sanitizeHtml } from './html.js';
 import { htmlToPdf } from './pdfHtml.js';
 import { folderName, layoutFor, loadTemplate, templateHtml, uploadDir } from './layout.js';
 import { projectAccount } from '../mail/accounts.js';
+import { publicBase } from './share.js';
 
 /**
  * Reporting (Regel vor KI): Im eingestellten Rhythmus erzeugt der Worker aus der Vorlage eine Doku-Seite,
@@ -65,6 +66,10 @@ function esc(s: unknown): string {
 }
 
 /** Kennzahlen-Block aus dem Regelwerk: Fortschritt, Verzug, Blockaden, Eskalationen, Meilensteine. */
+const d10 = (iso: string) => { const [y, m, d] = iso.slice(0, 10).split('-'); return `${d}.${m}.${y}`; };
+/** Zeitraum des Berichts: seit dem letzten Lauf (sonst „bis“) bis heute. */
+export const reportPeriod = (lastRunOn: string | null | undefined, today: string) => (lastRunOn && lastRunOn < today ? `${d10(lastRunOn)} bis ${d10(today)}` : `bis ${d10(today)}`);
+
 export async function reportFactsHtml(db: Db, projectId: string, today: string, since: string | null): Promise<string> {
   const tasks = await loadTasks(db, `t.project_id = $1 and t.archived_at is null`, [projectId]);
   const open = tasks.filter((t) => !t.done);
@@ -132,7 +137,7 @@ export async function createReport(db: Db, mail: MailService, projectId: string,
     const filename = `${title.replace(/[^\p{L}\p{N}._-]+/gu, '_').slice(0, 80)}_v1.pdf`;
     const r = await mail.sendFromAccount(account, {
       to: p.recipients, subject: title,
-      text: `Guten Tag,\n\nanbei der aktuelle Bericht „${title}“ aus dem Projekt „${pr.name}“ als PDF.\n\nMit freundlichen Grüßen\n${lead.name ?? 'Projektleitung'}`,
+      text: `Hallo,\n\nanbei der aktuelle Bericht „${title}“ aus dem Projekt „${pr.name}“ als PDF.\nBerichtszeitraum: ${reportPeriod(p.lastRunOn, today)}\nIm Tool: ${publicBase()}${link}\n\nViele Grüße\n${lead.name ?? 'Projektleitung'}`,
       userId: actor ?? lead.userId!, projectId, attachments: [{ filename, content: pdf, contentType: 'application/pdf' }]
     });
     await mkdir(uploadDir, { recursive: true });

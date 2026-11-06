@@ -124,6 +124,8 @@ test('Stellvertretende PL: Agent plant im ganzen Projekt, weist Agenten zu, änd
     A({ type: 'set_dates', ref: `WEB-${other.number}`, dueDate: '2026-12-24' }),
     A({ type: 'create_ap', title: 'Wände streichen', subproject: 'Maler', responsible: 'max@demo.local' })
   ];
+  // Folgelauf aus der Freigabe des vorigen Tests abwarten, damit der nächste Aufruf der Lauf als stellvertretende PL ist
+  await flushAgentRuns();
   const before = calls.length;
   const r = await t.api(pl).post(`/tasks/${ap.id}/agent-run?wait=1`);
   assert.equal(r.statusCode, 200, r.body);

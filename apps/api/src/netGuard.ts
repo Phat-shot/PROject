@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises';
 import { BlockList, isIP } from 'node:net';
+import { Agent } from 'undici';
 import { badRequest } from './errors.js';
 
 /**
@@ -81,4 +82,48 @@ export async function assertOutboundUrl(raw: string): Promise<void> {
 export async function assertOutboundHost(host: string): Promise<void> {
   const e = await outboundHostError(host);
   if (e) throw badRequest(e);
+}
+
+/**
+ * Geprüfte Adressen eines Ziels: die Freigabe (allowList) oder, nach bestandener Prüfung, die aufgelösten IPs.
+ * Leer, wenn der Host nicht auflösbar ist (Testlauf ohne DNS) – dann bleibt die Verbindung ungepinnt.
+ */
+async function checkedAddresses(hostRaw: string): Promise<string[]> {
+  const host = hostRaw.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+  if (isIP(host)) return [host];
+  try { return await resolver.lookup(host); } catch { return []; }
+}
+
+/**
+ * fetch zu einem benutzerkonfigurierten Ziel (lokales LLM, CalDAV, SearXNG, Recherche): prüft die Adresse (SSRF), pinnt die
+ * DNS-Auflösung auf die geprüften Adressen (kein Rebinding zwischen Prüfung und Verbindung) und folgt keiner Weiterleitung
+ * (ein 3xx ins interne Netz ginge sonst samt Zugangsdaten mit). In Tests ersetzt fetchFn den Client; der Dispatcher wird
+ * dort ignoriert.
+ */
+export async function pinnedFetch(fetchFn: typeof fetch, url: string, init: RequestInit = {}, label = 'Ziel'): Promise<Response> {
+  const e = await outboundUrlError(url);
+  if (e) throw badRequest(`${label}: ${e}`);
+  const u = new URL(url);
+  const ips = await checkedAddresses(u.hostname);
+  const dispatcher = ips.length
+    ? new Agent({
+        connect: {
+          lookup: (_host: string, opts: { all?: boolean }, cb: (err: Error | null, addr: any, family?: number) => void) => {
+            const list = ips.map((address) => ({ address, family: isIP(address) }));
+            if (opts?.all) cb(null, list); else cb(null, list[0].address, list[0].family);
+          }
+        }
+      })
+    : null;
+  try {
+    const r = await fetchFn(url, { ...init, redirect: 'manual', ...(dispatcher ? ({ dispatcher } as any) : {}) });
+    if (r.status >= 300 && r.status < 400) {
+      const loc = r.headers.get('location');
+      throw badRequest(`${label}: ${u.host} leitet weiter (HTTP ${r.status}${loc ? ` nach ${loc.slice(0, 120)}` : ''}); Weiterleitungen werden aus Sicherheitsgründen nicht gefolgt – bitte die endgültige Adresse eintragen`);
+    }
+    return r;
+  } finally {
+    // Verbindungen schließen, sobald die Antwort gelesen ist (Streams laufen weiter, bis der Body verbraucht ist)
+    if (dispatcher) void dispatcher.close().catch(() => undefined);
+  }
 }

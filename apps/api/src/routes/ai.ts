@@ -121,6 +121,8 @@ export async function aiRoutes(app: FastifyInstance) {
       if (allowed?.length && blocked?.length) throw badRequest('Online-Recherche: entweder erlaubte oder gesperrte Domains, nicht beides');
       const url = w.url === undefined ? curW.url : w.url ? String(w.url).trim().replace(/\/+$/, '') : null;
       if (url && !/^https?:\/\//.test(url)) throw badRequest('Online-Recherche: Adresse mit http(s)://');
+      // SearXNG läuft meist intern: Freigabe über OUTBOUND_ALLOW_HOSTS, sonst SSRF auf interne Dienste
+      if (url && url !== curW.url) await assertOutboundUrl(url);
       web = { provider: w.provider ?? curW.provider ?? 'none', url, apiKey: w.apiKey === null ? null : typeof w.apiKey === 'string' && w.apiKey.trim() ? seal(w.apiKey.trim()) : curW.apiKey ?? null,
         maxPerRun: w.maxPerRun !== undefined ? Math.max(1, Math.min(20, Number(w.maxPerRun) || 5)) : curW.maxPerRun ?? 5, dailyPerAgent: w.dailyPerAgent !== undefined ? Math.max(0, Math.min(500, Number(w.dailyPerAgent) || 0)) : curW.dailyPerAgent ?? 20,
         allowedDomains: allowed ?? (blocked?.length ? [] : curW.allowedDomains ?? []), blockedDomains: blocked ?? (allowed?.length ? [] : curW.blockedDomains ?? []) };

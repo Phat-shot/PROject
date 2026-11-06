@@ -12,7 +12,7 @@ import { htmlToMd, mdToHtml } from '../docs/html.js';
 import * as L from '../docs/layout.js';
 import { createHash } from 'node:crypto';
 import { publicBase } from '../docs/share.js';
-import { AGENT_SHEET, TASK_RULES } from './sheet.js';
+import { AGENT_SHEET, DATA_RULE, TASK_RULES, mailData } from './sheet.js';
 import { mailBodyOk, originMails, reSubject } from '../mail/origin.js';
 import { canSeeSubproject, visibleSubprojectSql } from '../rights.js';
 import { syncAgentWaiting } from '../tasks/waiting.js';
@@ -836,7 +836,7 @@ export async function runAgentOnTask(db: Db, mail: MailService, fetchFn: typeof 
   const d10 = (v: any) => (v ? (v instanceof Date ? v.toISOString() : String(v)).slice(0, 10) : '');
   const span = (a: any, b: any) => (a || b ? ` · ${d10(a) || '?'} – ${d10(b) || '?'}` : '');
   // Systemblöcke (Konzept 6.8): fest (KI-Sheet und Regeln, für alle Läufe gleich), je Agent und Projekt (Name, Rolle, Stil), je Projekt und Sichtbarkeit (Überblick); Anthropic cacht die Blöcke
-  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}`;
+  const sysFixed = `${AGENT_SHEET}\n\n${TASK_RULES}\n\n${DATA_RULE}`;
   const sysAgent = `# Du\nDu bist „${agent.name}“, KI-Agent und ${isPl ? 'stellvertretende Projektleitung' : 'Mitglied'} im Projekt ${task.project_key} „${task.project_name}“. Für ${task.parent_id ? 'diese Aufgabe' : 'dieses Arbeitspaket'} bist du zuständig; du treibst es voran wie eine zuständige Person. ${signature ? `Mails nach außen haben eine Anrede und enden genau mit dieser Unterschrift:\n${signature}\n` : `Mails nach außen haben Anrede und Unterschrift „${agent.name} (KI-Agent, Projekt ${task.project_key})“. `}${styleText(agent.persona)}`;
   let systemBlocks = [sysFixed, sysAgent, digestText(digest)];
   let system = systemBlocks.join('\n\n');
@@ -853,7 +853,7 @@ ${items.rows.map((i: any) => `- [${i.done ? 'x' : ' '}] ${i.title} (itemId ${i.i
 ${comments.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleDateString('de-DE')} ${x.name ?? 'System'}${x.source === 'ai' ? ' (KI)' : ''}${x.visibility === 'external' ? ' [für Externe sichtbar]' : ''}: ${cut(x.body, 400)}`).join('\n') || '–'}` },
     { key: 'chat', keep: true, text: dms.rows.length ? `Chat (deine Direktnachrichten zu ${code}, neueste zuerst):\n${dms.rows.map((x: any) => `- ${new Date(x.created_at).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Berlin' })} ${x.mine ? 'Du' : x.name}: ${cut(x.body, 400)}`).join('\n')}` : '' },
     { key: 'mails', text: `Mails zum Arbeitspaket:
-${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${x.subject}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500) : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
+${mails.rows.map((x: any) => `- ${new Date(x.date).toLocaleDateString('de-DE')} ${x.outgoing ? 'AN' : 'VON'} ${x.from_addr}${x.outgoing ? '' : ` (von ${senderClass.get(x.from_addr)})`}: ${mailData(x.subject ?? '')}${x.origin && !x.outgoing ? ` [Ursprungsmail, ${x.answered ? 'beantwortet' : 'noch nicht beantwortet'}]` : ''} – ${bodyOk(x) ? `<<<MAIL ${mailData(cut(x.text_body ?? x.snippet, x.origin ? 1500 : 500))} MAIL>>>` : '(Inhalt aus einem persönlichen Konto, nicht freigegeben)'}`).join('\n') || '–'}` },
     { key: 'pages', text: `Doku-Ordner: ${folders.rows.map((f: any) => f.name).join(', ') || '–'}
 Doku-Seiten (${found.pages.length ? 'passend zum Arbeitspaket; weitere per search' : 'neueste; passende per search'}):
 ${foundPages.map((p) => `- „${p.title}“ (pageId ${p.id}, ${p.folder ?? 'ohne Ordner'}, ${p.status})${p.excerpt ? `\n  ${cut(p.excerpt, 800)}` : ''}`).join('\n') || '–'}` },

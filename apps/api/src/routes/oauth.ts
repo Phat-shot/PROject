@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { createSession, requireUser, setSessionCookie } from '../auth.js';
 import { audit } from '../audit.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
-import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, pkceChallenge, pkceVerifier, publicRedirect, redirectUri } from '../oauth.js';
+import { authorizeUrl, exchangeCode, oauthProviders, oidcConfig, oidcDiscovery, oidcNonce, pkceChallenge, pkceVerifier, publicRedirect, redirectUri, verifyIdToken } from '../oauth.js';
 import { requireProject, syncProjectGroups } from '../rights.js';
 import { publicBase } from '../docs/share.js';
 import { seal } from '../secrets.js';
@@ -11,7 +11,7 @@ import { bind, orgAccount } from '../mail/accounts.js';
 import type { AccountRow } from '../mail/types.js';
 
 interface MailPurpose { kind: 'mail'; verifier?: string; provider: string; /** Verwalter des neuen Kontos (type bleibt eine Version als Alias) */ type: 'personal' | 'project' | 'org'; /** zentrales Postfach (Organisation, mehrere Projekte): keine org-Bindung, für alle Projekte wählbar */ central?: boolean; projectId: string | null; name: string | null }
-interface OidcPurpose { kind: 'oidc'; next: string; verifier?: string }
+interface OidcPurpose { kind: 'oidc'; next: string; verifier?: string; /** Nonce fürs ID-Token (an State und Cookie gebunden) */ nonce?: string }
 
 /** Der State gilt nur im Browser, der den Ablauf gestartet hat (sonst Konto- bzw. Login-Unterschiebung per Link) */
 const STATE_COOKIE = 'pt_oauth';
@@ -37,6 +37,12 @@ export async function oauthRoutes(app: FastifyInstance) {
     if (!state || !bound || bound !== state) return null;
     const r = await db.maybeOne(`delete from oauth_states where state = $1 and expires_at > now() returning *`, [state]);
     return r ? { userId: r.user_id as string | null, purpose: r.purpose as MailPurpose | OidcPurpose } : null;
+  };
+  /** Org für automatisch angelegte SSO-Benutzer: konfiguriert (OIDC_ORG_ID) oder die einzige vorhandene. */
+  const oidcOrg = async (orgId: string | null) => {
+    if (orgId) return /^[0-9a-f-]{36}$/i.test(orgId) ? db.maybeOne(`select id from orgs where id = $1`, [orgId]) : null;
+    const orgs = await db.query(`select id from orgs limit 2`);
+    return orgs.rows.length === 1 ? orgs.rows[0] : null;
   };
   const failTo = (path: string, msg: string) => `${publicBase()}${path}${path.includes('?') ? '&' : '?'}oauthError=${encodeURIComponent(msg)}`;
 
@@ -114,8 +120,9 @@ export async function oauthRoutes(app: FastifyInstance) {
     if (!cfg) throw notFound('Single Sign-on ist nicht konfiguriert');
     const disc = await oidcDiscovery(cfg, app.fetchFn);
     const verifier = pkceVerifier();
-    const state = await newState(reply, null, { kind: 'oidc', next: publicRedirect(req.query.next), verifier });
-    const q = new URLSearchParams({ client_id: cfg.clientId, response_type: 'code', redirect_uri: `${publicBase()}/api/auth/oidc/callback`, scope: cfg.scopes.join(' '), state, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256' });
+    const nonce = oidcNonce();
+    const state = await newState(reply, null, { kind: 'oidc', next: publicRedirect(req.query.next), verifier, nonce });
+    const q = new URLSearchParams({ client_id: cfg.clientId, response_type: 'code', redirect_uri: `${publicBase()}/api/auth/oidc/callback`, scope: cfg.scopes.join(' '), state, nonce, code_challenge: pkceChallenge(verifier), code_challenge_method: 'S256' });
     return reply.redirect(`${disc.authorization_endpoint}?${q.toString()}`);
   });
 
@@ -131,9 +138,13 @@ export async function oauthRoutes(app: FastifyInstance) {
       const tr = await app.fetchFn(disc.token_endpoint, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body });
       const tj: any = await tr.json().catch(() => ({}));
       if (!tr.ok || !tj.access_token) throw new Error(tj.error_description ?? tj.error ?? `Token ${tr.status}`);
+      // ID-Token: Signatur (JWKS), Aussteller, Client, Ablauf, Nonce; das Subject daraus ist die Identität
+      if (!tj.id_token) throw new Error('Der Identitätsanbieter hat kein ID-Token geliefert');
+      const idc = await verifyIdToken(cfg, disc, String(tj.id_token), st.purpose.nonce ?? '', app.fetchFn);
       const ur = await app.fetchFn(disc.userinfo_endpoint, { headers: { authorization: `Bearer ${tj.access_token}` } });
       const u: any = await ur.json().catch(() => ({}));
       if (!ur.ok || !u.sub) throw new Error(`Userinfo ${ur.status}`);
+      if (String(u.sub) !== String(idc.sub)) throw new Error('Userinfo gehört nicht zum ID-Token');
       // Zuordnung und Anlage per E-Mail nur mit geprüfter Adresse (sonst übernimmt, wer beim IdP eine fremde Adresse einträgt, das Konto)
       const emailVerified = u.email_verified === true || u.email_verified === 'true' || cfg.trustEmail;
       const email = emailVerified ? String(u.email ?? '').toLowerCase() : '';
@@ -143,8 +154,9 @@ export async function oauthRoutes(app: FastifyInstance) {
         if (row) await db.query(`update users set oidc_subject = $2 where id = $1 and oidc_subject is null`, [row.id, String(u.sub)]);
       }
       if (!row && cfg.autoCreate && email) {
-        const org = await db.maybeOne(`select id from orgs order by created_at limit 1`);
-        if (!org) throw new Error('Keine Organisation eingerichtet');
+        // Ziel-Org: OIDC_ORG_ID oder die einzige Org; bei mehreren ohne Angabe keine stille Zuordnung zur ältesten
+        const org = await oidcOrg(cfg.orgId);
+        if (!org) throw new Error(cfg.orgId ? `OIDC_ORG_ID ${cfg.orgId} ist keine bekannte Organisation` : 'Mehrere Organisationen: OIDC_ORG_ID setzen, damit neue SSO-Benutzer der richtigen zugeordnet werden');
         row = await db.one(`insert into users (org_id, email, name, password_hash, global_role, oidc_subject) values ($1, $2, $3, '', 'user', $4) returning *`, [org.id, email, String(u.name ?? u.preferred_username ?? email), String(u.sub)]);
         await audit(db, { orgId: org.id, userId: row.id, action: 'user.create', objectType: 'user', objectId: row.id, details: { email, via: 'oidc' } });
       }
