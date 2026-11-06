@@ -19,7 +19,7 @@ vi.mock('./ProjectPage', () => ({ useProjectOptional: () => null, useProject: ()
 import { InvitationsCard } from './admin/People';
 import { AcceptInvitePage } from './AcceptInvitePage';
 import { LlmsCard } from './admin/Ai';
-import { AssistantCard } from './project/settings/Ai';
+import { AiTab, AssistantCard } from './project/settings/Ai';
 import { GeneralTab } from './project/settings/General';
 
 const wrap = (n: ReactNode) => render(<MemoryRouter>{n}</MemoryRouter>);
@@ -124,5 +124,34 @@ describe('Schlankes persönliches Projekt', () => {
     project = { personal: false };
     wrap(<GeneralTab />);
     expect(screen.queryByLabelText(/Alle Bereiche anzeigen/)).not.toBeInTheDocument();
+  });
+});
+
+describe('KI-Reiter im persönlichen Projekt: eine Karte statt Agentenverwaltung', () => {
+  const agents = (inProject: unknown[]) => ({ inProject, candidates: [], budget: 50 });
+  const route = (inProject: unknown[]) => (url: string) => {
+    if (url.endsWith('/assistant')) return Promise.resolve({ assistant: { id: 'as1', name: 'Jarvis', persona: null, active: true, aiProfileId: 'pr1', profileName: 'Qwen', dailyBudget: null, channelId: 'c1' }, profiles: [{ id: 'pr1', name: 'Qwen', provider: 'local', model: 'qwen', own: true }], blocked: [], canCreate: false });
+    if (url.endsWith('/agents')) return Promise.resolve(agents(inProject));
+    if (url.endsWith('/llms')) return Promise.resolve({ own: [], canAddOwn: true, ownLlmAllowed: true, addOwnReason: null });
+    if (url.endsWith('/agent-policy')) return Promise.resolve({ project: {}, effective: { mode: 'standard', confirm: [], workflows: true, chatOrders: 'pl', scope: 'task', synergies: 'ask', reviewAt: '07:30', depth: 'standard', origin: { mode: 'Standard', confirm: {}, workflows: 'Standard', chatOrders: 'Standard', scope: 'Standard', synergies: 'Standard', depth: 'Standard' }, denied: {} }, agents: [] });
+    return Promise.resolve({});
+  };
+  it('zeigt Assistent und eigenes LLM, keine Agentenverwaltung, keine Projektagent-Auswahl, keine Rechte-Karte', async () => {
+    project = { personal: true, agentUserId: 'as1' };
+    get.mockImplementation(route([{ id: 'as1', name: 'Jarvis' }]));
+    wrap(<AiTab />);
+    expect(await screen.findByText('Jarvis')).toBeInTheDocument();
+    expect(await screen.findByText('Eigenes LLM')).toBeInTheDocument();
+    expect(screen.queryByText('Projektagent')).not.toBeInTheDocument();
+    expect(screen.queryByText('Deine Rechte')).not.toBeInTheDocument();
+    expect(screen.queryByText('Weitere Agenten')).not.toBeInTheDocument();
+  });
+  it('ältere zusätzliche Agenten erscheinen nur als „Weitere Agenten“', async () => {
+    project = { personal: true, agentUserId: 'as1' };
+    get.mockImplementation(route([{ id: 'as1', name: 'Jarvis', rights: [], deny: [], usable: true }, { id: 'old', name: 'Altagent', rights: [], deny: [], usable: true }]));
+    wrap(<AiTab />);
+    expect(await screen.findByText('Weitere Agenten')).toBeInTheDocument();
+    expect(screen.getByText('Altagent')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Agent einladen/ })).not.toBeInTheDocument();
   });
 });

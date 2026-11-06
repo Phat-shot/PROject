@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react';
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, fmtDate } from '../../../lib/api';
@@ -46,7 +47,7 @@ function ProjectAgentSelect({ readOnly = false }: { readOnly?: boolean }) {
  * Agenten im Projekt: Im Projekt gibt es nur Agenten (kein „Projekt-LLM“). Die PL lädt Agenten ein, deren LLM hier eingesetzt
  * werden darf, und schränkt sie ein: Rechte abschalten, Selbstständigkeit strenger; mehr als der Verwalter des LLM erteilt hat, nie.
  */
-function AgentsInProject({ readOnly }: { readOnly: boolean }) {
+function AgentsInProject({ readOnly, noInvite = false }: { readOnly: boolean; noInvite?: boolean }) {
   const { detail, reload } = useProject();
   const pid = detail.project.id;
   const d = useData<ProjectAgents>(`/projects/${pid}/agents`);
@@ -62,7 +63,7 @@ function AgentsInProject({ readOnly }: { readOnly: boolean }) {
   const usable = d.data.candidates.filter((c) => c.usable);
   return (
     <div className="stack gap-2">
-      <div className="row between"><h3 className="m-0">Agenten im Projekt</h3>{!readOnly && <button className="btn sm primary" disabled={usable.length === 0} title={usable.length === 0 ? 'Kein einladbarer Agent (Verwaltung › KI oder eigenes LLM unten)' : undefined} onClick={() => setInvite(true)}>Agent einladen</button>}</div>
+      <div className="row between"><h3 className="m-0">Agenten im Projekt</h3>{!readOnly && !noInvite && <button className="btn sm primary" disabled={usable.length === 0} title={usable.length === 0 ? 'Kein einladbarer Agent (Verwaltung › KI oder eigenes LLM unten)' : undefined} onClick={() => setInvite(true)}>Agent einladen</button>}</div>
       {error && <div className="error small">{error}</div>}
       {d.data.inProject.length === 0 ? <div className="empty">Noch kein Agent im Projekt. Ohne Agent sind die KI-Funktionen hier aus.</div> : <table className="table"><thead><tr><th>Agent</th><th>LLM</th><th>Rolle</th><th>Darf hier</th><th /></tr></thead><tbody>
         {d.data.inProject.map((a) => {
@@ -205,7 +206,7 @@ export function MyRights() {
  * Eigenes LLM des Projekts (wenn der Mandant es erlaubt): die PL bindet es ein und verwaltet seine Agenten (anlegen, berechtigen);
  * sie sind nur hier Mitglied. Der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann sperren.
  */
-function OwnLlmCard() {
+function OwnLlmCard({ assistantMode = false }: { assistantMode?: boolean }) {
   const { detail, reload } = useProject();
   const d = useData<ProjectLlms>(`/projects/${detail.project.id}/llms`);
   const ag = useData<ProjectAgents>(`/projects/${detail.project.id}/agents`);
@@ -222,15 +223,15 @@ function OwnLlmCard() {
     <div className="mt" id="llm">
       <div className="row between mb"><h3 className="m-0">Eigenes LLM</h3>{(d.data.canAddOwn || d.data.ownLlmAllowed) && <button className="btn sm" disabled={!d.data.canAddOwn} title={d.data.addOwnReason ?? undefined} onClick={() => setEdit('new')}>LLM einbinden</button>}</div>
       {!d.data.canAddOwn && d.data.addOwnReason && <div className="notice small mb">{d.data.addOwnReason}</div>}
-      <p className="muted small">Ein LLM nur für dieses Projekt (lokal, OpenAI-kompatibel, oder Anthropic). Du legst seine Agenten an und legst fest, was sie dürfen; sie sind gleich Mitglied. Der Schlüssel liegt verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann sperren.</p>
+      <p className="muted small">{assistantMode ? 'Ein LLM nur für dein persönliches Projekt (lokal, OpenAI-kompatibel, oder Anthropic). Danach steht es oben beim Assistenten zur Wahl.' : 'Ein LLM nur für dieses Projekt (lokal, OpenAI-kompatibel, oder Anthropic). Du legst seine Agenten an und legst fest, was sie dürfen; sie sind gleich Mitglied.'} Der Schlüssel liegt verschlüsselt; der Org-Admin sieht Name, Anbieter, Adresse und Verbrauch und kann sperren.</p>
       {error && <div className="error small">{error}</div>}
       {msg && <div className="success small">{msg}</div>}
       {d.data.own.map((l) => <section key={l.id} className="llm-block" style={l.active && !l.adminBlocked ? undefined : { opacity: 0.6 }}>
         <div className="row between wrap">
           <div><strong>{l.name}</strong> {l.adminBlocked ? <span className="badge danger">vom Org-Admin gesperrt</span> : l.active ? <span className="badge ok">aktiv</span> : <span className="badge">inaktiv</span>}<div className="muted small">{l.provider === 'local' ? l.baseUrl : 'Anthropic'} · {l.model} · {(l.tokensIn + l.tokensOut).toLocaleString('de-DE')} Token</div></div>
-          <span className="nowrap"><button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>(`${base}/${l.id}/test`); setMsg(`${l.name}: ${r.model} antwortet „${r.reply}“.`); })}>Testen</button> <button className="btn sm link" onClick={() => setEdit(l)}>Bearbeiten</button> <button className="btn sm link" disabled={busy} onClick={() => void run(async () => { await api.del(`${base}/${l.id}`); await reloadAll(); })}>Entfernen</button> <button className="btn sm primary" disabled={!d.data!.canAddOwn} onClick={() => setAgent({ agent: null, llmId: l.id })}>Agent anlegen</button></span>
+          <span className="nowrap"><button className="btn sm" disabled={busy} onClick={() => void run(async () => { const r = await api.post<{ model: string; reply: string }>(`${base}/${l.id}/test`); setMsg(`${l.name}: ${r.model} antwortet „${r.reply}“.`); })}>Testen</button> <button className="btn sm link" onClick={() => setEdit(l)}>Bearbeiten</button> <button className="btn sm link" disabled={busy} onClick={() => void run(async () => { await api.del(`${base}/${l.id}`); await reloadAll(); })}>Entfernen</button> {!assistantMode && <button className="btn sm primary" disabled={!d.data!.canAddOwn} onClick={() => setAgent({ agent: null, llmId: l.id })}>Agent anlegen</button>}</span>
         </div>
-        {agentsOf(l.id).length > 0 && <table className="table"><tbody>{agentsOf(l.id).map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}>
+        {!assistantMode && agentsOf(l.id).length > 0 && <table className="table"><tbody>{agentsOf(l.id).map((a) => <tr key={a.id} style={a.active ? undefined : { opacity: 0.6 }}>
           <td>{a.name}{!a.active && <span className="badge ml-2">deaktiviert</span>}<div className="muted small">{a.persona ?? 'Standardstil'}</div></td>
           <td className="small">{rightsSummary(a.rights)}<div className="muted">{a.dailyBudget ?? ag.data?.budget}/Tag · {a.runs} Läufe</div></td>
           <td className="nowrap">{a.canManage && <><button className="btn sm link" onClick={() => setAgent({ agent: a, llmId: l.id })}>Bearbeiten</button><button className="btn sm link" disabled={busy} onClick={() => void run(async () => { await api.patch(`/agents/${a.id}`, { active: !a.active }); await reloadAll(); })}>{a.active ? 'Deaktivieren' : 'Aktivieren'}</button></>}</td>
@@ -270,7 +271,7 @@ const profileLabel = (p: AssistantProfile) => `${p.name} (${p.own ? 'eigenes LLM
  * Dein Assistent (C): im persönlichen Projekt legt die Eigentümerin ihren Assistenten selbst an (Name, LLM aus den für sie freien
  * Profilen, Persona). Ohne freies LLM oder bei Sperre stehen die Gründe; danach Name, LLM, Budget, Chat, Bearbeiten, Pause.
  */
-export function AssistantCard() {
+export function AssistantCard({ children }: { children?: ReactNode }) {
   const { detail, reload } = useProject();
   const id = detail.project.id;
   const st = useData<AssistantState>(`/projects/${id}/assistant`, [id]);
@@ -302,7 +303,7 @@ export function AssistantCard() {
         {edit && <AssistantEditModal assistant={a} profiles={data.profiles} onClose={() => setEdit(false)} onSaved={async () => { setEdit(false); await after(); }} />}
       </> : <>
         {data.blocked.length > 0 && <div className="notice small mb"><strong>Noch kein Assistent möglich:</strong><ul className="m-0 mt-1 ml-4">{data.blocked.map((b) => <li key={b}>{b}</li>)}</ul></div>}
-        {data.profiles.length === 0 && <p className="small">Kein LLM frei. Eigenes LLM unten unter <a href="#llm">Eigenes LLM</a> (Projekt › Einstellungen › KI) eintragen oder den Admin um Freigabe eines Mandanten-LLM für dein persönliches Projekt bitten.</p>}
+        {data.profiles.length === 0 && <p className="small">Kein LLM frei. Unten unter <a href="#llm">Eigenes LLM</a> eines einbinden oder den Admin um Freigabe eines Mandanten-LLM für dein persönliches Projekt bitten.</p>}
         {data.canCreate && <div className="form">
           <div className="grid cols-2">
             <label className="field"><span>Name</span><input type="text" value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
@@ -313,6 +314,7 @@ export function AssistantCard() {
           <div><button className="btn primary" disabled={busy || !f.name.trim() || !profileId} onClick={() => void run(async () => { await api.post(`/projects/${id}/assistant`, { name: f.name.trim(), profileId, persona: f.persona.trim() || null }); await after(); })}>Assistent anlegen</button></div>
         </div>}
       </>}
+      {children}
     </SettingsCard>
   );
 }
@@ -344,9 +346,23 @@ function AssistantEditModal({ assistant, profiles, onClose, onSaved }: { assista
 export function AiTab() {
   const { detail } = useProject();
   const isPl = detail.project.myMembership.role === 'pl';
+  // Persönliches Projekt: eine Karte „Dein Assistent“ (Assistent, Selbstständigkeit, eigenes LLM) statt Agentenverwaltung
+  const personal = projectPolicy(detail.project).assistant;
+  const ag = useData<ProjectAgents>(personal ? `/projects/${detail.project.id}/agents` : null);
+  const assistantId = detail.project.agentUserId ?? null;
+  const others = personal ? (ag.data?.inProject ?? []).filter((a) => a.id !== assistantId) : [];
   return (
     <>
-      {projectPolicy(detail.project).assistant && isPl && <AssistantCard />}
+      {personal ? <>
+        {isPl && <AssistantCard>
+          {assistantId && <>
+            <h3 className="mt">Selbstständigkeit</h3>
+            <ProjectAgentPolicy />
+          </>}
+          <OwnLlmCard assistantMode />
+        </AssistantCard>}
+        {others.length > 0 && <SettingsCard title="Weitere Agenten" hint="Aus der Zeit vor dem Assistenten. Im persönlichen Projekt arbeitet nur noch dein Assistent; du kannst diese Agenten entfernen."><AgentsInProject readOnly={!isPl} noInvite /></SettingsCard>}
+      </> : <>
       <SettingsCard title="KI" action={<Link className="btn sm link" to="/hilfe/ki-agenten" title="KI-Handbuch">Hilfe</Link>} hint="Im Projekt arbeiten nur Agenten. Was ein Agent darf, legt der Verwalter seines LLM fest; hier lädst du ihn ein und kannst nur weiter einschränken.">
         {!isPl && <ReadOnlyNote who="PL" />}
         <AgentsInProject readOnly={!isPl} />
@@ -357,6 +373,7 @@ export function AiTab() {
         {isPl && <OwnLlmCard />}
       </SettingsCard>
       <SettingsCard title="Deine Rechte" hint="Rolle, Einzelrechte und je KI-Funktion erlaubt oder die Begründung (KI nutzen, Agent im Projekt mit dem Recht)."><MyRights /></SettingsCard>
+      </>}
     </>
   );
 }
