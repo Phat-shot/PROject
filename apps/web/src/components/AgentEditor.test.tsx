@@ -1,11 +1,29 @@
 import '@testing-library/jest-dom/vitest';
 import { describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { DEFAULT_AGENT_RIGHTS, type AiCapabilities } from '@projekttool/shared';
-import { RightsEditor, rightsSummary } from './AgentEditor';
+import { AgentEditorModal, RightsEditor, rightsSummary } from './AgentEditor';
+import { api } from '../lib/api';
 import { assistChoice } from '../lib/useAi';
 
 vi.mock('../lib/api', () => ({ api: { get: vi.fn(), post: vi.fn(), patch: vi.fn() } }));
+
+describe('Antwortstil auf Statusfragen', () => {
+  it('Select mit vier Stilen und Erklärung; Speichern schickt statusStyle', async () => {
+    vi.mocked(api.patch).mockResolvedValue({ warnings: [] });
+    const onSaved = vi.fn();
+    const agent = { id: 'a1', name: 'Morton', email: 'm@agent.local', active: true, aiProfileId: 'l1', persona: null, signature: null, thinkingMode: null, statusStyle: 'technical' as const, createdAt: '', projects: [], runs: 0, lastRunAt: null };
+    render(<AgentEditorModal agent={agent} llms={[{ id: 'l1', name: 'Qwen', provider: 'local' }]} llmId="l1" orgBudget={50} scoped={false} onClose={() => undefined} onSaved={onSaved} />);
+    const select = screen.getByLabelText(/Antwort auf Statusfragen/) as HTMLSelectElement;
+    expect([...select.options].map((o) => o.value)).toEqual(['technical', 'compact', 'text', 'management']);
+    expect(screen.getByText(/Liste mit Kennung, Titel und Termin/)).toBeInTheDocument();
+    fireEvent.change(select, { target: { value: 'management' } });
+    expect(screen.getByText(/Lagebild in wenigen Sätzen/)).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Speichern' })); });
+    expect(api.patch).toHaveBeenCalledWith('/agents/a1', expect.objectContaining({ statusStyle: 'management' }));
+    expect(onSaved).toHaveBeenCalled();
+  });
+});
 
 describe('Rechte eines Agenten', () => {
   it('PL schränkt nur ein: nicht erteilte Rechte sind gesperrt, erteilte abschaltbar', () => {

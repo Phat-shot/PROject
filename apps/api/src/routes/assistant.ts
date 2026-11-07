@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import type { AssistantState } from '@projekttool/shared';
-import { DEFAULT_AGENT_RIGHTS } from '@projekttool/shared';
+import { DEFAULT_AGENT_RIGHTS, defaultStatusStyle, type StatusStyle } from '@projekttool/shared';
 import { randomBytes } from 'node:crypto';
 import { requireUser } from '../auth.js';
 import { audit } from '../audit.js';
@@ -31,7 +31,7 @@ export async function assistantRoutes(app: FastifyInstance) {
     return p;
   };
   const assistantOf = async (projectId: string) => db.maybeOne(`select u.*, a.name as profile_name from users u left join ai_profiles a on a.id = u.ai_profile_id where u.kind = 'agent' and u.agent_role = 'assistant' and u.agent_project_id = $1 order by u.active desc, u.created_at limit 1`, [projectId]);
-  const mapAssistant = async (r: any, userId: string, orgId: string): Promise<NonNullable<AssistantState['assistant']>> => ({ id: r.id, name: r.name, persona: r.persona ?? null, active: Boolean(r.active), aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, dailyBudget: r.agent_daily_budget ?? null, channelId: await dmChannel(db, orgId, r.id, userId) });
+  const mapAssistant = async (r: any, userId: string, orgId: string): Promise<NonNullable<AssistantState['assistant']>> => ({ id: r.id, name: r.name, persona: r.persona ?? null, statusStyle: (r.status_style ?? defaultStatusStyle('assistant')) as StatusStyle, active: Boolean(r.active), aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, dailyBudget: r.agent_daily_budget ?? null, channelId: await dmChannel(db, orgId, r.id, userId) });
   /** Sperrgründe: Freigabe der Person, Notaus, kein wählbares LLM. */
   const state = async (user: { id: string; orgId: string }, p: any): Promise<AssistantState> => {
     const blocked: string[] = [];

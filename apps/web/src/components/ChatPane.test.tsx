@@ -6,7 +6,9 @@ const get = vi.fn();
 const post = vi.fn();
 vi.mock('../lib/api', () => ({ api: { get: (...a: unknown[]) => get(...a), post: (...a: unknown[]) => post(...a), patch: vi.fn(), del: vi.fn() }, fmtDateTime: (d: string) => d }));
 vi.mock('../lib/auth', () => ({ useAuth: () => ({ user: { id: 'u1' } }) }));
+import { MemoryRouter } from 'react-router-dom';
 import { ChatPane } from './ChatPane';
+import { resetProjectKeys } from './MentionInput';
 
 const base = '/chat/channels/c1/messages';
 const msg = (id: string, body: string, threadId: string | null = null) => ({ id, channelId: 'c1', userId: 'u2', userName: 'Petra Lenz', threadId, body, mentions: [], replyCount: 0, lastReplyAt: null, createdAt: '2026-10-18T10:00:00Z', editedAt: null, deleted: false });
@@ -72,15 +74,48 @@ describe('ChatPane', () => {
     expect(screen.getByRole('button', { name: 'Allgemein (kein Projekt)' })).toBeDisabled();
   });
 
-  it('zeigt bei ausstehender Agentenantwort Spinner und Name statt „denkt nach“; Screenreader hören „Morton denkt nach“', async () => {
+  it('zeigt bei ausstehender Agentenantwort nur den Spinner ohne sichtbaren Text; Screenreader hören „Morton denkt nach“', async () => {
     get.mockImplementation(async () => ({ messages: [msg('m1', 'Hi Morton, was steht an?')], hasMore: false, canWrite: true, busy: [{ id: 'a1', name: 'Morton' }] }));
     const { container } = render(<ChatPane channelId="c1" members={[]} />);
     await flush();
     const status = screen.getByRole('status', { name: 'Morton denkt nach' });
-    expect(status).toHaveTextContent('Morton …');
-    expect(status).not.toHaveTextContent('denkt nach');
+    expect(status.textContent).toBe('');
     expect(status.querySelector('.spinner')).not.toBeNull();
     expect(status.querySelector('svg.chat-busy-still')).not.toBeNull();
     expect(container.querySelectorAll('.chat-busy')).toHaveLength(1);
+  });
+
+  it('mehrere Agenten: ein Spinner, aria-label mit allen Namen', async () => {
+    get.mockImplementation(async () => ({ messages: [msg('m1', 'Status?')], hasMore: false, canWrite: true, busy: [{ id: 'a1', name: 'Morton' }, { id: 'a2', name: 'Jarvis' }] }));
+    const { container } = render(<ChatPane channelId="c1" members={[]} />);
+    await flush();
+    expect(screen.getByRole('status', { name: 'Morton, Jarvis denken nach' }).textContent).toBe('');
+    expect(container.querySelectorAll('.chat-busy .spinner')).toHaveLength(1);
+  });
+
+  it('Aufgabenkarte (tasks): nummerierte Liste mit Link, „Übernehmen“ sendet die Nummer, danach „übernommen“; gesperrt mit Grund', async () => {
+    const items = [
+      { n: 1, ref: 'WEB-12', taskId: 't12', projectId: 'p1', title: 'Angebot prüfen', due: '2026-11-06', status: 'Offen', canTake: true },
+      { n: 2, ref: 'WEB-14', taskId: 't14', projectId: 'p1', title: 'Logo', due: null, status: 'Offen', canTake: false, reason: 'schon bei Morton' }
+    ];
+    const card = { ...msg('s1', 'Aufgaben aus der Antwort:'), userId: null, userName: 'System', kind: 'system' as const, meta: { card: 'tasks' as const, items, agentId: 'a1' } };
+    get.mockImplementation(async (url: string) => (url === '/projects' ? { projects: [{ key: 'WEB' }] } : { messages: [{ ...msg('m1', 'Überfällig ist das Angebot (WEB-12).'), userId: 'a1', userName: 'Morton' }, card], hasMore: false, canWrite: true }));
+    post.mockResolvedValue({ items: [{ ...items[0], taken: true, canTake: false }, items[1]] });
+    resetProjectKeys();
+    render(<MemoryRouter><ChatPane channelId="c1" members={[]} /></MemoryRouter>);
+    await flush();
+    // Kennung im Agententext wird zum Link (Projekt der Person)
+    expect(screen.getAllByRole('link', { name: 'WEB-12' }).map((a) => a.getAttribute('href'))).toEqual(['/k/WEB-12', '/projekte/p1/board?task=t12']);
+    const list = screen.getByRole('list');
+    expect(list.querySelectorAll('li')).toHaveLength(2);
+    expect(screen.getByRole('link', { name: 'WEB-14' })).toHaveAttribute('href', '/projekte/p1/board?task=t14');
+    const buttons = screen.getAllByRole('button', { name: 'Übernehmen' });
+    expect(buttons[1]).toBeDisabled();
+    expect(buttons[1]).toHaveAttribute('title', 'schon bei Morton');
+    fireEvent.click(buttons[0]);
+    await flush();
+    expect(post).toHaveBeenCalledWith('/chat/messages/s1/take', { items: [1] });
+    expect(screen.getByText('übernommen')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Übernehmen' })).toHaveLength(1);
   });
 });

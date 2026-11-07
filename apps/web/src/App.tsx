@@ -20,6 +20,7 @@ import { NotFoundPage } from './pages/NotFoundPage';
 import { useEffect, useState } from 'react';
 import { api } from './lib/api';
 import { Loading } from './components/ui';
+import { TaskRefRedirect } from './components/MentionInput';
 
 /** Weiterleitung mit Erhalt der Filter (?…), z. B. alte Links auf „Alle Arbeitspakete“. */
 function KeepQuery({ to }: { to: string }) {
@@ -63,6 +64,7 @@ export default function App() {
         <Route path="/kalender" element={<CalendarPage />} />
         <Route path="/portfolio" element={<Navigate to="/dashboard/projekte" replace />} />
         <Route path="/chat/:cid?" element={<ChatPage />} />
+        <Route path="/k/:ref" element={<TaskRefRedirect />} />
         <Route path="/hilfe/:doc?" element={<HelpPage />} />
         <Route path="/workflows" element={<WorkflowsPage />} />
         <Route path="/workflows/laeufe/:rid" element={<WorkflowRunPage />} />

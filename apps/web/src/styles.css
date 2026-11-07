@@ -916,6 +916,10 @@ body:has(.drawer) .chat-fab { display: none; }
 .msg-avatar.pinned { box-shadow: 0 0 0 2px var(--primary); }
 .draft-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 8px 10px; margin-top: 6px; background: var(--surface); }
 .draft-card .draft-body { white-space: pre-wrap; margin-top: 6px; max-height: 240px; overflow: auto; }
+.tasks-card { border: 1px solid var(--border); border-radius: var(--r-lg); padding: 6px 10px 6px 4px; margin-top: 6px; background: var(--surface); }
+.tasks-card ol { padding-left: 24px; }
+.tasks-card li { margin: 2px 0; }
+.tasks-card li .btn { margin-left: 6px; }
 
 /* Board: Status ohne Ziehen („→“ auf der Karte); am Telefon immer sichtbar, sonst beim Überfahren */
 .status-menu { position: absolute; right: 4px; top: 2px; }
@@ -1272,7 +1276,6 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
 .chat-busy { display: flex; align-items: center; gap: 4px; font-style: normal; }
 .chat-busy .spinner { margin-right: 2px; }
 .chat-busy .chat-busy-still { display: none; flex: none; }
-.chat-busy .chat-busy-hint { margin-left: 4px; }
 @media (prefers-reduced-motion: reduce) {
   .chat-busy .spinner { display: none; }
   .chat-busy .chat-busy-still { display: inline-block; }

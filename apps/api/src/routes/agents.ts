@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import type { AgentActionClass, AgentMode, AgentPolicy, AiFeature } from '@projekttool/shared';
-import { AI_FEATURES, DEFAULT_AGENT_RIGHTS } from '@projekttool/shared';
+import type { AgentActionClass, AgentMode, AgentPolicy, AiFeature, StatusStyle } from '@projekttool/shared';
+import { AI_FEATURES, DEFAULT_AGENT_RIGHTS, STATUS_STYLES, defaultStatusStyle } from '@projekttool/shared';
 import { effectiveAgentPolicy, MODE_ORDER, parseAgentPolicy } from '../ai/agentPolicy.js';
 import { randomBytes } from 'node:crypto';
 import type { User } from '@projekttool/shared';
@@ -42,7 +42,7 @@ function cleanSignature(v: unknown): string | null {
  */
 export async function agentRoutes(app: FastifyInstance) {
   const db = app.db;
-  const mapAgent = (r: any, canManage = false) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, profileProjectId: r.profile_project_id ?? null, persona: r.persona ?? null, signature: r.signature ?? null, thinkingMode: r.thinking_mode ?? null,
+  const mapAgent = (r: any, canManage = false) => ({ id: r.id, name: r.name, email: r.email, active: r.active, aiProfileId: r.ai_profile_id ?? null, profileName: r.profile_name ?? null, profileProjectId: r.profile_project_id ?? null, persona: r.persona ?? null, signature: r.signature ?? null, thinkingMode: r.thinking_mode ?? null, statusStyle: (r.status_style ?? defaultStatusStyle(r.agent_role)) as StatusStyle,
     role: r.agent_role === 'assistant' ? 'assistant' : 'project',
     projectBound: r.agent_project_id ? { id: r.agent_project_id, label: r.bound_label ?? '' } : null, scope: r.agent_project_id ? 'project' : r.agent_scope ?? 'all', projectIds: r.scope_project_ids ?? [],
     rights: rightsOf(r), policy: (r.agent_policy ?? {}) as AgentPolicy,
@@ -83,6 +83,8 @@ export async function agentRoutes(app: FastifyInstance) {
     if (!Number.isInteger(v) || Number(v) < 0 || Number(v) > max) throw badRequest(`Tagesbudget: 0 bis ${max} Läufe oder leer (= Mandant)`);
     return Number(v);
   };
+  /** Antwortstil auf Statusfragen: einer der vier Stile oder null (Standard nach Rolle). */
+  const validStatusStyle = (v: unknown): StatusStyle | null => { if (v === null || v === undefined) return null; if (!STATUS_STYLES.some((x) => x.key === v)) throw badRequest(`Antwortstil: ${STATUS_STYLES.map((x) => x.key).join(', ')} oder null`); return v as StatusStyle; };
   const thinking = (v: unknown) => { if (v !== null && v !== undefined && v !== 'off' && v !== 'on') throw badRequest('Denkmodus: off, on oder null (wie LLM)'); return (v ?? null) as 'off' | 'on' | null; };
 
   app.get('/agents', async (req) => {
@@ -93,7 +95,7 @@ export async function agentRoutes(app: FastifyInstance) {
     return { agents: await withUsable(out) };
   });
 
-  app.post<{ Body: { name: string; aiProfileId: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents', async (req) => {
+  app.post<{ Body: { name: string; aiProfileId: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; statusStyle?: StatusStyle | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents', async (req) => {
     const user = requireUser(req);
     const b = req.body ?? ({} as any);
     const name = String(b.name ?? '').trim().slice(0, 80);
@@ -107,18 +109,20 @@ export async function agentRoutes(app: FastifyInstance) {
     const policy = validPolicy(b.policy);
     const budget = await validBudget(user.orgId, b.dailyBudget);
     const scope = profile.project_id ? 'all' : validScope(b.scope ?? 'all');
+    const statusStyle = validStatusStyle(b.statusStyle);
     const email = `${slug(name)}-${randomBytes(3).toString('hex')}@agent.local`;
     const r = await db.one(`insert into users (org_id, email, name, password_hash, global_role, kind, ai_profile_id, persona, signature, thinking_mode, agent_scope, agent_project_id, agent_created_by, agent_daily_budget, agent_rights, agent_policy)
       values ($1,$2,$3,'','user','agent',$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) returning *`,
       [user.orgId, email, name, profile.id, cleanPersona(b.persona), cleanSignature(b.signature), thinking(b.thinkingMode), scope, profile.project_id, user.id, budget, rights, JSON.stringify(policy)]);
     if (!profile.project_id && Array.isArray(b.projectIds)) await setAgentProjects(user.orgId, r.id, b.projectIds);
+    if (statusStyle) await db.query(`update users set status_style = $2 where id = $1`, [r.id, statusStyle]);
     // Agent am eigenen LLM eines Projekts: dort gleich Mitglied (ein anderes Projekt kann ihn nicht nutzen)
     if (profile.project_id) await db.query(`insert into project_members (project_id, user_id, role, is_deputy, can_edit_plan, can_approve, can_finalize, can_use_ai, agent_can_mail) values ($1,$2,'member',true,false,false,false,true,true) on conflict do nothing`, [profile.project_id, r.id]);
     await audit(db, { orgId: user.orgId, projectId: profile.project_id ?? null, userId: user.id, action: 'agent.create', objectType: 'user', objectId: r.id, details: { name, profile: profile.name, rights, policy, dailyBudget: budget } });
     return { agent: mapAgent(await db.one(`${AGENT_SELECT} where u.id = $1`, [r.id]), true) };
   });
 
-  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents/:id', async (req) => {
+  app.patch<{ Params: { id: string }; Body: { name?: string; active?: boolean; aiProfileId?: string; persona?: string | null; signature?: string | null; thinkingMode?: 'off' | 'on' | null; statusStyle?: StatusStyle | null; scope?: 'all' | 'selected'; projectIds?: string[]; dailyBudget?: number | null; rights?: AiFeature[]; policy?: AgentPolicy } }>('/agents/:id', async (req) => {
     const user = requireUser(req);
     const a = await db.maybeOne(`select u.*, p.project_id as profile_project_id from users u left join ai_profiles p on p.id = u.ai_profile_id where u.id = $1 and u.org_id = $2 and u.kind = 'agent'`, [req.params.id, user.orgId]);
     if (!a) throw notFound('Agent nicht gefunden');
@@ -145,6 +149,8 @@ export async function agentRoutes(app: FastifyInstance) {
     if ('thinkingMode' in b) await db.query(`update users set thinking_mode = $2 where id = $1`, [a.id, thinking(b.thinkingMode)]);
     if ('signature' in b) await db.query(`update users set signature = $2 where id = $1`, [a.id, cleanSignature(b.signature)]);
     if ('persona' in b) await db.query(`update users set persona = $2 where id = $1`, [a.id, cleanPersona(b.persona)]);
+    // Antwortstil auf Statusfragen: gleiche Rechte wie die Persona; null = Standard nach Rolle
+    if ('statusStyle' in b) await db.query(`update users set status_style = $2 where id = $1`, [a.id, validStatusStyle(b.statusStyle)]);
     if ('dailyBudget' in b) await db.query(`update users set agent_daily_budget = $2 where id = $1`, [a.id, await validBudget(user.orgId, b.dailyBudget)]);
     if (b.rights !== undefined) await db.query(`update users set agent_rights = $2 where id = $1`, [a.id, validRights(b.rights)]);
     if (b.policy !== undefined) await db.query(`update users set agent_policy = $2::jsonb where id = $1`, [a.id, JSON.stringify(validPolicy(b.policy))]);
