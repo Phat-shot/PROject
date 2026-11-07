@@ -411,7 +411,7 @@ test('Gruß mit Frage: Antwort nur mit Bereitschaftsfloskel löst einen zweiten 
   assert.equal(ps.length, 1, 'reiner Gruß: kein zweiter Versuch');
 });
 
-test('Projektagent: Antwortstil auf Statusfragen (technical Standard, compact nur Zahlen, management höchstens 5 terminierte ohne Blockaden) und Aufgabenkarte', async () => {
+test('Projektagent: Antwortstil auf Statusfragen (technical Standard, compact nur Zahlen, management höchstens 5 terminierte ohne Blockaden), Aufgaben an der Antwort (meta.statusItems), keine Aufgabenkarte', async () => {
   const admin = await t.login('admin@demo.local');
   const max = await t.login('max@demo.local');
   const agent = await t.db.one(`select id, name from users where name = 'Chatty' and kind = 'agent'`);
@@ -429,13 +429,18 @@ test('Projektagent: Antwortstil auf Statusfragen (technical Standard, compact nu
   await flushAgentRuns();
   const cid = (await t.api(max).post('/chat/dm', { userId: agent.id })).json().channelId;
   const ask = async (body: string) => { const n = prompts.length; assert.equal((await t.api(max).post(`/chat/channels/${cid}/messages`, { body })).statusCode, 200); await flushAgentRuns(); assert.equal(prompts.length, n + 1); return prompts.at(-1)!; };
-  const cards = async () => (await t.api(max).get(`/chat/channels/${cid}/messages`)).json().messages.filter((m: any) => m.kind === 'system' && m.meta?.card === 'tasks');
+  const msgs = async () => (await t.api(max).get(`/chat/channels/${cid}/messages`)).json().messages as any[];
+  const cards = async () => (await msgs()).filter((m: any) => m.kind === 'system' && m.meta?.card === 'tasks');
+  const lastReply = async () => (await msgs()).filter((m: any) => m.userId === agent.id && m.kind === 'user').at(-1);
 
   let p = await ask('Was steht an?');
   assert.match(p, /Statusfrage: Gib einen knappen Stand/);
   assert.match(p, /blockiert: Lieferant fehlt/);
-  // Alle genannten Arbeitspakete liegen schon beim Agenten: keine Karte mit nur gesperrten Knöpfen
-  assert.equal((await cards()).length, 0, 'keine Karte ohne übernehmbare Aufgabe');
+  // Keine Aufgabenkarte; die genannten Arbeitspakete hängen unsichtbar an der Antwort (Nummern für „übernimm 2“)
+  assert.equal((await cards()).length, 0, 'keine Aufgabenkarte');
+  const si = (await lastReply()).meta?.statusItems as any[];
+  assert.ok(si?.some((x) => x.title === 'Termin-AP 1'), JSON.stringify(si));
+  assert.deepEqual(si.map((x) => x.n), si.map((_, i) => i + 1));
 
   // management: Anzahlen und die 5 nächsten terminierten, keine Blockaden, Eskalationen oder Kennzahlenzeilen
   assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { statusStyle: 'management' })).statusCode, 200);
@@ -450,16 +455,18 @@ test('Projektagent: Antwortstil auf Statusfragen (technical Standard, compact nu
   assert.doesNotMatch(p, /blockiert|Lieferant fehlt|Eskalation \d|Kennzahlen zu/);
   assert.match(p, /Deine offenen Arbeitspakete zum Thema:\n– siehe Abschnitt „Statusfrage“ –/);
   assert.ok(block.length > 0 && block.length <= 5, 'höchstens 5 terminierte');
-  assert.equal((await cards()).length, 0, 'auch im Management-Stil keine Karte ohne übernehmbare Aufgabe');
+  assert.equal((await cards()).length, 0, 'auch im Management-Stil keine Aufgabenkarte');
+  const mi = (await lastReply()).meta?.statusItems as any[];
+  assert.ok(mi.length > 0 && mi.length <= 5 && mi.every((x) => x.due), JSON.stringify(mi));
 
-  // compact: nur Anzahlen, keine Kennungen oder Titel, keine Karte
-  const before = (await cards()).length;
+  // compact: nur Anzahlen, keine Kennungen oder Titel, keine statusItems
   assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { statusStyle: 'compact' })).statusCode, 200);
   p = await ask('Was steht an?');
   const section = p.split('# Statusfrage')[1].split('Fähigkeiten')[0];
   assert.match(section, /Antwortstil: kompakt\n[\s\S]*Anzahlen: überfällig \d+ · heute fällig 1 · diese Woche fällig \d+ · ohne Termin \d+ · Termine heute \d+ · offene Fragen \d+\n/);
   assert.doesNotMatch(p, /Termin-AP|WEB-\d+ „/);
-  assert.equal((await cards()).length, before, 'compact ohne Karte');
+  assert.equal((await cards()).length, 0, 'compact ohne Karte');
+  assert.equal((await lastReply()).meta?.statusItems, undefined, 'compact ohne statusItems');
 
   // text: Listen bleiben, Anweisung Fließtext mit Kennungen
   assert.equal((await t.api(admin).patch(`/agents/${agent.id}`, { statusStyle: 'text' })).statusCode, 200);

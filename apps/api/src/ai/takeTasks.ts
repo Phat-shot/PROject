@@ -1,4 +1,3 @@
-import type { ChatTaskItem } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { canSeeSubproject, getMembership } from '../rights.js';
@@ -7,8 +6,9 @@ import { touchTask } from '../tasks/service.js';
 import { queueAgentRun } from './agentEvents.js';
 
 /**
- * Aufgaben übernehmen (Chat): Die Person weist dem Agenten eine Aufgabe aus seiner Statusantwort zu, per Knopf auf der
- * Aufgabenkarte (meta.card = 'tasks', POST /chat/messages/:id/take) oder per Chat-Befehl take. Rechte wie die Zuweisung im
+ * Aufgaben übernehmen (Chat): Die Person weist dem Agenten Aufgaben per Chat-Befehl take zu („übernimm 2“, „übernimm WEB-12“,
+ * „übernimm alle überfälligen“); Nummern und Gruppen beziehen sich auf die Aufgaben seiner letzten Statusantwort
+ * (meta.statusItems an der Antwort, unsichtbar). Rechte wie die Zuweisung im
  * Projekt: KI-Agenten weist nur die Projektleitung zu (im persönlichen Projekt der Inhaber); der Agent ist aktives Mitglied des
  * Projekts und noch nicht zuständig, beide sehen das Teilprojekt. Danach Log, Audit und ein Lauf am Arbeitspaket (Anlass assigned).
  */
@@ -42,26 +42,9 @@ export async function takeTask(db: Db, q: { sender: { id: string; name: string; 
   return c;
 }
 
-/** Karte meta.items: je Aufgabe, ob der Absender sie dem Agenten zuweisen darf (sonst mit Grund). */
-export async function taskItems(db: Db, q: { senderId: string; agent: { id: string; name: string }; tasks: { taskId: string; projectId: string; ref: string; title: string; due: string | null; status: string }[] }): Promise<ChatTaskItem[]> {
-  const out: ChatTaskItem[] = [];
-  for (const [i, t] of q.tasks.entries()) {
-    const c = await takeCheck(db, { senderId: q.senderId, agent: q.agent, taskId: t.taskId });
-    out.push({ n: i + 1, ref: t.ref, taskId: t.taskId, projectId: t.projectId, title: t.title, due: t.due, status: t.status, canTake: c.ok, ...(c.ok ? {} : { reason: c.reason }) });
-  }
-  return out;
-}
-
-/** Karte nach dem Übernehmen neu prüfen: übernommene Aufgaben taken, die übrigen mit frischem canTake. */
-export async function refreshItems(db: Db, q: { senderId: string; agent: { id: string; name: string }; items: ChatTaskItem[]; taken: string[] }): Promise<ChatTaskItem[]> {
-  const out: ChatTaskItem[] = [];
-  for (const it of q.items) {
-    if (it.taken || q.taken.includes(it.taskId)) { out.push({ ...it, taken: true, canTake: false, reason: null }); continue; }
-    const c = await takeCheck(db, { senderId: q.senderId, agent: q.agent, taskId: it.taskId });
-    out.push({ ...it, canTake: c.ok, reason: c.ok ? null : c.reason });
-  }
-  return out;
-}
+/** Aufgaben einer Statusantwort (meta.statusItems), nummeriert in der Reihenfolge der Antwort. */
+export interface StatusItem { n: number; ref: string; taskId: string; projectId: string; title: string; due: string | null; status: string }
+export const statusItems = (tasks: Omit<StatusItem, 'n'>[]): StatusItem[] => tasks.map((t, i) => ({ n: i + 1, ref: t.ref, taskId: t.taskId, projectId: t.projectId, title: t.title, due: t.due, status: t.status }));
 
 /** Ergebnistext je Aufgabe. */
 export const takeLine = (it: { ref: string; title: string }, r: TakeCheck) => (r.ok ? `${it.ref} „${it.title}“` : `${it.ref}: ${r.reason}`);

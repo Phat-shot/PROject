@@ -3,9 +3,7 @@ import { undoOrder } from '../ai/chatCommands.js';
 import { requireUser } from '../auth.js';
 import { badRequest, forbidden, notFound } from '../errors.js';
 import { canSeeSubproject, getMembership, requireProject } from '../rights.js';
-import { dmChannel, notify, notifyMany, systemMessage } from '../notify.js';
-import { refreshItems, takeLine, takeTask } from '../ai/takeTasks.js';
-import type { ChatTaskItem } from '@projekttool/shared';
+import { dmChannel, notify, notifyMany } from '../notify.js';
 import { extractMentions } from '../tasks/mentions.js';
 import { chatBusyAgents, queueAgentChat, queueAgentRun } from '../ai/agentEvents.js';
 import { REFER_MARK, releasedText } from '../outbound.js';
@@ -82,9 +80,10 @@ export async function chatRoutes(app: FastifyInstance) {
   }
   const NO_WRITE = 'Im Projektkanal schreiben nur Mitglieder des Projekts';
 
+  // Ungelesen: ohne alte Aufgabenkarten (meta.card = 'tasks', abgeschafft; die Oberfläche blendet sie aus)
   async function unreadCount(channelId: string, userId: string): Promise<number> {
     const r = await db.one(
-      `select count(*)::int as n from chat_messages m where m.channel_id = $1 and m.deleted_at is null and m.user_id is distinct from $2
+      `select count(*)::int as n from chat_messages m where m.channel_id = $1 and m.deleted_at is null and m.user_id is distinct from $2 and m.meta->>'card' is distinct from 'tasks'
          and m.created_at > coalesce((select last_read_at from chat_channel_members where channel_id = $1 and user_id = $2), '1970-01-01'::timestamptz)`,
       [channelId, userId]
     );
@@ -163,37 +162,6 @@ export async function chatRoutes(app: FastifyInstance) {
     const { channel } = await channelAccess(user, m.channel_id);
     const q = await db.maybeOne(`${QUESTION_SELECT} where q.message_id = $1`, [m.thread_id ?? m.id]);
     return { message: mapMessage(m), channel: { id: channel.id, kind: channel.kind, projectId: channel.project_id }, threadId: m.thread_id ?? m.id, question: q ? mapQuestion(q) : null };
-  });
-
-  // Aufgaben übernehmen: Knopf auf der Aufgabenkarte (meta.card = 'tasks') unter einer Statusantwort; Nummern aus der Karte
-  app.post<{ Params: { mid: string }; Body: { items: number[] } }>('/chat/messages/:mid/take', async (req) => {
-    const user = requireUser(req);
-    if (user.kind === 'agent') throw forbidden('KI-Agenten übernehmen hier nichts');
-    const m = await db.maybeOne(`select * from chat_messages where id = $1 and deleted_at is null and kind = 'system'`, [req.params.mid]);
-    const meta = m ? (typeof m.meta === 'string' ? JSON.parse(m.meta) : m.meta) ?? {} : {};
-    if (!m || meta.card !== 'tasks' || !Array.isArray(meta.items)) throw notFound('Aufgabenkarte nicht gefunden');
-    const { canWrite } = await channelAccess(user, m.channel_id);
-    if (!canWrite) throw forbidden(NO_WRITE);
-    const nums = Array.isArray(req.body?.items) ? [...new Set(req.body.items.map(Number).filter((n) => Number.isInteger(n) && n > 0))] : [];
-    if (!nums.length) throw badRequest('items: Nummern aus der Karte');
-    const agent = await db.maybeOne(`select id, name from users where id = $1 and kind = 'agent'`, [meta.agentId]);
-    if (!agent) throw badRequest('Agent der Karte nicht gefunden');
-    const items = meta.items as ChatTaskItem[];
-    const results: { type: string; status: 'ok' | 'denied'; text: string; link: string | null; taskId: string | null }[] = [];
-    const taken: string[] = [];
-    for (const n of nums) {
-      const it = items.find((x) => x.n === n);
-      if (!it) { results.push({ type: 'take', status: 'denied', text: `Nr. ${n} steht nicht auf der Karte`, link: null, taskId: null }); continue; }
-      if (it.taken) { results.push({ type: 'take', status: 'denied', text: `${it.ref}: schon übernommen`, link: null, taskId: it.taskId }); continue; }
-      const r = await takeTask(db, { sender: { id: user.id, name: user.name, orgId: user.orgId }, agent, taskId: it.taskId });
-      if (r.ok) taken.push(it.taskId);
-      results.push({ type: 'take', status: r.ok ? 'ok' : 'denied', text: r.ok ? `Übernommen von ${agent.name}: ${takeLine(it, r)}` : takeLine(it, r), link: `/projekte/${it.projectId}/board?task=${it.taskId}`, taskId: it.taskId });
-    }
-    const next = await refreshItems(db, { senderId: user.id, agent, items, taken });
-    await db.query(`update chat_messages set meta = coalesce(meta, '{}'::jsonb) || $2::jsonb where id = $1`, [m.id, JSON.stringify({ items: next })]);
-    const body = results.map((r) => `${r.status === 'denied' ? 'Nicht ausgeführt: ' : ''}${r.text}`).join('\n');
-    await systemMessage(db, { channelId: m.channel_id, threadId: m.thread_id ?? null, body, meta: { card: 'results', results, link: results.find((r) => r.status === 'ok')?.link ?? null } });
-    return { items: next, results };
   });
 
   // Nachricht senden (optional als Antwort in einem Thread)
@@ -372,7 +340,7 @@ export async function chatRoutes(app: FastifyInstance) {
       `select c.id, c.kind, c.project_id, count(m.id)::int as n
        from chat_channels c
        left join chat_channel_members me on me.channel_id = c.id and me.user_id = $1
-       join chat_messages m on m.channel_id = c.id and m.deleted_at is null and m.user_id is distinct from $1 and m.created_at > coalesce(me.last_read_at, '1970-01-01'::timestamptz)
+       join chat_messages m on m.channel_id = c.id and m.deleted_at is null and m.user_id is distinct from $1 and m.meta->>'card' is distinct from 'tasks' and m.created_at > coalesce(me.last_read_at, '1970-01-01'::timestamptz)
        where c.org_id = $2 and ((c.kind = 'dm' and me.user_id is not null) or (c.kind = 'project' and exists (select 1 from project_members pm where pm.project_id = c.project_id and pm.user_id = $1)))
        group by c.id, c.kind, c.project_id`,
       [user.id, user.orgId]

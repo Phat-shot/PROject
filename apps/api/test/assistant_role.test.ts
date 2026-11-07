@@ -307,11 +307,12 @@ test('Assistent: Selbstbild im Systemprompt; Statusfrage mit Gruß bekommt den A
   assert.ok(r.system.includes(ASSISTANT_RULES));
 });
 
-test('Assistent: Antwortstil (Standard Fließtext, compact nur Zahlen, management höchstens 5 terminierte), Aufgabenkarte, Übernehmen per Knopf und per Befehl take', async () => {
+test('Assistent: Antwortstil (Standard Fließtext, compact nur Zahlen, management höchstens 5 terminierte), Aufgaben der Statusantwort (meta.statusItems), Übernehmen per Befehl take', async () => {
   const admin = await t.login('admin@demo.local');
   const say = async (body: string) => { const n = prompts.length; const r = await t.api(max).post(`/chat/channels/${dm}/messages`, { body }); assert.equal(r.statusCode, 200, r.body); await flushAgentRuns(); assert.equal(prompts.length - n, 1); return prompts.at(-1)!; };
   const messages = async () => (await t.api(max).get(`/chat/channels/${dm}/messages`)).json().messages as any[];
-  const lastCard = async () => (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'tasks').at(-1);
+  const lastStatus = async () => (await messages()).filter((m) => m.kind === 'user' && m.userId === assistant.id && m.meta?.statusItems).at(-1);
+  const taskCards = async () => (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'tasks').length;
   assert.equal((await t.api(max).get(`/projects/${maxPid}/assistant`)).json().assistant.statusStyle, 'text', 'Standard beim Assistenten');
   // Weitere Aufgaben mit Termin (insgesamt mehr als 5) im persönlichen Projekt
   const { today } = berlinWeek(new Date());
@@ -320,58 +321,57 @@ test('Assistent: Antwortstil (Standard Fließtext, compact nur Zahlen, managemen
   for (const [i, d] of [-3, 0, 2, 12, 25, 40].entries()) assert.equal((await t.api(max).post(`/projects/${maxPid}/tasks`, { title: `Privat ${i}`, columnId: col, dueDate: day(d) })).statusCode, 200);
   const key = (await t.db.one(`select key from projects where id = $1`, [maxPid])).key;
 
-  // text (Standard): Listen wie technisch, Anweisung Fließtext; Karte mit allen genannten Aufgaben, Max darf übernehmen
+  // text (Standard): Listen wie technisch, Anweisung Fließtext; die Antwort trägt alle genannten Aufgaben in meta.statusItems, keine Karte
   let p = await say('Was steht an?');
   assert.match(p, /# Statusfrage\nAntwortstil: Fließtext/);
   assert.match(p, /Überfällig:\n- /);
   assert.match(p, /nennst ihre Kennung in Klammern/);
-  let card = await lastCard();
-  assert.ok(card, 'Aufgabenkarte unter der Antwort');
-  const items = card.meta.items as any[];
+  assert.equal(await taskCards(), 0, 'keine Aufgabenkarte mehr');
+  let status = await lastStatus();
+  assert.ok(status, 'statusItems an der Antwort');
+  const items = status.meta.statusItems as any[];
   assert.ok(items.some((x) => x.title === 'Ohne Termin notiert'), 'Ohne Termin gehört dazu');
   assert.ok(items.some((x) => x.title === 'Steuererklärung abgeben'));
   assert.deepEqual(items.map((x) => x.n), items.map((_, i) => i + 1));
-  assert.ok(items.every((x) => x.canTake && x.ref.startsWith(`${key}-`) && x.projectId === maxPid), JSON.stringify(items));
-  assert.equal(card.meta.agentId, assistant.id);
+  assert.ok(items.every((x) => x.ref.startsWith(`${key}-`) && x.projectId === maxPid && x.taskId && 'due' in x && x.status), JSON.stringify(items));
 
-  // Rechte: nur die PL weist Agenten zu (Nina ist nicht einmal Mitglied); fremde Person sieht die Karte nicht
+  // Rechte: nur die PL weist Agenten zu (Nina ist nicht einmal Mitglied)
   const other = await takeCheck(t.db, { senderId: (await t.db.one(`select id from users where email = 'nina@extern.de'`)).id, agent: assistant, taskId: items[0].taskId });
   assert.equal(other.ok, false);
   assert.match((other as any).reason, /nur die Projektleitung/);
-  assert.equal((await t.api(nina).post(`/chat/messages/${card.id}/take`, { items: [1] })).statusCode, 403);
-  assert.equal((await t.api(max).post(`/chat/messages/${card.id}/take`, { items: [] })).statusCode, 400);
+  // Die Route zum Knopf gibt es nicht mehr
+  assert.equal((await t.api(max).post(`/chat/messages/${status.id}/take`, { items: [1] })).statusCode, 404);
 
-  // Knopf „Übernehmen“: Zuständigkeit, Log, Audit, Lauf eingeplant, Karte markiert, Systemnachricht mit Ergebnis
+  // Befehl take mit Nummer (Reihenfolge der letzten Statusantwort): Zuständigkeit, Log, Audit, Lauf, Ergebnis
   const first = items[0];
-  let r = await t.api(max).post(`/chat/messages/${card.id}/take`, { items: [first.n] });
-  assert.equal(r.statusCode, 200, r.body);
-  assert.equal(r.json().items[0].taken, true);
-  assert.equal(r.json().results[0].status, 'ok');
-  await flushAgentRuns();
-  assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [first.taskId])).responsible_user_id, assistant.id);
+  nextCommands = [{ type: 'take', items: [first.n] }];
+  await say(`übernimm ${first.n}`);
+  assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [first.taskId])).responsible_user_id, assistant.id, 'Nummer aus der Statusantwort');
   assert.ok(await t.db.maybeOne(`select 1 from task_comments where task_id = $1 and body like 'Übernommen auf Wunsch von Max Keller per Chat%'`, [first.taskId]), 'Log');
   assert.ok(await t.db.maybeOne(`select 1 from audit_log where object_id = $1 and action = 'task.update' and details->>'via' = 'chat_take'`, [first.taskId]), 'Audit');
   assert.ok(await t.db.maybeOne(`select 1 from agent_runs where task_id = $1 and agent_user_id = $2 and trigger = 'assigned'`, [first.taskId, assistant.id]), 'Lauf eingeplant');
-  assert.equal((await lastCard()).meta.items[0].taken, true);
-  const sys = (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'results').at(-1);
-  assert.match(sys.body, new RegExp(`Übernommen von Jarvis: ${first.ref}`));
-  r = await t.api(max).post(`/chat/messages/${card.id}/take`, { items: [first.n] });
-  assert.equal(r.json().results[0].status, 'denied', 'schon übernommen');
-
-  // Befehl take mit Nummer (letzte Karte), mit Kennung und mit Gruppe
-  const second = items[1];
-  nextCommands = [{ type: 'take', items: [second.n] }];
-  await say('übernimm 2');
-  assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [second.taskId])).responsible_user_id, assistant.id, 'Nummer aus der Karte');
   let res = (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'results').at(-1);
   assert.equal(res.meta.results[0].type, 'take');
   assert.equal(res.meta.results[0].status, 'ok');
-  assert.equal((await t.db.one(`select meta from chat_messages where id = $1`, [card.id])).meta.items[1].taken, true, 'Karte aktualisiert');
+  assert.match(res.body, new RegExp(`Übernommen von Jarvis: ${first.ref}`));
+  // noch einmal: schon zuständig, übersprungen
+  nextCommands = [{ type: 'take', items: [first.n] }];
+  await say(`übernimm ${first.n}`);
+  res = (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'results').at(-1);
+  assert.equal(res.meta.results[0].status, 'denied');
+  assert.match(res.body, /schon bei Jarvis/);
+
+  // mit Kennung und mit Gruppe
+  const second = items[1];
+  nextCommands = [{ type: 'take', items: [second.n] }];
+  await say(`übernimm ${second.n}`);
+  assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [second.taskId])).responsible_user_id, assistant.id);
   const byRef = items.find((x) => x.title === 'Ohne Termin notiert');
   nextCommands = [{ type: 'take', refs: [byRef.ref] }];
   await say(`übernimm ${byRef.ref}`);
   assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [byRef.taskId])).responsible_user_id, assistant.id, 'Kennung');
-  const overdue = items.filter((x) => x.due && x.due < today && !x.taken && x.n !== first.n && x.n !== second.n);
+  const overdue = items.filter((x) => x.due && x.due < today);
+  assert.ok(overdue.length > 1);
   nextCommands = [{ type: 'take', filter: 'overdue' }];
   await say('übernimm alle überfälligen');
   for (const x of overdue) assert.equal((await t.db.one(`select responsible_user_id from tasks where id = $1`, [x.taskId])).responsible_user_id, assistant.id, `überfällig ${x.ref}`);
@@ -379,21 +379,22 @@ test('Assistent: Antwortstil (Standard Fließtext, compact nur Zahlen, managemen
   await say('übernimm 99');
   res = (await messages()).filter((m) => m.kind === 'system' && m.meta?.card === 'results').at(-1);
   assert.equal(res.meta.results[0].status, 'denied');
-  assert.match(res.body, /Nr\. 99 steht nicht auf der Karte/);
+  assert.match(res.body, /Nr\. 99 stand nicht in meiner letzten Statusantwort/);
+  assert.equal(await taskCards(), 0);
 
-  // compact: nur Anzahlen, keine Titel, keine Karte
+  // compact: nur Anzahlen, keine Titel, keine statusItems
   assert.equal((await t.api(admin).patch(`/agents/${assistant.id}`, { statusStyle: 'compact' })).statusCode, 403, 'den Assistenten verwaltet seine Person');
   assert.equal((await t.api(max).patch(`/agents/${assistant.id}`, { statusStyle: 'compact' })).statusCode, 200);
   assert.equal((await t.api(max).get(`/projects/${maxPid}/assistant`)).json().assistant.statusStyle, 'compact');
-  const cards0 = (await messages()).filter((m) => m.meta?.card === 'tasks').length;
+  const status0 = (await lastStatus()).id;
   p = await say('Was steht an?');
   const section = p.split('# Statusfrage')[1].split('Antworte nie')[0];
   assert.match(section, /Antwortstil: kompakt/);
   assert.match(section, /Anzahlen: überfällig \d+ · heute fällig \d+ · diese Woche fällig \d+ · ohne Termin \d+ · Termine heute 1 · offene Fragen \d+/);
   assert.doesNotMatch(p, /Privat \d|Steuererklärung|Ohne Termin notiert/, 'keine Titel im Prompt');
-  assert.equal((await messages()).filter((m) => m.meta?.card === 'tasks').length, cards0, 'keine Karte');
+  assert.equal((await lastStatus()).id, status0, 'keine statusItems');
 
-  // management: höchstens 5 terminierte (die nächsten fälligen), keine ohne Termin; Karte genau diese
+  // management: höchstens 5 terminierte (die nächsten fälligen), keine ohne Termin; statusItems genau diese
   assert.equal((await t.api(max).patch(`/agents/${assistant.id}`, { statusStyle: 'management' })).statusCode, 200);
   p = await say('Was steht an?');
   assert.match(p, /Antwortstil: Management/);
@@ -402,14 +403,16 @@ test('Assistent: Antwortstil (Standard Fließtext, compact nur Zahlen, managemen
   assert.equal(lines.length, 5);
   assert.ok(lines.every((l) => / · fällig \d\d\.\d\d\./.test(l)));
   assert.doesNotMatch(p, /Ohne Termin notiert|Privat 5/);
-  card = await lastCard();
-  assert.equal(card.meta.items.length, 5);
-  assert.ok(card.meta.items.every((x: any) => x.due));
-  assert.deepEqual(card.meta.items.map((x: any) => x.due), [...card.meta.items.map((x: any) => x.due)].sort());
-  // Gruß im Stil management: keine Karte
-  const n1 = (await messages()).filter((m) => m.meta?.card === 'tasks').length;
+  status = await lastStatus();
+  assert.notEqual(status.id, status0);
+  assert.equal(status.meta.statusItems.length, 5);
+  assert.ok(status.meta.statusItems.every((x: any) => x.due));
+  assert.deepEqual(status.meta.statusItems.map((x: any) => x.due), [...status.meta.statusItems.map((x: any) => x.due)].sort());
+  // Gruß im Stil management: keine statusItems
+  const n1 = (await lastStatus()).id;
   p = await say('Hallo Jarvis');
   assert.match(p, /reiner Gruß: grüß kurz zurück und gib in einem Satz das Lagebild/);
-  assert.equal((await messages()).filter((m) => m.meta?.card === 'tasks').length, n1);
+  assert.equal((await lastStatus()).id, n1);
+  assert.equal(await taskCards(), 0);
   await t.api(max).patch(`/agents/${assistant.id}`, { statusStyle: null });
 });
