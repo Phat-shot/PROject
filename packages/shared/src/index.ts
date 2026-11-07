@@ -57,6 +57,23 @@ export interface ChatChoice { label: string; value: string; hint?: string }
 export type ChatIntent = 'general' | 'project' | 'personal';
 /** Rolle eines KI-Agenten (users.agent_role) */
 export type AgentRole = 'project' | 'assistant';
+/**
+ * Antwortstil eines Agenten auf Statusfragen (users.status_style; null = Standard nach Rolle: text beim Assistenten,
+ * technical beim Projektagenten). Gilt für Statusfragen und Grüße an den Assistenten und Statusfragen an Projektagenten.
+ */
+export type StatusStyle = 'technical' | 'compact' | 'text' | 'management';
+export const STATUS_STYLES: { key: StatusStyle; label: string; hint: string }[] = [
+  { key: 'technical', label: 'Technisch', hint: 'Liste mit Kennung, Titel und Termin je Aufgabe, Überfälliges zuerst.' },
+  { key: 'compact', label: 'Kompakt', hint: 'Nur Anzahlen je Gruppe (überfällig, heute, diese Woche, ohne Termin, Termine, Fragen) in ein bis zwei Zeilen.' },
+  { key: 'text', label: 'Fließtext', hint: 'Ein kurzer Text in eigenen Worten; jede Aufgabe mit ihrer Kennung, damit sie im Chat verlinkt ist.' },
+  { key: 'management', label: 'Management', hint: 'Lagebild in wenigen Sätzen mit höchstens den fünf nächsten fälligen Aufgaben, ohne Details zu Eskalationen und Blockaden.' }
+];
+export const defaultStatusStyle = (role: AgentRole | string | null | undefined): StatusStyle => (role === 'assistant' ? 'text' : 'technical');
+/**
+ * Systemkarte meta.card = 'tasks' unter einer Statusantwort: die Aufgaben aus dem Abschnitt „Statusfrage“, nummeriert.
+ * canTake: der Absender darf sie dem Agenten zuweisen (sonst reason); taken: schon übernommen (POST /chat/messages/:id/take).
+ */
+export interface ChatTaskItem { n: number; ref: string; taskId: string; projectId: string; title: string; due: string | null; status: string; canTake: boolean; reason?: string | null; taken?: boolean }
 /** Freigabe eines Mandanten-LLM für persönliche Projekte: none (Standard), all, users (nur personalUserIds) */
 export type PersonalUse = 'none' | 'all' | 'users';
 export const PERSONAL_USES: { key: PersonalUse; label: string }[] = [
@@ -67,7 +84,7 @@ export const PERSONAL_USES: { key: PersonalUse; label: string }[] = [
 /** Zustand des persönlichen Assistenten (GET /projects/:id/assistant) */
 export interface AssistantState {
   /** vorhandener Assistent (Agent mit agentRole assistant) */
-  assistant: { id: string; name: string; persona: string | null; active: boolean; aiProfileId: string | null; profileName: string | null; dailyBudget: number | null; channelId: string } | null;
+  assistant: { id: string; name: string; persona: string | null; /** Antwortstil auf Statusfragen (wirksam, mit Standard) */ statusStyle: StatusStyle; active: boolean; aiProfileId: string | null; profileName: string | null; dailyBudget: number | null; channelId: string } | null;
   /** wählbare LLM-Profile: freigegebene Mandanten-Profile für diese Person und eigene LLMs des Projekts */
   profiles: { id: string; name: string; provider: 'anthropic' | 'local'; model: string; own: boolean }[];
   /** Sperrgründe (leer = Assistent anlegbar bzw. nutzbar) */
@@ -1257,7 +1274,7 @@ export interface Meeting {
 export interface CalendarTarget { key: 'microsoft' | 'google' | 'caldav'; label: string; accountId: string | null }
 
 export interface AiProfile { id: string; name: string; provider: 'anthropic' | 'local'; model: string; baseUrl: string | null; hasKey: boolean; active: boolean; /** Denkmodus des lokalen Modells aus (enable_thinking: false) */ thinkingOff: boolean; /** Kontextfenster des Modells in Token (leer = 32k); die Eingabe belegt höchstens 45 % */ contextTokens?: number | null; /** Zeitlimit je Anfrage in Sekunden (lokal, leer = 600) */ timeoutS?: number | null; /** Online-Recherche mit diesem Profil erlaubt (Konzept 8; dazu KI-Freigabe agent.web) */ webSearch?: boolean; /** Freigabe für Projekte: alle, ausgewählte (projectIds) oder keine (nur Agenten der Org) */ projectScope?: 'all' | 'selected' | 'none'; projectIds?: string[]; /** Freigabe für persönliche Projekte: none (Standard), all, users (personalUserIds); personalScope = (personalUse === 'all') bleibt lesend für ältere Oberflächen */ personalUse?: PersonalUse; personalUserIds?: string[]; personalScope?: boolean; /** Verbrauch (Token) und letzte Nutzung */ tokensIn?: number; tokensOut?: number; lastUsedAt?: string | null }
-export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
+export interface AgentUser { id: string; name: string; email: string; active: boolean; aiProfileId: string | null; /** Name seines LLM */ profileName?: string | null; /** LLM gehört einem Projekt (eigenes LLM): dessen PL verwaltet den Agenten */ profileProjectId?: string | null; /** Agent am eigenen LLM eines Projekts: nur dort */ projectBound?: { id: string; label: string } | null; /** Rechte vom Verwalter des LLM */ rights?: AiFeature[]; /** Obergrenze des Verwalters (maxMode, lockedConfirm, maxDepth, mode, workflows) */ policy?: AgentPolicy; /** die angemeldete Person verwaltet ihn (verwaltet sein LLM) */ canManage?: boolean; /** Einsatz (Konzept LLM/Agenten 2.2): alle Projekte, ausgewählte (projectIds) oder nur das eigene Projekt */ scope?: 'all' | 'selected' | 'project'; projectIds?: string[]; dailyBudget?: number | null; /** Schreibstil als eine Zeile Freitext */ persona: string | null; /** Unterschrift für Mails, frei; null = Standard */ signature: string | null; /** Denkmodus: null = wie KI-Profil */ thinkingMode: 'off' | 'on' | null; /** Antwortstil auf Statusfragen (wirksam, mit Standard nach Rolle) */ statusStyle?: StatusStyle; createdAt: string; projects: { id: string; key: string; name: string; /** läuft dort (Einsatz, LLM verfügbar) oder Grund */ usable?: boolean; reason?: string | null }[]; runs: number; lastRunAt: string | null }
 /** Aktionen eines Laufs; Chat-Läufe: chat_reply (Antwort), chat_note (Log-Eintrag am Arbeitspaket taskId), claim_check (ersetzte Behauptungen, replaced = Anzahl) */
 export interface AgentRun { id: string; agentId: string; /** eigene Bewertung (Daumen hoch 1, Daumen runter -1) */ myRating?: 1 | -1 | null; agentName: string; taskId: string | null; taskTitle: string | null; taskNumber: number | null; trigger: string; status: 'ok' | 'error' | 'skipped'; reasoning: string | null; /** Kosten im Tagesbudget (gründlich = 2) */ cost?: number; depth?: AgentDepth | null; actions: { type: string; text?: string; column?: string; itemId?: string; to?: string[]; subject?: string; reason?: string; taskId?: string; replaced?: number }[]; proposed?: unknown[] | null; inputTokens: number; outputTokens: number; /** Online-Suchen in diesem Lauf */ webSearches?: number; /** Reichweite des Laufs */ scope?: 'task' | 'project' | 'chat' | 'mail'; /** Kontextgröße: Grenze, vorher, nachher, gekürzte Abschnitte */ contextStats?: { limit: number; before: number; after: number; trimmed: Record<string, { from: number; to: number }> } | null; error: string | null; createdAt: string }
 

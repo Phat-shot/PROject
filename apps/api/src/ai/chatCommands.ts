@@ -13,6 +13,8 @@ import { reparentTask } from '../tasks/structure.js';
 import { CHAT_ORDERS, MODE_ORDER, effectiveAgentPolicy, parseAgentPolicy } from './agentPolicy.js';
 import { aiAllowed } from './policy.js';
 import { SQL } from '../projectPolicy.js';
+import type { ChatTaskItem } from '@projekttool/shared';
+import { refreshItems, takeLine, takeTask } from './takeTasks.js';
 
 /**
  * Steuerung der Agenten im Chat (Konzept 7). Das Modell liefert Befehle, das System prüft sie (Rechte des Absenders nach 7.1,
@@ -20,9 +22,9 @@ import { SQL } from '../projectPolicy.js';
  * mit dem tatsächlichen Ergebnis je Befehl. Aufträge legt createPlannedTask mit den Rechten des Auftraggebers an; der Agent wird
  * zuständig und läuft mit Anlass order. Freigaben führt der Agent nie selbst aus: approve zeigt die Karte mit den offenen Vorschlägen.
  */
-export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer' | 'move';
-export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move'];
-export interface ChatCommand { type: ChatCommandType; ref?: string | null; /** move: Kennung des Ziel-Arbeitspakets (Aufgabe umhängen); leer mit subproject = Arbeitspaket einem Teilprojekt zuordnen */ to?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null }
+export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer' | 'move' | 'take';
+export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move', 'take'];
+export interface ChatCommand { type: ChatCommandType; ref?: string | null; /** move: Kennung des Ziel-Arbeitspakets (Aufgabe umhängen); leer mit subproject = Arbeitspaket einem Teilprojekt zuordnen */ to?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null; /** take: Nummern der letzten Aufgabenkarte, Kennungen, Gruppe (overdue, today, week, all) */ items?: number[] | null; refs?: string[] | null; filter?: string | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
 export type SenderRole = 'pl' | 'tp' | 'responsible' | 'member' | 'reader' | 'none';
@@ -68,7 +70,7 @@ export const commandsText = (role: SenderRole, a: ReturnType<typeof allowedComma
   else if (role !== 'reader' && role !== 'none') can.push(`keine Aufträge (Policy chatOrders = ${policy?.chatOrders ?? 'pl'}: Vorschlag an die PL als order_request über refer)`);
   if (a.control) can.push(`Steuerbefehle run, pause, resume, stop, priority${role === 'pl' ? ' an allen Arbeitspaketen' : ' an eigenen Arbeitspaketen'}`);
   if (a.approve) can.push('approve/reject zeigt die Karte mit offenen Bestätigungen (Klick entscheidet)');
-  if (a.policy) can.push('policy (Selbstständigkeit je AP), report (Zwischenstände)');
+  if (a.policy) can.push('policy (Selbstständigkeit je AP), report (Zwischenstände), take (Aufgaben dir zuweisen)');
   else if (a.note) can.push('report (eigene Zwischenstände)');
   if (a.note) can.push('note (Information ins Log)');
   return `${r[role]}; darf: ${can.join('; ') || 'nur Auskunft'}`;
@@ -123,6 +125,7 @@ const link = (projectId: string, taskId: string) => `/projekte/${projectId}/boar
 async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null): Promise<CommandResult> {
   const { db, agent, sender, now } = ctx;
   if (c.type === 'order') return createOrder(ctx, c);
+  if (c.type === 'take') return takeCommand(ctx, c);
   if (c.type === 'refer') {
     // Absender ohne Auftragsrecht: Vorschlag als Frage order_request an die PL
     if (!ctx.project) return { type: c.type, status: 'denied', text: 'Projekt nicht eindeutig' };
@@ -261,6 +264,55 @@ async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null):
   }
 }
 
+/**
+ * take: Aufgaben dem Agenten zuweisen. Nummern und Gruppe (overdue, today, week, all) beziehen sich auf die letzte
+ * Aufgabenkarte dieses Agenten im selben Gespräch bzw. Thread (das System löst sie auf, nicht das Modell), Kennungen gelten
+ * direkt. Rechte wie die Zuweisung im Projekt (takeCheck); die Karte markiert übernommene Aufgaben.
+ */
+async function takeCommand(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
+  const { db, agent, sender } = ctx;
+  const card = await db.maybeOne(`select id, meta from chat_messages where channel_id = $1 and thread_id is not distinct from $2 and kind = 'system' and deleted_at is null and meta->>'card' = 'tasks' and meta->>'agentId' = $3 order by created_at desc limit 1`, [ctx.channelId, ctx.threadId, agent.id]);
+  const meta = card ? (typeof card.meta === 'string' ? JSON.parse(card.meta) : card.meta) ?? {} : null;
+  const items: ChatTaskItem[] = Array.isArray(meta?.items) ? meta.items : [];
+  const nums = (Array.isArray(c.items) ? c.items : []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
+  const refs = [...(Array.isArray(c.refs) ? c.refs : []), ...(c.ref ? [c.ref] : [])].map((r) => String(r ?? '').trim().toUpperCase()).filter(Boolean);
+  const filter = String(c.filter ?? '').trim().toLowerCase();
+  if (!nums.length && !refs.length && !filter) return { type: 'take', status: 'denied', text: 'take: welche Aufgaben? Nummern aus der Karte, Kennungen oder eine Gruppe' };
+  if ((nums.length || filter) && !card) return { type: 'take', status: 'denied', text: 'Keine Aufgabenkarte in diesem Gespräch: bitte Kennungen nennen oder zuerst nach dem Stand fragen' };
+  if (filter && !['overdue', 'today', 'week', 'all'].includes(filter)) return { type: 'take', status: 'denied', text: `take: Gruppe ${filter} unbekannt (overdue, today, week, all)` };
+  const { today, sunday } = berlinDay(ctx.now);
+  const inFilter = (it: ChatTaskItem) => filter === 'all' || (it.due != null && (filter === 'overdue' ? it.due < today : filter === 'today' ? it.due === today : it.due >= today && it.due <= sunday));
+  const targets: { taskId: string; ref: string; title: string; projectId: string }[] = [];
+  const skipped: string[] = [];
+  const add = (t: { taskId: string; ref: string; title: string; projectId: string }) => { if (!targets.some((x) => x.taskId === t.taskId)) targets.push(t); };
+  for (const n of nums) { const it = items.find((x) => x.n === n); if (it) add(it); else skipped.push(`Nr. ${n} steht nicht auf der Karte`); }
+  if (filter) { const hit = items.filter((it) => !it.taken && inFilter(it)); if (!hit.length) skipped.push(`keine Aufgabe der Gruppe ${filter} auf der Karte`); hit.forEach(add); }
+  for (const ref of refs) {
+    const onCard = items.find((x) => x.ref.toUpperCase() === ref);
+    if (onCard) { add(onCard); continue; }
+    const t = await targetTask(ctx, { type: 'take', ref });
+    if ('error' in t) { skipped.push(t.error); continue; }
+    add({ taskId: t.task.id, ref: `${t.project.key}-${t.task.number}`, title: t.task.title, projectId: t.project.id });
+  }
+  const ok: string[] = [];
+  const taken: string[] = [];
+  for (const t of targets) {
+    const r = await takeTask(db, { sender: { id: sender.id, name: sender.name, orgId: sender.orgId }, agent, taskId: t.taskId });
+    if (r.ok) { ok.push(takeLine(t, r)); taken.push(t.taskId); } else skipped.push(takeLine(t, r));
+  }
+  if (card && taken.length) await db.query(`update chat_messages set meta = coalesce(meta, '{}'::jsonb) || $2::jsonb where id = $1`, [card.id, JSON.stringify({ items: await refreshItems(db, { senderId: sender.id, agent, items, taken }) })]);
+  const first = targets.find((t) => taken.includes(t.taskId));
+  if (!ok.length) return { type: 'take', status: 'denied', text: `Übernehmen: ${skipped.join('; ') || 'nichts gefunden'}` };
+  return { type: 'take', status: 'ok', text: `Übernommen von ${agent.name}: ${ok.join(', ')}${skipped.length ? `; nicht: ${skipped.join('; ')}` : ''}`, link: first ? link(first.projectId, first.taskId) : null, taskId: first?.taskId ?? null };
+}
+/** Heute und Sonntag dieser Woche in Europe/Berlin (YYYY-MM-DD). */
+function berlinDay(now: Date): { today: string; sunday: string } {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Berlin', year: 'numeric', month: '2-digit', day: '2-digit' }).format(now);
+  const dow = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Berlin', weekday: 'short' }).format(now));
+  const [y, m, d] = today.split('-').map(Number);
+  return { today, sunday: new Date(Date.UTC(y, m - 1, d + ((7 - dow) % 7))).toISOString().slice(0, 10) };
+}
+
 /** Auftrag ohne Recht: Frage order_request an die PL (der Auftraggeber wird genannt). */
 async function orderRequest(ctx: CommandCtx, project: { id: string; key: string }, text: string, parentTask: any | null): Promise<CommandResult> {
   const { db, agent, sender, now } = ctx;
@@ -351,7 +403,7 @@ async function createOrder(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
 export async function postResults(ctx: CommandCtx, results: CommandResult[], agentRunId: string | null): Promise<string | null> {
   if (!results.length) return null;
   // Karte nur, wenn sie etwas zu entscheiden oder zu erklären hat (abgelehnt, angehalten, Auftrag mit Rückgängig, Bestätigung); Bestätigungen von Kleinigkeiten (Notiz, Priorität …) nur mit Einstellung chatCards = all
-  const needed = results.some((r) => r.status !== 'ok' || r.questionId || (r.type === 'order' && r.undoUntil));
+  const needed = results.some((r) => r.status !== 'ok' || r.questionId || (r.type === 'order' && r.undoUntil) || r.type === 'take');
   if (!needed) {
     const u = await ctx.db.maybeOne(`select settings from users where id = $1`, [ctx.sender.id]);
     const settings = typeof u?.settings === 'string' ? JSON.parse(u.settings) : u?.settings ?? {};

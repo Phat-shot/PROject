@@ -70,7 +70,20 @@ Unterschied zum Projektagenten: Der Assistent gehört nur zu deinem persönliche
 
 **Statusfragen:** Auf „Was steht an?“, „Gibt's was zu tun?“ oder „Wie ist der Stand?“ – auch mit Gruß und Namen davor, z. B. „Hi Morton, was steht an?“ – antwortet er mit dem, was in deinem persönlichen Projekt ansteht. Die Daten ermittelt das System selbst: offene Arbeitspakete und Aufgaben (überfällig, heute fällig, diese Woche fällig, ohne Termin; je höchstens 8 mit Kennung, Titel und Termin), Zahl der offenen Checklistenpunkte, Termine heute und morgen, offene Fragen und Bestätigungen an dich, angehaltene Aktionen und Mail-Entwürfe zur Freigabe. Überfälliges und Heutiges nennt er zuerst; ist nichts offen, sagt er kurz „Gerade steht nichts an“ und schlägt etwas vor (z. B. etwas notieren oder einen Termin eintragen). Auf einen reinen Gruß („Hi Morton“) grüßt er kurz zurück und nennt in einem Satz, was überfällig oder heute fällig ist.
 
-Während er antwortet, zeigt der Chat unter den Nachrichten einen Spinner mit seinem Namen („Morton …“; bei reduzierter Bewegung eine stehende Sanduhr); Screenreader hören „Morton denkt nach“.
+**Antwortstil auf Statusfragen:** Wie er (und jeder Projektagent) auf Statusfragen antwortet, stellst du am Agenten unter „Antwort auf Statusfragen“ ein (Assistent: Projekt › Einstellungen › KI › Assistent bearbeiten; Projektagenten: Verwaltung › KI am Agenten, gleiche Rechte wie die Persona):
+
+| Stil | Antwort |
+|---|---|
+| Technisch | Liste mit Kennung, Titel und Termin je Aufgabe, Überfälliges zuerst (Standard für Projektagenten) |
+| Kompakt | nur Anzahlen in ein bis zwei Zeilen: überfällig, heute, diese Woche, ohne Termin, Termine heute, offene Fragen; keine Titel |
+| Fließtext | kurzer Text in eigenen Worten, jede Aufgabe mit ihrer Kennung (im Chat verlinkt) (Standard für den Assistenten) |
+| Management | Lagebild in wenigen Sätzen mit höchstens den fünf nächsten fälligen Aufgaben (nur mit Termin), ohne Details zu Eskalationen und Blockaden |
+
+Der Stil gilt für Statusfragen und Grüße an den Assistenten und für Statusfragen an Projektagenten. Die Daten bleiben dieselben; bei „Kompakt“ und „Management“ gibt das System dem Modell nur die Anzahlen bzw. die fünf Aufgaben, damit es nichts anderes nennen kann.
+
+**Aufgaben übernehmen:** Unter jeder Statusantwort (außer im Stil „Kompakt“; beim reinen Gruß nur Überfälliges und Heutiges) steht eine nummerierte Karte mit genau den Aufgaben, die die Antwort nennt, je mit Link und Knopf **Übernehmen**. Ein Klick macht den Agenten zuständig, schreibt „Übernommen auf Wunsch von … per Chat“ ins Log und startet ihn am Arbeitspaket; die Karte zeigt danach „übernommen“. Dasselbe geht im Text: „übernimm 2 und 4“ (Nummern der letzten Karte im selben Gespräch bzw. Thread; das System löst sie auf), „übernimm WEB-12“ oder „übernimm alle überfälligen“ (auch „heute“, „diese Woche“, „alle“). Rechte wie bei der Zuweisung im Projekt: Agenten weist nur die Projektleitung zu (im persönlichen Projekt du als Inhaber), der Agent muss Mitglied sein und darf nicht schon zuständig sein; sonst ist der Knopf gesperrt und nennt den Grund.
+
+Während er antwortet, zeigt der Chat unter den Nachrichten nur einen Spinner (bei reduzierter Bewegung eine stehende Sanduhr), ohne sichtbaren Text; Screenreader hören „Morton denkt nach“ (bei mehreren Agenten alle Namen).
 
 Auch ein gewöhnlicher Agent, der Mitglied deines persönlichen Projekts ist, verhält sich dort wie ein Assistent: Sein Gespräch steht im Chat angepinnt ganz oben (Chat ist der erste Punkt der Leiste) und öffnet sich am Desktop von selbst. Er hilft auch bei allgemeinen Fragen. Was du erledigt haben willst („Frag Sven nach dem Stand“, „Leg mir einen Termin an“, „Recherchiere …“), legt er als Auftrag im persönlichen Projekt an und erledigt es sofort; jeder Schritt erscheint im Chat. Mails gehen nicht von selbst raus: Er legt dir den Entwurf als Karte in den Chat, mit **Senden**, **Ändern** (direkt in der Karte) und **Verwerfen**. Ist der Auftrag erledigt, setzt er ihn auf erledigt; das System schließt ihn ab und archiviert ihn (Log bleibt). Erledigt-Setzen braucht dafür keine Bestätigung, der Auftrag selbst ist sie. Für einen solchen Auftrag legt er keine weiteren Arbeitspakete, Teilprojekte oder Meilensteine an. Ging es in deiner vorigen Nachricht um ein anderes Projekt (z. B. „Wie steht es bei AirGPU?“), gilt eine Folgebitte ohne Nennung („Leg das bitte an“) für dieses Projekt, nicht für dein persönliches. Nennst du ein Projekt, in dem er nicht Mitglied ist, sagt er das und wie er dazukommt (die PL lädt ihn unter Projekt › Einstellungen › KI ein); anderswo legt er dann nichts an.
 
@@ -189,6 +202,7 @@ Der Agent kennt Rolle und Rechte des Absenders, erkennt Anweisungen in natürlic
 | `policy` | Selbstständigkeit oder Denktiefe je Arbeitspaket („WEB-12 ohne Rückfrage“, „WEB-12 gründlich“), innerhalb der Grenzen | Projektleitung |
 | `report` | Zwischenstände wünschen (jeder Lauf, Meilensteine, täglich, Abschluss; optional per Mail) | Projektleitung, Auftraggeber |
 | `refer` | Frage an die Projektleitung weitergeben; Auftragsvorschlag | Mitglieder |
+| `take` | Aufgaben dem Agenten zuweisen: „übernimm 2 und 4“ (Nummern der letzten Aufgabenkarte), „übernimm WEB-12“, „übernimm alle überfälligen“; Log „Übernommen auf Wunsch von … per Chat“, danach läuft er am Arbeitspaket | Projektleitung (persönliches Projekt: Inhaber) |
 | `move` | Aufgabe unter ein anderes Arbeitspaket hängen („WEB-23 unter WEB-22“) oder Arbeitspaket einem Teilprojekt zuordnen („WEB-22 ins Teilprojekt Sanitär“, „keins“ = heraus); nur im selben Projekt, Log an Quelle und Ziel | wie Aufträge (Policy „Aufträge im Chat“) oder „Projektplan ändern“ |
 
 Sagt der Agent „habe ich verschoben, umgehängt, zugeordnet, umgewandelt“, ohne dass ein `move` auf der Karte steht, ersetzt `claimCheck` den Satz wie bei „angelegt“ oder „gesendet“.

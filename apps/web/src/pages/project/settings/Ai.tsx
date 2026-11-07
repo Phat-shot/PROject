@@ -4,8 +4,8 @@ import { Link } from 'react-router-dom';
 import { api, fmtDate } from '../../../lib/api';
 import { Loading, Modal, roleLabel, useAsync, useDialog, Term } from '../../../components/ui';
 import { AgentPolicyEditor, EffectivePolicyText } from '../../../components/AgentPolicy';
-import { AgentEditorModal, RightsEditor, rightsSummary } from '../../../components/AgentEditor';
-import { AGENT_MODES, AI_FEATURES, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature, type AssistantState, type EffectiveAgentPolicy } from '@projekttool/shared';
+import { AgentEditorModal, RightsEditor, rightsSummary, StatusStyleSelect } from '../../../components/AgentEditor';
+import { AGENT_MODES, AI_FEATURES, defaultStatusStyle, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature, type AssistantState, type EffectiveAgentPolicy } from '@projekttool/shared';
 import { useProject } from '../../ProjectPage';
 import { useData } from '../../../lib/useData';
 import { ReadOnlyNote, SettingsCard } from '../../../components/settings/Settings';
@@ -321,7 +321,7 @@ export function AssistantCard({ children }: { children?: ReactNode }) {
 }
 
 function AssistantEditModal({ assistant, profiles, onClose, onSaved }: { assistant: NonNullable<AssistantState['assistant']>; profiles: AssistantProfile[]; onClose: () => void; onSaved: () => Promise<void> }) {
-  const [f, setF] = useState({ name: assistant.name, persona: assistant.persona ?? '', aiProfileId: assistant.aiProfileId ?? '', dailyBudget: assistant.dailyBudget == null ? '' : String(assistant.dailyBudget) });
+  const [f, setF] = useState({ name: assistant.name, persona: assistant.persona ?? '', statusStyle: assistant.statusStyle ?? defaultStatusStyle('assistant'), aiProfileId: assistant.aiProfileId ?? '', dailyBudget: assistant.dailyBudget == null ? '' : String(assistant.dailyBudget) });
   const { busy, error, run } = useAsync();
   const known = profiles.some((p) => p.id === f.aiProfileId);
   return (
@@ -332,9 +332,10 @@ function AssistantEditModal({ assistant, profiles, onClose, onSaved }: { assista
           {!known && <option value={f.aiProfileId}>{assistant.profileName ?? 'bisheriges LLM'} (nicht mehr frei)</option>}
           {profiles.map((p) => <option key={p.id} value={p.id}>{profileLabel(p)}</option>)}</select></label>
         <label className="field"><span>Persona</span><input type="text" value={f.persona} onChange={(e) => setF({ ...f, persona: e.target.value })} /></label>
+        <StatusStyleSelect value={f.statusStyle} onChange={(statusStyle) => setF({ ...f, statusStyle })} />
         <label className="field"><span>Tagesbudget (Läufe je Tag, leer = Vorgabe des Mandanten)</span><input className="w-120" type="number" min={1} value={f.dailyBudget} onChange={(e) => setF({ ...f, dailyBudget: e.target.value })} /></label>
         {error && <div className="error small">{error}</div>}
-        <div className="row"><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/agents/${assistant.id}`, { name: f.name.trim(), persona: f.persona.trim() || null, ...(f.aiProfileId && f.aiProfileId !== assistant.aiProfileId ? { aiProfileId: f.aiProfileId } : {}), dailyBudget: f.dailyBudget ? Number(f.dailyBudget) : null }); await onSaved(); })}>Speichern</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
+        <div className="row"><button className="btn primary" disabled={busy || !f.name.trim()} onClick={() => void run(async () => { await api.patch(`/agents/${assistant.id}`, { name: f.name.trim(), persona: f.persona.trim() || null, statusStyle: f.statusStyle, ...(f.aiProfileId && f.aiProfileId !== assistant.aiProfileId ? { aiProfileId: f.aiProfileId } : {}), dailyBudget: f.dailyBudget ? Number(f.dailyBudget) : null }); await onSaved(); })}>Speichern</button><button className="btn" onClick={onClose}>Abbrechen</button></div>
       </div>
     </Modal>
   );

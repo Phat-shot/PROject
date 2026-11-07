@@ -132,6 +132,8 @@ Einstellungen › Fristen und Berichte: Verzug, Stillstand und Blockaden eskalie
 - **Projektkanal** je Projekt, Antworten als Thread, `@Name` benachrichtigt. Schreiben dürfen eingetragene Mitglieder (auch Leser); ist ein Projekt für alle Benutzer des Mandanten sichtbar, lesen die übrigen nur mit. Die PL kann Nachrichten löschen.
 - **Threads** klappen direkt unter ihrer Nachricht auf („n Antworten“, ▾ schließt); dort stehen Frage-Kopf, Antworten und das Antwortfeld. Gehört ein Thread zu einer älteren Nachricht, erst „Ältere laden“.
 - **Direktnachrichten** mit jeder Person des Mandanten und mit KI-Agenten („+ Neu“); Antworten auch dort als Thread.
+- **Kennungen** wie WEB-12 werden im Chat zu Links, wenn das Kürzel zu einem deiner Projekte gehört; der Link (`/k/WEB-12`) öffnet das AP im Board, sofern du es sehen darfst.
+- **Agenten antworten:** Solange ein Agent schreibt, steht unter den Nachrichten ein Spinner (ohne Text; Screenreader: „Morton denkt nach“). Unter Statusantworten („Was steht an?“) zeigt eine nummerierte Karte die genannten Aufgaben mit **Übernehmen** (Agent wird zuständig und beginnt); im Text geht das mit „übernimm 2“, „übernimm WEB-12“ oder „übernimm alle überfälligen“. Wie ausführlich die Statusantwort ist (technisch, kompakt, Fließtext, Management), stellt man am Agenten ein (KI-Handbuch Kapitel 2).
 - **Archivieren:** Jedes Gespräch außer dem angepinnten Assistenten lässt sich archivieren (Knopf am Gespräch); es wandert in die eingeklappte Gruppe unten und kommt mit der nächsten Nachricht von selbst zurück. Die Suche findet auch archivierte Gespräche.
 
 ### Offene Fragen

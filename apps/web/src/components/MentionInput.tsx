@@ -1,5 +1,5 @@
 import { api } from '../lib/api';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useEffect, useRef, useState } from 'react';
 
 interface Member { userId: string; name: string }
@@ -57,33 +57,61 @@ export function MentionInput({ value, onChange, members, placeholder, onSubmit, 
   );
 }
 
-/** Rendert @Name der Mitglieder hervorgehoben. */
-export function MentionText({ text, members }: { text: string; members: Member[] }) {
-  // @Namen hervorheben, Kennungen wie WEB-12 verlinken (öffnet das Arbeitspaket, wenn man es sehen darf)
+/** Kürzel der Projekte, die die Person kennt (einmal je Sitzung geladen); bis dahin leer. */
+let keysCache: Promise<string[]> | null = null;
+export function useProjectKeys(): string[] {
+  const [keys, setKeys] = useState<string[]>([]);
+  useEffect(() => {
+    keysCache ??= api.get<{ projects?: { key: string }[] }>('/projects').then((r) => (r?.projects ?? []).map((p) => String(p.key).toUpperCase())).catch(() => { keysCache = null; return []; });
+    let live = true;
+    void keysCache.then((k) => { if (live) setKeys(k); });
+    return () => { live = false; };
+  }, []);
+  return keys;
+}
+/** Nur für Tests: Cache der Kürzel leeren. */
+export const resetProjectKeys = () => { keysCache = null; };
+
+/**
+ * Rendert @Name der Mitglieder hervorgehoben und Kennungen wie WEB-12 als Link auf /k/WEB-12 (löst beim Öffnen auf und
+ * leitet ins Board weiter). Mit keys nur Kennungen, deren Kürzel ein Projekt der Person ist; ohne keys jede Kennung.
+ */
+export function MentionText({ text, members, keys }: { text: string; members: Member[]; keys?: string[] }) {
   const names = [...members].sort((a, b) => b.name.length - a.name.length).map((m) => m.name);
   const nameRe = names.length ? `@(${names.map((n) => n.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})(?![\\p{L}\\p{N}])` : null;
+  const known = keys ? new Set(keys.map((k) => k.toUpperCase())) : null;
   const re = new RegExp(`${nameRe ? `${nameRe}|` : ''}(?<![\\p{L}\\p{N}-])([A-Z][A-Z0-9]{1,9}-[1-9]\\d{0,5})(?![\\p{L}\\p{N}])`, 'gu');
   const parts: (string | JSX.Element)[] = [];
   let last = 0; let m: RegExpExecArray | null; let i = 0;
   while ((m = re.exec(text))) {
+    if (nameRe && m[1]) { parts.push(text.slice(last, m.index)); parts.push(<span key={i++} className="mention">@{m[1]}</span>); last = m.index + m[0].length; continue; }
+    const code = m[nameRe ? 2 : 1];
+    if (known && !known.has(code.slice(0, code.lastIndexOf('-')))) continue;
     parts.push(text.slice(last, m.index));
-    if (nameRe && m[1]) parts.push(<span key={i++} className="mention">@{m[1]}</span>);
-    else parts.push(<TaskRefLink key={i++} code={m[nameRe ? 2 : 1]} />);
+    parts.push(<Link key={i++} className="task-ref" to={`/k/${code}`} title={`${code} öffnen`}>{code}</Link>);
     last = m.index + m[0].length;
   }
   parts.push(text.slice(last));
   return <>{parts}</>;
 }
 
-/** Kennung als Link: sucht das Arbeitspaket (nur sichtbare) und öffnet es im Board; sonst bleibt es Text. */
-function TaskRefLink({ code }: { code: string }) {
+/**
+ * Weiterleitung /k/:ref (z. B. /k/WEB-12): sucht das Arbeitspaket (nur sichtbare) und öffnet es im Board; sonst ein Hinweis.
+ * So lädt der Chat nichts je Nachricht, aufgelöst wird erst beim Klick.
+ */
+export function TaskRefRedirect() {
+  const { ref = '' } = useParams();
   const nav = useNavigate();
-  const open = async (e: React.MouseEvent) => {
-    e.preventDefault();
-    const [key, n] = [code.slice(0, code.lastIndexOf('-')), Number(code.slice(code.lastIndexOf('-') + 1))];
-    const r = await api.get<{ tasks: { id: string; number: number; projectId: string; projectKey: string }[] }>(`/search?q=${encodeURIComponent(code)}`).catch(() => null);
-    const t = r?.tasks.find((x) => x.projectKey.toUpperCase() === key.toUpperCase() && x.number === n);
-    if (t) nav(`/projekte/${t.projectId}/board?task=${t.id}`);
-  };
-  return <a href="#" className="task-ref" title={`${code} öffnen`} onClick={(e) => void open(e)}>{code}</a>;
+  const [missing, setMissing] = useState(false);
+  useEffect(() => {
+    const code = ref.toUpperCase();
+    const cut = code.lastIndexOf('-');
+    const [key, n] = [code.slice(0, cut), Number(code.slice(cut + 1))];
+    let live = true;
+    api.get<{ tasks: { id: string; number: number; projectId: string; projectKey: string }[] }>(`/search?q=${encodeURIComponent(code)}`)
+      .then((r) => { const t = r?.tasks?.find((x) => x.projectKey.toUpperCase() === key && x.number === n); if (!live) return; if (t) nav(`/projekte/${t.projectId}/board?task=${t.id}`, { replace: true }); else setMissing(true); })
+      .catch(() => { if (live) setMissing(true); });
+    return () => { live = false; };
+  }, [ref]);
+  return missing ? <div className="pad-24"><p>{ref} gibt es nicht oder du darfst es nicht sehen.</p><Link to="/chat">Zurück zum Chat</Link></div> : <div className="pad-24 muted small" role="status">{ref} wird geöffnet …</div>;
 }

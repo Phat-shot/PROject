@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { AGENT_ACTION_CLASSES, AGENT_DEPTHS, AGENT_MODES, AI_CATEGORIES, AI_FEATURES, DEFAULT_AGENT_RIGHTS, type AgentActionClass, type AgentDepth, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature } from '@projekttool/shared';
+import { AGENT_ACTION_CLASSES, AGENT_DEPTHS, AGENT_MODES, AI_CATEGORIES, AI_FEATURES, DEFAULT_AGENT_RIGHTS, STATUS_STYLES, defaultStatusStyle, type StatusStyle, type AgentActionClass, type AgentDepth, type AgentMode, type AgentPolicy, type AgentUser, type AiFeature } from '@projekttool/shared';
 import { api } from '../lib/api';
 import { useData } from '../lib/useData';
 import { Modal, useAsync } from './ui';
@@ -49,6 +49,17 @@ export function ScopeEditor({ scope, projectIds, onChange, agent = false }: { sc
   );
 }
 
+/** Antwortstil auf Statusfragen: Select mit den vier Stilen, darunter die Ein-Satz-Erklärung des gewählten. */
+export function StatusStyleSelect({ value, onChange }: { value: StatusStyle; onChange: (v: StatusStyle) => void }) {
+  const cur = STATUS_STYLES.find((x) => x.key === value);
+  return (
+    <label className="field"><span>Antwort auf Statusfragen</span>
+      <select value={value} onChange={(e) => onChange(e.target.value as StatusStyle)}>{STATUS_STYLES.map((x) => <option key={x.key} value={x.key} title={x.hint}>{x.label}</option>)}</select>
+      {cur && <span className="muted small">{cur.hint}</span>}
+    </label>
+  );
+}
+
 export interface LlmChoice { id: string; name: string; provider: 'local' | 'anthropic'; thinkingOff?: boolean }
 
 /**
@@ -59,7 +70,7 @@ export interface LlmChoice { id: string; name: string; provider: 'local' | 'anth
 export function AgentEditorModal({ agent, llms, llmId, orgBudget, scoped, onClose, onSaved }: { agent: AgentUser | null; llms: LlmChoice[]; llmId: string; orgBudget: number; scoped: boolean; onClose: () => void; onSaved: (warnings: string[]) => Promise<void> | void }) {
   const p0: AgentPolicy = agent?.policy ?? {};
   const [f, setF] = useState({
-    name: agent?.name ?? '', persona: agent?.persona ?? '', signature: agent?.signature ?? '', aiProfileId: agent?.aiProfileId ?? llmId, thinkingMode: agent?.thinkingMode ?? null as 'off' | 'on' | null,
+    name: agent?.name ?? '', persona: agent?.persona ?? '', signature: agent?.signature ?? '', aiProfileId: agent?.aiProfileId ?? llmId, thinkingMode: agent?.thinkingMode ?? null as 'off' | 'on' | null, statusStyle: (agent?.statusStyle ?? defaultStatusStyle('project')) as StatusStyle,
     dailyBudget: agent?.dailyBudget == null ? '' : String(agent.dailyBudget), scope: (agent?.scope === 'selected' ? 'selected' : 'all') as 'all' | 'selected', projectIds: agent?.projectIds ?? [],
     rights: agent?.rights ?? DEFAULT_AGENT_RIGHTS, maxMode: p0.maxMode ?? '' as AgentMode | '', lockedConfirm: p0.lockedConfirm ?? [] as AgentActionClass[], maxDepth: p0.maxDepth ?? '' as AgentDepth | ''
   });
@@ -68,7 +79,7 @@ export function AgentEditorModal({ agent, llms, llmId, orgBudget, scoped, onClos
   const lock = (c: AgentActionClass, on: boolean) => setF({ ...f, lockedConfirm: on ? [...f.lockedConfirm, c] : f.lockedConfirm.filter((x) => x !== c) });
   const save = () => run(async () => {
     const policy: AgentPolicy = { ...(f.maxMode ? { maxMode: f.maxMode } : {}), ...(f.lockedConfirm.length ? { lockedConfirm: f.lockedConfirm } : {}), ...(f.maxDepth ? { maxDepth: f.maxDepth } : {}) };
-    const body = { name: f.name.trim(), persona: f.persona.trim() || null, signature: f.signature.trim() || null, aiProfileId: f.aiProfileId, thinkingMode: f.thinkingMode, dailyBudget: f.dailyBudget === '' ? null : Number(f.dailyBudget), rights: f.rights, policy, ...(scoped ? { scope: f.scope, projectIds: f.scope === 'selected' ? f.projectIds : [] } : {}) };
+    const body = { name: f.name.trim(), persona: f.persona.trim() || null, signature: f.signature.trim() || null, aiProfileId: f.aiProfileId, thinkingMode: f.thinkingMode, statusStyle: f.statusStyle, dailyBudget: f.dailyBudget === '' ? null : Number(f.dailyBudget), rights: f.rights, policy, ...(scoped ? { scope: f.scope, projectIds: f.scope === 'selected' ? f.projectIds : [] } : {}) };
     const r = agent ? await api.patch<{ warnings?: string[] }>(`/agents/${agent.id}`, body) : await api.post<{ warnings?: string[] }>('/agents', body);
     await onSaved(r.warnings ?? []);
   });
@@ -80,6 +91,7 @@ export function AgentEditorModal({ agent, llms, llmId, orgBudget, scoped, onClos
           <label className="field"><span>LLM</span><select value={f.aiProfileId} disabled={llms.length < 2} onChange={(e) => setF({ ...f, aiProfileId: e.target.value })}>{llms.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>
         </div>
         <label className="field"><span>Persona (Schreibstil, eine Zeile)</span><input type="text" value={f.persona} maxLength={300} placeholder="z. B. freundlich, knapp, duzt das Team" onChange={(e) => setF({ ...f, persona: e.target.value })} /></label>
+        <StatusStyleSelect value={f.statusStyle} onChange={(statusStyle) => setF({ ...f, statusStyle })} />
         <label className="field"><span>Unterschrift für Mails (leer = „Name (KI-Agent, Projekt KEY)“)</span><textarea rows={2} maxLength={500} value={f.signature} onChange={(e) => setF({ ...f, signature: e.target.value })} /></label>
         <div className="grid cols-2">
           <label className="field"><span>Tagesbudget (Läufe, leer = Mandant {orgBudget})</span><input type="number" min={0} max={orgBudget} value={f.dailyBudget} placeholder={String(orgBudget)} onChange={(e) => setF({ ...f, dailyBudget: e.target.value })} /></label>

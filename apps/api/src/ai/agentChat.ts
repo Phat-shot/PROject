@@ -18,7 +18,9 @@ import { projectAccount } from '../mail/accounts.js';
 import { webAvailable } from './web.js';
 import { recordFeedback } from './feedback.js';
 import { systemMessage } from '../notify.js';
-import type { ChatChoice, ChatIntent } from '@projekttool/shared';
+import type { ChatChoice, ChatIntent, StatusStyle } from '@projekttool/shared';
+import { defaultStatusStyle } from '@projekttool/shared';
+import { taskItems } from './takeTasks.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -47,8 +49,8 @@ const SCHEMA = {
     onTopic: { type: 'boolean', description: 'true, wenn die Antwort das Thema (Projekt oder Arbeitspaket) betrifft; false bei Gruß, Smalltalk, allgemeinen Fragen oder Bitten ohne Projektbezug' },
     commands: {
       type: 'array', description: 'Befehle, die das System prüft und ausführt (höchstens 5, davon höchstens 1 order): nur wenn die Nachricht sie verlangt und der Absender laut Kontext darf; sonst leer',
-      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'to', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail'], properties: {
-        type: { type: 'string', enum: ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move'] },
+      items: { type: 'object', additionalProperties: false, required: ['type', 'ref', 'to', 'text', 'title', 'parent', 'project', 'subproject', 'dueDate', 'deliverables', 'every', 'level', 'mode', 'depth', 'reason', 'mail', 'items', 'refs', 'filter'], properties: {
+        type: { type: 'string', enum: ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move', 'take'] },
         ref: { type: 'string', description: 'note/pause/resume/stop/priority/approve/reject/policy/report: Kennung des Arbeitspakets (z. B. WEB-12); move: Kennung der Aufgabe oder des Arbeitspakets, das verschoben wird; für das in derselben Antwort per order angelegte: neu; sonst leer' },
         to: { type: 'string', description: 'move: Kennung des Ziel-Arbeitspakets (Aufgabe darunter hängen); leer, wenn ein Arbeitspaket per subproject einem Teilprojekt zugeordnet wird; sonst leer' },
         text: { type: 'string', description: 'order: der Auftrag im Wortlaut (Beschreibung); note: Information fürs Log; refer: Vorschlag für die PL; sonst leer' },
@@ -63,7 +65,10 @@ const SCHEMA = {
         mode: { type: 'string', description: 'policy: auto, confirm_critical oder confirm_all; sonst leer' },
         depth: { type: 'string', description: 'policy: Denktiefe quick (schnell), standard oder deep (gründlich); sonst leer' },
         reason: { type: 'string', description: 'stop/reject: Grund; sonst leer' },
-        mail: { type: 'boolean', description: 'order/report: Zwischenstände und Lieferung auch per Mail an den Auftraggeber' }
+        mail: { type: 'boolean', description: 'order/report: Zwischenstände und Lieferung auch per Mail an den Auftraggeber' },
+        items: { type: 'array', items: { type: 'integer' }, description: 'take: Nummern aus der letzten Aufgabenkarte im Gespräch („übernimm 2 und 4“); sonst leer' },
+        refs: { type: 'array', items: { type: 'string' }, description: 'take: Kennungen der Aufgaben („übernimm WEB-12“); sonst leer' },
+        filter: { type: 'string', description: 'take: overdue, today, week oder all aus der letzten Aufgabenkarte („übernimm alle überfälligen“); sonst leer' }
       } }
     },
     notes: {
@@ -353,6 +358,10 @@ export function berlinWeek(now: Date): { today: string; sunday: string } {
 /** Statusdaten für den Assistenten: was im persönlichen Projekt ansteht, vom System per SQL ermittelt (nicht vom Modell). */
 export interface StatusBrief {
   overdue: StatusTask[]; today: StatusTask[]; week: StatusTask[]; noDate: StatusTask[]; later: number;
+  /** die nächsten fälligen Aufgaben mit Termin (höchstens 5, auch überfällige), für den Stil management */
+  dated: StatusTask[];
+  /** Anzahlen je Gruppe (nicht gekürzt), für die Stile compact und management */
+  counts: StatusCounts;
   openItems: number;
   meetings: { title: string; day: 'heute' | 'morgen'; from: string; to: string; location: string | null; tentative: boolean }[];
   questions: { kind: string; body: string; ref: string | null }[];
@@ -361,19 +370,23 @@ export interface StatusBrief {
   /** nichts offen: keine Arbeitspakete, Termine, Fragen, Freigaben oder Entwürfe */
   empty: boolean;
 }
-export interface StatusTask { ref: string; title: string; due: string | null; parent: string | null; mine: boolean }
+export interface StatusCounts { overdue: number; today: number; week: number; noDate: number; later: number; meetingsToday: number; questions: number }
+export interface StatusTask { id: string; projectId: string; ref: string; title: string; due: string | null; parent: string | null; mine: boolean; status: string }
 const STATUS_MAX = 8;
+/** Höchstens so viele terminierte Aufgaben im Stil management. */
+export const MANAGEMENT_MAX = 5;
 export async function statusBrief(db: Db, q: { projectId: string; personId: string; agentId: string; now: Date }): Promise<StatusBrief> {
   const { today, sunday } = berlinWeek(q.now);
   // Offene Arbeitspakete und Aufgaben der Person bzw. des Assistenten (zuständig direkt oder geerbt; ohne Zuständigkeit gilt die Person)
   const rows = (await db.query(
-    `select p.key, t.number, t.title, to_char(t.due_date, 'YYYY-MM-DD') as due, pt.title as parent_title, (${EFFECTIVE_RESPONSIBLE_SQL}) as resp,
+    `select t.id, t.project_id, p.key, t.number, t.title, c.name as column_name, to_char(t.due_date, 'YYYY-MM-DD') as due, pt.title as parent_title, (${EFFECTIVE_RESPONSIBLE_SQL}) as resp,
        case when t.due_date is null then 'none' when t.due_date < $2::date then 'overdue' when t.due_date = $2::date then 'today' when t.due_date <= $3::date then 'week' else 'later' end as bucket
      from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id ${EFFECTIVE_JOINS}
      where t.project_id = $1 and t.deleted_at is null and t.archived_at is null and not c.is_done
        and ((${EFFECTIVE_RESPONSIBLE_SQL}) is null or (${EFFECTIVE_RESPONSIBLE_SQL}) = any(array[$4, $5]::uuid[]))
      order by t.due_date nulls last, t.number limit 200`, [q.projectId, today, sunday, q.personId, q.agentId])).rows as any[];
-  const pick = (b: string) => rows.filter((r) => r.bucket === b).slice(0, STATUS_MAX).map((r): StatusTask => ({ ref: `${r.key}-${r.number}`, title: r.title, due: r.due ?? null, parent: r.parent_title ?? null, mine: r.resp === q.agentId }));
+  const task = (r: any): StatusTask => ({ id: r.id, projectId: r.project_id, ref: `${r.key}-${r.number}`, title: r.title, due: r.due ?? null, parent: r.parent_title ?? null, mine: r.resp === q.agentId, status: r.column_name });
+  const pick = (b: string) => rows.filter((r) => r.bucket === b).slice(0, STATUS_MAX).map(task);
   const openItems = (await db.one(`select count(*)::int as c from checklist_items i join tasks t on t.id = i.task_id join board_columns c on c.id = t.column_id where t.project_id = $1 and not i.done and t.deleted_at is null and t.archived_at is null and not c.is_done`, [q.projectId])).c as number;
   // Termine heute und morgen (Europe/Berlin)
   const meetings = (await db.query(
@@ -381,25 +394,42 @@ export async function statusBrief(db: Db, q: { projectId: string; personId: stri
        (starts_at at time zone 'Europe/Berlin')::date = $2::date as is_today
      from meetings where project_id = $1 and starts_at >= ($2::date)::timestamp at time zone 'Europe/Berlin' and starts_at < ($2::date + 2)::timestamp at time zone 'Europe/Berlin'
      order by starts_at limit ${STATUS_MAX}`, [q.projectId, today])).rows.map((m: any) => ({ title: m.title, day: (m.is_today ? 'heute' : 'morgen') as 'heute' | 'morgen', from: m.f, to: m.t, location: m.location ?? null, tentative: Boolean(m.tentative) }));
+  const meetingsToday = (await db.one(`select count(*)::int as c from meetings where project_id = $1 and starts_at >= ($2::date)::timestamp at time zone 'Europe/Berlin' and starts_at < ($2::date + 1)::timestamp at time zone 'Europe/Berlin'`, [q.projectId, today])).c as number;
   // Offene Fragen und Bestätigungen an die Person (oder an den Kanal des persönlichen Projekts), angehaltene Aktionen zur Freigabe
-  const questions = (await db.query(
-    `select q.kind, q.body, p.key, t.number from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id
-     where q.project_id = $1 and q.status = 'open' and (q.addressee_id = $2 or q.addressee_id is null) order by q.created_at limit ${STATUS_MAX}`, [q.projectId, q.personId])).rows.map((r: any) => ({ kind: r.kind, body: String(r.body ?? '').replace(/\s+/g, ' '), ref: r.number ? `${r.key}-${r.number}` : null }));
+  const QW = `from questions q join projects p on p.id = q.project_id left join tasks t on t.id = q.task_id where q.project_id = $1 and q.status = 'open' and (q.addressee_id = $2 or q.addressee_id is null)`;
+  const questions = (await db.query(`select q.kind, q.body, p.key, t.number ${QW} order by q.created_at limit ${STATUS_MAX}`, [q.projectId, q.personId])).rows.map((r: any) => ({ kind: r.kind, body: String(r.body ?? '').replace(/\s+/g, ' '), ref: r.number ? `${r.key}-${r.number}` : null }));
+  const questionCount = (await db.one(`select count(*)::int as c ${QW}`, [q.projectId, q.personId])).c as number;
   const proposals = (await db.one(`select count(*)::int as c from ai_proposals where project_id = $1 and status = 'pending'`, [q.projectId])).c as number;
   // Mail-Entwürfe zur Freigabe: aus dem persönlichen Projekt oder aus eigenen Postfächern der Person
   const drafts = (await db.query(
     `select d.subject, d.to_addrs from mail_drafts d where d.status = 'pending_approval'
        and (d.project_id = $1 or d.account_id in (select a.id from mail_accounts a where (a.type = 'personal' and a.owner_user_id = $2) or a.managed_user_id = $2))
      order by d.created_at limit ${STATUS_MAX}`, [q.projectId, q.personId])).rows.map((d: any) => ({ subject: String(d.subject || '(ohne Betreff)'), to: (Array.isArray(d.to_addrs) ? d.to_addrs : []).map((x: any) => (typeof x === 'string' ? x : x?.address ?? x?.email ?? '')).filter(Boolean).join(', ') }));
-  const b: StatusBrief = { overdue: pick('overdue'), today: pick('today'), week: pick('week'), noDate: pick('none'), later: rows.filter((r) => r.bucket === 'later').length, openItems, meetings, questions, proposals, drafts, empty: false };
+  const n = (b: string) => rows.filter((r) => r.bucket === b).length;
+  const counts: StatusCounts = { overdue: n('overdue'), today: n('today'), week: n('week'), noDate: n('none'), later: n('later'), meetingsToday, questions: questionCount };
+  const b: StatusBrief = { overdue: pick('overdue'), today: pick('today'), week: pick('week'), noDate: pick('none'), later: counts.later, dated: rows.filter((r) => r.due).slice(0, MANAGEMENT_MAX).map(task), counts, openItems, meetings, questions, proposals, drafts, empty: false };
   b.empty = !rows.length && !meetings.length && !questions.length && !proposals && !drafts.length;
   return b;
 }
 const dm = (iso: string | null) => (iso ? `${iso.slice(8, 10)}.${iso.slice(5, 7)}.` : '');
-/** Abschnitt „Statusfrage“ für den Prompt des Assistenten. */
-export function statusBriefText(b: StatusBrief, greeting: boolean): string {
-  const list = (label: string, xs: StatusTask[]) => (xs.length ? `${label}:\n${xs.map((t) => `- ${t.ref} „${cut(t.title, 80)}“${t.due ? ` · fällig ${dm(t.due)}` : ''}${t.parent ? ` (Aufgabe in „${cut(t.parent, 60)}“)` : ''}${t.mine ? ' · bei dir' : ''}`).join('\n')}\n` : '');
-  const lines = [
+const STYLE_LABEL: Record<StatusStyle, string> = { technical: 'technisch', compact: 'kompakt', text: 'Fließtext', management: 'Management' };
+/** Anzahlen je Gruppe in einer Zeile (compact, management). */
+export const countsLine = (c: StatusCounts) => `überfällig ${c.overdue} · heute fällig ${c.today} · diese Woche fällig ${c.week} · ohne Termin ${c.noDate} · Termine heute ${c.meetingsToday} · offene Fragen ${c.questions}`;
+/** Antwortanweisung je Stil (ohne Gruß, nicht leer). */
+const STYLE_HOW: Record<StatusStyle, string> = {
+  technical: 'Antworte knapp aus diesen Daten: Überfälliges und heute Fälliges zuerst (Kennung, Titel, Termin), dann Termine heute und morgen, dann diese Woche, offene Fragen, Freigaben und Entwürfe; Leeres weglassen.',
+  text: 'Antworte in einem kurzen, zusammenhängenden Text nach bestem Wissen (keine Liste): Überfälliges und heute Fälliges zuerst, dann Termine, diese Woche, offene Fragen, Freigaben und Entwürfe. Jede Aufgabe beschreibst du in eigenen Worten und nennst ihre Kennung in Klammern (z. B. „… (WEB-12)“), damit sie im Chat verlinkt wird; Leeres weglassen.',
+  compact: 'Antworte in ein bis zwei Zeilen nur mit diesen Anzahlen (Gruppen mit 0 weglassen): keine Titel, keine Kennungen, keine einzelnen Aufgaben.',
+  management: `Gib ein Lagebild in zwei bis vier Sätzen: zuerst die Gesamtlage aus den Anzahlen, dann höchstens die ${MANAGEMENT_MAX} genannten Aufgaben mit Kennung und Termin. Keine Details zu Eskalationen oder Blockaden, keine Aufgaben ohne Termin, nichts darüber hinaus.`
+};
+/**
+ * Abschnitt „Statusfrage“ für den Prompt des Assistenten, je Antwortstil: technical und text bekommen die Listen (Daten gleich,
+ * Anweisung verschieden), compact nur die Anzahlen, management die Anzahlen und die nächsten fälligen Aufgaben mit Termin.
+ */
+export function statusBriefText(b: StatusBrief, greeting: boolean, style: StatusStyle = 'technical'): string {
+  const task = (t: StatusTask) => `- ${t.ref} „${cut(t.title, 80)}“${t.due ? ` · fällig ${dm(t.due)}` : ''}${t.parent ? ` (Aufgabe in „${cut(t.parent, 60)}“)` : ''}${t.mine ? ' · bei dir' : ''}`;
+  const list = (label: string, xs: StatusTask[]) => (xs.length ? `${label}:\n${xs.map(task).join('\n')}\n` : '');
+  const full = [
     list('Überfällig', b.overdue), list('Heute fällig', b.today), list('Diese Woche fällig', b.week), list('Ohne Termin', b.noDate),
     b.later ? `Später fällig: ${b.later}\n` : '',
     b.openItems ? `Offene Checklistenpunkte: ${b.openItems}\n` : '',
@@ -408,12 +438,46 @@ export function statusBriefText(b: StatusBrief, greeting: boolean): string {
     b.proposals ? `Angehaltene Aktionen zur Freigabe: ${b.proposals}\n` : '',
     b.drafts.length ? `Mail-Entwürfe zur Freigabe:\n${b.drafts.map((d) => `- „${cut(d.subject, 80)}“${d.to ? ` an ${cut(d.to, 80)}` : ''}`).join('\n')}\n` : ''
   ].join('');
+  const lines = b.empty ? '' : style === 'compact'
+    ? `Anzahlen: ${countsLine(b.counts)}\n`
+    : style === 'management'
+      ? `Anzahlen: ${countsLine(b.counts)}\n${list(`Die nächsten fälligen Aufgaben (höchstens ${MANAGEMENT_MAX}, nur mit Termin)`, b.dated)}`
+      : full;
+  const urgent = b.counts.overdue + b.counts.today > 0;
+  const greet: Record<StatusStyle, string> = {
+    technical: urgent ? ' und nenne in einem Satz, was überfällig oder heute fällig ist (Kennung, Titel)' : ', ohne Liste',
+    text: urgent ? ' und nenne in einem Satz, was überfällig oder heute fällig ist (in eigenen Worten, jede Aufgabe mit ihrer Kennung)' : ', ohne Liste',
+    compact: urgent ? ' und nenne in einem Halbsatz nur die Anzahl überfälliger und heute fälliger Aufgaben' : ', ohne Zahlen',
+    management: urgent ? ' und gib in einem Satz das Lagebild aus den Anzahlen' : ', ohne Liste'
+  };
   const how = greeting
-    ? `Die letzte Nachricht ist ein reiner Gruß: grüß kurz zurück${b.overdue.length || b.today.length ? ' und nenne in einem Satz, was überfällig oder heute fällig ist (Kennung, Titel)' : ', ohne Liste'}.`
+    ? `Die letzte Nachricht ist ein reiner Gruß: grüß kurz zurück${greet[style]}.`
     : b.empty
       ? 'Im persönlichen Projekt ist gerade nichts offen: sag kurz „Gerade steht nichts an“ und mach einen konkreten Vorschlag (z. B. etwas notieren, einen Termin eintragen, eine Erinnerung anlegen).'
-      : 'Antworte knapp aus diesen Daten: Überfälliges und heute Fälliges zuerst (Kennung, Titel, Termin), dann Termine heute und morgen, dann diese Woche, offene Fragen, Freigaben und Entwürfe; Leeres weglassen.';
-  return `# Statusfrage\nVom System ermittelt aus dem persönlichen Projekt (Stand jetzt; vollständig, nichts dazuerfinden):\n${lines || '– nichts offen –\n'}${how} Antworte nie, du sähest keine Frage oder Bitte.\n`;
+      : STYLE_HOW[style];
+  return `# Statusfrage\nAntwortstil: ${STYLE_LABEL[style]}\nVom System ermittelt aus dem persönlichen Projekt (Stand jetzt; vollständig, nichts dazuerfinden):\n${lines || '– nichts offen –\n'}${how} Antworte nie, du sähest keine Frage oder Bitte.\n`;
+}
+/** Aufgaben, die der Abschnitt „Statusfrage“ des Assistenten nennt (Reihenfolge wie dort), für die Aufgabenkarte; compact: keine. */
+export function statusBriefTasks(b: StatusBrief, greeting: boolean, style: StatusStyle): StatusTask[] {
+  if (style === 'compact' || b.empty) return [];
+  if (style === 'management') return greeting ? [] : b.dated;
+  return greeting ? [...b.overdue, ...b.today] : [...b.overdue, ...b.today, ...b.week, ...b.noDate];
+}
+
+/**
+ * Abschnitt „Statusfrage“ für Projektagenten (Thema status): technical bleibt wie bisher (Anweisung am Ende des Prompts, Liste
+ * „Deine offenen Arbeitspakete“); text bekommt dazu die Anweisung, compact nur Anzahlen, management Anzahlen und die nächsten
+ * fälligen Arbeitspakete mit Termin (ohne Blockaden und Wartezustände). Ergebnis: Text und die genannten Arbeitspakete.
+ */
+export function projectStatusText(rows: { id: string; project_id: string; key: string; number: number; title: string; due_date: any; column_name: string }[], counts: StatusCounts, style: StatusStyle): { text: string; tasks: StatusTask[] } {
+  const task = (r: any): StatusTask => ({ id: r.id, projectId: r.project_id, ref: `${r.key}-${r.number}`, title: r.title, due: d10(r.due_date) || null, parent: null, mine: true, status: r.column_name });
+  const all = rows.map(task);
+  if (style === 'technical') return { text: '', tasks: all };
+  const head = `# Statusfrage\nAntwortstil: ${STYLE_LABEL[style]}\nVom System ermittelt aus deinen offenen Arbeitspaketen im Thema (Stand jetzt; vollständig, nichts dazuerfinden):\n`;
+  if (style === 'text') return { text: `${head}Daten: Liste „Deine offenen Arbeitspakete zum Thema“ und Kennzahlen unten.\n${STYLE_HOW.text}\n`, tasks: all };
+  if (style === 'compact') return { text: `${head}Anzahlen: ${countsLine(counts)}\n${STYLE_HOW.compact}\n`, tasks: [] };
+  const dated = all.filter((t) => t.due).slice(0, MANAGEMENT_MAX);
+  return { text: `${head}Anzahlen: ${countsLine(counts)}\n${dated.length ? `Die nächsten fälligen Arbeitspakete (höchstens ${MANAGEMENT_MAX}, nur mit Termin):\n${dated.map((t) => `- ${t.ref} „${cut(t.title, 80)}“ · fällig ${dm(t.due)}`).join('\n')}\n` : ''}${STYLE_HOW.management}\n`, tasks: dated };
 }
 
 export interface KeyFigures { open: number; active: number; dueWeek: number; overdue: number; blocked: number; waiting: number }
@@ -533,12 +597,14 @@ export function assumptionHint(scope: ChatScope): string {
 }
 
 export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: string, channelId: string, messageId: string, now = new Date()): Promise<AgentChatResult> {
-  const agent = await db.maybeOne(`select id, name, org_id, persona, agent_role, agent_project_id from users where id = $1 and kind = 'agent' and active`, [agentId]);
+  const agent = await db.maybeOne(`select id, name, org_id, persona, agent_role, agent_project_id, status_style from users where id = $1 and kind = 'agent' and active`, [agentId]);
   if (!agent) return { status: 'skipped', error: 'Agent nicht aktiv' };
   const channel = await db.maybeOne(`select * from chat_channels where id = $1 and org_id = $2`, [channelId, agent.org_id]);
   // Assistent (D): antwortet nur auf Direktnachrichten, Erwähnungen im Projektkanal ignoriert er
   if (channel && channel.kind === 'project' && agent.agent_role === 'assistant') return { status: 'skipped', error: 'Assistent antwortet nur auf Direktnachrichten' };
   const isAssistant = agent.agent_role === 'assistant';
+  /** Antwortstil auf Statusfragen (Standard nach Rolle) */
+  const style: StatusStyle = agent.status_style ?? defaultStatusStyle(agent.agent_role);
   let msg = await db.maybeOne(`select m.*, u.name as user_name from chat_messages m join users u on u.id = m.user_id where m.id = $1 and m.channel_id = $2 and m.kind = 'user' and m.deleted_at is null`, [messageId, channelId]);
   if (!channel || !msg || msg.user_id === agent.id) return { status: 'skipped' };
   /** Die eingegangene Nachricht; msg ist bei einer Antwort auf die Rückfrage die Ursprungsnachricht, die damit beantwortet wird. */
@@ -681,10 +747,14 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Genannte Arbeitspakete, für die der Agent nicht zuständig ist: nur der Stand, kein Log (Sichtbarkeit hat das Thema geprüft)
   const others = scope.taskIds.filter((id) => !known.has(id));
   const named = others.length ? await db.query(`select t.id, t.number, t.title, t.due_date, t.blocked, t.blocked_reason, c.name as column_name, c.is_done, p.key, coalesce(u.name, t.responsible_email) as resp from tasks t join board_columns c on c.id = t.column_id join projects p on p.id = t.project_id left join users u on u.id = t.responsible_user_id where t.id = any($1::uuid[]) and t.deleted_at is null order by p.key, t.number`, [others]) : { rows: [] as any[] };
+  // Statusfrage im Stil compact oder management: nur der Abschnitt „Statusfrage“ nennt Aufgaben (keine Listen, Kennzahlen, Treffer daneben)
+  const isStatus = Boolean(scope.status) || scope.how === 'status';
+  const lean = isStatus && (style === 'compact' || style === 'management');
   // Kennzahlen je Thema (bei „alle“ je Projekt eine Zeile), vom System berechnet
   const viewerId = project ? null : msg.user_id;
   const figures: string[] = [];
-  if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
+  if (lean) { /* Anzahlen stehen im Abschnitt „Statusfrage“ */ }
+  else if (scope.taskIds.length) figures.push(keyFiguresLine(scope.refs.join(', '), await keyFigures(db, { projectIds: scope.projectIds, taskIds: scope.taskIds, viewerId, now })));
   else if (scope.how !== 'general') for (const p of scope.projects) figures.push(keyFiguresLine(p.key, await keyFigures(db, { projectIds: [p.id], viewerId, now })));
   const HOW: Record<ChatScopeHow, string> = { matched: 'über Inhalte zugeordnet: Treffer nur in diesem Projekt', open: 'über Inhalte: Treffer in mehreren Projekten, ordne zu oder frag nach', channel: 'Projekt dieses Kanals', mentioned: 'in der Nachricht genannt', history: 'zuletzt im Thread genannt', all: scope.projects.length > 1 ? 'alle gemeinsamen Projekte, ausdrücklich gefragt' : 'einziges gemeinsames Projekt', status: 'Statusfrage: alle gemeinsamen Projekte', ask: '', personal: 'persönliches Projekt des Absenders, weil die Nachricht kein anderes Projekt nennt', general: '', chosen: 'auf deine Rückfrage gewählt' };
   const theme = scope.how === 'general'
@@ -694,7 +764,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
       : `kein gemeinsames Projekt mit ${msg.user_name}; du kannst nur allgemein antworten`;
   // Persönliches Projekt ohne weiteren Kontext: passende Doku-Seiten (Suche nach der Nachricht, sonst die neuesten) als Wissensquelle
   let personalDocs = '';
-  if (scope.intent === 'personal' && scope.projectIds.length === 1) {
+  if (scope.intent === 'personal' && scope.projectIds.length === 1 && !lean) {
     const found = await knowledgeSearch(db, { projectId: scope.projectIds[0], agentId: agent.id, query: msg.body, viewerId: msg.user_id, maxTitles: 8, maxExcerpts: 3 });
     // Neueste Seiten nur aus Ordnern, die der Agent sehen darf (Agent-Zugriff und Schalter „für KI-Agenten“)
     const access = found.pages.length ? null : await folderAccessMap(db, scope.projectIds[0]);
@@ -707,7 +777,7 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
   // Mails und Dateien zur Nachricht: EINE Suche über alle Projekte des Themas (Vereinigung der Ansichten bzw. Dateiquellen, jede
   // Mail und Datei einmal); in Direktnachrichten nur, was auch die fragende Person lesen darf, im Projektkanal nur Ansichten, die
   // alle Mitglieder lesen dürfen. Im Chat gibt es keine Leserunden: nur Ausschnitte, ganze Mails/Dateien liest der Lauf am Arbeitspaket
-  if (scope.how !== 'general' && scope.projectIds.length && tokens(msg.body).length && !small) {
+  if (scope.how !== 'general' && scope.projectIds.length && tokens(msg.body).length && !small && !lean) {
     const src = await searchSources(db, { projectIds: scope.projectIds, agentId: agent.id, viewerId: project ? null : msg.user_id, allMembers: Boolean(project), query: msg.body, source: ['mails', 'files'], max: 6 });
     if (src.mails?.length || src.files?.length) knowledge += `Treffer zur Nachricht in Mails und Dateien (nur, was du und ${project ? 'alle Mitglieder des Kanals' : msg.user_name} lesen dürft; nur Ausschnitte, Quelle nennen):\n${[src.mails?.length ? mailHitsText(src.mails) : '', src.files?.length ? fileHitsText(src.files) : ''].filter(Boolean).join('\n')}\n`;
   }
@@ -722,7 +792,24 @@ export async function runAgentChat(db: Db, fetchFn: typeof fetch, agentId: strin
     : `${AGENT_SHEET}\n\n${CHAT_RULES}\n\n${DATA_RULE}\n\n# Du\nDu bist „${agent.name}“, KI-Agent im Projekttool. ${styleText(agent.persona)}`;
   // Statusfrage oder Gruß an den Assistenten: was im persönlichen Projekt ansteht, vom System ermittelt
   const greeting = small && Boolean(scope.status);
-  const statusText = scope.status && scope.projectIds.length === 1 ? statusBriefText(await statusBrief(db, { projectId: scope.projectIds[0], personId: msg.user_id, agentId: agent.id, now }), greeting) : '';
+  // Aufgaben, die der Abschnitt nennt: Karte „tasks“ unter der Antwort (außer im Stil compact)
+  let statusText = '';
+  let statusTasks: StatusTask[] = [];
+  if (scope.status && scope.projectIds.length === 1) {
+    const brief = await statusBrief(db, { projectId: scope.projectIds[0], personId: msg.user_id, agentId: agent.id, now });
+    statusText = statusBriefText(brief, greeting, style);
+    statusTasks = statusBriefTasks(brief, greeting, style);
+  } else if (scope.how === 'status' && scope.projectIds.length) {
+    const { today, sunday } = berlinWeek(now);
+    const due = (t: any) => d10(t.due_date);
+    const rows = tasks.rows as any[];
+    const meetingsToday = (await db.one(`select count(*)::int as c from meetings where project_id = any($1::uuid[]) and starts_at >= ($2::date)::timestamp at time zone 'Europe/Berlin' and starts_at < ($2::date + 1)::timestamp at time zone 'Europe/Berlin'`, [scope.projectIds, today])).c as number;
+    const questionsOpen = (await db.one(`select count(*)::int as c from questions where project_id = any($1::uuid[]) and status = 'open' and (asked_by = $2 or addressee_id = $3)`, [scope.projectIds, agent.id, msg.user_id])).c as number;
+    const counts: StatusCounts = { overdue: rows.filter((t) => due(t) && due(t) < today).length, today: rows.filter((t) => due(t) === today).length, week: rows.filter((t) => due(t) > today && due(t) <= sunday).length, noDate: rows.filter((t) => !due(t)).length, later: rows.filter((t) => due(t) > sunday).length, meetingsToday, questions: questionsOpen };
+    const ps = projectStatusText(rows, counts, style);
+    statusText = ps.text;
+    statusTasks = ps.tasks;
+  }
   // Steht die Nachricht schon als Rückmeldung im Log eines Arbeitspakets (Antwort auf eine Frage des Agenten), keine zweite Notiz dazu
   const logged = await db.query(
     `select c.task_id, p.key, t.number from task_comments c join tasks t on t.id = c.task_id join projects p on p.id = t.project_id
@@ -760,12 +847,12 @@ ${policy ? `Agenten-Policy${scopeTask ? ` für ${scope.refs[0]}` : ` im Projekt 
 ${approvals.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} „${q.title ?? ''}“: ${cut(q.body.replace(/\n/g, ' '), 200)}`).join('\n')}
 ` : ''}Fähigkeiten: Mails senden ${canMail ? 'direkt (Außenprüfung, erster Kontakt als Entwurf)' : 'nur als Entwurf zur Freigabe'}; Postfächer und Mail-Eingang siehst du im Chat nicht (zu Mails nur, was in Arbeitspaketen und unter „Treffer zur Nachricht in Mails und Dateien“ steht; ganze Mails und Dateien liest du erst im Lauf am Arbeitspaket); Online-Recherche ${web?.ok ? `freigegeben (heute noch ${web.left} Suchen)` : `nicht freigegeben${web && !web.ok ? ` (${web.reason})` : ''}`}.
 ${statusText}${personalDocs}${knowledge}${openQs.rows.length ? `Deine offenen Fragen hier (questionId für answers; nur zur Zuordnung, nicht ungefragt erwähnen):\n${openQs.rows.map((q: any) => `- ${q.key}${q.number ? `-${q.number}` : ''} seit ${hhmm(q.created_at)}: ${cut(q.body, 240)} (questionId ${q.id})`).join('\n')}\n` : ''}${figures.length ? `${figures.join('\n')}\n` : ''}Deine offenen Arbeitspakete zum Thema:
-${tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}${waitDates(t.agent_wait)}` : ''}${t.agent_next_check_at ? ` · Wiedervorlage ${dmy(t.agent_next_check_at)}` : ''}${t.agent_paused ? ' · Agent pausiert (eine fällige Frist hebt die Pause auf; run startet sofort)' : ''} (taskId ${t.id})${t.open_items ? `\n  Offene Tasks: ${cut(t.open_items, 500)}` : ''}${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
-${otherAps.rows.length ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
+${lean ? '– siehe Abschnitt „Statusfrage“ –' : tasks.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“${t.parent_title ? ` (Aufgabe in „${t.parent_title}“)` : ''} · ${t.column_name}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}${t.agent_wait ? ` · du wartest auf: ${t.agent_wait.reason}${waitDates(t.agent_wait)}` : ''}${t.agent_next_check_at ? ` · Wiedervorlage ${dmy(t.agent_next_check_at)}` : ''}${t.agent_paused ? ' · Agent pausiert (eine fällige Frist hebt die Pause auf; run startet sofort)' : ''} (taskId ${t.id})${t.open_items ? `\n  Offene Tasks: ${cut(t.open_items, 500)}` : ''}${t.recent ? `\n  Log: ${cut(t.recent, 500)}` : ''}`).join('\n') || '– keine –'}
+${otherAps.rows.length && !lean ? `Weitere offene Arbeitspakete im Thema (Kennung · Titel · Teilprojekt · zuständig; für order parent/ref und gegen Dubletten):
 ${otherAps.rows.map((t: any) => `- ${t.key}-${t.number} · ${cut(t.title, 60)}${t.sp ? ` · ${t.sp}` : ''}${t.resp ? ` · ${t.resp}` : ''}`).join('\n')}
 ` : ''}${named.rows.length ? `Genannte Arbeitspakete, für die du nicht zuständig bist (nur Stand, kein Log):\n${named.rows.map((t: any) => `- ${t.key}-${t.number} „${t.title}“ · ${t.column_name}${t.is_done ? ' (erledigt)' : ''}${t.due_date ? ` · fällig ${d10(t.due_date)}` : ''}${t.resp ? ` · zuständig ${t.resp}` : ''}${t.blocked ? ` · blockiert: ${t.blocked_reason ?? ''}` : ''}`).join('\n')}\n` : ''}Verlauf (älteste zuerst):
 ${[...history.rows].reverse().map((h: any) => `${hhmm(h.created_at)} ${h.kind === 'system' ? 'System' : h.uid === agent.id ? 'Du' : h.name}: ${cut(h.body, 600)}`).join('\n')}
-${greeting ? `\nDie letzte Nachricht ist nur ein Gruß: Sie beantwortet keine deiner Fragen (keine answers, keine notes). Grüß kurz zurück wie im Abschnitt „Statusfrage“ beschrieben (onTopic false).` : small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${scope.status && !small ? `\nDie letzte Nachricht ist eine Statusfrage an dich als Assistent: antworte aus dem Abschnitt „Statusfrage“ oben, keine Rückfrage, keine Bereitschaftsfloskel.` : ''}${scope.how === 'status' ? `\nDie letzte Nachricht ist eine Statusfrage: Gib einen knappen Stand aus den Daten oben (deine offenen Arbeitspakete mit Fälligkeit, worauf du wartest, Blockaden; offene Bestätigungen; Kennzahlen je Projekt). Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${scope.hidden.length ? `\nZu ${scope.hidden.join(', ')} schreibt das System selbst vor deine Antwort, dass du dazu hier nichts sagen kannst; geh darauf nicht ein.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
+${greeting ? `\nDie letzte Nachricht ist nur ein Gruß: Sie beantwortet keine deiner Fragen (keine answers, keine notes). Grüß kurz zurück wie im Abschnitt „Statusfrage“ beschrieben (onTopic false).` : small ? `\nDie letzte Nachricht ist nur ein Gruß oder eine Kurzmeldung ohne inhaltliche Rückmeldung: Sie beantwortet keine deiner Fragen (keine answers, keine notes)${openQs.rows.length ? ', deine offene Frage bleibt offen' : ''}. Antworte wie eine Kollegin, kurz und freundlich, ohne Projektinhalte und ohne Erinnerung an offene Fragen (onTopic false).` : scope.how === 'history' ? `\nDas Thema stammt aus dem Verlauf (${scope.refs[0] ?? scope.projects[0]?.key}); betrifft deine Antwort es nicht, setze onTopic false.` : ''}${scope.status && !small ? `\nDie letzte Nachricht ist eine Statusfrage an dich als Assistent: antworte aus dem Abschnitt „Statusfrage“ oben im dort genannten Antwortstil, keine Rückfrage, keine Bereitschaftsfloskel.` : ''}${scope.how === 'status' && style !== 'technical' ? `\nDie letzte Nachricht ist eine Statusfrage: antworte aus dem Abschnitt „Statusfrage“ oben im dort genannten Antwortstil. Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${scope.how === 'status' && style === 'technical' ? `\nDie letzte Nachricht ist eine Statusfrage: Gib einen knappen Stand aus den Daten oben (deine offenen Arbeitspakete mit Fälligkeit, worauf du wartest, Blockaden; offene Bestätigungen; Kennzahlen je Projekt). Keine Rückfrage und keine bloße Bereitschaftsfloskel; ist nichts offen, sag das konkret.` : ''}${scope.hidden.length ? `\nZu ${scope.hidden.join(', ')} schreibt das System selbst vor deine Antwort, dass du dazu hier nichts sagen kannst; geh darauf nicht ein.` : ''}${loggedRefs.length ? `\nDie letzte Nachricht steht bereits als Rückmeldung im Log von ${loggedRefs.join(', ')}; der Lauf an diesem Arbeitspaket setzt sie gleich um. Bestätige kurz, ohne anzukündigen, was du anlegst oder zuweist; keine Notiz, kein order.` : ''}
 ${msg.id !== trigger.id ? `Die letzte Nachricht „${cut(trigger.body, 80)}“ beantwortet nur deine Rückfrage nach dem Thema (es steht jetzt fest, siehe Thema). Beantworte damit die Nachricht davor von ${msg.user_name} inhaltlich: „${cut(msg.body, 400)}“.` : small ? `Antworte auf die letzte Nachricht von ${msg.user_name}.` : `Beantworte die letzte Nachricht von ${msg.user_name} inhaltlich; ein Gruß davor ist nur Anrede.`}`;
   try {
     type ChatJson = { reply?: string; notes?: { taskId: string; text: string }[]; answers?: { questionId: string; text: string }[]; commands?: ChatCommand[] };
@@ -819,6 +906,15 @@ ${msg.id !== trigger.id ? `Die letzte Nachricht „${cut(trigger.body, 80)}“ b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens, channel_id) values ($1,$2,$3,null,'chat','ok',$4,$5,$6,$7,$8) returning id`,
       [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);
     if (results.length) await postResults(ctxCmd, results, run.id);
+    // Aufgabenkarte unter der Statusantwort: genau die Aufgaben aus dem Abschnitt „Statusfrage“, mit „Übernehmen“, wo der Absender darf
+    if (statusTasks.length) {
+      const items = await taskItems(db, { senderId: msg.user_id, agent, tasks: statusTasks.map((x) => ({ taskId: x.id, projectId: x.projectId, ref: x.ref, title: x.title, due: x.due, status: x.status })) });
+      // Nur, wenn sich mindestens eine Aufgabe übernehmen lässt; sonst wäre es eine Liste gesperrter Knöpfe (Kennungen im Text sind verlinkt)
+      if (items.some((it) => it.canTake)) {
+      const card = await systemMessage(db, { channelId: channel.id, threadId, body: `Aufgaben aus der Antwort:\n${items.map((it) => `${it.n}. ${it.ref} „${cut(it.title, 80)}“${it.due ? ` · fällig ${dmy(it.due)}` : ''}`).join('\n')}`, meta: { card: 'tasks', items, agentId: agent.id, style } });
+      await db.query(`update chat_messages set agent_run_id = $2 where id = $1`, [card, run.id]);
+      }
+    }
     await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, scope: scope.how, notes: notes.length, commands: results.map((x) => `${x.type}:${x.status}`), claimsReplaced: checked.replaced.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     return { status: 'ok', reply, notes, scope, results };
   } catch (e: any) {
