@@ -20,7 +20,7 @@ import { recordFeedback } from './feedback.js';
 import { systemMessage } from '../notify.js';
 import type { ChatChoice, ChatIntent, StatusStyle } from '@projekttool/shared';
 import { defaultStatusStyle } from '@projekttool/shared';
-import { taskItems } from './takeTasks.js';
+import { statusItems } from './takeTasks.js';
 
 /**
  * KI-Agent im Chat: antwortet auf Direktnachrichten, auf @Erwähnungen im Projektkanal und in Threads, in denen er
@@ -66,9 +66,9 @@ const SCHEMA = {
         depth: { type: 'string', description: 'policy: Denktiefe quick (schnell), standard oder deep (gründlich); sonst leer' },
         reason: { type: 'string', description: 'stop/reject: Grund; sonst leer' },
         mail: { type: 'boolean', description: 'order/report: Zwischenstände und Lieferung auch per Mail an den Auftraggeber' },
-        items: { type: 'array', items: { type: 'integer' }, description: 'take: Nummern aus der letzten Aufgabenkarte im Gespräch („übernimm 2 und 4“); sonst leer' },
+        items: { type: 'array', items: { type: 'integer' }, description: 'take: Nummern in der Reihenfolge deiner letzten Statusantwort im Gespräch („übernimm 2 und 4“); sonst leer' },
         refs: { type: 'array', items: { type: 'string' }, description: 'take: Kennungen der Aufgaben („übernimm WEB-12“); sonst leer' },
-        filter: { type: 'string', description: 'take: overdue, today, week oder all aus der letzten Aufgabenkarte („übernimm alle überfälligen“); sonst leer' }
+        filter: { type: 'string', description: 'take: overdue, today, week oder all aus deiner letzten Statusantwort („übernimm alle überfälligen“); sonst leer' }
       } }
     },
     notes: {
@@ -457,7 +457,7 @@ export function statusBriefText(b: StatusBrief, greeting: boolean, style: Status
       : STYLE_HOW[style];
   return `# Statusfrage\nAntwortstil: ${STYLE_LABEL[style]}\nVom System ermittelt aus dem persönlichen Projekt (Stand jetzt; vollständig, nichts dazuerfinden):\n${lines || '– nichts offen –\n'}${how} Antworte nie, du sähest keine Frage oder Bitte.\n`;
 }
-/** Aufgaben, die der Abschnitt „Statusfrage“ des Assistenten nennt (Reihenfolge wie dort), für die Aufgabenkarte; compact: keine. */
+/** Aufgaben, die der Abschnitt „Statusfrage“ des Assistenten nennt (Reihenfolge wie dort), für meta.statusItems an der Antwort (Befehl take); compact: keine. */
 export function statusBriefTasks(b: StatusBrief, greeting: boolean, style: StatusStyle): StatusTask[] {
   if (style === 'compact' || b.empty) return [];
   if (style === 'management') return greeting ? [] : b.dated;
@@ -895,6 +895,9 @@ ${msg.id !== trigger.id ? `Die letzte Nachricht „${cut(trigger.body, 80)}“ b
     }
     const reply = `${notInText ? `${notInText} ` : ''}${hiddenRest.length ? `Zu ${hiddenRest.join(', ')} kann ich dir hier nichts sagen. ` : ''}${refLine}${checked.text}${hint}`;
     const meta: Record<string, unknown> = { ...(scope.projectIds.length === 1 ? { projectId: scope.projectIds[0] } : {}), ...(scope.confidence === 'guess' ? { assumed: scope.intent, forMessageId: msg.id } : {}) };
+    // Statusantwort: die Aufgaben aus dem Abschnitt „Statusfrage“ in Reihenfolge, unsichtbar an der Antwort (meta.statusItems);
+    // „übernimm 2“ bzw. eine Gruppe löst der Befehl take daraus auf
+    if (statusTasks.length) meta.statusItems = statusItems(statusTasks.map((x) => ({ taskId: x.id, projectId: x.projectId, ref: x.ref, title: x.title, due: x.due, status: x.status })));
     await post(reply, reply, Object.keys(meta).length ? meta : null);
     for (const n of notes) {
       await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1,$2,$3,'ai')`, [n.taskId, agent.id, `Aus dem Chat (${msg.user_name}): ${cut(n.text, 1000)}`]);
@@ -906,15 +909,6 @@ ${msg.id !== trigger.id ? `Die letzte Nachricht „${cut(trigger.body, 80)}“ b
     const run = await db.one(`insert into agent_runs (org_id, agent_user_id, project_id, task_id, trigger, status, reasoning, actions, input_tokens, output_tokens, channel_id) values ($1,$2,$3,null,'chat','ok',$4,$5,$6,$7,$8) returning id`,
       [agent.org_id, agent.id, channel.project_id ?? null, `Chat mit ${msg.user_name} · Thema: ${scopeText}`, JSON.stringify(actions), r.inputTokens, r.outputTokens, channel.id]);
     if (results.length) await postResults(ctxCmd, results, run.id);
-    // Aufgabenkarte unter der Statusantwort: genau die Aufgaben aus dem Abschnitt „Statusfrage“, mit „Übernehmen“, wo der Absender darf
-    if (statusTasks.length) {
-      const items = await taskItems(db, { senderId: msg.user_id, agent, tasks: statusTasks.map((x) => ({ taskId: x.id, projectId: x.projectId, ref: x.ref, title: x.title, due: x.due, status: x.status })) });
-      // Nur, wenn sich mindestens eine Aufgabe übernehmen lässt; sonst wäre es eine Liste gesperrter Knöpfe (Kennungen im Text sind verlinkt)
-      if (items.some((it) => it.canTake)) {
-      const card = await systemMessage(db, { channelId: channel.id, threadId, body: `Aufgaben aus der Antwort:\n${items.map((it) => `${it.n}. ${it.ref} „${cut(it.title, 80)}“${it.due ? ` · fällig ${dmy(it.due)}` : ''}`).join('\n')}`, meta: { card: 'tasks', items, agentId: agent.id, style } });
-      await db.query(`update chat_messages set agent_run_id = $2 where id = $1`, [card, run.id]);
-      }
-    }
     await audit(db, { orgId: agent.org_id, projectId: channel.project_id ?? null, userId: agent.id, action: 'agent.chat', objectType: 'chat_channel', objectId: channel.id, details: { runId: run.id, scope: scope.how, notes: notes.length, commands: results.map((x) => `${x.type}:${x.status}`), claimsReplaced: checked.replaced.length, profile: cfg.name, model: r.model, inputTokens: r.inputTokens, outputTokens: r.outputTokens } });
     return { status: 'ok', reply, notes, scope, results };
   } catch (e: any) {

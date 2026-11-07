@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { ChatChoice, ChatTaskItem, MailDraft, Question } from '@projekttool/shared';
+import type { ChatChoice, MailDraft, Question } from '@projekttool/shared';
 import { useAuth } from '../lib/auth';
 import { api, fmtDateTime } from '../lib/api';
 import { MentionInput, MentionText, useProjectKeys } from './MentionInput';
@@ -9,7 +9,9 @@ import { IconChevronDown, IconChevronRight, IconCircleCheck, IconCircleX, IconHo
 import { ApprovalCard } from './AgentPolicy';
 import { Thumbs, useRating } from './Rating';
 
-export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (Daumen hoch 1, Daumen runter -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe; choices: Rückfrage des Agenten nach dem Thema (Knöpfe) */ card?: 'results' | 'choices' | 'tasks'; /** tasks: Aufgaben aus der Statusantwort (nummeriert, mit Übernehmen) und der Agent dazu */ items?: ChatTaskItem[]; agentId?: string; results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null; /** choices: Auswahl (value wird als Nachricht gesendet), Ursprungsnachricht, gewählter Wert */ choices?: ChatChoice[]; forMessageId?: string | null; chosen?: string | null } | null }
+export interface ChatMessage { id: string; channelId: string; userId: string | null; userName: string; /** von einem KI-Agenten (bewertbar) */ fromAgent?: boolean; /** eigene Bewertung (Daumen hoch 1, Daumen runter -1) */ myRating?: 1 | -1 | null; threadId: string | null; body: string; mentions: string[]; replyCount: number; lastReplyAt: string | null; createdAt: string; editedAt: string | null; deleted: boolean; /** system: Systembeitrag (Meldung, Karte) mit meta.link; nicht bearbeitbar */ kind?: 'user' | 'system'; meta?: { link?: string | null; event?: string; /** Systemkarte der Chat-Steuerung: Ergebnisse je Befehl, Auftrag mit Rückgängig, Freigabe; choices: Rückfrage des Agenten nach dem Thema (Knöpfe) */ card?: 'results' | 'choices' | 'tasks'; /* tasks: alte Aufgabenkarte, wird ausgeblendet */ results?: { type: string; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null }[]; taskId?: string | null; undoUntil?: string | null; approvalQuestionId?: string | null; /** choices: Auswahl (value wird als Nachricht gesendet), Ursprungsnachricht, gewählter Wert */ choices?: ChatChoice[]; forMessageId?: string | null; chosen?: string | null } | null }
+/** Alte Aufgabenkarten (meta.card = 'tasks', abgeschafft; übernehmen nur noch per Text „übernimm 2“) gar nicht anzeigen */
+const visible = (list: ChatMessage[]) => list.filter((m) => !(m.kind === 'system' && m.meta?.card === 'tasks'));
 interface Page { messages: ChatMessage[]; hasMore: boolean; canWrite?: boolean; /** Agenten, deren Antwort noch aussteht */ busy?: { id: string; name: string }[] }
 interface Member { userId: string; name: string }
 
@@ -51,11 +53,11 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
   const load = async () => {
     try {
       const p = await api.get<Page>(base);
-      setMsgs(p.messages); setHasMore(p.hasMore); setCanWrite(p.canWrite !== false); setBusy(p.busy ?? []); setError(null);
+      setMsgs(visible(p.messages)); setHasMore(p.hasMore); setCanWrite(p.canWrite !== false); setBusy(p.busy ?? []); setError(null);
     } catch (e) { setError((e as Error).message); }
   };
   const loadThread = async (id: string) => {
-    try { setReplies((await api.get<Page>(`${base}?thread=${id}`)).messages); } catch (e) { setError((e as Error).message); }
+    try { setReplies(visible((await api.get<Page>(`${base}?thread=${id}`)).messages)); } catch (e) { setError((e as Error).message); }
     try { setQuestion((await api.get<{ question: Question | null }>(`/chat/messages/${id}`)).question); } catch { setQuestion(null); }
   };
   useEffect(() => { setMsgs([]); setThread(initialThread ?? null); void load(); const h = setInterval(() => { void load(); if (threadRef.current) void loadThread(threadRef.current); }, 5000); return () => clearInterval(h); }, [channelId]);
@@ -77,7 +79,7 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
     if (!msgs.length) return;
     const el = listRef.current; const h0 = el?.scrollHeight ?? 0;
     const p = await api.get<Page>(`${base}?before=${encodeURIComponent(msgs[0].createdAt)}`);
-    setMsgs((m) => [...p.messages, ...m]); setHasMore(p.hasMore);
+    setMsgs((m) => [...visible(p.messages), ...m]); setHasMore(p.hasMore);
     requestAnimationFrame(() => { if (el) el.scrollTop = el.scrollHeight - h0; });
   };
   // Feld sofort leeren (wirkt flüssiger); schlägt das Senden fehl, kommt der Text zurück
@@ -124,13 +126,12 @@ export function ChatPane({ channelId, members, canModerate, placeholder, initial
       </div>
       {editing?.id === m.id
         ? <div className="form"><textarea value={editing.body} autoFocus onChange={(e) => setEditing({ ...editing, body: e.target.value })} onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void saveEdit(); } if (e.key === 'Escape') setEditing(null); }} /><div className="row"><button className="btn sm primary" onClick={() => void saveEdit()}>Speichern</button><button className="btn sm" onClick={() => setEditing(null)}>Abbrechen</button></div></div>
-        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? (m.meta?.card === 'results' && m.meta.results?.length ? <ResultLines results={m.meta.results} /> : m.meta?.card === 'tasks' && m.meta.items?.length ? <span className="muted small">Aufgaben aus der Antwort</span> : m.body) : <MentionText text={m.body} members={members} keys={keys} />}</div>}
+        : <div className="chat-body">{m.deleted ? <span className="muted">(gelöscht)</span> : system(m) ? (m.meta?.card === 'results' && m.meta.results?.length ? <ResultLines results={m.meta.results} /> : m.body) : <MentionText text={m.body} members={members} keys={keys} />}</div>}
       {m.fromAgent && !m.deleted && <Thumbs value={m.myRating} onRate={(v) => rating.rate(m.id, m.myRating, v)} />}
       {!m.deleted && m.meta?.link && (system(m) || !('question' in m.meta)) && <Link className="btn sm link" to={m.meta.link}>Öffnen</Link>}
       {system(m) && !m.deleted && (m.meta as any)?.card === 'draft' && <DraftCard draftId={String((m.meta as any).draftId)} />}
       {system(m) && !m.deleted && m.meta?.card === 'results' && <ResultsCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} />}
       {system(m) && !m.deleted && m.meta?.card === 'choices' && <ChoicesCard m={m} onChoose={(v) => void send(v, m.threadId)} />}
-      {system(m) && !m.deleted && m.meta?.card === 'tasks' && m.meta.items?.length ? <TasksCard m={m} onChanged={() => { void load(); if (thread) void loadThread(thread); }} /> : null}
       {threads && !inThread && (m.replyCount > 0 || !m.deleted) && (
         <button className={`btn sm link chat-thread-btn ${thread === m.id ? 'open' : ''}`} aria-expanded={thread === m.id} onClick={() => setThread(thread === m.id ? null : m.id)}>{thread === m.id ? <><IconChevronDown size={12} /> </> : m.replyCount > 0 ? <><IconChevronRight size={12} /> </> : ''}{m.replyCount > 0 ? `${m.replyCount} Antwort${m.replyCount === 1 ? '' : 'en'}${m.lastReplyAt && thread !== m.id ? ` · ${fmtDateTime(m.lastReplyAt)}` : ''}` : 'Antworten'}</button>
       )}
@@ -197,38 +198,6 @@ function ResultsCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }
     {q && <ApprovalCard q={q} onChanged={() => { void api.get<{ question: Question }>(`/questions/${q.id}`).then((r) => setQ(r.question)); onChanged(); }} />}
     {error && <div className="error small">{error}</div>}
   </div>;
-}
-
-/**
- * Aufgabenkarte unter einer Statusantwort (meta.card = 'tasks'): nummerierte Liste der Aufgaben aus der Antwort mit Link und
- * „Übernehmen“ (weist sie dem Agenten zu, POST /chat/messages/:id/take). Gesperrt mit Grund als Titel; danach „übernommen“.
- */
-function TasksCard({ m, onChanged }: { m: ChatMessage; onChanged: () => void }) {
-  const [items, setItems] = useState<ChatTaskItem[]>(m.meta?.items ?? []);
-  const [busy, setBusy] = useState<number | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const fromServer = JSON.stringify(m.meta?.items ?? []);
-  useEffect(() => { setItems(m.meta?.items ?? []); }, [fromServer]);
-  const take = async (n: number) => {
-    setBusy(n);
-    try { const r = await api.post<{ items: ChatTaskItem[] }>(`/chat/messages/${m.id}/take`, { items: [n] }); if (r?.items) setItems(r.items); setError(null); onChanged(); }
-    catch (e) { setError((e as Error).message); }
-    finally { setBusy(null); }
-  };
-  const dm = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
-  return (
-    <div className="tasks-card small">
-      <ol className="m-0">
-        {items.map((it) => <li key={it.n}>
-          <Link className="task-ref" to={`/projekte/${it.projectId}/board?task=${it.taskId}`}>{it.ref}</Link> {it.title}{it.due ? <span className="muted"> · fällig {dm(it.due)}</span> : null}{it.status ? <span className="muted"> · {it.status}</span> : null}{' '}
-          {it.taken
-            ? <span className="badge ok">übernommen</span>
-            : <button type="button" className="btn sm" disabled={!it.canTake || busy !== null} title={it.canTake ? `${it.ref} dem Agenten zuweisen; er beginnt gleich` : it.reason ?? 'Nicht möglich'} onClick={() => void take(it.n)}>Übernehmen</button>}
-        </li>)}
-      </ol>
-      {error && <div className="error small">{error}</div>}
-    </div>
-  );
 }
 
 /**

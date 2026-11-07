@@ -13,8 +13,7 @@ import { reparentTask } from '../tasks/structure.js';
 import { CHAT_ORDERS, MODE_ORDER, effectiveAgentPolicy, parseAgentPolicy } from './agentPolicy.js';
 import { aiAllowed } from './policy.js';
 import { SQL } from '../projectPolicy.js';
-import type { ChatTaskItem } from '@projekttool/shared';
-import { refreshItems, takeLine, takeTask } from './takeTasks.js';
+import { takeLine, takeTask, type StatusItem } from './takeTasks.js';
 
 /**
  * Steuerung der Agenten im Chat (Konzept 7). Das Modell liefert Befehle, das System prüft sie (Rechte des Absenders nach 7.1,
@@ -24,7 +23,7 @@ import { refreshItems, takeLine, takeTask } from './takeTasks.js';
  */
 export type ChatCommandType = 'order' | 'note' | 'run' | 'pause' | 'resume' | 'stop' | 'priority' | 'approve' | 'reject' | 'policy' | 'report' | 'refer' | 'move' | 'take';
 export const COMMAND_TYPES: ChatCommandType[] = ['order', 'note', 'run', 'pause', 'resume', 'stop', 'priority', 'approve', 'reject', 'policy', 'report', 'refer', 'move', 'take'];
-export interface ChatCommand { type: ChatCommandType; ref?: string | null; /** move: Kennung des Ziel-Arbeitspakets (Aufgabe umhängen); leer mit subproject = Arbeitspaket einem Teilprojekt zuordnen */ to?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null; /** take: Nummern der letzten Aufgabenkarte, Kennungen, Gruppe (overdue, today, week, all) */ items?: number[] | null; refs?: string[] | null; filter?: string | null }
+export interface ChatCommand { type: ChatCommandType; ref?: string | null; /** move: Kennung des Ziel-Arbeitspakets (Aufgabe umhängen); leer mit subproject = Arbeitspaket einem Teilprojekt zuordnen */ to?: string | null; text?: string | null; title?: string | null; parent?: string | null; project?: string | null; subproject?: string | null; dueDate?: string | null; deliverables?: string[] | null; every?: string | null; level?: string | null; mode?: string | null; depth?: string | null; reason?: string | null; mail?: boolean | null; /** take: Nummern aus der letzten Statusantwort, Kennungen, Gruppe (overdue, today, week, all) */ items?: number[] | null; refs?: string[] | null; filter?: string | null }
 export interface CommandResult { type: ChatCommandType; status: 'ok' | 'held' | 'denied'; text: string; link?: string | null; taskId?: string | null; questionId?: string | null; undoUntil?: string | null }
 
 export type SenderRole = 'pl' | 'tp' | 'responsible' | 'member' | 'reader' | 'none';
@@ -266,30 +265,31 @@ async function runOne(ctx: CommandCtx, c: ChatCommand, ordered: Ordered = null):
 
 /**
  * take: Aufgaben dem Agenten zuweisen. Nummern und Gruppe (overdue, today, week, all) beziehen sich auf die letzte
- * Aufgabenkarte dieses Agenten im selben Gespräch bzw. Thread (das System löst sie auf, nicht das Modell), Kennungen gelten
- * direkt. Rechte wie die Zuweisung im Projekt (takeCheck); die Karte markiert übernommene Aufgaben.
+ * Statusantwort dieses Agenten im selben Gespräch bzw. Thread (meta.statusItems an der Antwort, Reihenfolge wie im Text;
+ * das System löst sie auf, nicht das Modell), Kennungen gelten direkt. Rechte wie die Zuweisung im Projekt (takeCheck);
+ * schon zuständige oder erledigte Aufgaben werden übersprungen.
  */
 async function takeCommand(ctx: CommandCtx, c: ChatCommand): Promise<CommandResult> {
   const { db, agent, sender } = ctx;
-  const card = await db.maybeOne(`select id, meta from chat_messages where channel_id = $1 and thread_id is not distinct from $2 and kind = 'system' and deleted_at is null and meta->>'card' = 'tasks' and meta->>'agentId' = $3 order by created_at desc limit 1`, [ctx.channelId, ctx.threadId, agent.id]);
-  const meta = card ? (typeof card.meta === 'string' ? JSON.parse(card.meta) : card.meta) ?? {} : null;
-  const items: ChatTaskItem[] = Array.isArray(meta?.items) ? meta.items : [];
+  const last = await db.maybeOne(`select meta from chat_messages where channel_id = $1 and thread_id is not distinct from $2 and user_id = $3 and kind = 'user' and deleted_at is null and meta ? 'statusItems' order by created_at desc limit 1`, [ctx.channelId, ctx.threadId, agent.id]);
+  const meta = last ? (typeof last.meta === 'string' ? JSON.parse(last.meta) : last.meta) ?? {} : null;
+  const items: StatusItem[] = Array.isArray(meta?.statusItems) ? meta.statusItems : [];
   const nums = (Array.isArray(c.items) ? c.items : []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
   const refs = [...(Array.isArray(c.refs) ? c.refs : []), ...(c.ref ? [c.ref] : [])].map((r) => String(r ?? '').trim().toUpperCase()).filter(Boolean);
   const filter = String(c.filter ?? '').trim().toLowerCase();
-  if (!nums.length && !refs.length && !filter) return { type: 'take', status: 'denied', text: 'take: welche Aufgaben? Nummern aus der Karte, Kennungen oder eine Gruppe' };
-  if ((nums.length || filter) && !card) return { type: 'take', status: 'denied', text: 'Keine Aufgabenkarte in diesem Gespräch: bitte Kennungen nennen oder zuerst nach dem Stand fragen' };
+  if (!nums.length && !refs.length && !filter) return { type: 'take', status: 'denied', text: 'take: welche Aufgaben? Nummern aus der letzten Statusantwort, Kennungen oder eine Gruppe' };
+  if ((nums.length || filter) && !last) return { type: 'take', status: 'denied', text: 'Keine Statusantwort in diesem Gespräch: bitte Kennungen nennen oder zuerst nach dem Stand fragen' };
   if (filter && !['overdue', 'today', 'week', 'all'].includes(filter)) return { type: 'take', status: 'denied', text: `take: Gruppe ${filter} unbekannt (overdue, today, week, all)` };
   const { today, sunday } = berlinDay(ctx.now);
-  const inFilter = (it: ChatTaskItem) => filter === 'all' || (it.due != null && (filter === 'overdue' ? it.due < today : filter === 'today' ? it.due === today : it.due >= today && it.due <= sunday));
+  const inFilter = (it: StatusItem) => filter === 'all' || (it.due != null && (filter === 'overdue' ? it.due < today : filter === 'today' ? it.due === today : it.due >= today && it.due <= sunday));
   const targets: { taskId: string; ref: string; title: string; projectId: string }[] = [];
   const skipped: string[] = [];
   const add = (t: { taskId: string; ref: string; title: string; projectId: string }) => { if (!targets.some((x) => x.taskId === t.taskId)) targets.push(t); };
-  for (const n of nums) { const it = items.find((x) => x.n === n); if (it) add(it); else skipped.push(`Nr. ${n} steht nicht auf der Karte`); }
-  if (filter) { const hit = items.filter((it) => !it.taken && inFilter(it)); if (!hit.length) skipped.push(`keine Aufgabe der Gruppe ${filter} auf der Karte`); hit.forEach(add); }
+  for (const n of nums) { const it = items.find((x) => x.n === n); if (it) add(it); else skipped.push(`Nr. ${n} stand nicht in meiner letzten Statusantwort`); }
+  if (filter) { const hit = items.filter(inFilter); if (!hit.length) skipped.push(`keine Aufgabe der Gruppe ${filter} in meiner letzten Statusantwort`); hit.forEach(add); }
   for (const ref of refs) {
-    const onCard = items.find((x) => x.ref.toUpperCase() === ref);
-    if (onCard) { add(onCard); continue; }
+    const listed = items.find((x) => x.ref.toUpperCase() === ref);
+    if (listed) { add(listed); continue; }
     const t = await targetTask(ctx, { type: 'take', ref });
     if ('error' in t) { skipped.push(t.error); continue; }
     add({ taskId: t.task.id, ref: `${t.project.key}-${t.task.number}`, title: t.task.title, projectId: t.project.id });
@@ -300,7 +300,6 @@ async function takeCommand(ctx: CommandCtx, c: ChatCommand): Promise<CommandResu
     const r = await takeTask(db, { sender: { id: sender.id, name: sender.name, orgId: sender.orgId }, agent, taskId: t.taskId });
     if (r.ok) { ok.push(takeLine(t, r)); taken.push(t.taskId); } else skipped.push(takeLine(t, r));
   }
-  if (card && taken.length) await db.query(`update chat_messages set meta = coalesce(meta, '{}'::jsonb) || $2::jsonb where id = $1`, [card.id, JSON.stringify({ items: await refreshItems(db, { senderId: sender.id, agent, items, taken }) })]);
   const first = targets.find((t) => taken.includes(t.taskId));
   if (!ok.length) return { type: 'take', status: 'denied', text: `Übernehmen: ${skipped.join('; ') || 'nichts gefunden'}` };
   return { type: 'take', status: 'ok', text: `Übernommen von ${agent.name}: ${ok.join(', ')}${skipped.length ? `; nicht: ${skipped.join('; ')}` : ''}`, link: first ? link(first.projectId, first.taskId) : null, taskId: first?.taskId ?? null };

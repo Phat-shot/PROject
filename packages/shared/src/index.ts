@@ -69,11 +69,6 @@ export const STATUS_STYLES: { key: StatusStyle; label: string; hint: string }[] 
   { key: 'management', label: 'Management', hint: 'Lagebild in wenigen Sätzen mit höchstens den fünf nächsten fälligen Aufgaben, ohne Details zu Eskalationen und Blockaden.' }
 ];
 export const defaultStatusStyle = (role: AgentRole | string | null | undefined): StatusStyle => (role === 'assistant' ? 'text' : 'technical');
-/**
- * Systemkarte meta.card = 'tasks' unter einer Statusantwort: die Aufgaben aus dem Abschnitt „Statusfrage“, nummeriert.
- * canTake: der Absender darf sie dem Agenten zuweisen (sonst reason); taken: schon übernommen (POST /chat/messages/:id/take).
- */
-export interface ChatTaskItem { n: number; ref: string; taskId: string; projectId: string; title: string; due: string | null; status: string; canTake: boolean; reason?: string | null; taken?: boolean }
 /** Freigabe eines Mandanten-LLM für persönliche Projekte: none (Standard), all, users (nur personalUserIds) */
 export type PersonalUse = 'none' | 'all' | 'users';
 export const PERSONAL_USES: { key: PersonalUse; label: string }[] = [
