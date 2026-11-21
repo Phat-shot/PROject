@@ -266,8 +266,18 @@ export interface DoneActor { id: string; orgId: string }
  * Folgen von „erledigt“ (manuell, per Agent oder Automatik gleich): offene Fragen schließen, Arbeitspaket-Automatik (letzte
  * offene Aufgabe), nächster Workflow-Schritt, Wiederholung „nach Erledigung“. existing = Zeile vor dem Verschieben.
  */
+/** Setzt Eskalationsstufe und Selbst-Erinnerung eines erledigten Elements zurück (mit Log-Eintrag, wenn eine Stufe bestand). */
+export async function resetEscalationDone(db: Db, taskId: string, userId: string | null = null): Promise<boolean> {
+  const r = await db.maybeOne(`update tasks t set escalation_level = 0, escalated_at = null, escalation_reminded_at = null from tasks o where t.id = $1 and o.id = t.id and (o.escalation_level > 0 or o.escalation_reminded_at is not null) returning o.escalation_level as was, t.created_by, t.project_id`, [taskId]);
+  if (!r) return false;
+  if (Number(r.was) > 0) await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1, $2, 'Eskalation zurückgesetzt: erledigt', 'system')`, [taskId, userId ?? r.created_by]);
+  return true;
+}
+
 export async function onTaskDone(db: Db, mail: MailService, existing: any, user: DoneActor): Promise<void> {
   await cancelQuestions(db, { taskId: existing.id }, `${existing.title} ist erledigt`, user.id);
+  // Erledigt: Eskalation und Erinnerung entfallen
+  await resetEscalationDone(db, existing.id, user.id);
   // Letzte offene Aufgabe erledigt: Arbeitspaket mit (Folgen wie von Hand: Fragen, Workflow, Wiederholung)
   const parent = existing.parent_id ? await completeParentIfDone(db, existing.id, user.id) : null;
   if (parent) {

@@ -79,7 +79,7 @@ describe('TaskDrawer: Checklisten gehören zu Aufgaben', () => {
     get.mockImplementation(async (url: string) => (url === '/tasks/t3' ? detailOf(auf) : detailOf(ap, [auf])));
     patch.mockImplementation(async () => { auf = aufgabeDone; return { task: aufgabeDone }; });
     renderDrawer();
-    fireEvent.click(await screen.findByRole('button', { name: /Fugen/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fugen', expanded: false }));
     fireEvent.click(await screen.findByLabelText('„Verfugen“ erledigt'));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/tasks/t3/checklist/j2', { done: true }));
     expect(await screen.findByText('Aufgabe automatisch erledigt')).toBeInTheDocument();
@@ -93,7 +93,7 @@ describe('TaskDrawer: Checklisten gehören zu Aufgaben', () => {
     get.mockImplementation(async (url: string) => (url === '/tasks/t3' ? detailOf(aufgabe) : detailOf(ap, [aufgabe])));
     patch.mockResolvedValue({ task: aufgabe });
     renderDrawer();
-    fireEvent.click(await screen.findByRole('button', { name: /Fugen/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fugen', expanded: false }));
     fireEvent.click(await screen.findByLabelText('„Fugenmasse kaufen“ erledigt'));
     await waitFor(() => expect(patch).toHaveBeenCalledWith('/tasks/t3/checklist/j1', { done: false }));
     await waitFor(() => expect(reloadTasks).toHaveBeenCalled());
@@ -105,7 +105,7 @@ describe('TaskDrawer: Checklisten gehören zu Aufgaben', () => {
     patch.mockResolvedValue({ task: aufgabe });
     post.mockResolvedValue({ task: aufgabe });
     renderDrawer();
-    fireEvent.click(await screen.findByRole('button', { name: /Fugen/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fugen', expanded: false }));
     fireEvent.click(await screen.findByRole('button', { name: /Alle Details/ }));
     const input = await screen.findByLabelText('Neuer Checklistenpunkt');
     expect(screen.getByRole('heading', { name: /^Checkliste/ })).not.toHaveTextContent('Altbestand');
@@ -129,7 +129,7 @@ describe('TaskDrawer: Checklisten gehören zu Aufgaben', () => {
   const openDemote = async () => {
     get.mockImplementation(async (url: string) => (url === '/tasks/t3' ? detailOf(aufgabe) : detailOf(ap, [aufgabe])));
     renderDrawer();
-    fireEvent.click(await screen.findByRole('button', { name: /Fugen/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Fugen', expanded: false }));
     fireEvent.click(await screen.findByRole('button', { name: /Alle Details/ }));
     await screen.findByLabelText('Neuer Checklistenpunkt');
     fireEvent.click(screen.getByRole('button', { name: 'Verschieben …' }));

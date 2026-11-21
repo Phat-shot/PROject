@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import type { ChecklistItem, Subproject, Task } from '@projekttool/shared';
 import { api, fmtDate, today } from '../lib/api';
 import { prioLabel } from '../components/ui';
-import { IconCheckSquare, IconChecklist, IconLock } from '../components/icons';
+import { IconChecklist, IconListTodo, IconLock } from '../components/icons';
+import { HELP_CHECKLIST, HELP_TASKS, TaskKey, TaskStateIcon } from '../components/TaskBits';
 
 export interface WorkProject {
   id: string; key: string; name: string; myRole: string;
@@ -66,7 +67,7 @@ export function WorkTree({ nodes, reload }: { nodes: WorkNode[]; reload: () => P
                 {l.sub && !l.mine && <span className="muted small">verantwortlich: {l.sub.responsible.name ?? '–'}{l.sub.responsible.inherited ? ' (geerbt)' : ''}</span>}
                 {l.sub?.endDate && <span className="muted small">· bis {fmtDate(l.sub.endDate)}</span>}
               </div>
-              {l.items.map((it) => <ApNode key={it.ap.id} projectId={p.id} it={it} t={t} toggleTask={toggleTask} />)}
+              {l.items.map((it) => <ApNode key={it.ap.id} projectId={p.id} projectKey={p.key} it={it} t={t} toggleTask={toggleTask} />)}
             </div>
           ))}
         </div>
@@ -78,31 +79,32 @@ export function WorkTree({ nodes, reload }: { nodes: WorkNode[]; reload: () => P
 const FROM_LABEL: Record<string, string> = { task: 'Arbeitspaket', subproject: 'Teilprojekt', project: 'PL' };
 
 /** Arbeitspaket oder Aufgabe mit eigenen Tasks; Aufgaben hängen eingerückt am Arbeitspaket. */
-function ApNode({ projectId, it, t, toggleTask }: { projectId: string; it: WorkItem; t: string; toggleTask: (ap: Task, c: ChecklistItem) => Promise<void> }) {
+function ApNode({ projectId, projectKey, it, t, toggleTask }: { projectId: string; projectKey: string; it: WorkItem; t: string; toggleTask: (ap: Task, c: ChecklistItem) => Promise<void> }) {
   const { ap, mine, tasks, subs } = it;
   return (
     <div className={`wt-ap ${ap.parentId ? 'wt-aufgabe' : ''}`}>
       <div className="wt-ap-row">
         <span className="wt-bracket" />
-        {ap.parentId && <span className="badge" title="Aufgabe im Arbeitspaket">Aufgabe</span>}
+        {ap.parentId && <span className="wt-kind" title={HELP_TASKS}><TaskStateIcon state={ap.done ? 'done' : 'open'} size={14} /><span className="sr-only">Aufgabe </span><TaskKey projectKey={projectKey} number={ap.number} /></span>}
         <Link to={`/projekte/${projectId}/board?task=${ap.id}`} className={ap.done ? 'muted' : ''} style={ap.done ? { textDecoration: 'line-through' } : undefined}>{ap.title}</Link>
         {ap.priority !== 'normal' && <span className={`badge prio-${ap.priority}`}>{prioLabel[ap.priority]}</span>}
         {ap.blocked && <span className="badge blocked">blockiert</span>}
         {ap.escalationLevel > 0 && <span className="badge danger">Esk. {ap.escalationLevel}</span>}
         {ap.dueDate && <span style={!ap.done && ap.dueDate < t ? { color: 'var(--danger)', fontWeight: 600 } : undefined}>{fmtDate(ap.dueDate)}</span>}
         <span className="muted small">{mine ? (ap.responsible.inherited ? `ich (geerbt vom ${FROM_LABEL[ap.responsible.inheritedFrom ?? 'project']})` : 'ich') : `${ap.responsible.name ?? ap.responsible.email ?? '–'}${ap.responsible.inherited ? ' (geerbt)' : ''}`}</span>
-        {(ap.subtaskTotal ?? 0) > 0 && <span className="muted small" title="Aufgaben erledigt / gesamt"><IconChecklist size={12} /><span className="sr-only">Aufgaben </span> {ap.subtaskDone}/{ap.subtaskTotal}</span>}
-        {ap.checklistTotal > 0 && <span className="muted small" title="Checkliste erledigt / gesamt"><IconCheckSquare size={12} /><span className="sr-only">Checkliste </span> {ap.checklistDone}/{ap.checklistTotal}</span>}
+        {(ap.subtaskTotal ?? 0) > 0 && <span className="muted small" title="Aufgaben erledigt / gesamt"><IconListTodo size={12} /><span className="sr-only">Aufgaben </span> {ap.subtaskDone}/{ap.subtaskTotal}</span>}
+        {ap.checklistTotal > 0 && <span className="muted small" title="Checkliste erledigt / gesamt"><IconChecklist size={12} /><span className="sr-only">Checkliste </span> {ap.checklistDone}/{ap.checklistTotal}</span>}
       </div>
+      {tasks.length > 0 && <div className="wt-cl-head" title={HELP_CHECKLIST}><IconChecklist size={12} /> Checkliste</div>}
       {tasks.map(({ item, inherited }) => (
         <label key={item.id} className={`wt-task ${item.done ? 'done' : ''}`}>
           <span className="wt-bracket" />
-          <input type="checkbox" checked={item.done} onChange={() => void toggleTask(ap, item)} />
+          <input type="checkbox" className="cl-check" checked={item.done} onChange={() => void toggleTask(ap, item)} />
           <span>{item.title}</span>
           <span className="muted small">{inherited ? 'ich (geerbt)' : 'ich'}</span>
         </label>
       ))}
-      {subs.map((s) => <ApNode key={s.ap.id} projectId={projectId} it={s} t={t} toggleTask={toggleTask} />)}
+      {subs.map((s) => <ApNode key={s.ap.id} projectId={projectId} projectKey={projectKey} it={s} t={t} toggleTask={toggleTask} />)}
     </div>
   );
 }

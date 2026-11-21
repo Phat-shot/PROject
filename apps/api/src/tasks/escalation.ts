@@ -2,7 +2,7 @@ import { DEFAULT_ESCALATION } from '@projekttool/shared';
 import type { Db } from '../db.js';
 import { audit } from '../audit.js';
 import { dispatch, notify } from '../notify.js';
-import { dateStr, loadTasks, resolveProjectLead } from './service.js';
+import { dateStr, loadTasks, resetEscalationDone, resolveProjectLead } from './service.js';
 import { projectAccount } from '../mail/accounts.js';
 import { supersedeDrafts } from '../mail/supersede.js';
 
@@ -155,6 +155,9 @@ export async function evaluateProject(db: Db, projectId: string, today: string):
 export async function runEscalations(db: Db, today = new Date().toISOString().slice(0, 10)) {
   const projects = await db.query(`select id, org_id, name, key, escalation from projects where status = 'active'`);
   let raised = 0, reset = 0, reminded = 0;
+  // Erledigte oder archivierte Elemente behalten keine Stufe (falls der Weg über onTaskDone nicht lief, z. B. Altbestand)
+  const done = await db.query(`select t.id from tasks t join board_columns c on c.id = t.column_id where (t.escalation_level > 0 or t.escalation_reminded_at is not null) and (c.is_done or t.archived_at is not null or t.deleted_at is not null)`);
+  for (const d of done.rows) if (await resetEscalationDone(db, d.id)) reset++;
   for (const pr of projects.rows) {
     const p = policyOf(pr.escalation);
     const rows = await evaluateProject(db, pr.id, today);

@@ -19,7 +19,8 @@ test('Anmelden, Projekt öffnen, Arbeitspaket anlegen und im Drawer bearbeiten',
   const item = page.locator('.drawer input[aria-label="Neuer Checklistenpunkt für „Erster Schritt“"]');
   await item.fill('Punkt eins');
   await item.press('Enter');
-  await expect(page.locator('.drawer')).toContainText('Punkt eins');
+  // Der Punkt steht als umbenennbares Feld in der aufgeklappten Aufgabe (Wert, nicht Seitentext)
+  await expect(page.locator('.drawer .checklist input.inline-text').filter({ hasNot: page.locator('[disabled]') }).last()).toHaveValue('Punkt eins');
   await page.getByRole('button', { name: 'Schließen' }).click();
   await expect(page.locator('.task-card', { hasText: title })).toBeVisible();
 });

@@ -4,9 +4,10 @@ import { LABEL_COLORS, type Task } from '@projekttool/shared';
 import { api, downloadCsv, fmtDate, today } from '../../lib/api';
 import { useAuth } from '../../lib/auth';
 import { Badge, Button, IconButton, Initials, keyboardShortcutsBlocked, Loading, Modal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
-import { IconAlert, IconArrowRight, IconCheck, IconCollapse, IconCheckSquare, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
+import { IconAlert, IconArrowRight, IconCheck, IconChecklist, IconCircle, IconCollapse, IconChevronDown, IconChevronRight, IconChevronUp, IconClock, IconComment, IconHourglass, IconLock, IconRotate, IconSettings, IconX } from '../../components/icons';
 import { moveTaskTo, reviewOptsOf } from '../../lib/moveTask';
 import { SUBTASK_DRAG } from './MoveDialog';
+import { HELP_CHECKLIST, HELP_TASKS, TaskKey, TaskStatusButton, taskState } from '../../components/TaskBits';
 import { useCreate } from './create';
 import { useData } from '../../lib/useData';
 import { StartRunDialog, type WorkflowDef } from './WorkflowsView';
@@ -316,8 +317,12 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
   const { detail } = useProject();
   const dueClass = x.done ? 'done' : x.dueDate && x.dueDate < t ? 'overdue' : x.dueDate && x.dueDate <= soon ? 'soon' : '';
   const labels = x.labelIds.map((id) => detail.labels.find((l) => l.id === id)).filter(Boolean);
-  // Fortschritt aus Aufgaben und Checkliste zusammen
-  const stepsTotal = x.subtaskTotal + x.checklistTotal; const stepsDone = x.subtaskDone + x.checklistDone;
+  // Fortschritt getrennt: Aufgaben (eigener Status) und Checkliste (Punkte des AP-Altbestands und seiner Aufgaben)
+  const clTotal = x.checklistTotal + kids.reduce((n, k) => n + k.checklistTotal, 0);
+  const clDone = x.checklistDone + kids.reduce((n, k) => n + k.checklistDone, 0);
+  const subTotal = Math.max(x.subtaskTotal, kids.length); const subDone = kids.length ? kids.filter((k) => k.done).length : x.subtaskDone;
+  // Balken: Aufgaben, wenn es welche gibt, sonst Checkliste
+  const stepsTotal = subTotal || clTotal; const stepsDone = subTotal ? subDone : clDone;
   const dueTitle = x.done ? 'erledigt' : dueClass === 'overdue' ? 'überfällig' : dueClass === 'soon' ? 'in den nächsten 3 Tagen fällig' : 'Deadline';
   // Aufgabe (aus dem Arbeitspaket oder einer Karte) auf dieses Arbeitspaket ziehen: umhängen (reparent), nicht Status
   const { reloadTasks, tasks: allTasks } = useProject();
@@ -352,15 +357,15 @@ function TaskCard({ task: x, t, soon, canEdit, dragging, dropMarker, onDragStart
         {x.conflicts.length > 0 && <span className="conflict" title={x.conflicts.join('\n')}><IconAlert size={12} /><span className="sr-only">Terminkonflikt</span></span>}
         {x.workflowRunId && <Link to={`/workflows/laeufe/${x.workflowRunId}`} title="Aus einem Workflow-Lauf" aria-label="Workflow-Lauf öffnen" onClick={(e) => e.stopPropagation()}><IconRotate size={12} /></Link>}
         {x.commentCount > 0 && <span title="Log-Einträge"><IconComment size={12} /><span className="sr-only">Log-Einträge</span> {x.commentCount}</span>}
-        {/* Aufgaben zählt die Liste unten; hier nur die Checkliste */}
-        {x.checklistTotal > 0 && kids.length > 0 ? <span title={`Checkliste: ${x.checklistDone}/${x.checklistTotal}`} className={x.checklistDone === x.checklistTotal ? 'ok' : ''}><IconCheckSquare size={12} /><span className="sr-only">Checkliste</span> {x.checklistDone}/{x.checklistTotal}</span>
-          : stepsTotal > 0 && kids.length === 0 && <span title={`Erledigt: ${x.checklistDone}/${x.checklistTotal} Checkliste`} className={stepsDone === stepsTotal ? 'ok' : ''}><IconCheckSquare size={12} /><span className="sr-only">Erledigt</span> {stepsDone}/{stepsTotal}</span>}
+        {/* Mit Aufgaben stehen beide Zähler im Kopf der Aufgabenliste unten; sonst hier, getrennt */}
+        {kids.length === 0 && subTotal > 0 && <span className={`count-tasks ${subDone === subTotal ? 'ok' : ''}`} title={`Aufgaben: ${subDone}/${subTotal} erledigt. ${HELP_TASKS}`}><IconCircle size={12} /><span className="sr-only">Aufgaben</span> {subDone}/{subTotal}</span>}
+        {kids.length === 0 && clTotal > 0 && <span className={`count-checklist ${clDone === clTotal ? 'ok' : ''}`} title={`Checkliste: ${clDone}/${clTotal} erledigt. ${HELP_CHECKLIST}`}><IconChecklist size={12} /><span className="sr-only">Checkliste</span> {clDone}/{clTotal}</span>}
         <span className="right who" title={x.responsible.inherited ? `${x.responsible.name ?? ''} (geerbt vom ${x.responsible.inheritedFrom === 'task' ? 'Arbeitspaket' : x.responsible.inheritedFrom === 'subproject' ? 'Teilprojekt' : 'PL'})` : x.responsible.name ?? x.responsible.email ?? ''}>
           {x.responsible.userId ? <span className={x.responsible.inherited ? 'avatar-wrap inherited' : 'avatar-wrap'}><Initials name={x.responsible.name} /></span> : x.responsible.name ? <span className="avatar-wrap external" title={`${x.responsible.name} (extern)`}><Initials name={x.responsible.name} /></span> : <span className="badge">{x.responsible.email ? 'extern' : '–'}</span>}
         </span>
       </div>
-      {stepsTotal > 0 && <div className={`progress ${stepsDone === stepsTotal ? 'complete' : ''}`} role="progressbar" aria-valuemin={0} aria-valuemax={stepsTotal} aria-valuenow={stepsDone} aria-label="Fortschritt"><div style={{ width: `${Math.round((stepsDone / stepsTotal) * 100)}%` }} /></div>}
-      {kids.length > 0 && <CardSubtasks kids={kids} open={kidsOpen} canEdit={canEdit && !selectable} />}
+      {stepsTotal > 0 && <div className={`progress ${stepsDone === stepsTotal ? 'complete' : ''}`} role="progressbar" aria-valuemin={0} aria-valuemax={stepsTotal} aria-valuenow={stepsDone} aria-label={subTotal ? 'Fortschritt Aufgaben' : 'Fortschritt Checkliste'}><div style={{ width: `${Math.round((stepsDone / stepsTotal) * 100)}%` }} /></div>}
+      {kids.length > 0 && <CardSubtasks kids={kids} open={kidsOpen} canEdit={canEdit && !selectable} checklist={{ done: clDone, total: clTotal }} />}
       {canEdit && !selectable && <StatusMenu task={x} />}
     </div>
   );
@@ -476,7 +481,7 @@ function WorkflowPicker({ onPick, onClose }: { onPick: (d: WorkflowDef) => void;
  * Aufgaben in der Karte ihres Arbeitspakets: bleiben beim Arbeitspaket, egal in welchem Status. Häkchen erledigt, Status direkt
  * umschaltbar, Klick auf den Titel öffnet das Arbeitspaket mit der Aufgabe aufgeklappt.
  */
-function CardSubtasks({ kids, open: initial, canEdit }: { kids: Task[]; open: boolean; canEdit: boolean }) {
+function CardSubtasks({ kids, open: initial, canEdit, checklist }: { kids: Task[]; open: boolean; canEdit: boolean; checklist: { done: number; total: number } }) {
   const { detail, reloadTasks, openTask } = useProject();
   const dialog = useDialog();
   const [open, setOpen] = useState(initial);
@@ -489,11 +494,14 @@ function CardSubtasks({ kids, open: initial, canEdit }: { kids: Task[]; open: bo
   const stop = (e: React.SyntheticEvent) => e.stopPropagation();
   return (
     <div className="card-subs" onClick={stop} onMouseDown={stop} onKeyDown={stop} onDragStart={(e) => { e.stopPropagation(); if (!(e.target as HTMLElement).closest('[data-subtask]')) e.preventDefault(); }} draggable={false}>
-      <button className="card-subs-toggle" aria-expanded={open} onClick={() => setOpen(!open)} title={open ? 'Aufgaben einklappen' : 'Aufgaben aufklappen'}>{open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} {done}/{kids.length} Aufgaben</button>
+      <div className="card-subs-head">
+        <button className="card-subs-toggle" aria-expanded={open} onClick={() => setOpen(!open)} title={`${open ? 'Aufgaben einklappen' : 'Aufgaben aufklappen'}. ${HELP_TASKS}`}>{open ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}<IconCircle size={12} /> Aufgaben {done}/{kids.length}</button>
+        {checklist.total > 0 && <span className={`card-cl ${checklist.done === checklist.total ? 'ok' : ''}`} title={`Checklistenpunkte erledigt (in allen Aufgaben). ${HELP_CHECKLIST}`}><IconChecklist size={12} /> Checkliste {checklist.done}/{checklist.total}</span>}
+      </div>
       {open && <ul>{kids.map((k) => <li key={k.id} className={k.done ? 'done' : ''} data-subtask={k.id} draggable={canEdit} title={canEdit ? 'Auf ein anderes Arbeitspaket ziehen, um die Aufgabe dorthin zu verschieben' : undefined}
         onDragStart={(e) => { e.stopPropagation(); e.dataTransfer.setData(SUBTASK_DRAG, k.id); e.dataTransfer.setData('text/plain', k.title); e.dataTransfer.effectAllowed = 'move'; }}>
-        <input type="checkbox" checked={k.done} disabled={!canEdit || busy} title={k.done ? 'Wieder öffnen' : 'Erledigt'} aria-label={`${k.title}: ${k.done ? 'wieder öffnen' : 'erledigt'}`} onChange={() => { const col = k.done ? openCol : doneCol; if (col) void move(k, col.id); }} />
-        <button className="sub-title" title="Im Arbeitspaket öffnen" onClick={() => openTask(k.id)}>{k.title}</button>
+        <TaskStatusButton title={k.title} size={14} state={taskState(k.done, detail.columns.find((c) => c.id === k.columnId)?.kind)} disabled={!canEdit || busy} onToggle={() => { const col = k.done ? openCol : doneCol; if (col) void move(k, col.id); }} />
+        <button className="sub-title" title="Im Arbeitspaket öffnen" onClick={() => openTask(k.id)}><TaskKey projectKey={detail.project.key} number={k.number} /> {k.title}</button>
         {!k.done && <span className="sub-meta">
           <select className="sub-status" value={k.columnId} disabled={!canEdit || busy} title="Status der Aufgabe" aria-label="Status der Aufgabe" onChange={(e) => void move(k, e.target.value)}>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
           {k.dueDate && <span className={`sub-due ${k.dueDate < today() ? 'overdue' : ''}`}>{fmtDate(k.dueDate)}</span>}

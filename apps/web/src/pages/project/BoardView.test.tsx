@@ -1,6 +1,6 @@
 import '@testing-library/jest-dom/vitest';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 
 const openTask = vi.fn();
@@ -10,11 +10,12 @@ const task = {
   responsible: { userId: 'u1', name: 'Petra Lenz', email: null, inherited: false }, blocked: false, escalationLevel: 0, conflicts: [], dueDate: null, startDate: null,
   checklistTotal: 0, checklistDone: 0, subtaskTotal: 0, subtaskDone: 0, commentCount: 0, wait: null, recurrence: null, archivedAt: null, deletedAt: null
 };
+let boardTasks: unknown[] = [task];
 vi.mock('../../lib/api', () => ({ api: { get: vi.fn(async () => ({ tasks: [] })), post: vi.fn(), patch: vi.fn(), del: vi.fn() }, ApiError: class extends Error {}, downloadCsv: vi.fn(), fmtDate: (d: string) => d, today: () => '2026-11-06' }));
 vi.mock('../ProjectPage', () => ({
   useProject: () => ({
     detail: { project: { id: 'p1', key: 'WEB', myMembership: { role: 'pl', canEditPlan: true, userId: 'u1' } }, columns: [{ id: 'c1', name: 'Offen', kind: 'active', isDone: false }, { id: 'c2', name: 'Erledigt', kind: 'done', isDone: true }], subprojects: [], members: [{ userId: 'u1', name: 'Petra Lenz' }], labels: [] },
-    tasks: [task], reloadTasks, openTask, openSubproject: vi.fn(), users: [], reload: vi.fn(), ai: null
+    tasks: boardTasks, reloadTasks, openTask, openSubproject: vi.fn(), users: [], reload: vi.fn(), ai: null
   })
 }));
 vi.mock('../../lib/auth', () => ({ useAuth: () => ({ user: { id: 'u1' } }) }));
@@ -25,7 +26,7 @@ vi.mock('./WorkflowsView', () => ({ StartRunDialog: () => null }));
 import { BoardView } from './BoardView';
 
 describe('Board: Karten per Tastatur', () => {
-  beforeEach(() => { openTask.mockReset(); });
+  beforeEach(() => { openTask.mockReset(); boardTasks = [task]; });
 
   it('Karte ist fokussierbar (role=button) und öffnet mit Enter und Leertaste', () => {
     render(<MemoryRouter><BoardView /></MemoryRouter>);
@@ -46,5 +47,32 @@ describe('Board: Karten per Tastatur', () => {
     expect(screen.getByRole('button', { name: /Nur meine/ })).toHaveAttribute('aria-pressed', 'false');
     fireEvent.keyDown(document.body, { key: 'q' });
     expect(screen.getByRole('button', { name: /Nur meine/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+});
+
+describe('Board-Karte: Aufgaben und Checkliste getrennt', () => {
+  it('Kopf der Aufgabenliste zählt Aufgaben und Checkliste getrennt; Aufgabe mit Kennung und rundem Status-Knopf', () => {
+    const k1 = { ...task, id: 'k1', number: 8, title: 'Preise', parentId: 't1', done: true, columnId: 'c2', checklistTotal: 2, checklistDone: 2 };
+    const k2 = { ...task, id: 'k2', number: 9, title: 'Text', parentId: 't1', checklistTotal: 3, checklistDone: 1 };
+    boardTasks = [{ ...task, subtaskTotal: 2, subtaskDone: 1, checklistTotal: 2, checklistDone: 1 }, k1, k2];
+    render(<MemoryRouter><BoardView /></MemoryRouter>);
+    const card = screen.getByRole('button', { name: 'WEB-7 Angebot prüfen öffnen' });
+    const toggle = within(card).getByRole('button', { name: /Aufgaben 1\/2/ });
+    expect(toggle).toHaveTextContent('Aufgaben 1/2');
+    expect(within(card).getByText(/Checkliste 4\/7/)).toHaveClass('card-cl');
+    expect(within(card).queryByText(/Aufgaben 4\/7|5\/9/)).not.toBeInTheDocument();
+    expect(within(card).getByText('WEB-9')).toHaveClass('task-key');
+    expect(within(card).getByRole('button', { name: '„Text“ als erledigt markieren' })).toHaveClass('task-status-btn');
+    expect(within(card).getByRole('button', { name: '„Preise“ wieder öffnen' })).toBeInTheDocument();
+    expect(card.querySelector('.card-subs input[type=checkbox]')).toBeNull();
+  });
+
+  it('Karte ohne Aufgaben-Liste: Checkliste als eigener Zähler', () => {
+    boardTasks = [{ ...task, checklistTotal: 3, checklistDone: 1 }];
+    render(<MemoryRouter><BoardView /></MemoryRouter>);
+    const card = screen.getByRole('button', { name: 'WEB-7 Angebot prüfen öffnen' });
+    const cl = card.querySelector('.count-checklist')!;
+    expect(cl).toHaveTextContent('Checkliste 1/3');
+    expect(card.querySelector('.count-tasks')).toBeNull();
   });
 });

@@ -2,6 +2,10 @@
 
 Zielgruppe: alle, die wissen wollen, was sich wann geändert hat (Administratoren vor einem Update, Projektleitung für die Kommunikation ans Team). Den vollständigen Funktionsumfang beschreibt [Funktionen.md](Funktionen.md); ältere Entwicklungsschritte stehen im Git-Log.
 
+## 2026-11-21 (Nachtrag)
+
+- Erledigte, archivierte oder gelöschte Elemente behalten keine Eskalationsstufe mehr: Rücksetzen beim Erledigen (mit Log-Eintrag), im Eskalationslauf und per Migration 083 für den Altbestand.
+
 ## 2026-11-21
 
 - Eskalation verfeinert (Migration 082, `tasks/escalation.ts`): Stillstand erst ab Arbeitsbeginn `tasks.started_at` – gesetzt per DB-Trigger beim ersten Spaltenwechsel in eine Spalte außer Geplant/Zurückgestellt (deckt Verschieben, `PATCH columnId`, Prüfung, Wartet, Automatik, Import ab); Backfill: `null`, wenn das AP noch in Geplant/Zurückgestellt/erster aktiver Spalte liegt und weder Spaltenwechsel im Audit noch Log-Einträge (außer Eskalationsmeldungen), erledigte Checklistenpunkte oder erledigte Aufgaben hat, sonst `created_at`. Selbst angelegte Aufgaben (`created_by = responsible_user_id`) eskalieren nur bei Verzug. Verzug nach wirksamem Termin (eigener, sonst der des Arbeitspakets); liegt er beim offenen AP, eskaliert nur das AP. Keine Eskalation an sich selbst: Stufen nur mit der zuständigen Person werden übersprungen (intern bis PL), sonst einmalige Erinnerung `task.reminder` (Klasse Fälligkeit/Information, `tasks.escalation_reminded_at`, Audit `escalation.self_reminder`, `EscalationRow.selfOnly`) statt Stufe. Persönliche Projekte: `escalation.enabled = false` für bestehende.

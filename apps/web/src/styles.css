@@ -229,7 +229,7 @@ table.table { width: 100%; border-collapse: collapse; }
 .card-subs { margin-top: 6px; border-top: 1px solid var(--border); padding-top: 4px; cursor: default; }
 .card-subs-toggle { background: none; border: 0; padding: 2px 0; color: var(--muted); font-size: 0.82em; cursor: pointer; }
 .card-subs ul { list-style: none; margin: 2px 0 0; padding: 0; }
-.card-subs li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 5px; align-items: center; font-size: 0.85em; padding: 3px 0; }
+.card-subs li { display: grid; grid-template-columns: auto minmax(0, 1fr); column-gap: 5px; align-items: center; font-size: 0.85em; padding: 3px 5px; margin-top: 3px; border: 1px solid var(--border); border-radius: var(--r-sm); background: var(--surface-2); }
 .card-subs .sub-meta { grid-column: 2; display: flex; align-items: center; gap: 5px; margin-top: 2px; }
 .card-subs li.done .sub-title { text-decoration: line-through; color: var(--muted); }
 .card-subs .sub-title { min-width: 0; text-align: left; background: none; border: 0; padding: 0; color: inherit; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -408,11 +408,11 @@ table.table { width: 100%; border-collapse: collapse; }
 .checklist li { display: flex; flex-wrap: wrap; gap: var(--sp-2); align-items: center; padding: 4px 0; }
 .checklist li.done span { text-decoration: line-through; color: var(--muted); }
 .subtasks { list-style: none; padding: 0; margin: 0 0 6px; }
-.subtasks li { padding: 4px 0; border-bottom: 1px solid var(--border); }
-.subtasks li .st-row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
+.subtasks > li { padding: 5px 8px; margin-bottom: 6px; border: 1px solid var(--border); border-radius: var(--r-md); background: var(--surface-2); }
+.subtasks > li .st-row { display: flex; gap: var(--sp-2); align-items: center; flex-wrap: wrap; }
 .subtasks li .st-title { text-align: left; padding: 0; flex: 1; min-width: 160px; }
-.subtasks li.open { background: var(--surface-2); border-radius: var(--r-md); padding: 4px 6px; }
-.subtasks .st-panel { margin: 6px 0 4px 22px; display: flex; flex-direction: column; gap: 6px; }
+.subtasks > li.open { border-color: var(--primary-border); }
+.subtasks .st-panel { margin: 6px 0 4px 26px; display: flex; flex-direction: column; gap: 6px; }
 .subtasks .st-panel .comment { margin: 0; }
 .subtasks li.done .st-title { text-decoration: line-through; color: var(--muted); }
 .wt-aufgabe { margin-left: 18px; }
@@ -1276,3 +1276,43 @@ abbr.term { text-decoration: underline dotted; text-underline-offset: 3px; curso
   .chat-busy .spinner { display: none; }
   .chat-busy .chat-busy-still { display: inline-block; }
 }
+
+/* Aufgabe vs. Checklistenpunkt: Aufgabe = runder Status-Knopf, Kennung, Rahmen; Punkt = kleine eckige Checkbox, eingerückt, ohne Rahmen */
+.task-status-btn { display: inline-flex; align-items: center; justify-content: center; flex: none; background: none; border: 0; padding: 2px; margin: 0; border-radius: var(--r-pill); color: var(--muted); cursor: pointer; }
+.task-status-btn:hover:not(:disabled) { color: var(--primary-text); background: var(--primary-soft); }
+.task-status-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.task-status-btn:disabled { cursor: default; opacity: 0.7; }
+.task-state.is-progress { color: var(--primary-text); }
+.task-state.is-done { color: var(--ok); }
+.task-key { display: inline-flex; align-items: center; flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: var(--fs-xs); line-height: 16px; padding: 0 5px; border-radius: var(--r-sm); border: 1px solid var(--border); background: var(--surface); color: var(--muted); }
+.items-head { display: flex; align-items: center; gap: 6px; }
+.items-head .icon { color: var(--muted); }
+h4.items-head { margin: 4px 0 0; font-size: var(--fs-sm); font-weight: 600; color: var(--muted); }
+.subtasks li .st-title { display: inline-flex; align-items: center; gap: 4px; color: var(--text); font-weight: 500; }
+.subtasks li .st-title .st-title-text { overflow: hidden; text-overflow: ellipsis; }
+.subtasks li .st-title .icon { color: var(--muted); flex: none; }
+.subtasks .st-cl { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); }
+.subtasks .st-cl.ok { color: var(--ok); }
+.st-checklist { padding-left: 4px; }
+.checklist li { font-size: var(--fs-md); }
+.checklist .cl-check, .wt-task .cl-check { width: 13px; height: 13px; margin: 0; flex: none; border-radius: 2px; }
+.checklist.compact { margin-left: 8px; }
+.checklist.compact li { padding: 1px 0; gap: 4px; }
+.checklist.compact .inline-text { padding: 1px 4px; min-width: 80px; }
+.checklist .cl-who .avatar { width: 18px; height: 18px; font-size: 9px; }
+.btn.icon-only { padding: 3px 5px; }
+.card-subs-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-subs-toggle { display: inline-flex; align-items: center; gap: 3px; }
+.card-subs-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; border-radius: var(--r-sm); }
+.card-cl, .task-card .count-tasks, .task-card .count-checklist { display: inline-flex; align-items: center; gap: 3px; color: var(--muted); font-size: 0.82em; }
+.card-cl.ok { color: var(--ok); }
+.card-subs .sub-title { display: inline-flex; align-items: center; gap: 4px; }
+.card-subs .sub-title .task-key { font-size: 10px; line-height: 14px; padding: 0 3px; }
+.card-subs .sub-title:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.card-subs .task-status-btn { padding: 1px; }
+.wt-kind { display: inline-flex; align-items: center; gap: 4px; }
+.wt-cl-head { display: flex; align-items: center; gap: 4px; margin: 4px 0 0 12px; font-size: var(--fs-xs); font-weight: 600; color: var(--muted); }
+.wt-task { font-size: var(--fs-sm); margin-left: 20px; }
+/* Checklistenpunkte: kein Rahmen (der gehört zur Aufgaben-Zeile), Titel nur bei Hover/Fokus als Eingabefeld erkennbar */
+.st-panel .checklist li { border: 0; background: none; padding: 2px 0; margin: 0; border-radius: 0; }
+.checklist .inline-text:not(:focus):not(:hover) { border-color: transparent; background: transparent; box-shadow: none; }
