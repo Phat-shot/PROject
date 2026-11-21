@@ -7,7 +7,7 @@ import {
   AlertTriangle, ArrowDown, ArrowLeft, ArrowRight, ArrowUp, ArrowUpRight, Cloud, Copy, Archive, CornerLeftUp, Download, FileText, Folder, Bell, Check, CheckSquare, ChevronDown, ChevronRight, ChevronUp, Circle, Clock, CornerDownLeft,
   Diamond, Hourglass, Link2, Lock, LockOpen, Mail, Menu, MessageSquare, MoreHorizontal, Paperclip, Pencil, Plus, RotateCw, Scissors, Search, Settings, Star,
   ThumbsDown, ThumbsUp, Trash2, X, Calendar, ChevronLeft, Upload,
-  Play, RectangleHorizontal, Quote, Table, Image, Undo2, Redo2, SkipForward, Timer, ListChecks, CornerDownRight, ExternalLink, ChevronsLeft, CircleDot, CircleCheck, CircleX, CircleDashed, Square, Ban, Minus
+  Play, RectangleHorizontal, Quote, Table, Image, Undo2, Redo2, SkipForward, Timer, ListChecks, CornerDownRight, ExternalLink, ChevronsLeft, CircleDot, CircleCheck, CircleX, CircleDashed, Square, Ban, Minus, ListTodo
 } from 'lucide-react';
 
 type Props = SVGProps<SVGSVGElement> & { size?: number };
@@ -81,3 +81,4 @@ export const IconPending = wrap(CircleDashed);
 export const IconSquare = wrap(Square);
 export const IconBan = wrap(Ban);
 export const IconRule = wrap(Minus);
+export const IconListTodo = wrap(ListTodo);

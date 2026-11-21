@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import type { Resource, ResourceBooking, Task, TaskComment, TaskRelation } from '@projekttool/shared';
+import type { ChecklistItem, Resource, ResourceBooking, Task, TaskComment, TaskRelation } from '@projekttool/shared';
 import { BookingForm, BookingRow } from '../../components/Resources';
 import { api, fmtDate, fmtDateTime } from '../../lib/api';
-import { Badge, Button, Drawer, Dropdown, FieldError, IconButton, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
-import { IconArrowUpRight, IconCheck, IconChevronDown, IconChevronRight, IconDiamond, IconHourglass, IconX } from '../../components/icons';
+import { Badge, Button, Drawer, Dropdown, FieldError, IconButton, Initials, Markdown, Modal, PromptModal, prioLabel, Term, useAsync, useDialog, useToast } from '../../components/ui';
+import { ItemsHeading, TaskKey, TaskStatusButton, taskState } from '../../components/TaskBits';
+import { IconArrowUpRight, IconCheck, IconCheckSquare, IconChevronDown, IconChevronRight, IconDiamond, IconHourglass, IconX } from '../../components/icons';
 import { Breadcrumbs } from '../../components/Breadcrumbs';
 import { QuickMail } from '../../components/QuickMail';
 import { useProject } from '../ProjectPage';
@@ -67,16 +68,15 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
   const saveErr = (...keys: string[]) => (saveError && keys.includes(saveError.field) ? saveError.msg : null);
   // Einstellungen eingeklappt: oben steht das Arbeiten, die Konfiguration nur bei Bedarf (Zustand je Browser gemerkt)
   const [cfgOpen, setCfgOpen] = useState(() => { try { return localStorage.getItem('taskDrawer.settings') === 'open'; } catch { return false; } });
-  const [ask, setAsk] = useState<null | { kind: 'taskEmail'; itemId: string; value: string } | { kind: 'blocked' } | { kind: 'escalate' } | { kind: 'convert' }>(null);
+  const [ask, setAsk] = useState<null | { kind: 'blocked' } | { kind: 'escalate' } | { kind: 'convert' }>(null);
   const [demote, setDemote] = useState(false);
-  const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId?: string }>(null);
+  const [mail, setMail] = useState<null | { to: string; subject: string; body: string }>(null);
   const [agentMsg, setAgentMsg] = useState<string | null>(null);
   const { busy, error, run, setError } = useAsync();
   const dialog = useDialog();
   const [copyMove, setCopyMove] = useState<'copy' | 'move' | null>(null);
-  // Struktur: Aufgabe verschieben / zum AP machen / Teilprojekt; Checklistenpunkt verschieben oder zur Aufgabe machen
+  // Struktur: Aufgabe verschieben / zum AP machen / Teilprojekt (Checklistenpunkte: siehe ChecklistItems)
   const [moveMode, setMoveMode] = useState<MoveMode | null>(null);
-  const [itemAction, setItemAction] = useState<null | { kind: 'move' | 'promote'; itemId: string }>(null);
   const toast = useToast();
   const { contacts } = useContacts(detail.project.id);
   const load = () => api.get<TaskDetail>(`/tasks/${taskId}`).then(setD).catch((e) => setError(e.message));
@@ -138,8 +138,6 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
       </>}>
       {error && <div className="error mb" role="alert">{error}</div>}
       {moveMode && <MoveTaskDialog task={t} mode={moveMode} onClose={() => setMoveMode(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok(moveMode === 'reparent' ? 'Aufgabe verschoben.' : moveMode === 'promote' ? 'Jetzt ein eigenes Arbeitspaket.' : 'Teilprojekt geändert.'); if (moveMode === 'promote') onView({ id: t.id, expand: null, full: true }); }} />}
-      {itemAction?.kind === 'move' && t.checklist?.find((i) => i.id === itemAction.itemId) && <MoveItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt verschoben.'); }} />}
-      {itemAction?.kind === 'promote' && t.checklist?.find((i) => i.id === itemAction.itemId) && <PromoteItemDialog task={t} item={t.checklist.find((i) => i.id === itemAction.itemId)!} members={members} onClose={() => setItemAction(null)} onDone={async () => { await load(); await reloadTasks(); toast.ok('Checklistenpunkt ist jetzt eine Aufgabe.'); }} />}
       {demote && <DemoteDialog task={t} onClose={() => setDemote(false)} onDone={async (r) => { await reloadTasks(); toast.ok('Aufgabe ist jetzt ein Checklistenpunkt.'); if (r.task.done && r.task.autoDoneAt) toast.ok('Aufgabe automatisch erledigt'); openTask(r.task.id); }} />}
       {copyMove && <CopyMoveDialog kind="task" op={copyMove} detail={detail} task={t} onClose={() => setCopyMove(null)} onDone={async (r) => { await reloadTasks(); if (r.projectId !== detail.project.id) onClose(); else if (r.taskId && copyMove === 'copy') openTask(r.taskId); }} />}
       {(() => {
@@ -252,29 +250,9 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
 
       {!t.parentId && canEdit && <p className="muted small mt-1 mb-0 checklist-hint">Checklistenpunkte gehören zu Aufgaben – lege oben eine Aufgabe an.</p>}
       {(t.parentId || (t.checklist?.length ?? 0) > 0) && <>
-      <h3 className="mt">{t.parentId ? 'Checkliste' : 'Checkliste (Altbestand)'} {t.checklistTotal > 0 && <span className="badge">{t.checklistDone}/{t.checklistTotal}</span>}</h3>
+      <ItemsHeading kind="checklist" done={t.checklistDone} total={t.checklistTotal}>{t.parentId ? 'Checkliste' : 'Checkliste (Altbestand)'}</ItemsHeading>
       {!t.parentId && <p className="muted small m-0">Diese Punkte stammen aus der Zeit vor den Aufgaben-Checklisten. Abhaken und Löschen geht weiter; „In Aufgabe überführen“ macht daraus eine Aufgabe mit genau diesen Punkten.</p>}
-      <ul className="checklist">
-        {t.checklist?.map((i) => (
-          <li key={i.id} className={i.done ? 'done' : ''}>
-            <input type="checkbox" checked={i.done} disabled={!canEdit} aria-label={`„${i.title}“ erledigt`} onChange={(e) => void run(async () => { const r = await api.patch<{ task: Task }>(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await checklistDone(r); })} />
-            <InlineText value={i.title} canEdit={canEdit} onSave={(title) => run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { title }); await load(); })} />
-            <select className="inline-select" value={i.responsibleUserId ?? (i.responsibleEmail ? (contacts.some((c) => c.email === i.responsibleEmail) ? `ext:${i.responsibleEmail}` : 'extern') : '')} disabled={!canEdit} title="Zuständig für diesen Checklistenpunkt" aria-label={`Zuständig für „${i.title}“`} onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAsk({ kind: 'taskEmail', itemId: i.id, value: i.responsibleEmail ?? '' }); return; } if (v.startsWith('ext:')) { void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: null, responsibleEmail: v.slice(4) }); await load(); }); return; } void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${i.id}`, { responsibleUserId: v || null, responsibleEmail: null }); await load(); }); }}>
-              <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
-              {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
-              {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
-              <option value="extern">{i.responsibleEmail && !contacts.some((c) => c.email === i.responsibleEmail) ? `${i.responsibleEmail} (extern)` : 'extern (neue Mail-Adresse) …'}</option>
-            </select>
-            {i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
-            {canEdit && <Dropdown label={`Menü zu „${i.title}“`} icon={false} items={[
-              { label: 'In Aufgabe umwandeln …', onClick: () => setItemAction({ kind: 'promote', itemId: i.id }) },
-              { label: 'In andere Aufgabe verschieben …', onClick: () => setItemAction({ kind: 'move', itemId: i.id }) },
-              { label: 'Löschen', danger: true, onClick: () => void dialog.confirm({ title: 'Checklistenpunkt löschen', text: `„${i.title}“ löschen?${d.mails.some((m) => m.checklistItemId === i.id) ? ` Der Mailverlauf dazu bleibt ${t.parentId ? 'an der Aufgabe' : 'am Arbeitspaket'}.` : ''}`, confirmLabel: 'Löschen', danger: true }).then((ok) => { if (ok) void run(async () => { const r = await api.del<{ task: Task }>(`/tasks/${t.id}/checklist/${i.id}`); await checklistDone(r); }); }) }
-            ]} />}
-            <MailThread mails={d.mails.filter((m) => m.checklistItemId === i.id)} projectId={detail.project.id} />
-          </li>
-        ))}
-      </ul>
+      <ChecklistItems task={t} items={t.checklist ?? []} canEdit={canEdit} members={members} contacts={contacts} mails={d.mails} onChanged={checklistDone} />
       </>}
       {!t.parentId && canEdit && (t.checklist?.length ?? 0) > 0 && <div className="row mt-1"><Button size="sm" loading={busy} title="Alle Punkte dieser Checkliste wandern in eine neue Aufgabe des Arbeitspakets" onClick={() => setAsk({ kind: 'convert' })}>In Aufgabe überführen</Button></div>}
       {t.parentId && canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { const r = await api.post<{ task: Task }>(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await checklistDone(r); }); }}>
@@ -307,13 +285,11 @@ function TaskDrawerView({ taskId, expand, full, onClose, onView }: { taskId: str
           <label className="check small" title="Externe zu diesem AP dürfen das erfahren (Außenkontext der KI-Agenten)"><input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} /> für Externe sichtbar</label></div>
       </div>}
 
-      {ask?.kind === 'taskEmail' && <PromptModal title="Externe Zuständigkeit für diesen Checklistenpunkt" label="Mail-Adresse" type="email" value={ask.value} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAsk(null)}
-        onSubmit={(v) => void run(async () => { await api.patch(`/tasks/${t.id}/checklist/${ask.itemId}`, { responsibleUserId: null, responsibleEmail: v || null }); await load(); })} />}
       {ask?.kind === 'convert' && <PromptModal title="Checkliste in Aufgabe überführen" label="Titel der neuen Aufgabe" value="Checkliste" hint="Alle Punkte samt Status und Zuständigkeit wandern in die neue Aufgabe; sie erbt die Zuständigkeit des Arbeitspakets." submitLabel="Überführen" onClose={() => setAsk(null)}
         onSubmit={(v) => void run(async () => { await api.post(`/tasks/${t.id}/checklist/convert`, { title: v || 'Checkliste' }); await load(); await reloadTasks(); toast.ok('Checkliste ist jetzt eine Aufgabe.'); })} />}
       {ask?.kind === 'blocked' && <PromptModal title="Als blockiert melden" label="Warum hängt das Arbeitspaket?" placeholder="z. B. warten auf Freigabe des Kunden" submitLabel="Melden" onClose={() => setAsk(null)} onSubmit={(v) => void patch({ blocked: true, blockedReason: v })} />}
       {ask?.kind === 'escalate' && <PromptModal title="Eine Stufe höher eskalieren" label="Grund (optional)" submitLabel="Eskalieren" onClose={() => setAsk(null)} onSubmit={(note) => void run(async () => { await api.post(`/tasks/${t.id}/escalate`, { level: t.escalationLevel + 1, note }); await load(); await reloadTasks(); })} />}
-      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} checklistItemId={mail.itemId ?? null} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void load()} />}
+      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} checklistItemId={null} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void load()} />}
       {shift && (
         <Modal title="Nachfolger verschieben – Vorschau" onClose={() => setShift(null)}>
           {shift.changes.length === 0 ? <p>Kein Nachfolger muss verschoben werden.</p> : (
@@ -342,6 +318,66 @@ function notifyAutoDone(toast: { ok: (t: string) => void }, before: Task, after:
 }
 
 /**
+ * Checklistenpunkte einer Aufgabe (bzw. Altbestand am AP), überall gleich bedienbar: eckige Checkbox, Titel per Klick umbenennen,
+ * Zuständigkeit, Menü (In Aufgabe umwandeln, In andere Aufgabe verschieben, Löschen mit Rückfrage), Mailverlauf je Punkt.
+ * compact (aufgeklappte Aufgabe im AP): Zuständigkeit nur als Avatar, kein „Nachfragen“.
+ * Entf/Rücktaste im geleerten Titel fragt, ob der Punkt gelöscht werden soll.
+ */
+function ChecklistItems({ task: t, items, canEdit, members, contacts, mails, compact = false, onChanged }: {
+  task: Task; items: ChecklistItem[]; canEdit: boolean; members: { id: string; name: string; kind?: string }[]; contacts: { email: string; name: string | null; organization?: string | null }[];
+  mails: TaskMail[]; compact?: boolean; onChanged: (r?: { task?: Task }) => Promise<void>;
+}) {
+  const { detail } = useProject();
+  const dialog = useDialog();
+  const toast = useToast();
+  const { run, error } = useAsync();
+  const [action, setAction] = useState<null | { kind: 'move' | 'promote' | 'email'; item: ChecklistItem }>(null);
+  const [mail, setMail] = useState<null | { to: string; subject: string; body: string; itemId: string }>(null);
+  const url = (i: ChecklistItem) => `/tasks/${t.id}/checklist/${i.id}`;
+  const save = (i: ChecklistItem, body: Record<string, unknown>) => run(async () => { const r = await api.patch<{ task: Task }>(url(i), body); await onChanged(r); });
+  const remove = (i: ChecklistItem) => void dialog.confirm({ title: 'Checklistenpunkt löschen', text: `„${i.title}“ löschen?${mails.some((m) => m.checklistItemId === i.id) ? ` Der Mailverlauf dazu bleibt ${t.parentId ? 'an der Aufgabe' : 'am Arbeitspaket'}.` : ''}`, confirmLabel: 'Löschen', danger: true })
+    .then((ok) => { if (ok) void run(async () => { const r = await api.del<{ task: Task }>(url(i)); await onChanged(r); }); });
+  const respValue = (i: ChecklistItem) => i.responsibleUserId ?? (i.responsibleEmail ? (contacts.some((c) => c.email === i.responsibleEmail) ? `ext:${i.responsibleEmail}` : 'extern') : '');
+  if (items.length === 0) return error ? <div className="error small">{error}</div> : null;
+  return (
+    <>
+      {error && <div className="error small" role="alert">{error}</div>}
+      <ul className={`checklist ${compact ? 'compact' : ''}`}>
+        {items.map((i) => {
+          const who = i.responsibleUserId ? members.find((u) => u.id === i.responsibleUserId)?.name ?? null : i.responsibleEmail;
+          return (
+            <li key={i.id} className={i.done ? 'done' : ''}>
+              <input type="checkbox" className="cl-check" checked={i.done} disabled={!canEdit} aria-label={`„${i.title}“ erledigt`} onChange={(e) => void save(i, { done: e.target.checked })} />
+              <InlineText value={i.title} canEdit={canEdit} ariaLabel={`Titel des Checklistenpunkts „${i.title}“`} onSave={(title) => save(i, { title })} onEmptyDelete={() => remove(i)} />
+              {compact
+                ? who && <span className="cl-who" title={`Zuständig: ${who}`}><Initials name={who} /></span>
+                : <select className="inline-select" value={respValue(i)} disabled={!canEdit} title="Zuständig für diesen Checklistenpunkt" aria-label={`Zuständig für „${i.title}“`} onChange={(e) => { const v = e.target.value; if (v === 'extern') { setAction({ kind: 'email', item: i }); return; } if (v.startsWith('ext:')) { void save(i, { responsibleUserId: null, responsibleEmail: v.slice(4) }); return; } void save(i, { responsibleUserId: v || null, responsibleEmail: null }); }}>
+                  <option value="">{t.responsible.name ?? t.responsible.email ?? '–'} (geerbt)</option>
+                  {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
+                  {contacts.length > 0 && <optgroup label="Extern (Kontakte)">{contacts.map((c) => <option key={c.email} value={`ext:${c.email}`}>{contactLabel(c)}</option>)}</optgroup>}
+                  <option value="extern">{i.responsibleEmail && !contacts.some((c) => c.email === i.responsibleEmail) ? `${i.responsibleEmail} (extern)` : 'extern (neue Mail-Adresse) …'}</option>
+                </select>}
+              {!compact && i.responsibleEmail && canEdit && <button className="btn sm link" title="Stand per Mail nachfragen" onClick={() => setMail({ itemId: i.id, to: i.responsibleEmail!, subject: `${detail.project.key}: Stand zu „${i.title}“`, body: `Guten Tag,\n\nwie ist der Stand zu „${i.title}“ (Arbeitspaket „${t.title}“${t.dueDate ? `, fällig ${t.dueDate.split('-').reverse().join('.')}` : ''})?\n\nBitte antworten Sie einfach auf diese Mail, die Antwort landet automatisch im Arbeitspaket.\n\nMit freundlichen Grüßen\n` })}>Nachfragen</button>}
+              {canEdit && <Dropdown label={`Menü zu „${i.title}“`} iconOnly items={[
+                { label: 'In Aufgabe umwandeln …', onClick: () => setAction({ kind: 'promote', item: i }) },
+                { label: 'In andere Aufgabe verschieben …', onClick: () => setAction({ kind: 'move', item: i }) },
+                { label: 'Löschen', danger: true, onClick: () => remove(i) }
+              ]} />}
+              <MailThread mails={mails.filter((m) => m.checklistItemId === i.id)} projectId={detail.project.id} />
+            </li>
+          );
+        })}
+      </ul>
+      {action?.kind === 'move' && <MoveItemDialog task={t} item={action.item} onClose={() => setAction(null)} onDone={async () => { await onChanged(); toast.ok('Checklistenpunkt verschoben.'); }} />}
+      {action?.kind === 'promote' && <PromoteItemDialog task={t} item={action.item} members={members} onClose={() => setAction(null)} onDone={async () => { await onChanged(); toast.ok('Checklistenpunkt ist jetzt eine Aufgabe.'); }} />}
+      {action?.kind === 'email' && <PromptModal title="Externe Zuständigkeit für diesen Checklistenpunkt" label="Mail-Adresse" type="email" value={action.item.responsibleEmail ?? ''} placeholder="name@firma.de" hint="Leer lassen entfernt die externe Zuständigkeit." submitLabel="Speichern" onClose={() => setAction(null)}
+        onSubmit={(v) => void save(action.item, { responsibleUserId: null, responsibleEmail: v || null })} />}
+      {mail && <QuickMail projectId={detail.project.id} taskId={t.id} checklistItemId={mail.itemId} to={mail.to} subject={mail.subject} body={mail.body} title="Stand nachfragen" onClose={() => setMail(null)} onSent={() => void onChanged()} />}
+    </>
+  );
+}
+
+/**
  * Aufgaben eines Arbeitspakets: Status und Zuständigkeit direkt in der Zeile, Klick auf den Titel klappt die Aufgabe hier auf
  * (Termin, Beschreibung, Checkliste, Log); „Alle Details“ öffnet sie ganz. Häkchen setzt auf Erledigt bzw. zurück.
  */
@@ -366,24 +402,27 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
   });
   return (
     <>
-      <h3 className="mt">Aufgaben {parent.subtaskTotal > 0 && <span className="badge">{parent.subtaskDone}/{parent.subtaskTotal}</span>}</h3>
+      <ItemsHeading kind="tasks" done={parent.subtaskDone} total={parent.subtaskTotal} />
       <ul className="subtasks">
         {subtasks.map((x) => (
           <li key={x.id} className={`${x.done ? 'done' : ''} ${open === x.id ? 'open' : ''}`} draggable={canEdit} title={canEdit ? 'Auf eine Karte im Board ziehen, um die Aufgabe dorthin zu verschieben' : undefined}
             onDragStart={(e) => { e.dataTransfer.setData(SUBTASK_DRAG, x.id); e.dataTransfer.setData('text/plain', x.title); e.dataTransfer.effectAllowed = 'move'; }}>
             <div className="st-row">
-              <input type="checkbox" checked={x.done} disabled={!canEdit || busy} title={x.done ? 'Wieder öffnen' : 'Erledigt'} onChange={() => void move(x, (x.done ? openCol : doneCol)?.id)} />
-              <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} aria-expanded={open === x.id} onClick={() => setOpen(open === x.id ? null : x.id)}>{open === x.id ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />} {x.title}</button>
+              <TaskStatusButton title={x.title} state={taskState(x.done, detail.columns.find((c) => c.id === x.columnId)?.kind)} disabled={!canEdit || busy} onToggle={() => void move(x, (x.done ? openCol : doneCol)?.id)} />
+              <TaskKey projectKey={detail.project.key} number={x.number} />
+              <button className="btn sm link st-title" title={open === x.id ? 'Zuklappen' : 'Aufklappen'} aria-expanded={open === x.id} onClick={() => setOpen(open === x.id ? null : x.id)}><span className="st-title-text">{x.title}</span>{open === x.id ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}</button>
+              {x.checklistTotal > 0 && <span className={`st-cl small ${x.checklistDone === x.checklistTotal ? 'ok' : ''}`} title={`Checkliste: ${x.checklistDone}/${x.checklistTotal} erledigt`}><IconCheckSquare size={12} /><span className="sr-only">Checkliste </span>{x.checklistDone}/{x.checklistTotal}</span>}
               {x.blocked && <span className="badge blocked">blockiert</span>}
               {x.done && x.autoDoneAt && <AutoDoneBadge at={x.autoDoneAt} />}
               {x.dueDate && <span className={`small nowrap ${!x.done && x.dueDate < t0 ? 'text-danger fw-600' : ''}`}>{fmtDate(x.dueDate)}</span>}
               {!x.done && <select className="inline-select" value={x.columnId} disabled={!canEdit || busy} title="Status" onChange={(e) => void move(x, e.target.value)}>{detail.columns.filter((c) => !c.isDone).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select>}
-              <select className="inline-select" value={x.responsibleUserId ?? ''} disabled={!canEdit || busy} title="Zuständig" onChange={(e) => void run(async () => { await api.patch(`/tasks/${x.id}`, { responsibleUserId: e.target.value || null, responsibleEmail: null }); await onChanged(); })}>
+              {x.responsible.name && <span className={`avatar-wrap ${x.responsible.inherited ? 'inherited' : ''}`} title={`Zuständig: ${x.responsible.name}${x.responsible.inherited ? ' (geerbt)' : ''}`}><Initials name={x.responsible.name} /></span>}
+              <select className="inline-select" value={x.responsibleUserId ?? ''} disabled={!canEdit || busy} title="Zuständig" aria-label={`Zuständig für Aufgabe „${x.title}“`} onChange={(e) => void run(async () => { await api.patch(`/tasks/${x.id}`, { responsibleUserId: e.target.value || null, responsibleEmail: null }); await onChanged(); })}>
                 <option value="">{(x.responsibleUserId ? null : x.responsible.name ?? x.responsible.email) ?? '–'} (geerbt)</option>
                 {members.map((u) => <option key={u.id} value={u.id}>{u.name}</option>)}
               </select>
             </div>
-            {open === x.id && <SubtaskPanel taskId={x.id} canEdit={canEdit} onFull={() => onFull(x.id)} onChanged={onChanged} />}
+            {open === x.id && <SubtaskPanel taskId={x.id} canEdit={canEdit} members={members} onFull={() => onFull(x.id)} onChanged={onChanged} />}
           </li>
         ))}
       </ul>
@@ -401,7 +440,7 @@ function SubtaskSection({ parent, subtasks, canEdit, members, expand, onFull, on
 }
 
 /** Aufgeklappte Aufgabe im Arbeitspaket: Termin, Beschreibung, Checkliste und Log, ohne den Kontext zu verlassen. */
-function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; canEdit: boolean; onFull: () => void; onChanged: () => Promise<void> }) {
+function SubtaskPanel({ taskId, canEdit, members, onFull, onChanged }: { taskId: string; canEdit: boolean; members: { id: string; name: string; kind?: string }[]; onFull: () => void; onChanged: () => Promise<void> }) {
   const { detail } = useProject();
   const [d, setD] = useState<TaskDetail | null>(null);
   const [item, setItem] = useState('');
@@ -428,11 +467,12 @@ function SubtaskPanel({ taskId, canEdit, onFull, onChanged }: { taskId: string; 
         <button className="btn sm link right" onClick={onFull}>Alle Details <IconArrowUpRight size={12} /></button>
       </div>
       <TextArea label="Beschreibung" value={t.description ?? ''} canEdit={canEdit} onSave={(v) => run(async () => { await api.patch(`/tasks/${t.id}`, { description: v || null }); await changed(); })} />
-      {(t.checklist?.length ?? 0) > 0 && <ul className="checklist">{t.checklist!.map((i) => <li key={i.id} className={i.done ? 'done' : ''}>
-        <input type="checkbox" checked={i.done} disabled={!canEdit} aria-label={`„${i.title}“ erledigt`} onChange={(e) => void run(async () => { const r = await api.patch<{ task: Task }>(`/tasks/${t.id}/checklist/${i.id}`, { done: e.target.checked }); await checklistChanged(r); })} /> {i.title}
-      </li>)}</ul>}
+      {((t.checklist?.length ?? 0) > 0 || canEdit) && <div className="st-checklist">
+      <ItemsHeading kind="checklist" level={4} done={t.checklistDone} total={t.checklistTotal} />
+      <ChecklistItems task={t} items={t.checklist ?? []} canEdit={canEdit} members={members} contacts={[]} mails={d.mails} compact onChanged={checklistChanged} />
       {canEdit && <form className="row" onSubmit={(e) => { e.preventDefault(); if (!item.trim()) return; void run(async () => { const r = await api.post<{ task: Task }>(`/tasks/${t.id}/checklist`, { title: item }); setItem(''); await checklistChanged(r); }); }}>
         <input className="grow" type="text" aria-label={`Neuer Checklistenpunkt für „${t.title}“`} placeholder="Checklistenpunkt … (Enter)" value={item} onChange={(e) => setItem(e.target.value)} /></form>}
+      </div>}
       {d.comments.length > 3 && <button className="btn sm link" onClick={() => setAll(!all)}>{all ? 'Nur die letzten' : `Alle ${d.comments.length} Log-Einträge`}</button>}
       {comments.map((c) => <div key={c.id} className="comment small"><div className="who">{c.userName} · {fmtDateTime(c.createdAt)}</div><div className="pre"><MentionText text={c.body} members={detail.members} /></div></div>)}
       {canEdit && <div className="row gap-2">
@@ -555,11 +595,12 @@ function TitleEdit({ value, canEdit, done, onSave }: { value: string; canEdit: b
 }
 
 /** Einzeiliger Text, der sich per Klick bearbeiten lässt (Enter/Verlassen speichert). */
-export function InlineText({ value, canEdit, onSave, className }: { value: string; canEdit: boolean; onSave: (v: string) => unknown; className?: string }) {
+export function InlineText({ value, canEdit, onSave, className, ariaLabel, onEmptyDelete }: { value: string; canEdit: boolean; onSave: (v: string) => unknown; className?: string; ariaLabel?: string; onEmptyDelete?: () => void }) {
   const [v, setV] = useState(value);
   useEffect(() => setV(value), [value]);
   const commit = () => { if (v.trim() && v.trim() !== value) onSave(v.trim()); else setV(value); };
-  return <input className={`inline-text ${className ?? ''}`} type="text" value={v} readOnly={!canEdit} onChange={(e) => setV(e.target.value)} onBlur={commit} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } }} />;
+  return <input className={`inline-text ${className ?? ''}`} type="text" value={v} readOnly={!canEdit} aria-label={ariaLabel} title={canEdit ? 'Klicken zum Umbenennen (Enter speichert, Esc verwirft)' : undefined} onChange={(e) => setV(e.target.value)} onBlur={commit}
+    onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); if (e.key === 'Escape') { setV(value); (e.target as HTMLInputElement).blur(); } if (onEmptyDelete && canEdit && v === '' && (e.key === 'Backspace' || e.key === 'Delete')) { e.preventDefault(); setV(value); onEmptyDelete(); } }} />;
 }
 
 /** Kontakte des Projekts als Vorschlagsliste für externe Mail-Adressen. */

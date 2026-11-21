@@ -58,7 +58,8 @@ export function Term({ k, children }: { k: keyof typeof TERMS; children?: ReactN
 
 export interface DropdownItem { label: ReactNode; onClick: () => void; disabled?: boolean; /** Sichtbarer Grund, wenn gesperrt */ reason?: string; danger?: boolean }
 /** Kleines Menü „Mehr“: Enter/Leertaste/Pfeil öffnen, Pfeiltasten wandern, Enter wählt, Esc und Klick außerhalb schließen. */
-export function Dropdown({ label = 'Mehr', items, size = 'sm', icon = true }: { label?: string; items: DropdownItem[]; size?: 'sm' | 'md'; icon?: boolean }) {
+/** iconOnly: nur „…“ sichtbar, label als zugänglicher Name und Tooltip (kompakte Zeilen). */
+export function Dropdown({ label = 'Mehr', items, size = 'sm', icon = true, iconOnly = false }: { label?: string; items: DropdownItem[]; size?: 'sm' | 'md'; icon?: boolean; iconOnly?: boolean }) {
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const ref = useRef<HTMLSpanElement>(null);
@@ -80,7 +81,7 @@ export function Dropdown({ label = 'Mehr', items, size = 'sm', icon = true }: { 
   };
   return (
     <span className="menu-wrap dropdown" ref={ref} onKeyDown={onKey}>
-      <button type="button" className={`btn ${size === 'sm' ? 'sm' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-controls={id} onClick={() => { setActive(enabled[0] ?? 0); setOpen((o) => !o); }}>{label}{icon && <IconMore />}</button>
+      <button type="button" className={`btn ${size === 'sm' ? 'sm' : ''}${iconOnly ? ' icon-only' : ''}`} aria-haspopup="menu" aria-expanded={open} aria-controls={id} aria-label={iconOnly ? label : undefined} title={iconOnly ? label : undefined} onClick={() => { setActive(enabled[0] ?? 0); setOpen((o) => !o); }}>{iconOnly ? <IconMore /> : <>{label}{icon && <IconMore />}</>}</button>
       {open && <div className="menu" role="menu" id={id} aria-label={label}>
         {items.map((it, i) => (
           <button key={i} type="button" role="menuitem" className={`${it.danger ? 'danger' : ''} ${active === i ? 'active' : ''}`.trim()} disabled={it.disabled} tabIndex={active === i ? 0 : -1} aria-disabled={it.disabled || undefined}
