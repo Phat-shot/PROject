@@ -48,7 +48,7 @@ export const TERMS: Record<string, string> = {
   pluscode: 'Plus-Code: Kennung in der Antwortadresse (konto+t<code>@…), über die Antworten automatisch im richtigen Arbeitspaket landen.',
   aussenpruefung: 'Außenprüfung: prüft Mails an Externe vor dem Versand auf Projektinternes (andere Arbeitspakete, nicht freigegebene Seiten, interne Adressen) und hält Agenten-Mails mit Fundstellen an.',
   essenz: 'Essenz: der von der KI aus einer Mail herausgezogene Kern als Vorschlag für Log-Eintrag, Status oder Termin bzw. als Abschnitt einer Seite; angewendet erst nach Freigabe.',
-  stillstand: 'Stillstand: ein Arbeitspaket in einer aktiven Spalte ohne Fortschritt über die eingestellte Frist; löst die Eskalation aus (Geplant, Wartet und Zurückgestellt zählen nicht).',
+  stillstand: 'Stillstand: ein begonnenes Arbeitspaket (aus der Anlage-Spalte weiterbewegt) in einer aktiven Spalte ohne Fortschritt über die eingestellte Frist; löst die Eskalation aus (Geplant, Wartet und Zurückgestellt zählen nicht, selbst angelegte Aufgaben nur bei Verzug).',
   regelm: 'Regel M: Mitgliedschaft über Gruppen: ein Direkteintrag überschreibt alle Gruppen, zwischen Gruppen gilt die höchste Rolle, Einzelrechte addieren sich.'
 };
 export function Term({ k, children }: { k: keyof typeof TERMS; children?: ReactNode }) {

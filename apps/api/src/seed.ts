@@ -335,6 +335,9 @@ Ampel: gelb – Agenturentscheidung steht aus, Wireframes im Plan.
   await db.query(`insert into task_comments (task_id, user_id, body) values ($1,$2,'Marketing und Vertrieb befragt, Einkauf folgt am Montag.')`, [a1, anna]);
 
   await db.query(`insert into audit_log (org_id, project_id, user_id, action, object_type, object_id, details) values ($1,$2,$3,'seed','system',null,'{"note":"Demodaten angelegt"}')`, [org.id, web.id, admin]);
+  // Arbeitsbeginn wie nach der Migration: was über die erste aktive Spalte („Offen“) hinaus ist, gilt als begonnen
+  await db.query(`update tasks t set started_at = t.created_at from board_columns c where c.id = t.column_id and t.started_at is null and c.kind in ('active', 'review', 'waiting')
+    and c.id <> (select f.id from board_columns f where f.project_id = t.project_id and f.kind = 'active' order by f.position limit 1)`);
 
   // Demo-Projekte verhalten sich wie Bestandsprojekte (Entscheidung 6): Agenten selbstständig; neue Projekte starten mit Rückfrage bei wichtigen Schritten
   await db.query(`update projects set agent_policy = '{"mode":"auto"}'::jsonb where org_id = $1`, [org.id]);

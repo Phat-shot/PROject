@@ -63,16 +63,31 @@ export function targetLevel(input: { overdueDays: number; staleDays: number; blo
 export interface EscalationRow {
   taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
   score: number; dueDate: string | null; responsible: string | null; chain: string[]; reason: string;
+  /** Die verbleibende Kette ist nur die zuständige Person selbst: einmalige Erinnerung statt Eskalation (targetLevel bleibt 0). */
+  selfOnly?: boolean;
 }
 
-/** Berechnet Soll-Stufen aller offenen Arbeitspakete eines Projekts (ohne Nebenwirkungen). */
+const DAY = 86400_000;
+const daysBetween = (from: string, to: string) => Math.round((Date.parse(to) - Date.parse(from)) / DAY);
+
+/**
+ * Berechnet Soll-Stufen aller offenen Arbeitspakete eines Projekts (ohne Nebenwirkungen). Einzige Stelle der Regeln; Worker,
+ * Projektübersicht, Warnungen und Berichte lesen nur hieraus.
+ * - Verzug nach wirksamem Termin: eigener Termin, sonst der des Arbeitspakets darüber. Ist das Arbeitspaket selbst noch offen und
+ *   hat diesen Termin, eskaliert nur das Arbeitspaket (eine Eskalation je Ursache), die Aufgabe ohne eigenen Termin nicht zusätzlich.
+ * - Stillstand erst ab dem Arbeitsbeginn (started_at, erster Wechsel aus der Anlage-Spalte) und nur in Spalten der Art active/review.
+ * - Selbst angelegte Aufgaben (angelegt von der zuständigen Person für sich selbst): nur Verzug, kein Stillstand, keine Blockade.
+ * - Keine Eskalation an sich selbst: Stufen, deren Empfänger nur die zuständige Person ist, werden übersprungen (intern bis zur PL;
+ *   der Eskalationskontakt erst zu seiner eigenen Frist); bleibt niemand sonst, ist es eine Erinnerung (selfOnly).
+ */
 export async function evaluateProject(db: Db, projectId: string, today: string): Promise<EscalationRow[]> {
   const policyRow = await db.one(`select escalation from projects where id = $1`, [projectId]);
   const p = policyOf(policyRow.escalation);
   if (!p.enabled) return [];
   const lead = await resolveProjectLead(db, projectId);
   const tasks = await loadTasks(db, 't.project_id = $1 and t.archived_at is null', [projectId], lead);
-  const raw = await db.query(`select id, blocked, blocked_reason, escalation_level, last_activity_at, column_id, subproject_id from tasks where project_id = $1 and archived_at is null`, [projectId]);
+  const taskById = new Map(tasks.map((t) => [t.id, t]));
+  const raw = await db.query(`select id, blocked, blocked_reason, escalation_level, last_activity_at, started_at, column_id, subproject_id, parent_id, created_by, responsible_user_id from tasks where project_id = $1 and archived_at is null`, [projectId]);
   const rawById = new Map(raw.rows.map((r: any) => [r.id, r]));
   const cols = await db.query(`select id, position, is_done, kind from board_columns where project_id = $1 order by position`, [projectId]);
   // „In Prüfung“ (review) zählt wie „in Bearbeitung“: hängt eine Prüfung, eskaliert sie
@@ -80,32 +95,58 @@ export async function evaluateProject(db: Db, projectId: string, today: string):
   const succCount = await db.query(`select predecessor_id, count(*)::int as c from task_dependencies group by predecessor_id`);
   const succ = new Map(succCount.rows.map((r: any) => [r.predecessor_id, r.c]));
   const milestones = await db.query(`select subproject_id, date from milestones where project_id = $1 and date >= $2 order by date`, [projectId, today]);
-  const subs = await db.query(`select s.id, s.name, u.name as resp_name from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1`, [projectId]);
+  const subs = await db.query(`select s.id, s.name, s.responsible_user_id, u.name as resp_name from subprojects s left join users u on u.id = s.responsible_user_id where s.project_id = $1`, [projectId]);
   const subById = new Map(subs.rows.map((s: any) => [s.id, s]));
+  const plIds = (await db.query(`select user_id from project_members where project_id = $1 and role = 'pl'`, [projectId])).rows.map((r: any) => r.user_id as string);
   const contact = p.contactUserId ? await db.maybeOne(`select name from users where id = $1`, [p.contactUserId]) : null;
+  const maxLevel = p.contactUserId || p.contactEmail ? 3 : 2;
   const out: EscalationRow[] = [];
   for (const t of tasks) {
     if (t.done) continue;
     const r = rawById.get(t.id);
     if (!r) continue;
-    const overdueDays = t.dueDate && t.dueDate < today ? Math.round((Date.parse(today) - Date.parse(t.dueDate)) / 86400_000) : 0;
-    const active = activeCols.has(r.column_id);
-    const staleDays = active ? Math.floor((Date.parse(today + 'T00:00:00Z') - new Date(r.last_activity_at).getTime()) / 86400_000) : 0;
+    const selfCreated = Boolean(r.created_by && r.responsible_user_id === r.created_by);
+    // Wirksamer Termin: eigener, sonst der des Arbeitspakets; liegt die Ursache beim offenen AP, eskaliert nur dieses
+    const parent = r.parent_id ? taskById.get(r.parent_id) : undefined;
+    const inherited = !t.dueDate && parent?.dueDate ? parent.dueDate : null;
+    const effectiveDue = t.dueDate ?? inherited;
+    const coveredByParent = Boolean(inherited && parent && !parent.done);
+    const overdueDays = effectiveDue && effectiveDue < today && !coveredByParent ? daysBetween(effectiveDue, today) : 0;
+    const started = Boolean(r.started_at);
+    const active = activeCols.has(r.column_id) && started && !selfCreated;
+    const staleFrom = active ? Math.max(new Date(r.last_activity_at).getTime(), new Date(r.started_at).getTime()) : 0;
+    const staleDays = active ? Math.max(0, Math.floor((Date.parse(today + 'T00:00:00Z') - staleFrom) / DAY)) : 0;
+    const blockedCounts = r.blocked && !selfCreated;
     const ms = milestones.rows.find((m: any) => !m.subproject_id || m.subproject_id === t.subprojectId);
-    const milestoneWithinDays = ms ? Math.round((Date.parse(dateStr(ms.date)!) - Date.parse(today)) / 86400_000) : null;
-    const score = criticality({ priority: t.priority, overdueDays, successors: succ.get(t.id) ?? 0, milestoneWithinDays, blocked: r.blocked });
-    let target = targetLevel({ overdueDays, staleDays, blocked: r.blocked, score }, p);
+    const milestoneWithinDays = ms ? daysBetween(today, dateStr(ms.date)!) : null;
+    const score = criticality({ priority: t.priority, overdueDays, successors: succ.get(t.id) ?? 0, milestoneWithinDays, blocked: blockedCounts });
+    let target = targetLevel({ overdueDays, staleDays, blocked: blockedCounts, score }, p);
     // Ohne Eskalationskontakt endet die Kette beim PL
-    if (!p.contactUserId && !p.contactEmail) target = Math.min(target, 2);
-    if (target === 0 && r.escalation_level === 0) continue;
+    target = Math.min(target, maxLevel);
+    // Keine Eskalation an sich selbst: Empfänger je Stufe ohne die zuständige Person
+    const self = t.responsible.userId;
     const sub = t.subprojectId ? subById.get(t.subprojectId) : null;
+    const others = (level: number): boolean => {
+      if (level === 1) { const u = sub?.responsible_user_id ?? lead.userId; return Boolean(u && u !== self); }
+      if (level === 2) return (plIds.length ? plIds : [lead.userId]).some((u) => u && u !== self);
+      return Boolean(p.contactEmail || (p.contactUserId && p.contactUserId !== self));
+    };
+    let selfOnly = false;
+    if (target > 0 && self) {
+      // intern bis zur PL überspringen; der Eskalationskontakt kommt erst zu seiner eigenen Frist
+      const candidates = [target, ...[1, 2].filter((l) => l > target)];
+      const next = candidates.find((l) => others(l));
+      if (next) target = next;
+      else { selfOnly = true; target = 0; }
+    }
+    if (target === 0 && r.escalation_level === 0 && !selfOnly) continue;
     const chain = [t.responsible.name ?? t.responsible.email ?? '–', sub?.resp_name ? `${sub.resp_name} (TP ${sub.name})` : `PL (TP ohne Verantwortlichen)`, lead.name ?? 'PL', contact?.name ?? p.contactEmail ?? '– kein Eskalationskontakt –'];
     const reasons: string[] = [];
     if (r.blocked) reasons.push(`blockiert${r.blocked_reason ? `: ${r.blocked_reason}` : ''}`);
-    if (overdueDays > 0) reasons.push(`${overdueDays} Tage überfällig`);
+    if (overdueDays > 0) reasons.push(`${overdueDays} Tage überfällig${inherited ? ' (Termin des Arbeitspakets)' : ''}`);
     if (staleDays >= p.staleDays) reasons.push(`${staleDays} Tage ohne Aktivität`);
     if (score >= 6) reasons.push(`hohe Kritikalität (${score} Punkte, Fristen halbiert)`);
-    out.push({ taskId: t.id, title: t.title, projectId, level: r.escalation_level, targetLevel: target, overdueDays, staleDays, blocked: r.blocked, blockedReason: r.blocked_reason, score, dueDate: t.dueDate, responsible: t.responsible.name ?? t.responsible.email, chain, reason: reasons.join(', ') || 'zurückgestuft' });
+    out.push({ taskId: t.id, title: t.title, projectId, level: r.escalation_level, targetLevel: target, overdueDays, staleDays, blocked: r.blocked, blockedReason: r.blocked_reason, score, dueDate: effectiveDue, responsible: t.responsible.name ?? t.responsible.email, chain, reason: reasons.join(', ') || 'zurückgestuft', ...(selfOnly ? { selfOnly } : {}) });
   }
   return out.sort((a, b) => b.targetLevel - a.targetLevel || b.score - a.score);
 }
@@ -113,11 +154,16 @@ export async function evaluateProject(db: Db, projectId: string, today: string):
 /** Worker: Stufen anheben (benachrichtigen, Log, ggf. Mail-Entwurf) und zurücksetzen, wenn der Grund entfällt. */
 export async function runEscalations(db: Db, today = new Date().toISOString().slice(0, 10)) {
   const projects = await db.query(`select id, org_id, name, key, escalation from projects where status = 'active'`);
-  let raised = 0, reset = 0;
+  let raised = 0, reset = 0, reminded = 0;
   for (const pr of projects.rows) {
     const p = policyOf(pr.escalation);
     const rows = await evaluateProject(db, pr.id, today);
+    const selfIds: string[] = [];
     for (const row of rows) {
+      if (row.selfOnly) {
+        selfIds.push(row.taskId);
+        if (await remindSelf(db, pr, row, today)) reminded++;
+      }
       if (row.targetLevel > row.level) {
         await escalate(db, pr, p, row, today);
         raised++;
@@ -128,8 +174,28 @@ export async function runEscalations(db: Db, today = new Date().toISOString().sl
         reset++;
       }
     }
+    // Erinnerung gilt je Anlass: entfällt er, darf beim nächsten Mal wieder erinnert werden
+    await db.query(`update tasks set escalation_reminded_at = null where project_id = $1 and escalation_reminded_at is not null and not (id = any($2::uuid[]))`, [pr.id, selfIds]);
   }
-  return { raised, reset };
+  return { raised, reset, reminded };
+}
+
+/**
+ * Keine Eskalation an sich selbst: einmalige Erinnerung an die zuständige Person (Klasse Fälligkeit bei Verzug, sonst Information),
+ * ein Log-Eintrag, keine Eskalationsstufe. Erneut erst, wenn der Anlass entfallen war.
+ */
+async function remindSelf(db: Db, pr: any, row: EscalationRow, today: string): Promise<boolean> {
+  const t = await db.maybeOne(`update tasks set escalation_reminded_at = now() where id = $1 and escalation_reminded_at is null returning id, created_by`, [row.taskId]);
+  if (!t) return false;
+  const lead = await resolveProjectLead(db, pr.id);
+  const task = (await loadTasks(db, 't.id = $1', [row.taskId], lead))[0];
+  const userId = task?.responsible.userId;
+  if (userId) {
+    await notify(db, { userId, projectId: pr.id, taskId: row.taskId, event: row.overdueDays > 0 ? 'due' : 'info', type: 'task.reminder', title: `Erinnerung: ${row.title}`, body: `${row.reason}. Keine Eskalation – du bist selbst die nächste Stufe.`, link: `/projekte/${pr.id}/board?task=${row.taskId}`, ref: { type: 'task', id: row.taskId }, dedupeKey: `escself:${row.taskId}:${today}` });
+  }
+  await db.query(`insert into task_comments (task_id, user_id, body, source) values ($1, $2, $3, 'system')`, [row.taskId, userId ?? t.created_by ?? lead.userId, `Erinnerung statt Eskalation (${today}): ${row.reason}. Die Eskalationskette führt nur zur zuständigen Person selbst.`]);
+  await audit(db, { orgId: pr.org_id, projectId: pr.id, userId: null, action: 'escalation.self_reminder', objectType: 'task', objectId: row.taskId, details: { reason: row.reason, overdueDays: row.overdueDays, staleDays: row.staleDays } });
+  return true;
 }
 
 async function escalate(db: Db, pr: any, p: EscalationPolicy, row: EscalationRow, today: string) {

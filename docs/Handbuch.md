@@ -73,7 +73,7 @@ Das Dashboard gibt es nur global; oben lässt es sich nach einem Projekt filtern
 
 ### Board
 
-- **Spaltenarten:** Geplant, aktive Spalten (z. B. Offen, In Arbeit), **In Prüfung**, **Wartet**, Zurückgestellt, Erledigt. Nur aktive Spalten und „In Prüfung“ zählen als Stillstand für die Eskalation. Bestehende Spalten mit dem Namen „In Prüfung“ haben die Art „In Prüfung“ bekommen.
+- **Spaltenarten:** Geplant, aktive Spalten (z. B. Offen, In Arbeit), **In Prüfung**, **Wartet**, Zurückgestellt, Erledigt. Nur aktive Spalten und „In Prüfung“ zählen als Stillstand für die Eskalation, und erst ab dem Arbeitsbeginn (Eskalationsregelwerk). Bestehende Spalten mit dem Namen „In Prüfung“ haben die Art „In Prüfung“ bekommen.
 - Swimlanes je Teilprojekt (abschaltbar), Spalten einklappen, WIP-Limit je Spalte. Leere Swimlanes sind eingeklappt; „+ Arbeitspaket“ steht nur in der ersten aktiven Spalte.
 - **Spaltengruppen:** Spalten mit gleicher Gruppe (Einstellungen › Planung und Board › Spalten bearbeiten, Feld „Gruppe“) erscheinen im Board als **eine** Spalte mit Abschnitten untereinander; die Gruppe steht an der Position ihrer vordersten Spalte. Jeder Abschnitt ist eine eigene Spalte: eigener Kopf mit Art, Zähler und WIP-Limit, eigenes Ziel beim Ziehen, eigene Schnellanlage, einklappbar (auch die ganze Gruppe, dann nur die Gesamtzahl). Neue Projekte gruppieren **Geplant, Wartet und Zurückgestellt als „Nicht in Arbeit“**; bestehende Projekte bleiben, wie sie sind – der Knopf „Geplant, Wartet und Zurückgestellt zu „Nicht in Arbeit“ zusammenfassen“ im Spaltenformular setzt die Gruppe bei allen Spalten dieser Arten. Status-Menü „→“, Sammelaktionen und Vorlagen nennen weiterhin die einzelnen Spalten. Am Handy bleibt die Gruppe eine Spalte, die Abschnitte stehen untereinander.
 - **Filter:** Text, Person, Label, Priorität, nur meine, überfällig, Konflikte, blockiert/eskaliert, Archiv. Personenfilter treffen ein AP auch über seine offenen Aufgaben.
@@ -121,6 +121,13 @@ Knopf klicken, Titel eingeben (Enter), danach öffnet die Maske mit allen Felder
 ### Eskalationsregelwerk
 
 Einstellungen › Fristen und Berichte: Verzug, Stillstand und Blockaden eskalieren automatisch entlang Zuständig → Teilprojekt-Verantwortung → PL → Eskalationskontakt. Kritikalität (Priorität, Nachfolger, naher Meilenstein, Blockade) halbiert die Fristen. Jede Stufe erzeugt Benachrichtigung und Log-Eintrag.
+
+- **Verzug** zählt ab dem wirksamen Termin: eigener Termin, sonst der des Arbeitspakets darüber. Ist das Arbeitspaket mit diesem Termin noch offen, eskaliert nur das Arbeitspaket, nicht zusätzlich jede Aufgabe ohne eigenen Termin (eine Eskalation je Ursache). Ein Arbeitspaket eskaliert nur aus eigenem Termin, eigenem Stillstand oder eigener Blockade.
+- **Stillstand** („hängt“, Standard 7 Tage ohne Aktivität) zählt erst ab dem Arbeitsbeginn: dem ersten Wechsel aus der Spalte, in der das Arbeitspaket angelegt wurde, in eine Spalte außer Geplant und Zurückgestellt. Neue, nicht begonnene Arbeitspakete in „Offen“ eskalieren also nicht; auch wer direkt in „In Arbeit“ anlegt, beginnt erst mit dem nächsten Spaltenwechsel. Gezählt wird nur in aktiven Spalten und „In Prüfung“.
+- **Selbst angelegt** (angelegt von der zuständigen Person für sich selbst): eskaliert nur bei Verzug, nicht bei Stillstand oder Blockade. Die Blockade bleibt auf Karte und in den Listen sichtbar.
+- **Keine Eskalation an sich selbst:** Stufen, deren Empfänger die zuständige Person ist (etwa die TP-Verantwortung bei eigener Aufgabe), werden übersprungen, die Meldung geht gleich an die PL; der Eskalationskontakt kommt erst zu seiner eigenen Frist. Bleibt niemand außer der Person selbst (z. B. die PL ist zuständig und es gibt keinen Eskalationskontakt), gibt es statt einer Eskalation eine einmalige Erinnerung (Klasse Fälligkeit bzw. Information) und einen Log-Eintrag, ohne Eskalationsstufe. Erneut erinnert wird erst, wenn der Anlass zwischendurch entfallen war.
+- **Persönliche Projekte:** Eskalation ist aus (auch für bestehende persönliche Projekte); die PL kann sie unter Fristen und Berichte einschalten.
+- Projektübersicht, Warnungen, Statusbericht und „Offen für dich“ folgen denselben Regeln.
 
 ## 6. Kommunikation: Chat und Mail
 
