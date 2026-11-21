@@ -264,6 +264,8 @@ export const DEFAULT_REPORTING: ReportingPolicy = { enabled: false, templateKey:
 export interface EscalationRow {
   taskId: string; title: string; projectId: string; level: number; targetLevel: number; overdueDays: number; staleDays: number; blocked: boolean; blockedReason: string | null;
   score: number; dueDate: string | null; responsible: string | null; chain: string[]; reason: string;
+  /** Verbleibende Kette ist nur die zuständige Person selbst: Erinnerung statt Eskalation */
+  selfOnly?: boolean;
 }
 
 export interface OrgSettings {
