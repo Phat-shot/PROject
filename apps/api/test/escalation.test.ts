@@ -214,3 +214,22 @@ test('Migration 082: Eskalation in persönlichen Projekten aus, PL kann sie eins
   assert.equal(on.statusCode, 200, on.body);
   assert.equal((await t.db.one(`select escalation from projects where id = $1`, [pers.id])).escalation.enabled, true);
 });
+
+test('Erledigt setzt die Eskalation zurück (beim Erledigen und im Lauf für Altbestand)', async () => {
+  const { pl, id, col } = await freshProject('ESD');
+  const task = (await t.api(pl).post(`/projects/${id}/tasks`, { title: 'Überfällig', columnId: col('Offen'), responsibleUserId: t.ids.users.anna, dueDate: day(-10) })).json().task;
+  await runEscalations(t.db, day(0));
+  assert.ok((await t.db.one(`select escalation_level from tasks where id = $1`, [task.id])).escalation_level > 0, 'eskaliert');
+  // Erledigen über die Route: Stufe sofort 0, Log-Eintrag
+  assert.equal((await t.api(pl).post(`/tasks/${task.id}/move`, { columnId: col('Erledigt') })).statusCode, 200);
+  const after = await t.db.one(`select escalation_level, escalated_at from tasks where id = $1`, [task.id]);
+  assert.equal(after.escalation_level, 0);
+  assert.equal(after.escalated_at, null);
+  assert.ok((await t.db.query(`select 1 from task_comments where task_id = $1 and body = 'Eskalation zurückgesetzt: erledigt'`, [task.id])).rows.length === 1);
+  // Altbestand: erledigtes Element mit Stufe (ohne onTaskDone) räumt der nächste Lauf auf
+  const old = (await t.api(pl).post(`/projects/${id}/tasks`, { title: 'Altbestand', columnId: col('Erledigt') })).json().task;
+  await t.db.query(`update tasks set escalation_level = 2, escalated_at = now() where id = $1`, [old.id]);
+  const r = await runEscalations(t.db, day(0));
+  assert.ok(r.reset >= 1);
+  assert.equal((await t.db.one(`select escalation_level from tasks where id = $1`, [old.id])).escalation_level, 0);
+});
